@@ -176,10 +176,13 @@ impl<'a> Writer<'a> {
         if text.is_empty() {
             return;
         }
-        // Adjacent code elements have separate HTML nodes but no text between
-        // them. Markdown code spans would merge or need an invented space.
+        // Adjacent code elements are distinct inline values. A separator is
+        // required in Markdown; otherwise their code-span delimiters touch and
+        // the rendered text is indistinguishable from one joined value.
         if self.code.is_some() {
-            self.flush_code_html();
+            self.flush_code();
+            self.output.push(' ');
+            self.line_digits = None;
         }
         if preformatted {
             if !text.is_empty() {
@@ -457,25 +460,6 @@ impl<'a> Writer<'a> {
         }
     }
 
-    fn flush_code_html(&mut self) {
-        if let Some(code) = self.code.take() {
-            self.output.push_str("<code>");
-            for ch in code.chars() {
-                match ch {
-                    '&' => self.output.push_str("&amp;"),
-                    '<' => self.output.push_str("&lt;"),
-                    '>' => self.output.push_str("&gt;"),
-                    '\\' | '`' | '*' | '_' | '[' | ']' | '|' | '~' => {
-                        self.output.push('\\');
-                        self.output.push(ch);
-                    }
-                    _ => self.output.push(ch),
-                }
-            }
-            self.output.push_str("</code>");
-            self.line_digits = None;
-        }
-    }
 }
 
 fn is_punctuation(ch: char) -> bool {

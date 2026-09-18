@@ -147,9 +147,10 @@ fn normal_code_moves_unicode_boundary_spaces_outside_delimiters() {
 #[test]
 fn adjacent_code_elements_keep_distinct_values() {
     let html = "<div><code>name</code><code>string</code></div>";
+    assert_eq!(markdown(html, false), "`name` `string`");
     assert_eq!(
         rendered_html(&markdown(html, false)),
-        "<p><code>name</code><code>string</code></p>\n"
+        "<p><code>name</code> <code>string</code></p>\n"
     );
     assert_eq!(
         markdown("<code>first</code>suffix<code>second</code>", false),
@@ -165,7 +166,7 @@ fn empty_code_between_values_does_not_join_or_invent_code_text() {
             let result = markdown(&source, preformatted);
             assert_eq!(
                 rendered_html(&result),
-                "<p><code>name</code><code>string</code></p>\n",
+                "<p><code>name</code> <code>string</code></p>\n",
                 "{source}, preformatted={preformatted}: {result}"
             );
         }
