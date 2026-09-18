@@ -4354,6 +4354,7 @@ dom/nodes/Document-contentType/contentType/xhr_responseType_document.html
 dom/nodes/Document-createAttribute.html
 dom/nodes/Document-createCDATASection.html
 dom/nodes/Document-createComment.html
+dom/nodes/Document-createElement-namespace.html
 dom/nodes/Document-createElement.html
 dom/nodes/Document-createElementNS.html
 dom/nodes/Document-createProcessingInstruction.html
