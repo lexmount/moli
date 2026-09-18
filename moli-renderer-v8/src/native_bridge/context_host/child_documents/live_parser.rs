@@ -1710,6 +1710,7 @@ impl JsContextHost {
         let ParserScriptHandoff::BlockingClassic {
             node_id,
             start_line,
+            blocking_signatures_before,
             script,
             ..
         } = handoff
@@ -1720,6 +1721,19 @@ impl JsContextHost {
             (ScriptKind::Classic, ScriptSource::Inline(source)) => source.clone(),
             _ => return false,
         };
+        // Only nested inline parser scripts bypass blocking stylesheets. A direct
+        // document.write() into a script-created parser must wait for them.
+        if !self.child_document_is_executing_parser_script(document_handle)
+            && self
+                .frame_owner_store
+                .current_child_document_owner(child_handle)
+                .is_some_and(|owner| {
+                    self.frame_document_blocking_stylesheets
+                        .blocks_signatures(owner, blocking_signatures_before.iter())
+                })
+        {
+            return false;
+        }
         let Some(mut job) = self.frame_owner_child_parser_classic_script_job(
             child_handle,
             Some(*node_id),
