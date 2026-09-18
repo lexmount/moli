@@ -4538,6 +4538,8 @@ dom/observable/tentative/idlharness.html
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-constructor.window.js?moli-wpt-script=window
+dom/observable/tentative/observable-drop.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-drop.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-event-target.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-event-target.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-event-target.window.js?moli-wpt-script=window
@@ -4561,6 +4563,8 @@ dom/observable/tentative/observable-reduce.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-reduce.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-some.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-some.any.js?moli-wpt-any=window
+dom/observable/tentative/observable-take.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/observable-take.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-toArray.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-toArray.any.js?moli-wpt-any=window
 dom/ranges/Range-adopt-test.html

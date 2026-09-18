@@ -1,6 +1,139 @@
 use super::*;
 
 #[test]
+fn observable_count_operators_preserve_conversion_sharing_reentrancy_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-count-operators.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.countOperatorResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-count-operators.js")
+    ))
+    .expect("Observable count operator fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("countOperatorResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 194, "{result}");
+}
+
+#[test]
+fn observable_count_operators_preserve_conversion_result_and_exception_realms() {
+    let mut vm = new_storage_test_vm("https://observable-count-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable count operator realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  for (const name of ['take', 'drop']) {
+    const method = child.Observable.prototype[name];
+    child.countReads = 0;
+    const amount = new child.Object();
+    amount[Symbol.toPrimitive] = child.Function('globalThis.countThis = this; globalThis.countReads++; return 1;');
+    let starts = 0;
+    const source = new Observable(s => { starts++; s.next(1); s.next(2); s.complete(); });
+    const result = method.call(source, amount);
+    checks.push(result instanceof child.Observable, !(result instanceof Observable), Object.getPrototypeOf(result) === child.Observable.prototype);
+    checks.push(starts === 0, child.countReads === 1, child.countThis === amount);
+    const values = await result.toArray();
+    checks.push(values instanceof child.Array, values.length === 1 && values[0] === (name === 'take' ? 1 : 2));
+    const local = Observable.prototype[name].call(child.Observable.from([1, 2]), 1);
+    checks.push(local instanceof Observable, !(local instanceof child.Observable));
+    const localValues = await local.toArray();
+    checks.push(localValues instanceof Array, localValues.length === 1 && localValues[0] === (name === 'take' ? 1 : 2));
+    let reads = 0;
+    try { method.call({}, {valueOf() { reads++; return 1; }}); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+    checks.push(reads === 0);
+    try { method.call(source, 1n); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+    const marker = new child.RangeError('amount');
+    try { method.call(source, {valueOf() { throw marker; }}); } catch (e) { checks.push(e === marker, e instanceof child.RangeError); }
+    method.call(new Observable(s => s.error(marker)), 2).subscribe({error: e => checks.push(e === marker)});
+  }
+  globalThis.countOperatorRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let checks: Vec<bool> = serde_json::from_str(&vm.eval("countOperatorRealms").unwrap()).unwrap();
+    assert_eq!(checks.len(), 40);
+    assert!(checks.iter().all(|value| *value), "{checks:?}");
+}
+
+#[test]
+fn observable_count_operator_chains_trace_pending_state_and_release_after_early_completion() {
+    let mut vm = new_storage_test_vm("https://observable-count-gc.test/");
+    vm.eval(r#"
+globalThis.countChains = [];
+for (const kept of [false, true]) (() => {
+  let subscriber;
+  const token = {}, callback = value => token && value;
+  const source = new Observable(s => { subscriber = s; });
+  const mapped = source.map(callback), dropped = mapped.drop(1), taken = dropped.take(2);
+  const promise = taken.toArray();
+  subscriber.next(1);
+  const entry = {kept, templates: [source, mapped, dropped, taken].map(value => new WeakRef(value)),
+    refs: {subscriber: new WeakRef(subscriber), callback: new WeakRef(callback), token: new WeakRef(token)}};
+  if (kept) entry.promise = promise;
+  countChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify([
+countChains.every(c => c.templates.every(ref => ref.deref() === undefined)),
+countChains.every(c => Object.values(c.refs).every(ref => (ref.deref() !== undefined) === c.kept))
+])"#
+        )
+        .unwrap(),
+        "[true,true]"
+    );
+    vm.eval(
+        r#"
+const keptCountChain = countChains.find(c => c.kept);
+keptCountChain.promise.then(values => { keptCountChain.values = values; });
+{
+  const subscriber = keptCountChain.refs.subscriber.deref();
+  subscriber.next(2); subscriber.next(3);
+  globalThis.countSourceClosed = !subscriber.active;
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("countSourceClosed && JSON.stringify(keptCountChain.values) === '[2,3]'")
+            .unwrap(),
+        "true"
+    );
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            "countChains.every(c => Object.values(c.refs).every(ref => ref.deref() === undefined))"
+        )
+        .unwrap(),
+        "true"
+    );
+    vm.eval(r#"
+globalThis.cancelledCountChain = (() => {
+  const ac = new AbortController(), token = {}, callback = value => token && value;
+  let subscriber;
+  const source = new Observable(s => { subscriber = s; });
+  const promise = source.map(callback).drop(1).take(2).toArray({signal: ac.signal});
+  promise.catch(() => {}); ac.abort();
+  return {promise, subscriber, signal: ac.signal, refs: [new WeakRef(callback), new WeakRef(token)]};
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("!cancelledCountChain.subscriber.active && cancelledCountChain.refs.every(ref => ref.deref() === undefined)").unwrap(), "true");
+}
+
+#[test]
 fn observable_transforms_preserve_lazy_sharing_cancellation_and_callback_semantics() {
     let mut vm = new_storage_test_vm("https://observable-transforms.test/");
     vm.eval(&format!(
