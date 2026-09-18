@@ -1,6 +1,152 @@
 use super::*;
 
 #[test]
+fn observable_inspect_preserves_conversion_callbacks_cancellation_and_error_order() {
+    let mut vm = new_storage_test_vm("https://observable-inspect.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.inspectResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-inspect.js")
+    ))
+    .expect("Observable.inspect fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("inspectResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 169, "{result}");
+}
+
+#[test]
+fn observable_inspect_preserves_conversion_result_and_callback_error_realms() {
+    let mut vm = new_storage_test_vm("https://observable-inspect-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.inspect realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [];
+  const method = child.Observable.prototype.inspect, source = Observable.from([1]);
+  child.inspectCalls = [];
+  const inspector = {};
+  for (const name of ['subscribe', 'next', 'complete']) inspector[name] = child.Function(`inspectCalls.push('${name}'); globalThis.inspectThis = this;`);
+  const result = method.call(source, inspector);
+  checks.push(result instanceof child.Observable, !(result instanceof Observable), Object.getPrototypeOf(result) === child.Observable.prototype);
+  checks.push(child.inspectCalls.length === 0);
+  const values = await result.toArray();
+  checks.push(values instanceof child.Array, values[0] === 1, child.inspectThis === child, child.inspectCalls.join(',') === 'subscribe,next,complete');
+  const local = Observable.prototype.inspect.call(child.Observable.from([2]));
+  checks.push(local instanceof Observable, !(local instanceof child.Observable), Object.getPrototypeOf(local) === Observable.prototype);
+  const localValues = await local.toArray();
+  checks.push(localValues instanceof Array, localValues[0] === 2);
+  let reads = 0;
+  const input = {get next() { reads++; return () => {}; }};
+  const revoked = Proxy.revocable(source, {}); revoked.revoke();
+  for (const invalid of [{}, new Proxy(source, {}), revoked.proxy]) {
+    try { method.call(invalid, input); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+  }
+  checks.push(reads === 0);
+  for (const invalid of [1, {abort: null}, {next: 1}]) {
+    try { method.call(source, invalid); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+  }
+  const marker = new child.Error('inspector'); child.inspectError = marker;
+  try { method.call(source, {get complete() { throw marker; }}); } catch (e) { checks.push(e === marker, e instanceof child.Error); }
+  const callback = child.Function('throw globalThis.inspectError');
+  const error = await method.call(source, callback).toArray().catch(e => e);
+  checks.push(error === marker, error instanceof child.Error);
+  const mainReports = [], childReports = [], ac = new AbortController(); let s;
+  const onmain = e => { mainReports.push(e.error); e.preventDefault(); };
+  const onchild = e => { childReports.push(e.error); e.preventDefault(); };
+  addEventListener('error', onmain); child.addEventListener('error', onchild);
+  try {
+    new Observable(subscriber => { s = subscriber; }).inspect({abort: callback}).subscribe({}, {signal: ac.signal});
+    ac.abort('stop');
+    checks.push(mainReports.length === 0, childReports.length === 1 && childReports[0] === marker, !s.active && s.signal.reason === 'stop');
+  } finally { removeEventListener('error', onmain); child.removeEventListener('error', onchild); }
+  Object.setPrototypeOf(source, null);
+  const branded = method.call(source);
+  checks.push(branded instanceof child.Observable, (await branded.toArray())[0] === 1);
+  globalThis.inspectRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let checks: Vec<bool> = serde_json::from_str(&vm.eval("inspectRealms").unwrap()).unwrap();
+    assert_eq!(checks.len(), 35);
+    assert!(checks.iter().all(|value| *value), "{checks:?}");
+}
+
+#[test]
+fn observable_inspect_traces_pending_callbacks_and_releases_closed_or_abandoned_graphs() {
+    let mut vm = new_storage_test_vm("https://observable-inspect-gc.test/");
+    vm.eval(r#"
+globalThis.inspectorNames = ['subscribe', 'next', 'error', 'complete', 'abort'];
+function makeInspectorCallback() {
+  const token = {};
+  return {token, callback: () => token};
+}
+function makeInspectorSource() {
+  let subscriber;
+  return {source: new Observable(s => { subscriber = s; }), get subscriber() { return subscriber; }};
+}
+globalThis.inspectedChains = [];
+for (const mode of ['abandoned', 'complete', 'error', 'abort']) (() => {
+  const input = makeInspectorSource(), callbacks = inspectorNames.map(makeInspectorCallback);
+  const inspector = Object.fromEntries(callbacks.map((c, i) => [inspectorNames[i], c.callback]));
+  const result = input.source.inspect(inspector), ac = new AbortController();
+  const promise = result.toArray(mode === 'abort' ? {signal: ac.signal} : undefined);
+  promise.catch(() => {}); input.subscriber.next(1);
+  const entry = {mode, templates: [input.source, result, inspector].map(v => new WeakRef(v)),
+    subscriber: new WeakRef(input.subscriber), callbacks: callbacks.map(c => [new WeakRef(c.callback), new WeakRef(c.token)])};
+  if (mode !== 'abandoned') entry.promise = promise;
+  if (mode === 'abort') entry.controller = ac;
+  inspectedChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+inspectedChains.every(c => c.templates.every(ref => ref.deref() === undefined)),
+inspectedChains.every(c => (c.subscriber.deref() !== undefined) === (c.mode !== 'abandoned')),
+inspectedChains.every(c => c.callbacks.every((refs, i) => refs.every(ref => (ref.deref() !== undefined) === (c.mode !== 'abandoned' && i !== 0))))
+])"#).unwrap(), "[true,true,true]");
+    vm.eval(r#"
+for (const c of inspectedChains.filter(c => c.promise)) {
+  c.promise.then(values => { c.correct = c.mode === 'complete' && JSON.stringify(values) === '[1,2]'; }, error => { c.correct = error === c.mode; });
+  const source = c.subscriber.deref(); source.next(2);
+  if (c.mode === 'complete') source.complete();
+  else if (c.mode === 'error') source.error('error');
+  else c.controller.abort('abort');
+  c.closedSubscriber = source;
+}
+"#).unwrap();
+    assert_eq!(vm.eval("inspectedChains.filter(c => c.promise).every(c => c.correct && !c.closedSubscriber.active)").unwrap(), "true");
+    collect(&mut vm);
+    assert_eq!(
+        vm.eval(
+            "inspectedChains.every(c => c.callbacks.flat().every(ref => ref.deref() === undefined))"
+        )
+        .unwrap(),
+        "true"
+    );
+    vm.eval(r#"
+globalThis.preabortedInspectSubscribers = [];
+globalThis.preabortedInspectorRefs = (() => {
+  const callbacks = inspectorNames.map(makeInspectorCallback);
+  const inspector = Object.fromEntries(callbacks.map((c, i) => [inspectorNames[i], c.callback]));
+  new Observable(s => preabortedInspectSubscribers.push(s)).inspect(inspector).subscribe({}, {signal: AbortSignal.abort('pre-aborted')});
+  return callbacks.flatMap(c => [new WeakRef(c.callback), new WeakRef(c.token)]);
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("preabortedInspectSubscribers.length === 1 && preabortedInspectSubscribers.every(s => !s.active && s.signal.reason === 'pre-aborted') && preabortedInspectorRefs.every(ref => ref.deref() === undefined)").unwrap(), "true");
+}
+
+#[test]
 fn observable_take_until_preserves_conversion_notifier_order_sharing_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-take-until.test/");
     vm.eval(&format!(
