@@ -5,7 +5,9 @@
 
 mod callbacks;
 mod event_target;
+mod first;
 mod from;
+mod observer;
 mod state;
 
 pub(crate) use event_target::event_target_when;
@@ -23,6 +25,8 @@ use state::*;
 struct ObservablePrototype {
     #[webapi(method, length = 0, callback = subscribe)]
     subscribe: (),
+    #[webapi(method, length = 0, returns_promise, callback = first::first)]
+    first: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -189,7 +193,15 @@ fn subscribe<'s>(
     let Some(parsed) = webidl::parse_args::<SubscribeArgs<'s>>(scope, &args) else {
         return;
     };
-    let observable = args.this();
+    subscribe_internal(scope, args.this(), parsed.observer, parsed.signal);
+}
+
+fn subscribe_internal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observable: v8::Local<'s, v8::Object>,
+    observer: v8::Local<'s, v8::Object>,
+    signal: Option<ResolvedAbortSignal<'s>>,
+) {
     if !is_current(scope, observable) {
         return;
     }
@@ -206,9 +218,9 @@ fn subscribe<'s>(
         }
     };
     let mut observers = list(scope, subscriber, OBSERVERS);
-    observers.push(parsed.observer);
+    observers.push(observer);
     set_list(scope, subscriber, OBSERVERS, &observers);
-    if let Some(signal) = parsed.signal {
+    if let Some(signal) = signal {
         if signal.is_aborted(scope) {
             if fresh {
                 let reason = signal.reason(scope);
@@ -220,15 +232,20 @@ fn subscribe<'s>(
                 set_list(scope, subscriber, OBSERVERS, &observers);
             }
         } else {
-            let data =
-                v8::Array::new_with_elements(scope, &[subscriber.into(), parsed.observer.into()]);
+            let data = v8::Array::new_with_elements(scope, &[subscriber.into(), observer.into()]);
             let algorithm = v8::Function::builder(cancel_observer)
                 .data(data.into())
                 .build(scope)
                 .expect("Observable abort algorithm should allocate");
-            set_private_value(scope, parsed.observer, INPUT_SIGNAL, signal.value().into());
-            set_private_value(scope, parsed.observer, ABORT_ALGORITHM, algorithm.into());
-            signal.register_rethrowing_algorithm(scope, algorithm);
+            set_private_value(scope, observer, INPUT_SIGNAL, signal.value().into());
+            set_private_value(scope, observer, ABORT_ALGORITHM, algorithm.into());
+            if observer::is_native(scope, observer) {
+                // Native observers trace their private cancellation callback.
+                // The internal signal must not root an abandoned subscription.
+                signal.register_weak_rethrowing_algorithm(scope, algorithm);
+            } else {
+                signal.register_rethrowing_algorithm(scope, algorithm);
+            }
         }
     }
     if fresh {
@@ -354,9 +371,7 @@ fn subscriber_next<'s>(
     }
     // Reentrant subscribe/cancel must not change this notification's snapshot.
     for observer in list(scope, subscriber, OBSERVERS) {
-        if let Some(callback) = object_slot(scope, observer, NEXT) {
-            invoke_and_report(scope, callback, &[value]);
-        }
+        observer::notify(scope, observer, observer::Notification::Next(value));
     }
 }
 
@@ -378,11 +393,7 @@ fn subscriber_error<'s>(
     let observers = list(scope, subscriber, OBSERVERS);
     set_list(scope, subscriber, OBSERVERS, &[]);
     for observer in observers {
-        if let Some(callback) = object_slot(scope, observer, ERROR) {
-            invoke_and_report(scope, callback, &[error]);
-        } else {
-            callbacks::report_default_error(scope, error);
-        }
+        observer::notify(scope, observer, observer::Notification::Error(error));
     }
 }
 
@@ -418,9 +429,7 @@ fn subscriber_complete<'s>(
     let observers = list(scope, subscriber, OBSERVERS);
     set_list(scope, subscriber, OBSERVERS, &[]);
     for observer in observers {
-        if let Some(callback) = object_slot(scope, observer, COMPLETE) {
-            invoke_and_report(scope, callback, &[]);
-        }
+        observer::notify(scope, observer, observer::Notification::Complete);
     }
 }
 
