@@ -1244,12 +1244,13 @@ impl DocumentRuntime {
         let Some(pending) = self.pending_parser_insertion() else {
             return false;
         };
-        let input = pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session();
-        input.enqueue_script_input_html(html.to_owned());
+        let controller = pending.insertion.parser_bridge.insertion_controller();
+        let input = controller.input_session();
+        if !input.append_to_current_script_input(html) {
+            // A script-created parser can also receive writes from its caller
+            // outside parser-connected execution. Its insertion point is EOF.
+            controller.with_parser_stream(|stream| stream.append_to_end(html.to_owned()));
+        }
         input.enqueue_script_input_preload_html(html.to_owned());
         true
     }

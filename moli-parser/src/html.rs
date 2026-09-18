@@ -8,6 +8,7 @@ use std::{
 use html5ever::{
     Attribute, LocalName, Namespace, QualName,
     tendril::StrTendril,
+    tokenizer::BufferQueue,
     tree_builder::{ElementFlags, NodeOrText, QuirksMode, TreeSink},
 };
 use url::Url;
@@ -61,8 +62,14 @@ pub struct ParserInputQueue(Rc<RefCell<ParserInputState>>);
 struct ParserInputState {
     script_input_queue: VecDeque<String>,
     insertion_preload_queue: VecDeque<String>,
-    pending_stack: Vec<String>,
+    pending_stack: Vec<PendingScriptInput>,
     processed_insertion_meta_csp_count: usize,
+}
+
+#[derive(Debug)]
+struct PendingScriptInput {
+    insertion_point: Rc<BufferQueue>,
+    html: String,
 }
 
 pub struct DocumentStream {
@@ -733,6 +740,13 @@ impl DocumentStream {
         self.inner.script_input_session()
     }
 
+    /// Save the character-relative insertion point of a parser-connected script.
+    /// Writes queued while a nested resource blocks parsing stay before this
+    /// character, even while the tokenizer is parked in a deeper input frame.
+    pub fn enter_script_input_context(&self) -> ParserInputContext {
+        self.inner.enter_script_input_context()
+    }
+
     pub fn take_next_script_input(&self) -> Option<String> {
         self.inner.take_next_script_input()
     }
@@ -1399,11 +1413,29 @@ impl ParserInputSession {
             .filter(|html| !html.is_empty())
     }
 
-    pub fn enter_pending_context(&self) -> ParserInputContext {
-        self.0.borrow_mut().pending_stack.push(String::new());
+    pub(super) fn enter_pending_context(
+        &self,
+        insertion_point: Rc<BufferQueue>,
+    ) -> ParserInputContext {
+        self.0.borrow_mut().pending_stack.push(PendingScriptInput {
+            insertion_point,
+            html: String::new(),
+        });
         ParserInputContext {
             session: self.clone(),
         }
+    }
+
+    /// Queue a write made by the current script while tokenization is blocked.
+    /// The script's saved insertion point, rather than the blocked script's
+    /// current tokenizer frame, determines where these characters belong.
+    pub fn append_to_current_script_input(&self, html: &str) -> bool {
+        let mut state = self.0.borrow_mut();
+        let Some(current) = state.pending_stack.last_mut() else {
+            return false;
+        };
+        current.html.push_str(html);
+        true
     }
 
     pub fn enqueue_script_input_preload_html(&self, html: String) {
@@ -1430,29 +1462,20 @@ impl ParserInputSession {
             .borrow_mut()
             .pending_stack
             .last_mut()
-            .map(std::mem::take)
+            .map(|current| std::mem::take(&mut current.html))
             .unwrap_or_default()
     }
 
-    pub fn set_current_script_input_html(&self, html: String) {
-        let mut state = self.0.borrow_mut();
-        let Some(current) = state.pending_stack.last_mut() else {
-            return;
-        };
-        *current = html;
-    }
-
     fn flush_and_pop_pending_context(&self) {
-        let mut state = self.0.borrow_mut();
-        let pending = state.pending_stack.pop().unwrap_or_default();
-        if pending.is_empty() {
-            return;
-        }
-        if let Some(tail) = state.script_input_queue.back_mut() {
-            tail.push_str(&pending);
-        } else {
-            state.script_input_queue.push_back(pending);
-        }
+        let pending = self
+            .0
+            .borrow_mut()
+            .pending_stack
+            .pop()
+            .expect("parser script input context must exit in stack order");
+        pending
+            .insertion_point
+            .push_front(StrTendril::from(pending.html));
     }
 }
 
@@ -1975,7 +1998,9 @@ impl TreeSink for DocumentSink {
 mod tests {
     use std::rc::Rc;
 
-    use super::{HtmlParser, ParseHandle, ParserInputQueue};
+    use super::{
+        DocumentStream, HtmlParser, ParseHandle, ParserInputQueue, ParserPumpStep, ParserYield,
+    };
     use html5ever::{LocalName, Namespace, QualName};
     use moli_dom::native::{NativeDom, NativeNodeId};
     use url::Url;
@@ -2306,33 +2331,42 @@ mod tests {
     }
 
     #[test]
-    fn parser_input_session_keeps_nested_pending_buffers_on_a_stack() {
-        let queue = ParserInputQueue::default();
-        let session = queue.session();
+    fn parser_input_contexts_preserve_each_script_insertion_point() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://example.test/page.html").unwrap(),
+        );
+        let session = stream.script_input_session();
+        assert!(matches!(
+            stream.pump_parser_step("<script>outer()</script>f").result,
+            ParserPumpStep::Yield(ParserYield::Script(_))
+        ));
+        let outer = stream.enter_script_input_context();
+        assert!(matches!(
+            stream
+                .pump_parser_inserted_step("<script>inner()</script>d")
+                .result,
+            ParserPumpStep::Yield(ParserYield::Script(_))
+        ));
+        let inner = stream.enter_script_input_context();
+        assert!(matches!(
+            stream
+                .pump_parser_inserted_step("<script src='leaf.js'></script>b")
+                .result,
+            ParserPumpStep::Yield(ParserYield::Script(_))
+        ));
 
-        let outer = session.enter_pending_context();
-        session.set_current_script_input_html("<scr".to_owned());
-
-        let inner = session.enter_pending_context();
-        session.set_current_script_input_html("<div>inner".to_owned());
-        assert_eq!(session.take_current_script_input_html(), "<div>inner");
-        session.set_current_script_input_html("<div>inner".to_owned());
+        // Each caller continues writing while the leaf script blocks parsing.
+        // Consecutive writes retain FIFO order at that caller's own position.
+        assert!(inner.session().append_to_current_script_input("c1"));
+        assert!(inner.session().append_to_current_script_input("c2"));
         drop(inner);
-
-        assert_eq!(
-            queue.take_next_script_input().as_deref(),
-            Some("<div>inner")
-        );
-        assert_eq!(outer.session().take_current_script_input_html(), "<scr");
-        outer
-            .session()
-            .set_current_script_input_html("<script>outer</script>".to_owned());
+        assert!(outer.session().append_to_current_script_input("e1"));
+        assert!(outer.session().append_to_current_script_input("e2"));
         drop(outer);
+        assert!(!session.append_to_current_script_input("no active script"));
 
-        assert_eq!(
-            queue.take_next_script_input().as_deref(),
-            Some("<script>outer</script>")
-        );
+        session.enqueue_script_input_html("a".to_owned());
+        assert_eq!(stream.snapshot_pending_input(), "abc1c2de1e2f");
     }
 
     #[test]

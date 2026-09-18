@@ -22,10 +22,10 @@ use crate::script_planning::{
 
 use super::{
     html::{
-        ParserBlockingStylesheetPause, ParserFinishDiscoverySignals, ParserInputQueue,
-        ParserInputSession, ParserPumpOutcome, ParserPumpStep, ParserScriptElementStateTransition,
-        ParserScriptHandoff, ParserScriptNoExecutionOutcome, ParserScriptPreparationFailure,
-        ParserScriptPreparationRequest, ParserYield,
+        ParserBlockingStylesheetPause, ParserFinishDiscoverySignals, ParserInputContext,
+        ParserInputQueue, ParserInputSession, ParserPumpOutcome, ParserPumpStep,
+        ParserScriptElementStateTransition, ParserScriptHandoff, ParserScriptNoExecutionOutcome,
+        ParserScriptPreparationFailure, ParserScriptPreparationRequest, ParserYield,
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
@@ -495,6 +495,11 @@ impl HtmlTreeSinkStream {
 
     pub fn script_input_session(&self) -> ParserInputSession {
         self.script_input.session()
+    }
+
+    pub fn enter_script_input_context(&self) -> ParserInputContext {
+        self.script_input_session()
+            .enter_pending_context(self.parser.current_input_insertion_point())
     }
 
     pub fn take_next_script_input(&self) -> Option<String> {

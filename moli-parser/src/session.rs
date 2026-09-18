@@ -329,6 +329,10 @@ impl HtmlParserSession {
         self.input.borrow_mut().append_to_current_inserted(input)
     }
 
+    pub(super) fn current_input_insertion_point(&self) -> Rc<BufferQueue> {
+        self.input.borrow().current()
+    }
+
     pub(super) fn append_at_current_insertion_point(&self, input: StrTendril) {
         self.tokenizer.sink.sink().mark_source_positions_unknown();
         self.input.borrow_mut().push_back(input);
