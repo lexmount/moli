@@ -37,6 +37,9 @@ mod document_close;
 #[path = "scripts/document_write_insertion.rs"]
 mod document_write_insertion;
 
+#[path = "scripts/document_write_errors.rs"]
+mod document_write_errors;
+
 #[path = "scripts/parser_cleanup.rs"]
 mod parser_cleanup;
 
