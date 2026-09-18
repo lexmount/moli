@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn document_stream_methods_follow_receivers_across_frame_retirement() {
+    let mut vm = new_storage_test_vm("https://document-stream-receivers.test/page.html");
+    vm.eval(
+        "document.appendChild(document.createElement('html')).appendChild(document.createElement('body'));",
+    )
+    .expect("the shared browser fixture needs an initial page body");
+    let fixture = include_str!("../../../../tests/fixtures/document-stream-receivers.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({fixture})"))
+        .expect("document stream receiver regression probe");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 171);
+}
+
+#[test]
+fn document_stream_methods_use_receiver_trusted_types_policy() {
+    let mut vm = new_storage_test_vm("https://document-stream-policy.test/page.html");
+    vm.eval(
+        "document.appendChild(document.createElement('html')).appendChild(document.createElement('body'));",
+    )
+    .expect("the shared browser fixture needs an initial page body");
+    let fixture = include_str!("../../../../tests/fixtures/document-stream-trusted-types.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({fixture})"))
+        .expect("document stream Trusted Types regression probe");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 8);
+}
+
+#[test]
 fn windowless_documents_use_independent_incremental_parser_streams() {
     let mut vm = new_storage_test_vm("https://windowless-document-stream.test/page.html");
     vm.eval(

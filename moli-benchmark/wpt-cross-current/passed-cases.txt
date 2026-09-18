@@ -9932,3 +9932,4 @@ xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with no timeout
 xhr/xmlhttprequest-timeout-worker-twice.html?load fires normally with same timeout set twice
 xhr/xmlhttprequest-timeout-worker-twice.html?timeout fires normally with same timeout set twice
 xhr/xmlhttprequest-unsent.htm
+html/webappapis/dynamic-markup-insertion/opening-the-input-stream/active.window.js?moli-wpt-script=window
