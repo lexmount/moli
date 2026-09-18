@@ -1099,6 +1099,54 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
     );
 }
 
+#[test]
+fn document_csp_eval_keywords_preserve_source_token_boundaries() {
+    for from_meta in [false, true] {
+        for keyword in ["unsafe-eval", "wasm-unsafe-eval"] {
+            for (prefix, suffix, valid) in [
+                ("", "", true),
+                ("\t\n", " \r\u{000c}", true),
+                ("\u{000b}", "", false),
+                ("", "\u{000b}", false),
+            ] {
+                let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+                let mut vm = new_storage_test_vm("https://csp-source-tokens.test/");
+                if from_meta {
+                    vm.document_runtime
+                        .dom_host_mut()
+                        .reset_html_document_shell();
+                    vm.eval(&format!(
+                    "const meta = document.createElement('meta'); meta.httpEquiv = 'Content-Security-Policy'; meta.content = {}; document.head.appendChild(meta);",
+                    serde_json::to_string(&policy).unwrap(),
+                )).expect("install meta CSP without changing source token boundaries");
+                } else {
+                    vm.set_response_content_security_policies(std::slice::from_ref(&policy));
+                }
+                let result = vm
+                    .eval(&format!(
+                        "JSON.stringify({})",
+                        include_str!("../../../../tests/fixtures/csp-eval-source-tokens.js"),
+                    ))
+                    .expect("CSP execution probe");
+                let expected = serde_json::json!([
+                    if valid && keyword == "unsafe-eval" {
+                        "allowed"
+                    } else {
+                        "EvalError"
+                    },
+                    if valid && keyword == "unsafe-eval" {
+                        "allowed"
+                    } else {
+                        "EvalError"
+                    },
+                    if valid { "allowed" } else { "CompileError" },
+                ]);
+                assert_eq!(result, expected.to_string(), "meta={from_meta}: {policy:?}");
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn eval_csp_violation_reports_external_script_scheme_and_call_location() {
     let source = r#"
