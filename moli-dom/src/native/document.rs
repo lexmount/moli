@@ -68,6 +68,7 @@ struct DocumentMetadata {
     url: Url,
     content_type: Box<str>,
     character_set: Box<str>,
+    allow_declarative_shadow_roots: bool,
     ready_state: DocumentReadyState,
     // Retained with the Document when its Window is replaced during navigation.
     visibility_hidden: bool,
@@ -121,6 +122,7 @@ impl Document {
                 url,
                 content_type: content_type.into(),
                 character_set: "UTF-8".into(),
+                allow_declarative_shadow_roots: false,
                 ready_state: DocumentReadyState::Complete,
                 visibility_hidden: false,
                 quirks_mode: QuirksMode::NoQuirks,
@@ -183,6 +185,14 @@ impl Document {
 
     pub fn character_set(&self) -> &str {
         &self.metadata.character_set
+    }
+
+    pub fn allow_declarative_shadow_roots(&self) -> bool {
+        self.metadata.allow_declarative_shadow_roots
+    }
+
+    pub fn set_allow_declarative_shadow_roots(&mut self, allow: bool) {
+        self.metadata.allow_declarative_shadow_roots = allow;
     }
 
     pub fn set_character_set(&mut self, character_set: impl Into<String>) {
