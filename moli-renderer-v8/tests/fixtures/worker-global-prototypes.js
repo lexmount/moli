@@ -38,6 +38,11 @@
   check(Object.prototype.toString.call(WorkerGlobalScope.prototype) === '[object WorkerGlobalScope]', 'worker tag');
   check(throwsTypeError(() => new scopeConstructor()), 'specific illegal constructor');
   check(throwsTypeError(() => new WorkerGlobalScope()), 'worker illegal constructor');
+  check(typeof self.when === 'function', 'inherited when exposed');
+  check(self.when === eventTarget.prototype.when, 'inherited when identity');
+  for (const value of chain.slice(0, 3)) {
+    check(!Object.hasOwn(value, 'when'), 'when is inherited');
+  }
   test('prototype extension', () => {
     const key = Symbol('EventTarget extension');
     eventTarget.prototype[key] = 17;
@@ -56,6 +61,33 @@
     self.dispatchEvent(new Event('worker-prototype-probe'));
     check(values.length === 1, 'global listener removal still works');
   });
+  test('inherited observable events', () => {
+    const controller = new AbortController();
+    const values = [];
+    const observable = self.when('worker-prototype-probe');
+    check(observable instanceof Observable, 'when returns Observable');
+    observable.subscribe(event => values.push(event), {signal: controller.signal});
+    const first = new Event('worker-prototype-probe');
+    self.dispatchEvent(first);
+    check(values.length === 1 && values[0] === first, 'when receives global dispatch');
+    check(first.target === self, 'dispatched event target is global');
+    controller.abort();
+    self.dispatchEvent(new Event('worker-prototype-probe'));
+    check(values.length === 1, 'abort removes global listener');
+  });
+  test('global error reporting', () => {
+    const errors = [];
+    const marker = new Error('inspector abort');
+    const controller = new AbortController();
+    self.when('error').take(1).subscribe(event => {
+      errors.push(event.error);
+      event.preventDefault();
+    });
+    new Observable(subscriber => subscriber.next(1))
+      .inspect({abort() { throw marker; }})
+      .subscribe(() => controller.abort(), {signal: controller.signal});
+    check(errors.length === 1 && errors[0] === marker, 'when receives reported callback error');
+  });
   test('receiver branding', () => {
     let conversions = 0;
     let traps = 0;
@@ -67,6 +99,7 @@
       getPrototypeOf() { traps++; throw new Error('author proxy trap'); }
     }), revoked.proxy]) {
       check(throwsTypeError(() => eventTarget.prototype.addEventListener.call(receiver, type, () => {})), 'addEventListener rejects forged/proxy receiver');
+      check(throwsTypeError(() => eventTarget.prototype.when.call(receiver, type)), 'when rejects forged/proxy receiver');
     }
     check(conversions === 0, 'brand checked before conversion');
     check(traps === 0, 'brand checked without proxy traps');
@@ -76,6 +109,7 @@
     try {
       check(Object.getPrototypeOf(WorkerGlobalScope.prototype) === eventTarget.prototype, 'prototype keeps intrinsic EventTarget');
       check(Object.getPrototypeOf(WorkerGlobalScope) === eventTarget, 'constructor keeps intrinsic EventTarget');
+      check(self.when === eventTarget.prototype.when, 'when keeps intrinsic method');
     } finally { self.EventTarget = eventTarget; }
   });
   return {checks, failures};
