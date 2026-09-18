@@ -2071,7 +2071,7 @@ impl DocumentRuntime {
             }
             element
                 .attribute("content")
-                .map(str::trim)
+                .map(str::trim_ascii)
                 .filter(|content| !content.is_empty())
                 .map(str::to_owned)
         };

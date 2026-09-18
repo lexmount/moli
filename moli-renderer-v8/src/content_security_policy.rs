@@ -1241,7 +1241,7 @@ fn policy_allows_trusted_types_eval(policy: &str) -> bool {
         .is_some_and(|sources| {
             sources
                 .iter()
-                .any(|source| csp_keyword_eq(source.trim(), "trusted-types-eval"))
+                .any(|source| csp_keyword_eq(source, "trusted-types-eval"))
         })
 }
 
@@ -1559,7 +1559,7 @@ fn inline_style_element_source_list_allows(
 fn inline_source_violation_sample(source_list: &[&str], source: &str) -> String {
     if !source_list
         .iter()
-        .any(|source| csp_keyword_eq(source.trim(), "report-sample"))
+        .any(|source| csp_keyword_eq(source, "report-sample"))
     {
         return String::new();
     }
@@ -1594,14 +1594,7 @@ fn normalized_source_list_allows_url(
 }
 
 fn csp_nonce_source_matches(source: &str, nonce: &str) -> bool {
-    let source = source.trim();
-    let Some(value) = source
-        .strip_prefix("'nonce-")
-        .and_then(|value| value.strip_suffix('\''))
-    else {
-        return false;
-    };
-    value == nonce
+    csp_nonce_source_value(source).is_some_and(|value| value == nonce)
 }
 
 fn source_list_activates_strict_dynamic(sources: &[&str]) -> bool {
@@ -1615,7 +1608,6 @@ fn source_list_activates_strict_dynamic(sources: &[&str]) -> bool {
 
 fn csp_nonce_source_value(source: &str) -> Option<&str> {
     source
-        .trim()
         .strip_prefix("'nonce-")
         .and_then(|value| value.strip_suffix('\''))
 }
@@ -1656,7 +1648,7 @@ fn hash_source_value(value: &str) -> Option<CspHashSourceValue<'_>> {
 }
 
 fn csp_hash_source_value(source: &str) -> Option<CspHashSourceValue<'_>> {
-    let source = source.trim().strip_prefix('\'')?.strip_suffix('\'')?;
+    let source = source.strip_prefix('\'')?.strip_suffix('\'')?;
     hash_source_value(source)
 }
 
@@ -2116,20 +2108,18 @@ impl ContentSecurityPolicyNonUrlKind {
             }
             Self::DocumentInlineScript => source_list
                 .iter()
-                .any(|source| csp_keyword_eq(source.trim(), "unsafe-inline")),
+                .any(|source| csp_keyword_eq(source, "unsafe-inline")),
             Self::DocumentInlineStyleElement => source_list
                 .iter()
-                .any(|source| csp_keyword_eq(source.trim(), "unsafe-inline")),
+                .any(|source| csp_keyword_eq(source, "unsafe-inline")),
             Self::Eval => source_list
                 .iter()
-                .any(|source| csp_keyword_eq(source.trim(), "unsafe-eval")),
+                .any(|source| csp_keyword_eq(source, "unsafe-eval")),
             Self::TrustedTypesEval => source_list.iter().any(|source| {
-                let source = source.trim();
                 csp_keyword_eq(source, "unsafe-eval")
                     || csp_keyword_eq(source, "trusted-types-eval")
             }),
             Self::WasmEval => source_list.iter().any(|source| {
-                let source = source.trim();
                 csp_keyword_eq(source, "unsafe-eval") || csp_keyword_eq(source, "wasm-unsafe-eval")
             }),
         }
@@ -2137,10 +2127,6 @@ impl ContentSecurityPolicyNonUrlKind {
 }
 
 fn inline_event_handler_source_list_allows(source_list: &[&str], source: &str) -> bool {
-    let source_list = source_list
-        .iter()
-        .map(|source| source.trim())
-        .collect::<Vec<_>>();
     let has_nonce_or_hash = source_list.iter().any(|source| {
         csp_nonce_source_value(source).is_some() || csp_hash_source_value(source).is_some()
     });
@@ -2463,6 +2449,176 @@ mod tests {
                 &request_url("https://cdn.test/asset"),
                 ContentSecurityPolicyResourceKind::DocumentImage,
             ));
+        }
+    }
+
+    #[test]
+    fn csp_keywords_do_not_strip_control_characters_from_source_tokens() {
+        use ContentSecurityPolicyNonUrlKind::*;
+        for (kind, keyword) in [
+            (DocumentInlineScript, "unsafe-inline"),
+            (DocumentInlineStyleElement, "unsafe-inline"),
+            (DocumentInlineEventHandler, "unsafe-inline"),
+            (DocumentInlineNavigation, "unsafe-inline"),
+            (DocumentInlineStyleAttribute, "unsafe-inline"),
+            (Eval, "unsafe-eval"),
+            (TrustedTypesEval, "unsafe-eval"),
+            (TrustedTypesEval, "trusted-types-eval"),
+            (WasmEval, "unsafe-eval"),
+            (WasmEval, "wasm-unsafe-eval"),
+        ] {
+            for padding in [
+                "",
+                " \t\n\r\u{000c}",
+                "\0",
+                "\u{000b}",
+                "\u{001f}",
+                "\u{007f}",
+            ] {
+                let valid = padding.is_empty() || padding.starts_with(' ');
+                for source in [
+                    format!("{padding}'{keyword}'"),
+                    format!("'{keyword}'{padding}"),
+                ] {
+                    let policy = format!("default-src {source}");
+                    let violation = content_security_policy_non_url_violation_with_source(
+                        &policy,
+                        &protected_url(),
+                        kind,
+                        None,
+                        ContentSecurityPolicyDisposition::Enforce,
+                        &ContentSecurityPolicyReportingEndpoints::default(),
+                    );
+                    assert_eq!(violation.is_none(), valid, "{kind:?}: {policy:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn csp_nonce_and_hash_tokens_preserve_their_boundaries() {
+        let source = "t1.done();";
+        let integrity = "sha256-wmuLCpoj8EMqfQlPnt5NIMgKkCK62CxAkAiewI0zZps=";
+        for expression in ["'nonce-abc'".to_owned(), format!("'{integrity}'")] {
+            for (prefix, suffix, valid) in [
+                ("", "", true),
+                ("\t\n", " \r\u{000c}", true),
+                ("\u{000b}", "", false),
+                ("", "\u{000b}", false),
+            ] {
+                let token = format!("{prefix}{expression}{suffix}");
+                let policy = format!("default-src {token}");
+                let request = ContentSecurityPolicyScriptElementRequest {
+                    nonce: Some("abc"),
+                    integrity: Some(integrity),
+                    parser_inserted: true,
+                };
+                assert_eq!(
+                    script_element_request_allowed(&policy, request),
+                    valid,
+                    "{policy:?}"
+                );
+                let endpoints = ContentSecurityPolicyReportingEndpoints::default();
+                let script = content_security_policy_inline_script_element_violation_with_disposition_and_reporting_endpoints(
+                    &policy, &protected_url(), source, request,
+                    ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                );
+                assert_eq!(script.is_none(), valid, "inline script: {policy:?}");
+                let style = content_security_policy_inline_style_element_violation_with_disposition_and_reporting_endpoints(
+                    &policy, &protected_url(), source,
+                    ContentSecurityPolicyStyleElementRequest { nonce: Some("abc") },
+                    ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                );
+                assert_eq!(style.is_none(), valid, "inline style: {policy:?}");
+
+                // Invalid nonce/hash tokens must not disable unsafe-inline or
+                // activate strict-dynamic and erase a URL allowlist either.
+                let inline_policy = format!("script-src 'unsafe-inline' {token}");
+                let handler = content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
+                    &inline_policy, &protected_url(),
+                    ContentSecurityPolicyNonUrlKind::DocumentInlineEventHandler,
+                    "untrusted()", ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                );
+                assert_eq!(handler.is_none(), !valid, "{inline_policy:?}");
+                let dynamic_policy =
+                    format!("script-src 'strict-dynamic' https://cdn.test {token}");
+                assert_eq!(
+                    script_element_request_allowed(
+                        &dynamic_policy,
+                        ContentSecurityPolicyScriptElementRequest {
+                            parser_inserted: true,
+                            ..ContentSecurityPolicyScriptElementRequest::default()
+                        }
+                    ),
+                    !valid,
+                    "{dynamic_policy:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn csp_unsafe_hashes_requires_an_exact_keyword_and_hash_token() {
+        let hash = "'sha256-wmuLCpoj8EMqfQlPnt5NIMgKkCK62CxAkAiewI0zZps='";
+        for (sources, allowed) in [
+            (format!("'unsafe-hashes' {hash}"), true),
+            (format!("\u{000b}'unsafe-hashes' {hash}"), false),
+            (format!("'unsafe-hashes'\u{000b} {hash}"), false),
+            (format!("'unsafe-hashes' \u{000b}{hash}"), false),
+            (format!("'unsafe-hashes' {hash}\u{000b}"), false),
+        ] {
+            for kind in [
+                ContentSecurityPolicyNonUrlKind::DocumentInlineEventHandler,
+                ContentSecurityPolicyNonUrlKind::DocumentInlineStyleAttribute,
+            ] {
+                let violation = content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
+                    &format!("default-src {sources}"), &protected_url(), kind, "t1.done();",
+                    ContentSecurityPolicyDisposition::Enforce,
+                    &ContentSecurityPolicyReportingEndpoints::default(),
+                );
+                assert_eq!(violation.is_none(), allowed, "{kind:?}: {sources:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn csp_report_sample_and_trusted_types_eval_preserve_source_tokens() {
+        for (prefix, suffix, valid) in [
+            ("", "", true),
+            ("\t", "\r\u{000c}", true),
+            ("\u{000b}", "", false),
+            ("", "\u{000b}", false),
+        ] {
+            let policy = format!("script-src {prefix}'report-sample'{suffix}");
+            for disposition in [
+                ContentSecurityPolicyDisposition::Enforce,
+                ContentSecurityPolicyDisposition::Report,
+            ] {
+                let violation = content_security_policy_non_url_violation_with_source(
+                    &policy,
+                    &protected_url(),
+                    ContentSecurityPolicyNonUrlKind::Eval,
+                    Some("blocked()"),
+                    disposition,
+                    &ContentSecurityPolicyReportingEndpoints::default(),
+                )
+                .expect("report-sample does not authorize evaluation");
+                assert_eq!(violation.original_policy, policy);
+                assert_eq!(violation.disposition, disposition);
+                assert_eq!(
+                    violation.sample,
+                    if valid { "blocked()" } else { "" },
+                    "{policy:?}"
+                );
+            }
+            let policy = format!(
+                "require-trusted-types-for 'script'; script-src {prefix}'trusted-types-eval'{suffix}"
+            );
+            assert_eq!(
+                content_security_policy_allows_trusted_types_eval(std::slice::from_ref(&policy)),
+                valid,
+                "{policy:?}"
+            );
         }
     }
 
