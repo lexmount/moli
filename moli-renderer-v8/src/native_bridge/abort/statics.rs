@@ -74,23 +74,22 @@ pub(crate) fn abort_signal_any_callback<'s>(
     let Some(parsed) = webidl::parse_args::<abort_signal::AnyArgs<'s>>(scope, &args) else {
         return;
     };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    if let Some(signal) = new_dependent_abort_signal(scope, &parsed.signals) {
+        rv.set(signal.into());
+    } else {
         rv.set_null();
-        return;
-    };
+    }
+}
+
+pub(crate) fn new_dependent_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signals: &[v8::Local<'s, v8::Object>],
+) -> Option<v8::Local<'s, v8::Object>> {
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
-    let Some(signal) = create_signal(scope, host, false, None) else {
-        rv.set_null();
-        return;
-    };
-    let Some(composite_signal_id) = AbortStore::signal_id_from_object(scope, signal) else {
-        rv.set_null();
-        return;
-    };
-
-    let signals = parsed.signals;
-
-    for source_signal in &signals {
+    let signal = create_signal(scope, host, false, None)?;
+    let composite_signal_id = AbortStore::signal_id_from_object(scope, signal)?;
+    for source_signal in signals {
         let Some(source_signal_id) = AbortStore::signal_id_from_object(scope, *source_signal)
         else {
             continue;
@@ -106,18 +105,16 @@ pub(crate) fn abort_signal_any_callback<'s>(
             continue;
         };
         crate::native_bridge::abort::abort_signal(scope, signal, reason);
-        rv.set(signal.into());
-        return;
+        return Some(signal);
     }
 
     host.native_bridge_mut().abort.set_signal_sources(
         composite_signal_id,
         signals
-            .into_iter()
-            .filter_map(|signal| AbortStore::signal_id_from_object(scope, signal)),
+            .iter()
+            .filter_map(|signal| AbortStore::signal_id_from_object(scope, *signal)),
     );
-
-    rv.set(signal.into());
+    Some(signal)
 }
 
 fn abort_signal_timeout_fire_native_callback(

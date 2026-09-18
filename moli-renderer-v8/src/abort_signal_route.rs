@@ -87,6 +87,18 @@ pub(crate) struct ResolvedAbortSignal<'s> {
 }
 
 impl<'s> ResolvedAbortSignal<'s> {
+    /// Uses the same dependency graph as AbortSignal.any, without calling a
+    /// mutable JavaScript static method or relaying through author event listeners.
+    pub(crate) fn dependent(scope: &mut v8::PinScope<'s, '_>, sources: &[Self]) -> Option<Self> {
+        let sources: Vec<_> = sources.iter().map(|source| source.signal).collect();
+        let signal = if context_host_ptr_from_global_bridge(scope).is_some() {
+            crate::native_bridge::abort::new_dependent_abort_signal(scope, &sources)?
+        } else {
+            crate::worker::abort::new_worker_dependent_abort_signal(scope, &sources)?
+        };
+        Self::resolve(scope, signal)
+    }
+
     /// Creates a signal in the current realm without consulting author-visible
     /// constructors or maintaining another store for native algorithms.
     pub(crate) fn new(scope: &mut v8::PinScope<'s, '_>) -> Option<Self> {
