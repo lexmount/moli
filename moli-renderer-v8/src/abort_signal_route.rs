@@ -14,6 +14,65 @@ use crate::worker::abort as worker_abort;
 use moli_webapi::abort_signal::AbortSignalOwner;
 pub(crate) use moli_webapi::abort_signal::ResolvedAbortSignal;
 
+const RETHROW_ABORT_ALGORITHM: &str = "__moliRethrowAbortAlgorithm";
+const WEAK_ABORT_ALGORITHM: &str = "__moliWeakAbortAlgorithm";
+
+pub(crate) enum AbortAlgorithm {
+    Strong(v8::Global<v8::Function>),
+    Weak(v8::Weak<v8::Function>),
+}
+
+impl AbortAlgorithm {
+    pub(crate) fn new<'s>(
+        scope: &mut v8::PinScope<'s, '_>,
+        function: v8::Local<'s, v8::Function>,
+    ) -> Self {
+        if crate::util::get_private_value(scope, function.into(), WEAK_ABORT_ALGORITHM)
+            .is_some_and(|value| value.is_true())
+        {
+            Self::Weak(v8::Weak::new(scope, function))
+        } else {
+            Self::Strong(v8::Global::new(scope, function))
+        }
+    }
+
+    pub(crate) fn prepare<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<v8::Local<'s, v8::Function>> {
+        match self {
+            Self::Strong(function) => Some(v8::Local::new(scope, function)),
+            Self::Weak(function) => function.to_local(scope),
+        }
+    }
+}
+
+/// Most internal abort algorithms cannot throw. Observable iterator closing
+/// is an exception: its synchronous return() failure escapes AbortController.abort.
+/// Keep this policy on the native callback, in the existing signal-owned list.
+pub(crate) fn invoke_abort_algorithm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    label: &str,
+    algorithm: v8::Local<'s, v8::Function>,
+    signal: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+) -> bool {
+    if crate::util::get_private_value(scope, algorithm.into(), RETHROW_ABORT_ALGORITHM)
+        .is_some_and(|value| value.is_true())
+    {
+        algorithm.call(scope, signal.into(), &[reason]).is_some()
+    } else {
+        let _ = crate::exception_reporting::invoke_callback(
+            scope,
+            label,
+            algorithm,
+            signal.into(),
+            &[reason],
+        );
+        true
+    }
+}
+
 static WINDOW_SIGNALS: AbortSignalOwner = AbortSignalOwner {
     is_aborted: |scope, signal| {
         context_host_ptr_from_global_bridge(scope)
@@ -70,6 +129,36 @@ pub(crate) fn new_abort_signal<'s>(
         worker_abort::new_worker_abort_signal(scope)?
     };
     ResolvedAbortSignal::resolve(scope, signal)
+}
+
+pub(crate) fn register_rethrowing_algorithm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: ResolvedAbortSignal<'s>,
+    algorithm: v8::Local<'s, v8::Function>,
+) -> bool {
+    crate::util::set_private_value(
+        scope,
+        algorithm.into(),
+        RETHROW_ABORT_ALGORITHM,
+        v8::Boolean::new(scope, true).into(),
+    );
+    signal.register_algorithm(scope, algorithm)
+}
+
+/// The producer traces this callback itself. Its private subscription
+/// signal must not add a Rust root that outlives a discarded async iterator.
+pub(crate) fn register_weak_rethrowing_algorithm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: ResolvedAbortSignal<'s>,
+    algorithm: v8::Local<'s, v8::Function>,
+) -> bool {
+    crate::util::set_private_value(
+        scope,
+        algorithm.into(),
+        WEAK_ABORT_ALGORITHM,
+        v8::Boolean::new(scope, true).into(),
+    );
+    register_rethrowing_algorithm(scope, signal, algorithm)
 }
 
 /// Converts the final AddEventListenerOptions member after capture/once/passive.
