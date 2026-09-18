@@ -131,6 +131,20 @@ pub(crate) fn new_abort_signal<'s>(
     ResolvedAbortSignal::resolve(scope, signal)
 }
 
+/// Creates a dependent signal in the current realm's native AbortSignal graph.
+pub(crate) fn new_dependent_abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    sources: &[ResolvedAbortSignal<'s>],
+) -> Option<ResolvedAbortSignal<'s>> {
+    let sources: Vec<_> = sources.iter().map(|source| source.value()).collect();
+    let signal = if context_host_ptr_from_global_bridge(scope).is_some() {
+        crate::native_bridge::abort::new_dependent_abort_signal(scope, &sources)?
+    } else {
+        worker_abort::new_worker_dependent_abort_signal(scope, &sources)?
+    };
+    ResolvedAbortSignal::resolve(scope, signal)
+}
+
 pub(crate) fn register_rethrowing_algorithm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     signal: ResolvedAbortSignal<'s>,
