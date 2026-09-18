@@ -217,13 +217,9 @@ impl DocumentRuntime {
                 .dom_host
                 .set_script_force_async(request.handle(), false);
         }
-        let candidate = self.mutations.collect_connected_script_start_candidate(
-            scope,
-            host_ptr,
-            &mut self.dom_host,
-            request.handle(),
-            &self.document,
-        );
+        let candidate = self
+            .mutations
+            .collect_connected_script_start_candidate(&self.dom_host, request.handle());
         if let Some(candidate) = candidate {
             finish_runtime_script_start_candidate(self, scope, host_ptr, candidate);
         }
