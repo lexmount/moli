@@ -9,6 +9,7 @@ mod consume;
 mod event_target;
 mod first;
 mod from;
+mod inspect;
 mod observer;
 mod promise;
 mod state;
@@ -40,6 +41,8 @@ struct ObservablePrototype {
     drop: (),
     #[webapi(method = "takeUntil", length = 1, callback = until::take_until)]
     take_until: (),
+    #[webapi(method, length = 0, callback = inspect::inspect)]
+    inspect: (),
     #[webapi(method, length = 0, returns_promise, callback = first::first)]
     first: (),
     #[webapi(method, length = 0, returns_promise, callback = collect::last)]
@@ -145,23 +148,38 @@ fn observer_arg<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
 ) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
+    observer_callbacks(
+        scope,
+        dictionary(args.get(index), "SubscriptionObserver must be an object")?,
+        "Observable.subscribe",
+        "SubscriptionObserver",
+        &[("complete", COMPLETE), ("error", ERROR), ("next", NEXT)],
+    )
+}
+
+fn observer_callbacks<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    input: Option<v8::Local<'s, v8::Object>>,
+    prefix: &'static str,
+    dictionary_name: &'static str,
+    members: &[(&'static str, &'static str)],
+) -> Result<v8::Local<'s, v8::Object>, webidl::WebIdlError> {
     let observer = v8::Object::new(scope);
-    let Some(input) = dictionary(args.get(index), "SubscriptionObserver must be an object")? else {
+    let Some(input) = input else {
         return Ok(observer);
     };
     if input.is_callable() {
         let callback = webidl::convert::<webidl::WebIdlCallbackFunction>(
             scope,
             input.into(),
-            webidl::Context::argument("Observable.subscribe", 1),
+            webidl::Context::argument(prefix, 1),
         )?;
         set_callback(scope, observer, NEXT, callback);
         return Ok(observer);
     }
-    // Web IDL dictionary member conversion is lexicographic, even though the
-    // subscription itself delivers next/error/complete notifications.
-    for (name, slot) in [("complete", COMPLETE), ("error", ERROR), ("next", NEXT)] {
-        let context = webidl::Context::member("SubscriptionObserver", name);
+    // Callers list dictionary members in Web IDL's lexicographic order.
+    for &(name, slot) in members {
+        let context = webidl::Context::member(dictionary_name, name);
         if let Some(value) = webidl::property_result(scope, input, name, context)?
             && !value.is_undefined()
         {
@@ -295,6 +313,7 @@ fn subscribe_internal<'s>(
         } else if !from::subscribe(scope, observable, subscriber)
             && !transform::subscribe(scope, observable, subscriber)
             && !until::subscribe(scope, observable, subscriber)
+            && !inspect::subscribe(scope, observable, subscriber)
         {
             event_target::subscribe(scope, observable, subscriber);
         }
