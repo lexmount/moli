@@ -587,7 +587,14 @@ impl DocumentRuntime {
         handle: DomHandle,
         deep: bool,
     ) -> Option<DomHandle> {
+        let character_set = self
+            .document_character_set_for_handle(handle)
+            .map(str::to_owned);
         let clone = self.dom_host.clone_node(handle, deep)?;
+        if let Some(character_set) = character_set {
+            self.dom_host
+                .set_document_character_set_for_handle(clone, &character_set);
+        }
         let registry_retargets =
             custom_elements::registry_association_retargets_for_clone(host_ptr, handle, clone);
         custom_elements::apply_registry_association_retargets(host_ptr, &registry_retargets);

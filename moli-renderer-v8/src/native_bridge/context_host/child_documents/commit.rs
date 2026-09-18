@@ -205,6 +205,8 @@ impl JsContextHost {
         };
         // Navigation-created Documents start loading before parser scripts can
         // observe them. Keep the generic detached/initial-empty default complete.
+        self.dom_host_mut()
+            .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
         let _ = self
             .set_dom_document_ready_state_for_handle(document_handle, DocumentReadyState::Loading);
         let document_url = self.document_url_for_handle(document_handle);

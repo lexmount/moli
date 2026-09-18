@@ -134,6 +134,65 @@ fn new_detached_document_shell<'s>(
     Some(document)
 }
 
+fn set_detached_document_parse_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    quirks_mode: selectors::matching::QuirksMode,
+    character_set: &str,
+) -> Option<()> {
+    let compat_mode = if quirks_mode == selectors::matching::QuirksMode::Quirks {
+        "BackCompat"
+    } else {
+        "CSS1Compat"
+    };
+    let state = detached_state_object(scope, document)?;
+    state.set(
+        scope,
+        v8str(scope, "compatMode").into(),
+        v8_string(scope, compat_mode)?.into(),
+    )?;
+    state.set(
+        scope,
+        v8str(scope, "characterSet").into(),
+        v8_string(scope, character_set)?.into(),
+    )?;
+    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, document)?;
+    let dom_host = unsafe { &mut *runtime_ptr }.dom_host_mut();
+    dom_host.set_document_quirks_mode_for_handle(handle, quirks_mode);
+    dom_host.set_document_character_set_for_handle(handle, character_set);
+    Some(())
+}
+
+pub(in crate::native_bridge::document) fn build_detached_document_clone_shell<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, source)?;
+    let runtime = unsafe { &*runtime_ptr };
+    let document = runtime.dom_host().node(handle)?.as_document()?;
+    let kind = detached_state_string(scope, source, "documentKind").unwrap_or_else(|| {
+        if document.is_html_document() {
+            "html"
+        } else {
+            "xml"
+        }
+        .to_owned()
+    });
+    let url = document.url().clone();
+    let content_type = document.content_type().to_owned();
+    let quirks_mode = document.quirks_mode();
+    let character_set = document.character_set().to_owned();
+
+    // Start with an empty, inert Document. Only the metadata required by the
+    // DOM cloning algorithm is inherited, before any cloned children are added.
+    let cloned = new_detached_document_shell(scope, &kind, &content_type, url, false)?;
+    set_detached_document_parse_metadata(scope, cloned, quirks_mode, &character_set)?;
+    inherit_detached_document_origin(scope, cloned, source);
+    Some(cloned)
+}
+
 fn import_detached_document_children_from_host<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
@@ -212,34 +271,10 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     let url = detached_document_url(&parsed);
     let quirks_mode = parsed.dom().document()?.quirks_mode();
     let scripting_enabled = parsed.dom().document()?.scripting_enabled();
-    let compat_mode = if quirks_mode == selectors::matching::QuirksMode::Quirks {
-        "BackCompat"
-    } else {
-        "CSS1Compat"
-    };
     let content_type = content_type.unwrap_or(parsed.dom().document()?.content_type());
+    let character_set = character_set.unwrap_or(parsed.dom().document()?.character_set());
     let document = new_detached_document_shell(scope, kind, content_type, url, scripting_enabled)?;
-    if let Some(state) = detached_state_object(scope, document) {
-        let _ = state.set(
-            scope,
-            v8str(scope, "compatMode").into(),
-            v8_string(scope, compat_mode)?.into(),
-        );
-        if let Some(character_set) = character_set {
-            let _ = state.set(
-                scope,
-                v8str(scope, "characterSet").into(),
-                v8_string(scope, character_set)?.into(),
-            );
-        }
-    }
-    if let Some(document_handle) = detached_native_handle(scope, document)
-        && let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let _ = unsafe { &mut *runtime_ptr }
-            .dom_host_mut()
-            .set_document_quirks_mode_for_handle(document_handle, quirks_mode);
-    }
+    set_detached_document_parse_metadata(scope, document, quirks_mode, character_set)?;
     import_detached_document_children_from_host(scope, document, &parsed)?;
     Some(document)
 }

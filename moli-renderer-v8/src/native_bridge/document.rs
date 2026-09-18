@@ -1261,20 +1261,14 @@ fn document_character_set_getter_function<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = args.this();
-    if detached_state_object(scope, receiver).is_some() {
-        let character_set = detached_state_string(scope, receiver, "characterSet")
-            .unwrap_or_else(|| "UTF-8".into());
-        set_document_string_return_value(scope, &mut rv, &character_set);
-        return;
-    }
     let Some((runtime_ptr, handle)) = document_receiver_runtime_and_handle(scope, receiver) else {
         rv.set_undefined();
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
     let character_set = runtime
-        .child_browsing_context_character_set_for_document_handle(handle)
-        .unwrap_or_else(|| runtime.document_character_set())
+        .document_character_set_for_handle(handle)
+        .unwrap_or("UTF-8")
         .to_owned();
     set_document_string_return_value(scope, &mut rv, &character_set);
 }
