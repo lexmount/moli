@@ -1,6 +1,7 @@
 use super::*;
 use crate::custom_elements::CustomElementRegistryKey;
 
+mod inactive_document;
 mod insertion;
 mod parser;
 mod upgrade_reentry;

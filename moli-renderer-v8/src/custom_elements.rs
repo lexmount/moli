@@ -132,13 +132,13 @@ pub(crate) use registry_clone_retarget::{
 };
 mod registry_install;
 pub(crate) use registry_install::{
-    build_custom_elements_registry_for_window, rebind_materialized_child_custom_elements_registry,
+    build_custom_elements_registry_for_window, custom_elements_registry_for_current_realm,
+    rebind_materialized_child_custom_elements_registry,
 };
 mod registry_runtime;
 pub(crate) use registry_runtime::{
     mark_scoped_custom_elements_registry, registry_association_from_create_options_value,
-    registry_association_from_value, registry_association_matches_document_default,
-    registry_store_key,
+    registry_association_from_value, registry_association_matches_document, registry_store_key,
 };
 mod registry_initializer;
 pub(crate) use registry_initializer::initialize_registry_for_subtree;

@@ -437,6 +437,8 @@ impl StaticHandleCollectionStore {
 struct BridgeContextWrapperCache {
     wrappers: DenseReflectorMap<BridgeCachedWrapper>,
     live_collection_wrappers: HashMap<LiveCollectionDescriptor, BridgeCachedWrapper>,
+    retired_wrappers: HashMap<ReflectorId, v8::Weak<v8::Object>>,
+    retired_live_collection_wrappers: HashMap<LiveCollectionDescriptor, v8::Weak<v8::Object>>,
 }
 
 #[derive(Debug)]
@@ -455,6 +457,9 @@ pub(crate) fn contexts_share_wrapper_world(
             _ => false,
         }
 }
+
+#[derive(Debug)]
+struct RetiredWrapperContext;
 
 #[derive(Debug)]
 struct BridgeCachedWrapper {
@@ -563,6 +568,7 @@ pub(crate) fn clear_context_wrapper_cache_for_teardown(
     include_shared_default_world: bool,
 ) {
     let context = scope.get_current_context();
+    let _ = context.set_slot(Rc::new(RetiredWrapperContext));
     let _ = crate::context_bootstrap::retain_window_document_in_retired_realm(scope);
     crate::util::detach_document_page_context(context);
     if let Some(host) = crate::util::context_host_ptr_from_context_slot(context) {
@@ -654,6 +660,13 @@ impl BridgeIdentityStore {
             .wrappers
             .get(&reflector_id)
             .and_then(|entry| entry.wrapper.to_local(scope))
+            .or_else(|| {
+                context_wrapper_cache(scope)
+                    .borrow()
+                    .retired_wrappers
+                    .get(&reflector_id)
+                    .and_then(|wrapper| wrapper.to_local(scope))
+            })
     }
 
     pub(super) fn cache_wrapper(
@@ -666,10 +679,21 @@ impl BridgeIdentityStore {
             set_context_window_wrapper(scope, wrapper);
             return;
         }
-        context_wrapper_cache(scope)
-            .borrow_mut()
-            .wrappers
-            .insert(reflector_id, BridgeCachedWrapper::new(scope, wrapper));
+        let cache = context_wrapper_cache(scope);
+        let mut cache = cache.borrow_mut();
+        if scope
+            .get_current_context()
+            .get_slot::<RetiredWrapperContext>()
+            .is_some()
+        {
+            cache
+                .retired_wrappers
+                .insert(reflector_id, v8::Weak::new(scope, wrapper));
+        } else {
+            cache
+                .wrappers
+                .insert(reflector_id, BridgeCachedWrapper::new(scope, wrapper));
+        }
     }
 
     pub(super) fn register_live_collection(&mut self, descriptor: LiveCollectionDescriptor) -> u32 {
@@ -693,6 +717,13 @@ impl BridgeIdentityStore {
             .live_collection_wrappers
             .get(descriptor)
             .and_then(|entry| entry.wrapper.to_local(scope))
+            .or_else(|| {
+                context_wrapper_cache(scope)
+                    .borrow()
+                    .retired_live_collection_wrappers
+                    .get(descriptor)
+                    .and_then(|wrapper| wrapper.to_local(scope))
+            })
     }
 
     pub(super) fn cache_live_collection_wrapper(
@@ -701,10 +732,21 @@ impl BridgeIdentityStore {
         descriptor: LiveCollectionDescriptor,
         wrapper: v8::Local<'_, v8::Object>,
     ) {
-        context_wrapper_cache(scope)
-            .borrow_mut()
-            .live_collection_wrappers
-            .insert(descriptor, BridgeCachedWrapper::new(scope, wrapper));
+        let cache = context_wrapper_cache(scope);
+        let mut cache = cache.borrow_mut();
+        if scope
+            .get_current_context()
+            .get_slot::<RetiredWrapperContext>()
+            .is_some()
+        {
+            cache
+                .retired_live_collection_wrappers
+                .insert(descriptor, v8::Weak::new(scope, wrapper));
+        } else {
+            cache
+                .live_collection_wrappers
+                .insert(descriptor, BridgeCachedWrapper::new(scope, wrapper));
+        }
     }
 
     pub(super) fn retire_default_world_wrappers_for_realm(
