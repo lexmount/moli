@@ -20,58 +20,12 @@ fn native_clone_source_handle<'s>(
     detached_native_handle_for_runtime(scope, runtime_ptr, node)
 }
 
-fn detached_native_element_local_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let runtime_ptr = crate::util::context_host_ptr_from_global_bridge(scope)?;
-    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, element)?;
-    let dom_host = unsafe { &*runtime_ptr }.dom_host();
-    dom_host
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .map(|element| element.local_name().to_owned())
-}
-
-fn detached_document_root_local_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-) -> Option<String> {
-    let root = detached_document_element_object(scope, document)?;
-    detached_native_element_local_name(scope, root)
-        .or_else(|| object_string_property(scope, root, "localName"))
-}
-
 fn clone_detached_document_shell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
     deep: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let document_kind = detached_state_string(scope, document, "documentKind");
-    let root_is_html = detached_document_root_local_name(scope, document)
-        .is_some_and(|name| name.eq_ignore_ascii_case("html"));
-    let html_shell = match document_kind.as_deref() {
-        Some("html") => true,
-        Some(_) => false,
-        None => root_is_html,
-    };
-    let helper = match document_kind.as_deref() {
-        Some("html") => "__createDetachedHTMLDocument",
-        Some("xml") => "__createDetachedXmlDocument",
-        Some("plain") => "__createDetachedDocument",
-        _ if root_is_html => "__createDetachedHTMLDocument",
-        _ => "__createDetachedDocument",
-    };
-    let cloned = call_global_bridge_method(scope, helper, &[])
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let content_type = detached_document_content_type_value(scope, document)?;
-    set_detached_document_content_type(scope, cloned, &content_type)?;
-    inherit_detached_document_origin(scope, cloned, document);
-    if html_shell {
-        for child in detached_child_node_objects(scope, cloned) {
-            detached_detach_from_parent(scope, child);
-        }
-    }
+    let cloned = build_detached_document_clone_shell(scope, document)?;
     if !deep {
         return Some(cloned);
     }

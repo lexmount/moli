@@ -79,13 +79,7 @@ fn document_query_encoding_for_handle(
     handle: DomHandle,
 ) -> Option<&'static encoding_rs::Encoding> {
     let document_handle = document_handle_for_url_context(runtime, handle)?;
-    let character_set = if document_handle == runtime.dom_host().document_handle() {
-        runtime.document_character_set()
-    } else {
-        runtime
-            .child_browsing_context_character_set_for_document_handle(document_handle)
-            .unwrap_or("UTF-8")
-    };
+    let character_set = runtime.document_character_set_for_handle(document_handle)?;
     form_output_encoding_for_label(character_set).filter(|encoding| *encoding != encoding_rs::UTF_8)
 }
 
