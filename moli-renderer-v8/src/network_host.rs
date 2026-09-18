@@ -28,7 +28,7 @@ use moli_webapi_declare::WebApiObject;
 use crate::network::ResourceRequestClient;
 
 pub(crate) use self::async_fetch::{
-    browser_request_needs_manual_preflight_redirects,
+    browser_request_needs_manual_preflight_redirects, collect_image_response_into_parkable,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers,
@@ -112,8 +112,9 @@ pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
 pub(crate) use self::headers::{HeadersGuard, filter_headers_for_guard};
 pub(crate) use self::image::{
-    ImageElementResourceFetchStart, ScannedImagePreloadStart, image_response_descriptor,
-    start_image_element_resource_fetch, start_scanned_image_preload,
+    ImageElementResourceFetchStart, ScannedImagePreloadStart,
+    image_response_descriptor_from_parkable, start_image_element_resource_fetch,
+    start_scanned_image_preload,
 };
 pub(in crate::network_host) use self::js_values::{defined_object_string_property, v8_json_parse};
 pub(crate) use self::media::{
