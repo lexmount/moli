@@ -4291,6 +4291,8 @@ dom/nodes/rootNode.html
 dom/nodes/svg-template-querySelector.html
 dom/observable/tentative/crashtests/observable-gc.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/crashtests/observable-gc.any.js?moli-wpt-any=window
+dom/observable/tentative/crashtests/observable-takeUntil-toArray.any.js?moli-wpt-any=dedicatedworker
+dom/observable/tentative/crashtests/observable-takeUntil-toArray.any.js?moli-wpt-any=window
 dom/observable/tentative/idlharness.html
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-constructor.any.js?moli-wpt-any=window
@@ -4311,6 +4313,7 @@ dom/observable/tentative/observable-first.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-forEach.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-forEach.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-forEach.window.js?moli-wpt-script=window
+dom/observable/tentative/observable-inspect.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-last.any.js?moli-wpt-any=dedicatedworker
 dom/observable/tentative/observable-last.any.js?moli-wpt-any=window
 dom/observable/tentative/observable-map.any.js?moli-wpt-any=dedicatedworker
