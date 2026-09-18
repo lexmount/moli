@@ -792,6 +792,124 @@ mod tests {
     }
 
     #[test]
+    fn cors_response_fields_require_a_single_origin_value() {
+        let response_url = url("https://other.test/data");
+        for (origin, matching) in [
+            (
+                WebOrigin::from_url(&url("https://page.test/a")),
+                "https://page.test",
+            ),
+            (WebOrigin::Opaque, "null"),
+        ] {
+            for mode in [
+                RequestCredentialsMode::Omit,
+                RequestCredentialsMode::SameOrigin,
+                RequestCredentialsMode::Include,
+            ] {
+                for (values, allowed) in [
+                    (vec![], false),
+                    (vec![""], false),
+                    (vec![matching], true),
+                    (vec!["*"], mode != RequestCredentialsMode::Include),
+                    (vec!["https://wrong.test"], false),
+                    (vec![matching, matching], false),
+                    (vec![matching, ""], false),
+                    (vec!["", matching], false),
+                    (vec!["*", matching], false),
+                    (vec!["*", ""], false),
+                    (vec!["*, *"], false),
+                ] {
+                    let mut headers = vec![(
+                        "Access-Control-Allow-Credentials".to_owned(),
+                        "true".to_owned(),
+                    )];
+                    headers.extend(values.iter().enumerate().map(|(index, value)| {
+                        (
+                            if index == 0 {
+                                "Access-Control-Allow-Origin"
+                            } else {
+                                "access-control-allow-origin"
+                            }
+                            .to_owned(),
+                            (*value).to_owned(),
+                        )
+                    }));
+                    assert_eq!(
+                        validate_cors_response_chain(
+                            &origin,
+                            &header_response(response_url.clone(), headers.clone()),
+                            mode
+                        )
+                        .is_ok(),
+                        allowed,
+                        "origin={matching}, mode={mode:?}, values={values:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cors_response_fields_check_credentials_only_when_included() {
+        let document_url = url("https://page.test/a");
+        let response_url = url("https://other.test/data");
+        for values in [
+            vec![],
+            vec![""],
+            vec!["true"],
+            vec!["TRUE"],
+            vec!["True"],
+            vec!["false"],
+            vec!["true, true"],
+            vec!["true", "true"],
+            vec!["true", "false"],
+            vec!["true", ""],
+            vec!["", "true"],
+        ] {
+            let mut headers = vec![(
+                "Access-Control-Allow-Origin".to_owned(),
+                "https://page.test".to_owned(),
+            )];
+            headers.extend(values.iter().enumerate().map(|(index, value)| {
+                (
+                    if index == 0 {
+                        "Access-Control-Allow-Credentials"
+                    } else {
+                        "ACCESS-CONTROL-ALLOW-CREDENTIALS"
+                    }
+                    .to_owned(),
+                    (*value).to_owned(),
+                )
+            }));
+            for mode in [
+                RequestCredentialsMode::Omit,
+                RequestCredentialsMode::SameOrigin,
+                RequestCredentialsMode::Include,
+            ] {
+                assert_eq!(
+                    validate_cors_response_chain(
+                        WebOrigin::from_url(&document_url),
+                        &header_response(response_url.clone(), headers.clone()),
+                        mode
+                    )
+                    .is_ok(),
+                    mode != RequestCredentialsMode::Include || values == ["true"],
+                    "mode={mode:?}, values={values:?}"
+                );
+                assert!(
+                    validate_cors_response_chain(
+                        WebOrigin::from_url(&document_url),
+                        &header_response(document_url.clone(), headers.clone()),
+                        mode
+                    )
+                    .is_ok(),
+                    "same-origin responses do not require CORS permission"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn cors_response_header_lookup_uses_http_header_names() {
         let headers = vec![
             ("Access-Control-Allow-Origin".to_owned(), "*".to_owned()),
