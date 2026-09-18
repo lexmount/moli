@@ -465,10 +465,6 @@ impl<'a> Writer<'a> {
                     '&' => self.output.push_str("&amp;"),
                     '<' => self.output.push_str("&lt;"),
                     '>' => self.output.push_str("&gt;"),
-                    '\\' | '`' | '*' | '_' | '[' | ']' | '|' | '~' => {
-                        self.output.push('\\');
-                        self.output.push(ch);
-                    }
                     _ => self.output.push(ch),
                 }
             }
