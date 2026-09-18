@@ -1,6 +1,147 @@
 use super::*;
 
 #[test]
+fn observable_take_until_preserves_conversion_notifier_order_sharing_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-take-until.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.takeUntilResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-take-until.js")
+    ))
+    .expect("Observable.takeUntil fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("takeUntilResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 154, "{result}");
+}
+
+#[test]
+fn observable_take_until_preserves_result_conversion_and_exception_realms() {
+    let mut vm = new_storage_test_vm("https://observable-take-until-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.takeUntil realm");
+    vm.eval(r#"
+(async () => {
+  const child = document.querySelector('iframe').contentWindow, checks = [], log = [];
+  const method = child.Observable.prototype.takeUntil;
+  const source = new Observable(s => { log.push('source'); s.next(1); s.complete(); });
+  const notifier = new child.Observable(s => { log.push('notifier'); s.complete(); });
+  const result = method.call(source, notifier);
+  checks.push(result instanceof child.Observable, !(result instanceof Observable), Object.getPrototypeOf(result) === child.Observable.prototype);
+  checks.push(log.length === 0);
+  const values = await result.toArray();
+  checks.push(values instanceof child.Array, values[0] === 1);
+  checks.push(JSON.stringify(log) === '["notifier","source"]');
+  const local = Observable.prototype.takeUntil.call(child.Observable.from([2]), new Observable(s => s.complete()));
+  checks.push(local instanceof Observable, !(local instanceof child.Observable), Object.getPrototypeOf(local) === Observable.prototype);
+  const localValues = await local.toArray();
+  checks.push(localValues instanceof Array, localValues[0] === 2);
+  let reads = 0;
+  const input = {get [Symbol.iterator]() { reads++; return [][Symbol.iterator]; }};
+  const revoked = Proxy.revocable(source, {}); revoked.revoke();
+  for (const invalid of [{}, new Proxy(source, {}), revoked.proxy]) {
+    try { method.call(invalid, input); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+  }
+  checks.push(reads === 0);
+  for (const invalid of [1, {}, new Proxy(Promise.resolve(1), {})]) {
+    try { method.call(source, invalid); } catch (e) { checks.push(e instanceof child.TypeError, !(e instanceof TypeError)); }
+  }
+  const marker = new child.Error('notifier');
+  try { method.call(source, {get [Symbol.iterator]() { throw marker; }}); } catch (e) { checks.push(e === marker, e instanceof child.Error); }
+  method.call(new Observable(s => s.error(marker)), new child.Observable(() => {}))
+    .subscribe({error: e => checks.push(e === marker, e instanceof child.Error)});
+  let starts = 0, errors = 0, completions = 0;
+  method.call(new Observable(() => { starts++; }), new child.Observable(s => s.error(marker)))
+    .subscribe({error: () => errors++, complete: () => completions++});
+  checks.push(errors === 0 && completions === 1, starts === 0);
+  Object.setPrototypeOf(notifier, null);
+  const branded = method.call(source, notifier);
+  checks.push(branded instanceof child.Observable, (await branded.toArray())[0] === 1);
+  globalThis.takeUntilRealms = JSON.stringify(checks);
+})();
+"#).unwrap();
+    let checks: Vec<bool> = serde_json::from_str(&vm.eval("takeUntilRealms").unwrap()).unwrap();
+    assert_eq!(checks.len(), 33);
+    assert!(checks.iter().all(|value| *value), "{checks:?}");
+}
+
+#[test]
+fn observable_take_until_traces_both_inputs_and_releases_an_exhausted_notifier() {
+    let mut vm = new_storage_test_vm("https://observable-take-until-gc.test/");
+    vm.eval(r#"
+globalThis.untilChains = [];
+// Give each producer its own closure environment so a live source callback
+// cannot itself retain the notifier's subscriber and token.
+function makeUntilGcInput() {
+  let subscriber;
+  const token = {}, callback = value => token && value;
+  const source = new Observable(s => { subscriber = s; });
+  return {source, mapped: source.map(callback), callback, token, get subscriber() { return subscriber; }};
+}
+for (const mode of ['abandoned', 'notifier', 'source', 'notifier complete']) (() => {
+  const source = makeUntilGcInput(), notifier = makeUntilGcInput();
+  const result = source.mapped.takeUntil(notifier.mapped), promise = result.toArray();
+  source.subscriber.next(1);
+  if (mode === 'notifier complete') notifier.subscriber.complete();
+  const entry = {mode, templates: [source.source, notifier.source, source.mapped, notifier.mapped, result].map(v => new WeakRef(v)),
+    source: [source.subscriber, source.callback, source.token].map(v => new WeakRef(v)),
+    notifier: [notifier.subscriber, notifier.callback, notifier.token].map(v => new WeakRef(v))};
+  if (mode !== 'abandoned') entry.promise = promise;
+  untilChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+untilChains.every(c => c.templates.every(ref => ref.deref() === undefined)),
+untilChains.every(c => c.source.every(ref => (ref.deref() !== undefined) === (c.mode !== 'abandoned'))),
+untilChains.every(c => c.notifier.every(ref => (ref.deref() !== undefined) === (c.mode === 'notifier' || c.mode === 'source')))
+])"#).unwrap(), "[true,true,true]");
+    vm.eval(
+        r#"
+for (const c of untilChains.filter(c => c.promise)) {
+  c.promise.then(values => { c.correct = JSON.stringify(values) === '[1,2]'; });
+  const source = c.source[0].deref(), notifier = c.notifier[0].deref();
+  source.next(2);
+  if (c.mode === 'notifier') notifier.next('stop'); else source.complete();
+  c.closed = !source.active && (!notifier || !notifier.active);
+}
+"#,
+    )
+    .unwrap();
+    assert_eq!(
+        vm.eval("untilChains.filter(c => c.promise).every(c => c.correct && c.closed)")
+            .unwrap(),
+        "true"
+    );
+    collect(&mut vm);
+    assert_eq!(vm.eval("untilChains.every(c => [...c.source, ...c.notifier].every(ref => ref.deref() === undefined))").unwrap(), "true");
+    vm.eval(r#"
+globalThis.cancelledUntil = (() => {
+  let s, n;
+  const sourceToken = {}, notifierToken = {}, ac = new AbortController();
+  const sourceCallback = value => sourceToken && value, notifierCallback = value => notifierToken && value;
+  const source = new Observable(subscriber => { s = subscriber; }).map(sourceCallback);
+  const notifier = new Observable(subscriber => { n = subscriber; }).map(notifierCallback);
+  const promise = source.takeUntil(notifier).toArray({signal: ac.signal});
+  promise.catch(() => {}); ac.abort('cancel');
+  return {promise, signal: ac.signal, subscribers: [s, n], refs: [sourceToken, notifierToken, sourceCallback, notifierCallback].map(v => new WeakRef(v))};
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("cancelledUntil.subscribers.every(s => !s.active && s.signal.reason === 'cancel') && cancelledUntil.refs.every(ref => ref.deref() === undefined)").unwrap(), "true");
+}
+
+#[test]
 fn observable_count_operators_preserve_conversion_sharing_reentrancy_and_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-count-operators.test/");
     vm.eval(&format!(
