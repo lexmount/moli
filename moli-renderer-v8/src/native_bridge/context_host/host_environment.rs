@@ -839,10 +839,17 @@ impl JsContextHost {
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
         let changed = self.viewport_surface != viewport_surface;
-        if changed {
+        let previous_style_viewport = self.style_viewport();
+        self.viewport_surface = viewport_surface;
+        if self.style_viewport() != previous_style_viewport {
             self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
         }
-        self.viewport_surface = viewport_surface;
+        if changed {
+            // Presentation-only changes still invalidate the screencast token.
+            self.document_layout_state
+                .get_mut()
+                .mark_visual_state_dirty();
+        }
         changed
     }
 

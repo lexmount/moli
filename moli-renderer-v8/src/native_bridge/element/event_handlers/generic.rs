@@ -330,7 +330,47 @@ fn document_event_handler_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(crate) fn node_event_handler_getter_function<'s>(
+pub(crate) fn shadow_root_event_handler_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(event_handler_property_value_for_target(
+        scope,
+        runtime_ptr,
+        EventTargetHandle::Node(handle),
+        args.data(),
+    ));
+}
+
+pub(crate) fn shadow_root_event_handler_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    set_event_handler_property_for_target(
+        scope,
+        runtime_ptr,
+        EventTargetHandle::Node(handle),
+        args.data(),
+        args.get(0),
+    );
+    rv.set_undefined();
+}
+
+fn node_event_handler_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -495,7 +535,7 @@ fn compile_node_event_attribute_handler<'s>(
     Some(handler)
 }
 
-pub(crate) fn node_event_handler_setter_function<'s>(
+fn node_event_handler_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
