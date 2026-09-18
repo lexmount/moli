@@ -925,6 +925,47 @@ async fn worker_trusted_types_policy_callbacks_follow_webidl_contract() {
 }
 
 #[tokio::test]
+async fn worker_csp_string_compilation_keywords_preserve_source_token_boundaries() {
+    ensure_v8();
+    for keyword in ["unsafe-eval", "wasm-unsafe-eval"] {
+        for (prefix, suffix, valid) in [
+            ("", "", true),
+            ("\t\n", " \r\u{000c}", true),
+            ("\u{000b}", "", false),
+            ("", "\u{000b}", false),
+        ] {
+            let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+            let source = format!(
+                "postMessage(({}).slice(0, 2)); close();",
+                include_str!("../../../../tests/fixtures/csp-eval-source-tokens.js"),
+            );
+            let options =
+                WorkerSpawnOptions::new(source, "https://app.test/worker/main.js".to_owned())
+                    .with_content_security_policies(vec![policy.clone()]);
+            let mut handle = spawn_test_worker_with_options(options);
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let expected = serde_json::json!([
+                if valid && keyword == "unsafe-eval" {
+                    "allowed"
+                } else {
+                    "EvalError"
+                },
+                if valid && keyword == "unsafe-eval" {
+                    "allowed"
+                } else {
+                    "EvalError"
+                },
+            ]);
+            assert_eq!(
+                expect_post_json(message),
+                expected.to_string(),
+                "{policy:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn worker_string_timer_csp_blocks_and_reports_without_blocking_functions() {
     ensure_v8();
     for (policy, report_only, blocked, reports) in [
