@@ -902,11 +902,22 @@ impl PageScriptHost {
         &mut self,
         viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     ) -> bool {
-        if self.configured_viewport_surface() == viewport_surface {
+        let configured = self.configured_viewport_surface();
+        if configured == viewport_surface {
             return false;
         }
         let previous = self.viewport_surface();
-        self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
+        let orientation_only =
+            configured
+                .zip(viewport_surface)
+                .is_some_and(|(mut before, after)| {
+                    before.screen_orientation = after.screen_orientation;
+                    before == after
+                });
+        // The environment task delivers screen orientation changes.
+        if !orientation_only {
+            self.invalidate_layout_inputs(LayoutInputChange::StyleEnvironment);
+        }
         unsafe { &mut *self.document_runtime }.set_viewport_surface(viewport_surface);
         self.sample_root_viewport_change(previous);
         true
