@@ -112,6 +112,7 @@ fn detached_document_write_preserves_existing_noscript_text() {
 (() => {
   const doc = document.implementation.createHTMLDocument("");
   doc.open();
+  doc.write("<body>");
   const noscript = doc.createElement("noscript");
   noscript.textContent = "<em>fallback&</em>";
   doc.body.append(noscript);
@@ -1885,4 +1886,20 @@ fn live_document_clones_snapshot_encoding_independently_of_the_active_document()
         result,
         r#"[["windows-1252","windows-1252","https://document-clone-encoding.test/?%E4"],["windows-1252","windows-1252","https://document-clone-encoding.test/?%E4"]]"#
     );
+}
+
+#[test]
+fn windowless_documents_use_independent_incremental_parser_streams() {
+    let mut vm = new_storage_test_vm("https://windowless-document-stream.test/page.html");
+    vm.eval(
+        "document.appendChild(document.createElement('html')).appendChild(document.createElement('body'));",
+    )
+    .expect("the shared browser fixture needs an initial page body");
+    let fixture = include_str!("../../../../../tests/fixtures/windowless-document-stream.js");
+    let result = vm
+        .eval(&format!("JSON.stringify({fixture})"))
+        .expect("windowless document stream regression probe");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 261);
 }
