@@ -1,6 +1,110 @@
 use super::*;
 
 #[test]
+fn observable_flat_map_preserves_serial_order_conversion_reentrancy_and_cancellation() {
+    let mut vm = new_storage_test_vm("https://observable-flat-map.test/");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.flatMapResult = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-flat-map.js")
+    ))
+    .expect("Observable.flatMap fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("flatMapResult").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert!(result["checks"].as_u64().unwrap() >= 120, "{result}");
+}
+
+#[test]
+fn observable_flat_map_preserves_result_conversion_callback_and_cancellation_realms() {
+    let mut vm = new_storage_test_vm("https://observable-flat-map-realms.test/");
+    vm.eval("document.appendChild(document.createElement('iframe'))")
+        .unwrap();
+    materialize_single_child_default_realm_for_test(&mut vm, "Observable.flatMap realm");
+    vm.eval(&format!(
+        "({}).then(value => {{ globalThis.flatMapRealms = JSON.stringify(value); }});",
+        include_str!("../../../tests/fixtures/observable-flat-map-realms.js")
+    ))
+    .expect("Observable.flatMap realms fixture should evaluate");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("flatMapRealms").unwrap()).unwrap();
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(result["checks"], 31, "{result}");
+}
+
+#[test]
+fn observable_flat_map_traces_both_producers_and_releases_queues_and_closed_graphs() {
+    let mut vm = new_storage_test_vm("https://observable-flat-map-gc.test/");
+    vm.eval(r#"
+function makeFlatMapSource() {
+  let subscriber;
+  return {source: new Observable(s => { subscriber = s; }), get subscriber() { return subscriber; }};
+}
+function makeFlatMapper(inner) {
+  const token = {values: []};
+  return {token, callback: value => value === 0 ? inner : token.values};
+}
+globalThis.flatMapChains = [];
+for (const mode of ['abandoned', 'complete', 'outer-error', 'inner-error', 'abort']) (() => {
+  const outer = makeFlatMapSource(), inner = makeFlatMapSource(), mapper = makeFlatMapper(inner.source);
+  const result = outer.source.flatMap(mapper.callback), ac = new AbortController(), queued = [{}, {}];
+  const promise = result.toArray(mode === 'abort' ? {signal: ac.signal} : undefined);
+  promise.catch(() => {});
+  outer.subscriber.next(0); inner.subscriber.next(1);
+  for (const value of queued) outer.subscriber.next(value);
+  const entry = {mode, templates: [outer.source, result].map(v => new WeakRef(v)),
+    outer: new WeakRef(outer.subscriber), inner: new WeakRef(inner.subscriber),
+    callbacks: [mapper.callback, mapper.token].map(v => new WeakRef(v)), queued: queued.map(v => new WeakRef(v))};
+  if (mode !== 'abandoned') entry.promise = promise;
+  if (mode === 'abort') entry.controller = ac;
+  flatMapChains.push(entry);
+})();
+"#).unwrap();
+    let collect = |vm: &mut StandaloneScriptVmHarness| {
+        vm.renderer_document_isolate
+            .clone()
+            .with_entered_renderer_document_isolate(|isolate| {
+                isolate.clear_kept_objects();
+                isolate.low_memory_notification();
+                Ok(())
+            })
+            .unwrap();
+    };
+    collect(&mut vm);
+    assert_eq!(vm.eval(r#"JSON.stringify([
+flatMapChains.every(c => c.templates.every(ref => ref.deref() === undefined)),
+flatMapChains.every(c => [c.outer, c.inner, ...c.callbacks, ...c.queued].every(ref => (ref.deref() !== undefined) === (c.mode !== 'abandoned')))
+])"#).unwrap(), "[true,true]");
+    vm.eval(r#"
+for (const c of flatMapChains.filter(c => c.promise)) {
+  c.promise.then(values => { c.correct = c.mode === 'complete' && JSON.stringify(values) === '[1,2]'; }, error => { c.correct = error === c.mode; });
+  const outer = c.outer.deref(), inner = c.inner.deref(); inner.next(2);
+  if (c.mode === 'complete') { outer.complete(); inner.complete(); }
+  else if (c.mode === 'outer-error') outer.error(c.mode);
+  else if (c.mode === 'inner-error') inner.error(c.mode);
+  else c.controller.abort(c.mode);
+  c.closed = [outer, inner];
+}
+"#).unwrap();
+    assert_eq!(vm.eval("flatMapChains.filter(c => c.promise).every(c => c.correct && c.closed.every(s => !s.active))").unwrap(), "true");
+    collect(&mut vm);
+    assert_eq!(vm.eval("flatMapChains.every(c => [...c.callbacks, ...c.queued].every(ref => ref.deref() === undefined))").unwrap(), "true");
+    vm.eval(r#"
+globalThis.flatMapDrain = (() => {
+  const outer = makeFlatMapSource(), inner = makeFlatMapSource(), mapper = makeFlatMapper(inner.source), value = {};
+  const promise = outer.source.flatMap(mapper.callback).toArray();
+  outer.subscriber.next(0); outer.subscriber.next(value); outer.subscriber.complete();
+  return {promise, outer: new WeakRef(outer.subscriber), inner: new WeakRef(inner.subscriber),
+    value: new WeakRef(value), callback: new WeakRef(mapper.callback)};
+})();
+"#).unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("flatMapDrain.outer.deref() === undefined && flatMapDrain.inner.deref() !== undefined && flatMapDrain.value.deref() !== undefined && flatMapDrain.callback.deref() !== undefined").unwrap(), "true");
+    vm.eval("flatMapDrain.promise.then(v => { flatMapDrain.correct = v.length === 0; }); flatMapDrain.inner.deref().complete();").unwrap();
+    collect(&mut vm);
+    assert_eq!(vm.eval("flatMapDrain.correct && flatMapDrain.inner.deref() === undefined && flatMapDrain.value.deref() === undefined && flatMapDrain.callback.deref() === undefined").unwrap(), "true");
+}
+
+#[test]
 fn observable_finally_preserves_teardown_order_sharing_and_reentrant_cancellation() {
     let mut vm = new_storage_test_vm("https://observable-finally.test/");
     vm.eval(&format!(
