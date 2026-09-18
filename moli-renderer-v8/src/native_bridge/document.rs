@@ -210,7 +210,6 @@ pub(in crate::native_bridge) use detached_objects::{
 pub(in crate::native_bridge) use detached_objects::{
     detached_shadow_root_active_element_value, detached_shadow_root_selection_value,
 };
-pub(in crate::native_bridge::document) use detached_surface::detached_document_content_type_value;
 pub(super) use detached_surface::{
     bridge_adopt_node_into_document_callback, bridge_clone_node_into_document_callback,
     bridge_create_cdata_section_not_supported_callback, bridge_create_detached_comment_callback,
@@ -262,6 +261,9 @@ pub(super) use detached_surface::{
     detached_character_data_replace_data_callback, detached_character_data_substring_data_callback,
     detached_character_data_value, detached_text_split_text_callback,
     detached_text_whole_text_value, set_detached_character_data_value,
+};
+pub(in crate::native_bridge::document) use detached_surface::{
+    detached_document_content_type_value, set_detached_document_content_type,
 };
 pub(in crate::native_bridge) use detached_surface::{
     detached_element_local_name, detached_element_namespace_uri, detached_element_prefix,

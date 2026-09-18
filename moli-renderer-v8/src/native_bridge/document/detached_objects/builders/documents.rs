@@ -98,6 +98,7 @@ fn set_detached_document_url_state<'s>(
 fn new_detached_document_shell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &str,
+    content_type: &str,
     url: Url,
     scripting_enabled: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -127,6 +128,7 @@ fn new_detached_document_shell<'s>(
     {
         define_detached_native_handle(scope, document, handle);
     }
+    set_detached_document_content_type(scope, document, content_type)?;
     install_detached_document_instance_properties(scope, document, kind);
     let _ = ensure_detached_document_implementation(scope, document);
     Some(document)
@@ -215,20 +217,14 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     } else {
         "CSS1Compat"
     };
-    let document = new_detached_document_shell(scope, kind, url, scripting_enabled)?;
+    let content_type = content_type.unwrap_or(parsed.dom().document()?.content_type());
+    let document = new_detached_document_shell(scope, kind, content_type, url, scripting_enabled)?;
     if let Some(state) = detached_state_object(scope, document) {
         let _ = state.set(
             scope,
             v8str(scope, "compatMode").into(),
             v8_string(scope, compat_mode)?.into(),
         );
-        if let Some(content_type) = content_type {
-            let _ = state.set(
-                scope,
-                v8str(scope, "contentType").into(),
-                v8_string(scope, content_type)?.into(),
-            );
-        }
         if let Some(character_set) = character_set {
             let _ = state.set(
                 scope,
@@ -336,6 +332,7 @@ pub(in crate::native_bridge::document) fn build_detached_html_document_object<'s
     let document = new_detached_document_shell(
         scope,
         "html",
+        "text/html",
         Url::parse("about:blank").expect("static about:blank parses"),
         false,
     )?;
@@ -353,23 +350,18 @@ pub(in crate::native_bridge::document) fn build_detached_document_object<'s>(
     if kind == "html" {
         return build_detached_html_document_object(scope, None);
     }
+    let content_type = match namespace_uri.as_deref() {
+        Some(XHTML_NS) => "application/xhtml+xml",
+        Some(SVG_NS) => "image/svg+xml",
+        _ => "application/xml",
+    };
     let document = new_detached_document_shell(
         scope,
         kind,
+        content_type,
         Url::parse("about:blank").expect("static about:blank parses"),
         false,
     )?;
-    if kind == "xml"
-        && let Some(namespace_uri) = namespace_uri.as_deref()
-        && let Some(state) = detached_state_object(scope, document)
-    {
-        let _ = state.set(
-            scope,
-            v8str(scope, "creationNamespace").into(),
-            v8_string(scope, namespace_uri)?.into(),
-        );
-    }
-
     if let Some(doctype) = doctype {
         let doctype = if detached_is_node(scope, doctype) {
             doctype
