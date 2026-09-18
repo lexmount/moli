@@ -24,11 +24,67 @@ use super::navigation_result::{
 use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, history_owner_if_fully_active,
-    runtime_window_is_global, window_location_for_holder, window_navigation_for_holder,
+    runtime_window_is_global, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
 use moli_page_types::SameDocumentHistoryUpdate;
+
+/// The URL/history update used by document.open() replaces the current entry
+/// without running history API argument conversion or firing a navigate event.
+/// A missing serialized state preserves both history.state and its snapshot.
+pub(crate) fn update_history_for_document_open<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    url: &url::Url,
+) {
+    let Some(location) = window_location_for_holder(scope, window) else {
+        return;
+    };
+    sync_location_object(scope, location, url.as_str());
+    let Some(history) = window_history_for_holder(scope, window) else {
+        return;
+    };
+    let Some(entries) = history_entries(scope, history) else {
+        return;
+    };
+    let index = history_index(scope, history);
+    let Some(previous) = entries
+        .get_index(scope, index)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let navigation_index = navigation_current_entry_index(scope, window).unwrap_or(index);
+    let key = navigation_entry_key_value(scope, previous)
+        .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
+    let state =
+        clone_history_entry_state(scope, previous).unwrap_or_else(|| v8::null(scope).into());
+    let state_json = stringify_history_state(scope, state);
+    let entry = create_navigation_entry(
+        scope,
+        window,
+        url.as_str(),
+        state_json.as_deref(),
+        None,
+        None,
+        navigation_index,
+        &new_navigation_entry_id(),
+        &key,
+    );
+    copy_navigation_entry_document_id(scope, previous, entry);
+    bind_navigation_entry_runtime_owner(scope, entry, window);
+    set_history_entry_state(scope, entry, state);
+    let _ = entries.set_index(scope, index, entry.into());
+    set_history_entries(scope, history, entries);
+    sync_navigation_current_entry_from_history_entry(scope, window, entry);
+    sync_child_navigation_entry_seed_from_owner(scope, window);
+    if let Some(navigation) = window_navigation_for_holder(scope, window) {
+        dispatch_navigation_currententrychange(scope, navigation, Some(previous), Some("replace"));
+        dispatch_navigation_entry_dispose(scope, previous);
+    }
+}
 
 struct ParsedHistoryMutationArgs<'s> {
     state: v8::Local<'s, v8::Value>,

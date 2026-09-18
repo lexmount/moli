@@ -9823,7 +9823,7 @@ fn child_frame_target_selector_invalidation_uses_child_document_world() {
     </body>
   `);
   childDocument.close();
-  childWindow.history.replaceState(null, '', 'about:blank#old');
+  childWindow.history.replaceState(null, '', '#old');
   globalThis.__childTargetFrame = frame;
   globalThis.__childTargetOldStyle =
     childWindow.getComputedStyle(childDocument.getElementById('old'));
@@ -9855,7 +9855,7 @@ fn child_frame_target_selector_invalidation_uses_child_document_world() {
             r#"
 (() => {
   const childWindow = globalThis.__childTargetFrame.contentWindow;
-  childWindow.history.replaceState(null, '', 'about:blank#new');
+  childWindow.history.replaceState(null, '', '#new');
   const result = [
     globalThis.__childTargetOldStyle.color,
     globalThis.__childTargetNewStyle.color
