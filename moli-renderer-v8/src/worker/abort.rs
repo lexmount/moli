@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::{cell::RefCell, rc::Rc};
 
-use crate::abort_signal_route::{AbortAlgorithm, invoke_abort_algorithm};
+use crate::abort_signal_route::{AbortAlgorithm, invoke_abort_algorithms};
 use crate::util::{get_private_value, set_private_value, v8str};
 use crate::webidl;
 
@@ -297,34 +297,17 @@ fn run_worker_abort_steps<'s>(
         std::mem::take(&mut state.abort_algorithms)
     };
     reject_worker_fetches_for_signal(scope, signal_id, reason);
-    if !invoke_worker_abort_algorithms(scope, signal, reason, abort_algorithms) {
+    if !invoke_abort_algorithms(
+        scope,
+        "Worker AbortSignal abort algorithm",
+        signal,
+        reason,
+        abort_algorithms,
+    ) {
         return false;
     }
     // Dispatch reads the shared listener registry after all abort algorithms.
     abort_signal_events::dispatch_abort(scope, signal);
-    true
-}
-
-fn invoke_worker_abort_algorithms<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    signal: v8::Local<'s, v8::Object>,
-    reason: v8::Local<'s, v8::Value>,
-    abort_algorithms: Vec<AbortAlgorithm>,
-) -> bool {
-    for algorithm in abort_algorithms {
-        let Some(algorithm) = algorithm.prepare(scope) else {
-            continue;
-        };
-        if !invoke_abort_algorithm(
-            scope,
-            "Worker AbortSignal abort algorithm",
-            algorithm,
-            signal,
-            reason,
-        ) {
-            return false;
-        }
-    }
     true
 }
 
