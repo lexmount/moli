@@ -112,6 +112,31 @@ pub(crate) struct PreparedXhrSendBody {
     pub(crate) default_content_type: Option<String>,
 }
 
+pub(crate) enum ConvertedXhrSendBody<'s> {
+    Native(v8::Local<'s, v8::Value>),
+    Text(String),
+}
+
+impl<'s> ConvertedXhrSendBody<'s> {
+    pub(crate) fn prepare(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        method: &str,
+    ) -> Result<PreparedXhrSendBody, crate::webidl::WebIdlError> {
+        // Conversion precedes state checks, but GET/HEAD never extract body bytes.
+        if matches!(method, "GET" | "HEAD") {
+            return Ok(PreparedXhrSendBody::empty());
+        }
+        match self {
+            Self::Native(value) => prepare_xhr_send_body(scope, value),
+            Self::Text(text) => Ok(PreparedXhrSendBody::new(
+                text.into_bytes(),
+                Some(TEXT_CONTENT_TYPE.to_owned()),
+            )),
+        }
+    }
+}
+
 impl PreparedXhrSendBody {
     pub(crate) fn empty() -> Self {
         Self {
@@ -156,6 +181,8 @@ pub(crate) fn prepare_xhr_send_body<'s>(
         }
     }
 
+    validate_xhr_buffer_source(value)?;
+
     if let Some(bytes) = blob::buffer_source_bytes_from_value(scope, value) {
         return Ok(PreparedXhrSendBody::new(bytes, None));
     }
@@ -171,19 +198,42 @@ pub(crate) fn prepare_xhr_send_body<'s>(
     ))
 }
 
-pub(crate) fn prepare_xhr_send_body_from_args<'s>(
+pub(crate) fn convert_xhr_send_body_from_args<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-    method: &str,
-) -> Result<PreparedXhrSendBody, crate::webidl::WebIdlError> {
+) -> Result<ConvertedXhrSendBody<'s>, crate::webidl::WebIdlError> {
     let parsed = crate::webidl::try_parse_args::<XhrSendArgs<'s>>(scope, args)?;
-    let Some(body) = parsed.body else {
-        return Ok(PreparedXhrSendBody::empty());
-    };
-    if matches!(method, "GET" | "HEAD") {
-        return Ok(PreparedXhrSendBody::empty());
+    let body = parsed.body.unwrap_or_else(|| v8::null(scope).into());
+    validate_xhr_buffer_source(body)?;
+    if body.is_null_or_undefined() || body.is_array_buffer() || body.is_array_buffer_view() {
+        return Ok(ConvertedXhrSendBody::Native(body));
     }
-    prepare_xhr_send_body(scope, body)
+    if let Ok(object) = v8::Local::<v8::Object>::try_from(body)
+        && (web_api_interfaces::Blob::is_instance(scope, object)
+            || web_api_interfaces::FormData::is_instance(scope, object)
+            || web_api_interfaces::URLSearchParams::is_instance(scope, object))
+    {
+        return Ok(ConvertedXhrSendBody::Native(body));
+    }
+    let text = crate::webidl::convert::<crate::webidl::UsvString>(
+        scope,
+        body,
+        crate::webidl::Context::argument("XMLHttpRequest.send", 1),
+    )?;
+    Ok(ConvertedXhrSendBody::Text(text.0))
+}
+
+fn validate_xhr_buffer_source(
+    value: v8::Local<'_, v8::Value>,
+) -> Result<(), crate::webidl::WebIdlError> {
+    if value.is_shared_array_buffer()
+        || blob::buffer_source_has_shared_or_resizable_backing_store(value)
+    {
+        return Err(crate::webidl::WebIdlError::custom_message(
+            "XMLHttpRequest.send does not accept shared or resizable BufferSource backing stores",
+        ));
+    }
+    Ok(())
 }
 
 fn xhr_request_headers(

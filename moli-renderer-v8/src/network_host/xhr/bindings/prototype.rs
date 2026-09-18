@@ -10,7 +10,7 @@ struct XmlHttpRequestTemplateMethodsDeclaration {
     #[webapi(method = "open", length = 2, callback = xhr_open_callback)]
     open: (),
 
-    #[webapi(method = "send", length = 0, callback = xhr_send_callback)]
+    #[webapi(method = "send", length = 0, callback = xhr_send_callback, receiver = web_api_interfaces::XMLHttpRequest::is_instance)]
     send: (),
 
     #[webapi(method = "abort", length = 0, callback = xhr_abort_callback)]
