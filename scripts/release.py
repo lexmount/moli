@@ -12,10 +12,16 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import tomllib
 import zipfile
 from pathlib import Path
 from typing import Sequence
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    # Ubuntu 22.04 ships Python 3.10; its python3-tomli package provides the
+    # same reader API that entered the standard library in Python 3.11.
+    import tomli as tomllib
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

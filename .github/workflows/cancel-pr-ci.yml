@@ -16,7 +16,7 @@ permissions: {}
 jobs:
   cancel:
     name: Cancel superseded validation
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Record cancellation
         run: echo "Cancelled validation for closed PR #${{ github.event.pull_request.number }}."

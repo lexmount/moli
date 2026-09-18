@@ -37,6 +37,33 @@ release-regression binaries both invoke Cargo with `--release`, so they consume
 the same production profile. Normal development and unit-test builds retain
 their separate profiles and parallel code generation.
 
+## Linux compatibility baseline
+
+Linux builds and runtime checks use Ubuntu 22.04 (Jammy) containers. Release
+runners are pinned to `ubuntu-22.04` and `ubuntu-22.04-arm`; self-hosted CI uses
+the same container userspace. Pinning the runner alone is insufficient: native
+libraries linked inside a newer container can raise the binary's minimum libc.
+The Rust version still comes from `rust-toolchain`, installed with rustup.
+CI builds both HEAD and the common ancestor on this baseline for comparable A/B
+measurements. Cargo and rustup volumes are isolated from the former Debian image.
+
+Before publishing, each Linux archive is extracted into a fresh Ubuntu 22.04
+container without build dependencies. `scripts/check_linux_compat.py` checks the
+packaged ELF's imported ABI versions against `GLIBC_2.35`, `GLIBCXX_3.4.30`, and
+`CXXABI_1.3.13` (Jammy with distribution updates), rejecting newer or private ABI
+requirements, including `GLIBC_ABI_DT_RELR`. The check then runs `--version` and
+a local HTTP / JavaScript smoke test, covering page scripts, DOM access, and
+JavaScript `fetch`. CI checks its HEAD release binary in the same way and runs
+the CDP and WebDriver suites on Jammy. Browser-comparison jobs use the Jammy
+variant of the pinned Playwright image.
+
+This establishes Ubuntu 22.04 with updates as the tested minimum Linux runtime;
+it does not claim compatibility with every older distribution or kernel.
+Runtime packages are `ca-certificates`, `libstdc++6`, `zlib1g`, and
+`libfontconfig1`, in addition to the base system libraries. The Python packager
+needs Python 3.11+, or Python 3.10 with `tomli` (`apt-get install python3-tomli`
+on Ubuntu 22.04).
+
 ## Prepare the release
 
 1. Update `version` in `moli/Cargo.toml` and refresh `Cargo.lock`.

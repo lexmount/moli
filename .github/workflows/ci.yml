@@ -34,7 +34,7 @@ env:
 jobs:
   resolve-refs:
     name: Resolve exact revisions
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     outputs:
       base_sha: ${{ steps.refs.outputs.base_sha }}
       head_sha: ${{ steps.refs.outputs.head_sha }}
@@ -84,11 +84,51 @@ jobs:
 
   format:
     name: Format
-    runs-on: ubuntu-latest
-    container: rust:1.96.1-bookworm
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
     steps:
+      # These inline anchors also work when build-release-base checks out an
+      # older revision that does not contain the current CI helper scripts.
+      - &jammy-runtime
+        name: Prepare Ubuntu 22.04 runtime
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends \
+            ca-certificates curl git binutils python3 libstdc++6 zlib1g \
+            libfontconfig1 procps util-linux xz-utils
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - &rust-toolchain
+        name: Install pinned Rust toolchain
+        shell: bash
+        env:
+          CARGO_HOME: /usr/local/cargo
+          RUSTUP_HOME: /usr/local/rustup
+        run: |
+          set -euo pipefail
+          toolchain=$(tr -d '[:space:]' < rust-toolchain)
+          export PATH="$CARGO_HOME/bin:$PATH"
+          # Several self-hosted jobs can share an initially empty volume.
+          # Serialize bootstrapping so none observes a half-installed toolchain.
+          mkdir -p "$CARGO_HOME" "$RUSTUP_HOME"
+          exec 9>"$RUSTUP_HOME/.moli-install.lock"
+          flock 9
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 --fail --silent --show-error \
+              https://sh.rustup.rs -o "$RUNNER_TEMP/moli-rustup-init.sh"
+            sh "$RUNNER_TEMP/moli-rustup-init.sh" -y --profile minimal \
+              --default-toolchain "$toolchain" --no-modify-path
+          fi
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          echo "CARGO_HOME=$CARGO_HOME" >> "$GITHUB_ENV"
+          echo "RUSTUP_HOME=$RUSTUP_HOME" >> "$GITHUB_ENV"
+          echo "$CARGO_HOME/bin" >> "$GITHUB_PATH"
+          rustc --version
 
       - name: Install rustfmt
         run: rustup component add rustfmt
@@ -98,16 +138,23 @@ jobs:
 
   clippy:
     name: Clippy
-    runs-on: ubuntu-latest
-    container: rust:1.96.1-bookworm
+    runs-on: ubuntu-22.04
+    container: ubuntu:22.04
     steps:
+      - *jammy-runtime
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install AWS-LC build dependencies
+      - &jammy-build
+        name: Install native build dependencies
+        shell: bash
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+          apt-get install --yes --no-install-recommends \
+            build-essential cmake libclang-dev pkg-config zlib1g-dev libfontconfig1-dev
+
+      - *rust-toolchain
 
       - name: Install clippy
         run: rustup component add clippy
@@ -119,21 +166,19 @@ jobs:
     name: Nextest
     runs-on: [self-hosted, moli-ci]
     container:
-      image: rust:1.96.1-bookworm
-      # Docker seeds new named volumes from the pinned image. Keep toolchains
-      # and Cargo downloads local to each self-hosted Docker daemon. Bump both
-      # volume names when the image or Rust toolchain changes.
+      image: ubuntu:22.04
+      # rustup populates fresh volumes. Isolate them from the former Debian
+      # image; bump both names when the baseline or Rust toolchain changes.
       volumes:
-        - moli-ci-cargo-home-1-96-1-v1:/usr/local/cargo
-        - moli-ci-rustup-home-1-96-1-v1:/usr/local/rustup
+        - moli-ci-cargo-home-jammy-1-96-1-v1:/usr/local/cargo
+        - moli-ci-rustup-home-jammy-1-96-1-v1:/usr/local/rustup
     steps:
+      - *jammy-runtime
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install AWS-LC build dependencies
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+      - *jammy-build
+      - *rust-toolchain
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@13608cbb45b01feb47ef444ab1a42dc41ad56f1a # v2.79.11
@@ -145,7 +190,7 @@ jobs:
 
   python-harness-tests:
     name: Python harness tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - name: Checkout repository
@@ -194,9 +239,12 @@ jobs:
           uv run --project moli-webdriver-smoke --no-sync python -m unittest discover
           --start-directory moli-webdriver-smoke/tests
 
+      - name: Test Linux compatibility checks
+        run: python3 -m unittest discover --start-directory scripts/tests
+
   node-harness-tests:
     name: Node harness and fixture tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -230,19 +278,18 @@ jobs:
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 60
     container:
-      image: rust:1.96.1-bookworm
+      image: ubuntu:22.04
       volumes:
-        - moli-ci-cargo-home-1-96-1-v1:/usr/local/cargo
-        - moli-ci-rustup-home-1-96-1-v1:/usr/local/rustup
+        - moli-ci-cargo-home-jammy-1-96-1-v1:/usr/local/cargo
+        - moli-ci-rustup-home-jammy-1-96-1-v1:/usr/local/rustup
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-refs.outputs.head_sha }}
-      - name: Install AWS-LC build dependencies
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+      - *jammy-build
+      - *rust-toolchain
       - name: Build release binary
         run: cargo build --release --locked -p moli
       - name: Package release artifact
@@ -269,19 +316,18 @@ jobs:
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 60
     container:
-      image: rust:1.96.1-bookworm
+      image: ubuntu:22.04
       volumes:
-        - moli-ci-cargo-home-1-96-1-v1:/usr/local/cargo
-        - moli-ci-rustup-home-1-96-1-v1:/usr/local/rustup
+        - moli-ci-cargo-home-jammy-1-96-1-v1:/usr/local/cargo
+        - moli-ci-rustup-home-jammy-1-96-1-v1:/usr/local/rustup
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
           ref: ${{ needs.resolve-refs.outputs.base_sha }}
-      - name: Install AWS-LC build dependencies
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends cmake libclang-dev
+      - *jammy-build
+      - *rust-toolchain
       - name: Build release binary
         run: cargo build --release --locked -p moli
       - name: Package release artifact
@@ -305,10 +351,11 @@ jobs:
   cdp-smoke:
     name: CDP smoke
     needs: [resolve-refs, build-release-head]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -318,6 +365,8 @@ jobs:
         with:
           side: head
           revision: ${{ needs.resolve-refs.outputs.head_sha }}
+      - name: Verify Ubuntu 22.04 compatibility
+        run: python3 scripts/check_linux_compat.py target/ci-bin/moli-release-head/moli --smoke
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: 0.11.14
@@ -351,10 +400,11 @@ jobs:
   webdriver-smoke:
     name: WebDriver smoke
     needs: [resolve-refs, build-release-head]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -396,7 +446,7 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 45
-    container: mcr.microsoft.com/playwright/python:v1.58.0-noble
+    container: mcr.microsoft.com/playwright/python:v1.58.0-jammy
     steps:
       - uses: actions/checkout@v4
         with:
@@ -478,8 +528,9 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 30
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -523,7 +574,7 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 45
-    container: mcr.microsoft.com/playwright/python:v1.58.0-noble
+    container: mcr.microsoft.com/playwright/python:v1.58.0-jammy
     steps:
       - uses: actions/checkout@v4
         with:
@@ -580,8 +631,9 @@ jobs:
     needs: [resolve-refs, build-release-head, build-release-base]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 60
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -647,8 +699,9 @@ jobs:
     needs: [resolve-refs, build-release-head]
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 20
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -690,10 +743,11 @@ jobs:
       github.actor != 'dependabot[bot]')
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 90
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     env:
       BENCHMARK_OUTPUT: spider-bench-results
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -747,10 +801,11 @@ jobs:
       github.actor != 'dependabot[bot]')
     runs-on: [self-hosted, moli-ci]
     timeout-minutes: 90
-    container: rust:1.96.1-bookworm
+    container: ubuntu:22.04
     env:
       BENCHMARK_OUTPUT: sequential-navigation-soak-results
     steps:
+      - *jammy-runtime
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
