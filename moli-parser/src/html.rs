@@ -488,7 +488,25 @@ impl HtmlParser {
         final_url: Url,
         document_handle: NativeNodeId,
     ) -> DocumentStream {
-        DocumentStream::new_live_document_root(final_url, document_handle, self.scripting_enabled)
+        self.start_live_document_root_with_declarative_shadow_roots(
+            final_url,
+            document_handle,
+            true,
+        )
+    }
+
+    pub fn start_live_document_root_with_declarative_shadow_roots(
+        &self,
+        final_url: Url,
+        document_handle: NativeNodeId,
+        allow_declarative_shadow_roots: bool,
+    ) -> DocumentStream {
+        DocumentStream::new_live_document_root(
+            final_url,
+            document_handle,
+            self.scripting_enabled,
+            allow_declarative_shadow_roots,
+        )
     }
 
     pub fn parse_fragment_without_declarative_shadow_roots(
@@ -609,12 +627,14 @@ impl DocumentStream {
         final_url: Url,
         document_handle: NativeNodeId,
         scripting_enabled: bool,
+        allow_declarative_shadow_roots: bool,
     ) -> Self {
         Self {
             inner: new_live_document_root_html_tree_sink_stream(
                 final_url,
                 document_handle,
                 scripting_enabled,
+                allow_declarative_shadow_roots,
             ),
             input: RefCell::default(),
         }
@@ -662,7 +682,7 @@ impl DocumentStream {
         final_url: Url,
         document_handle: NativeNodeId,
     ) -> Self {
-        Self::new_live_document_root(final_url, document_handle, true)
+        Self::new_live_document_root(final_url, document_handle, true, true)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -731,6 +751,23 @@ impl DocumentStream {
 
     pub fn feed(&self, chunk: &str) {
         self.inner.feed(chunk)
+    }
+
+    /// Feeds an inert document parser while retaining its tokenizer and tree
+    /// builder state between writes. Scripts are not handed off for execution.
+    pub fn feed_with_runtime_dom_consumer<T>(&self, chunk: &str, consumer: &mut T)
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        // SAFETY: the parser-step guard clears the callbacks before the
+        // exclusively borrowed consumer leaves this call.
+        let sinks = unsafe { ParserRuntimeDomSinks::from_consumer(consumer) };
+        self.inner.enter_runtime_dom_sinks_parse_step(sinks);
+        let step = RuntimeDomSinksParserStep { stream: self };
+        step.feed(chunk);
     }
 
     fn feed_with_runtime_dom_consumer_without_element_creation<T>(

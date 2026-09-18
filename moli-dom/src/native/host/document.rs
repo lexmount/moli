@@ -988,6 +988,19 @@ impl DomHost {
         true
     }
 
+    pub fn set_document_allow_declarative_shadow_roots_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        allow: bool,
+    ) {
+        if let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        {
+            document.set_allow_declarative_shadow_roots(allow);
+        }
+    }
+
     pub fn document_scripting_enabled_for_handle(
         &self,
         document_handle: DomHandle,

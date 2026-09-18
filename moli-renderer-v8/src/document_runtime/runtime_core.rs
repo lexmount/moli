@@ -63,6 +63,8 @@ impl DocumentRuntime {
         // initial "loading". Without this, the DomHost keeps its default "complete"
         // (from NativeDom Document::new) and scripts see the wrong readyState.
         let _ = dom_host.set_document_ready_state(document.ready_state());
+        let document_handle = dom_host.document_handle();
+        dom_host.set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
         let parser_boundary_lifecycle_tx = page_task_parser_boundary_injection_tx.clone();
         Self {
             dom_host,
@@ -86,6 +88,7 @@ impl DocumentRuntime {
             destructive_write_counters: Default::default(),
             document_unload_counters: Default::default(),
             root_document_parser: None,
+            windowless_document_parsers: HashMap::new(),
             post_parse_schedule_invalidated: false,
             stylesheet_lifecycle,
             main_parser_continuation:
@@ -220,6 +223,7 @@ impl DocumentRuntime {
             destructive_write_counters: _,
             document_unload_counters: _,
             root_document_parser: _,
+            windowless_document_parsers: _,
             post_parse_schedule_invalidated: _,
             stylesheet_lifecycle: _,
             main_parser_continuation: _,
