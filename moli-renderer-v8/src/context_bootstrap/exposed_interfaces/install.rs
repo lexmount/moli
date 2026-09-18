@@ -175,6 +175,7 @@ pub(crate) fn capture_eager_intrinsic_interfaces<'s>(
         .ok_or_else(|| anyhow!("exposed interface template registry is unavailable"))?;
     initialize_intrinsic_interface_registry(scope, global);
     capture_ecmascript_intrinsic(scope, global, "Error")?;
+    capture_ecmascript_intrinsic(scope, global, "Promise")?;
     let realm = IntrinsicInterfaceRegistry::initialize_for_current_context(
         scope,
         registry.len(),

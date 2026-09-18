@@ -51,7 +51,7 @@ struct AbortSignalState {
     signal: Option<v8::Global<v8::Object>>,
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<crate::abort_signal_route::AbortAlgorithm>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
     // None for a source; Some (including empty) for a dependent signal's ordered roots.
     source_signals: Option<Vec<u32>>,
@@ -66,7 +66,7 @@ struct AbortLinkedTargetListener {
 }
 
 struct AbortSignalDispatch {
-    algorithms: Vec<v8::Global<v8::Function>>,
+    algorithms: Vec<crate::abort_signal_route::AbortAlgorithm>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
 }
 
@@ -220,7 +220,9 @@ impl AbortStore {
         };
         state
             .abort_algorithms
-            .push(v8::Global::new(scope, algorithm));
+            .push(crate::abort_signal_route::AbortAlgorithm::new(
+                scope, algorithm,
+            ));
         true
     }
 
@@ -237,8 +239,9 @@ impl AbortStore {
             return false;
         };
         state.abort_algorithms.retain(|candidate| {
-            let candidate = v8::Local::new(scope, candidate);
-            !candidate.strict_equals(algorithm.into())
+            candidate
+                .prepare(scope)
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
         });
         true
     }
@@ -374,7 +377,9 @@ pub(crate) fn abort_signal<'s>(
         let Some(dispatch) = dispatch else {
             continue;
         };
-        event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms);
+        if !event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms) {
+            return;
+        }
         for linked in dispatch.linked_target_listeners {
             unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
                 linked.target,

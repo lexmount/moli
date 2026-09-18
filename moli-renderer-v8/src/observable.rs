@@ -5,6 +5,7 @@
 
 mod callbacks;
 mod event_target;
+mod from;
 mod state;
 
 pub(crate) use event_target::event_target_when;
@@ -22,6 +23,13 @@ use state::*;
 struct ObservablePrototype {
     #[webapi(method, length = 0, callback = subscribe)]
     subscribe: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::Observable, enumerable)]
+struct ObservableStatics {
+    #[webapi(static_method = "from", length = 1, callback = from::from)]
+    from: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -48,7 +56,10 @@ pub(crate) fn install_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match name {
-        "Observable" => ObservablePrototype::initialize_prototype_template(scope, prototype),
+        "Observable" => {
+            ObservableStatics::initialize_template(scope, template);
+            ObservablePrototype::initialize_prototype_template(scope, prototype);
+        }
         "Subscriber" => SubscriberPrototype::initialize_prototype_template(scope, prototype),
         _ => {}
     }
@@ -201,7 +212,9 @@ fn subscribe<'s>(
         if signal.is_aborted(scope) {
             if fresh {
                 let reason = signal.reason(scope);
-                close(scope, subscriber, Some(reason));
+                if !close(scope, subscriber, Some(reason)) {
+                    return;
+                }
             } else {
                 observers.pop();
                 set_list(scope, subscriber, OBSERVERS, &observers);
@@ -215,7 +228,7 @@ fn subscribe<'s>(
                 .expect("Observable abort algorithm should allocate");
             set_private_value(scope, parsed.observer, INPUT_SIGNAL, signal.value().into());
             set_private_value(scope, parsed.observer, ABORT_ALGORITHM, algorithm.into());
-            signal.register_algorithm(scope, algorithm);
+            signal.register_rethrowing_algorithm(scope, algorithm);
         }
     }
     if fresh {
@@ -223,7 +236,7 @@ fn subscribe<'s>(
             if let Some(exception) = invoke(scope, callback, &[subscriber.into()]) {
                 subscriber_error(scope, subscriber, exception);
             }
-        } else {
+        } else if !from::subscribe(scope, observable, subscriber) {
             event_target::subscribe(scope, observable, subscriber);
         }
     }
@@ -253,9 +266,9 @@ fn close<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     subscriber: v8::Local<'s, v8::Object>,
     reason: Option<v8::Local<'s, v8::Value>>,
-) {
+) -> bool {
     if !active(scope, subscriber) {
-        return;
+        return true;
     }
     set_private_value(
         scope,
@@ -272,7 +285,12 @@ fn close<'s>(
         .filter(|reason| !reason.is_undefined())
         .unwrap_or_else(|| crate::native_bridge::abort::abort_error_value(scope));
     if let Some(signal) = signal {
+        v8::tc_scope!(let scope, scope);
         signal.abort(scope, reason);
+        if scope.has_caught() {
+            scope.rethrow();
+            return false;
+        }
     }
     let teardowns = list(scope, subscriber, TEARDOWNS);
     set_list(scope, subscriber, TEARDOWNS, &[]);
@@ -282,6 +300,7 @@ fn close<'s>(
         }
         invoke_and_report(scope, callback, &[]);
     }
+    true
 }
 
 fn release_abort_algorithm<'s>(
@@ -353,7 +372,9 @@ fn subscriber_error<'s>(
     if !is_current(scope, subscriber) {
         return;
     }
-    close(scope, subscriber, Some(error));
+    if !close(scope, subscriber, Some(error)) {
+        return;
+    }
     let observers = list(scope, subscriber, OBSERVERS);
     set_list(scope, subscriber, OBSERVERS, &[]);
     for observer in observers {
@@ -381,11 +402,19 @@ fn complete<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let subscriber = args.this();
+    subscriber_complete(scope, args.this());
+}
+
+fn subscriber_complete<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    subscriber: v8::Local<'s, v8::Object>,
+) {
     if !active(scope, subscriber) || !is_current(scope, subscriber) {
         return;
     }
-    close(scope, subscriber, None);
+    if !close(scope, subscriber, None) {
+        return;
+    }
     let observers = list(scope, subscriber, OBSERVERS);
     set_list(scope, subscriber, OBSERVERS, &[]);
     for observer in observers {
