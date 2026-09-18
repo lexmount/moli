@@ -12,6 +12,7 @@ mod from;
 mod observer;
 mod promise;
 mod state;
+mod transform;
 
 pub(crate) use event_target::event_target_when;
 
@@ -28,6 +29,10 @@ use state::*;
 struct ObservablePrototype {
     #[webapi(method, length = 0, callback = subscribe)]
     subscribe: (),
+    #[webapi(method, length = 1, callback = transform::map)]
+    map: (),
+    #[webapi(method, length = 1, callback = transform::filter)]
+    filter: (),
     #[webapi(method, length = 0, returns_promise, callback = first::first)]
     first: (),
     #[webapi(method, length = 0, returns_promise, callback = collect::last)]
@@ -239,17 +244,21 @@ fn subscribe_internal<'s>(
     set_list(scope, subscriber, OBSERVERS, &observers);
     let native = observer::is_native(scope, observer);
     if native {
-        // Pending native Promise observers keep their producer reachable even
-        // when no cancellation callback provides the reference to Subscriber.
+        // Native observers keep their producer reachable through pending
+        // Promises or downstream subscriptions, without a Rust root.
         set_private_value(scope, observer, observer::SUBSCRIBER, subscriber.into());
     }
     if let Some(signal) = signal {
         if signal.is_aborted(scope) {
             if fresh {
                 let reason = signal.reason(scope);
-                if !close(scope, subscriber, Some(reason)) {
+                if let Some(error) = close(scope, subscriber, Some(reason)) {
+                    scope.throw_exception(error);
                     return;
                 }
+                // No notification can reach an already-aborted observer,
+                // including when the initializer retains this closed Subscriber.
+                set_list(scope, subscriber, OBSERVERS, &[]);
             } else {
                 observers.pop();
                 set_list(scope, subscriber, OBSERVERS, &observers);
@@ -276,7 +285,9 @@ fn subscribe_internal<'s>(
             if let Some(exception) = invoke(scope, callback, &[subscriber.into()]) {
                 subscriber_error(scope, subscriber, exception);
             }
-        } else if !from::subscribe(scope, observable, subscriber) {
+        } else if !from::subscribe(scope, observable, subscriber)
+            && !transform::subscribe(scope, observable, subscriber)
+        {
             event_target::subscribe(scope, observable, subscriber);
         }
     }
@@ -297,18 +308,23 @@ fn cancel_observer<'s>(
     observers.retain(|entry| *entry != observer);
     set_list(scope, subscriber, OBSERVERS, &observers);
     release_abort_algorithm(scope, observer);
-    if observers.is_empty() {
-        close(scope, subscriber, Some(args.get(0)));
+    if observers.is_empty()
+        && let Some(error) = close(scope, subscriber, Some(args.get(0)))
+    {
+        scope.throw_exception(error);
     }
 }
 
+// Return an iterator-close failure only after running all teardowns. Explicit
+// cancellation propagates it; terminal notifications report it and still deliver
+// the original error/completion to their observers.
 fn close<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     subscriber: v8::Local<'s, v8::Object>,
     reason: Option<v8::Local<'s, v8::Value>>,
-) -> bool {
+) -> Option<v8::Local<'s, v8::Value>> {
     if !active(scope, subscriber) {
-        return true;
+        return None;
     }
     set_private_value(
         scope,
@@ -319,19 +335,31 @@ fn close<'s>(
     for observer in list(scope, subscriber, OBSERVERS) {
         release_abort_algorithm(scope, observer);
     }
+    // Reading the upstream observer roots it in the current V8 handle scope
+    // through abort steps, which may run author code. Remove the closed
+    // downstream's persistent edge even if those abort steps subsequently throw.
+    if object_slot(scope, subscriber, UPSTREAM_OBSERVER).is_some() {
+        set_private_value(
+            scope,
+            subscriber,
+            UPSTREAM_OBSERVER,
+            v8::undefined(scope).into(),
+        );
+    }
     let signal = object_slot(scope, subscriber, SIGNAL)
         .and_then(|signal| ResolvedAbortSignal::resolve(scope, signal));
     let reason = reason
         .filter(|reason| !reason.is_undefined())
         .unwrap_or_else(|| crate::native_bridge::abort::abort_error_value(scope));
-    if let Some(signal) = signal {
+    let exception = if let Some(signal) = signal {
         v8::tc_scope!(let scope, scope);
         signal.abort(scope, reason);
-        if scope.has_caught() {
-            scope.rethrow();
-            return false;
-        }
-    }
+        let exception = scope.exception();
+        scope.reset();
+        exception
+    } else {
+        None
+    };
     let teardowns = list(scope, subscriber, TEARDOWNS);
     set_list(scope, subscriber, TEARDOWNS, &[]);
     for callback in teardowns.into_iter().rev() {
@@ -340,7 +368,7 @@ fn close<'s>(
         }
         invoke_and_report(scope, callback, &[]);
     }
-    true
+    exception
 }
 
 fn release_abort_algorithm<'s>(
@@ -410,8 +438,8 @@ fn subscriber_error<'s>(
     if !is_current(scope, subscriber) {
         return;
     }
-    if !close(scope, subscriber, Some(error)) {
-        return;
+    if let Some(exception) = close(scope, subscriber, Some(error)) {
+        report(scope, subscriber, exception);
     }
     let observers = list(scope, subscriber, OBSERVERS);
     set_list(scope, subscriber, OBSERVERS, &[]);
@@ -446,8 +474,8 @@ fn subscriber_complete<'s>(
     if !active(scope, subscriber) || !is_current(scope, subscriber) {
         return;
     }
-    if !close(scope, subscriber, None) {
-        return;
+    if let Some(exception) = close(scope, subscriber, None) {
+        report(scope, subscriber, exception);
     }
     let observers = list(scope, subscriber, OBSERVERS);
     set_list(scope, subscriber, OBSERVERS, &[]);
