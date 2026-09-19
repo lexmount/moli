@@ -1,3 +1,4 @@
+use super::service_worker_drain::drain_service_worker_test_turn;
 use super::*;
 
 #[tokio::test]
@@ -2046,6 +2047,41 @@ fn text_track_id_and_cue_order_follow_wpt_edges() {
 
     assert_eq!(result, "LoremIpsum:true|123|231|123|312");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn media_source_object_urls_preserve_native_brands_and_reject_fetch() {
+    let loader = static_http_loader([]);
+    let (mut vm, browser_context_runtime) =
+        new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
+            "https://media-source-url.test/",
+            &loader,
+        );
+    let fixture = include_str!("../../../../tests/fixtures/media-source-url.js");
+    vm.eval("globalThis.mediaSourceUrlResult = null; if (!document.documentElement) document.appendChild(document.createElement('html'));").unwrap();
+    vm.eval(&format!(
+        "{fixture}\nmediaSourceUrlProbe().then(value => {{ mediaSourceUrlResult = value; }}, error => {{ mediaSourceUrlResult = {{error: String(error.stack || error)}}; }});"
+    )).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while vm.eval("mediaSourceUrlResult !== null").unwrap() != "true" {
+            browser_context_runtime.drain_shared_worker_service_lane();
+            drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
+        }
+    })
+    .await
+    .expect("MediaSource URL checks should finish");
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(mediaSourceUrlResult)").unwrap()).unwrap();
+    let checks = result["checks"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{result}"));
+    let failures: Vec<_> = checks
+        .iter()
+        .filter(|check| check["pass"] != true)
+        .collect();
+    assert_eq!(result["state"], "pass", "{failures:?}");
+    assert_eq!(checks.len(), 34);
+}
+
 #[test]
 fn media_source_constructor_preserves_prototype_chain_and_static_surface() {
     let mut vm = new_storage_test_vm("https://example.com/");
@@ -3091,7 +3127,7 @@ async fn match_media_change_event_uses_event_prototype_and_declared_properties()
 
     assert_eq!(
         result,
-        r#"[{"tag":"[object Event]","ctor":"Event","protoCtor":"Event","keys":"type,target,srcElement,currentTarget,defaultPrevented,bubbles,cancelable,isTrusted,composed,eventPhase","type":"change","media":"(prefers-color-scheme: dark)","matches":true,"mediaEnumerable":false,"matchesEnumerable":false,"targetIsMql":true,"currentTargetIsMql":true,"bubbles":false,"cancelable":false}]"#
+        r#"[{"tag":"[object MediaQueryListEvent]","ctor":"MediaQueryListEvent","protoCtor":"MediaQueryListEvent","keys":"type,target,srcElement,currentTarget,defaultPrevented,bubbles,cancelable,isTrusted,composed,eventPhase","type":"change","media":"(prefers-color-scheme: dark)","matches":true,"mediaEnumerable":false,"matchesEnumerable":false,"targetIsMql":true,"currentTargetIsMql":true,"bubbles":false,"cancelable":false}]"#
     );
 }
 

@@ -5,13 +5,15 @@ use url::Url;
 
 use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyResourceKind, ContentSecurityPolicyUrlViolation,
-    ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+    ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+    ContentSecurityPolicyUrlViolation, ContentSecurityPolicyViolationEventFields,
+    content_security_policy_non_url_violation_with_source,
+    content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
-    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
-    create_security_policy_violation_event, send_content_security_policy_reports,
+    create_security_policy_violation_event, current_script_violation_location,
+    send_content_security_policy_reports,
 };
 use crate::context_bootstrap::dispatch_simple_event_target_event;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
@@ -25,7 +27,7 @@ use crate::service_worker_runtime::{
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourceResourceType};
 use crate::worker::handle::WorkerPendingSubresourceFetch;
-use crate::worker::{WorkerPendingFetchContinue, WorkerToParentMessage};
+use crate::worker::{WorkerMessage, WorkerPendingFetchContinue, WorkerToParentMessage};
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, Request, RequestResourceType,
     should_request_be_blocked_due_to_bad_port,
@@ -35,6 +37,70 @@ use super::{
     PendingWorkerCspReport, WORKER_GLOBAL_LISTENERS_SLOT, WorkerGlobalState, next_fetch_id,
     record_worker_subresource_failure_with_handle, request_body_text,
 };
+
+pub(super) fn worker_policy_snapshot(
+    state: &WorkerGlobalState,
+) -> crate::content_security_policy::InheritedContentSecurityPolicy {
+    state
+        .content_security_policy_snapshot
+        .clone()
+        .unwrap_or_else(
+            || crate::content_security_policy::InheritedContentSecurityPolicy {
+                self_url: state.current_script_url.clone(),
+                header_policies: state.content_security_policies.clone(),
+                meta_policies: Vec::new(),
+                report_only_policies: state.content_security_report_only_policies.clone(),
+                reporting_endpoints: state.content_security_reporting_endpoints.clone(),
+            },
+        )
+}
+
+fn worker_policy_url<'a>(state: &'a WorkerGlobalState, protected_url: &'a Url) -> &'a Url {
+    state
+        .content_security_policy_snapshot
+        .as_ref()
+        .and_then(|policy| policy.self_url.as_ref())
+        .unwrap_or(protected_url)
+}
+
+pub(super) fn worker_policy_violation(
+    protected_url: &Url,
+    report_uri_enabled: bool,
+    mut violation: ContentSecurityPolicyUrlViolation,
+) -> ContentSecurityPolicyUrlViolation {
+    violation.document_uri = crate::content_security_policy::csp_url_for_report(protected_url);
+    violation.source_file = crate::content_security_policy::csp_url_for_report(protected_url);
+    if !report_uri_enabled {
+        violation.report_uri_endpoints.clear();
+    }
+    violation
+}
+
+fn worker_policies(
+    state: &WorkerGlobalState,
+    disposition: ContentSecurityPolicyDisposition,
+) -> impl Iterator<Item = (&String, bool)> {
+    let (headers, meta) = match (state.content_security_policy_snapshot.as_ref(), disposition) {
+        (Some(policy), ContentSecurityPolicyDisposition::Enforce) => (
+            policy.header_policies.as_slice(),
+            policy.meta_policies.as_slice(),
+        ),
+        (Some(policy), ContentSecurityPolicyDisposition::Report) => {
+            (policy.report_only_policies.as_slice(), &[][..])
+        }
+        (None, ContentSecurityPolicyDisposition::Enforce) => {
+            (state.content_security_policies.as_slice(), &[][..])
+        }
+        (None, ContentSecurityPolicyDisposition::Report) => (
+            state.content_security_report_only_policies.as_slice(),
+            &[][..],
+        ),
+    };
+    headers
+        .iter()
+        .map(|policy| (policy, true))
+        .chain(meta.iter().map(|policy| (policy, false)))
+}
 
 pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -48,6 +114,7 @@ pub(super) fn dispatch_worker_content_security_policy_violation_event<'s>(
     };
     let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
     send_content_security_policy_reports(
+        request_client.content_security_policy_reports(),
         request_client.request_client(),
         moli_url::WebOrigin::from_serialized(&violation.document_uri),
         &fields,
@@ -89,22 +156,95 @@ pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
     sink: &str,
     sample: &str,
 ) {
-    let violation = {
+    let violations = {
         let state_ref = state.borrow();
         let Some(protected_url) = state_ref.current_script_url.as_ref() else {
             return;
         };
-        content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
-                &state_ref.content_security_policies,
-                protected_url,
-                sink,
-                sample,
-                ContentSecurityPolicyDisposition::Enforce,
-                &state_ref.content_security_reporting_endpoints,
-        )
+        trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition, report_uri_enabled)| {
+                content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    worker_policy_url(&state_ref, protected_url),
+                    sink,
+                    sample,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                ).map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
+            })
+            .collect()
     };
-    if let Some(violation) = violation {
-        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+    queue_worker_trusted_types_violations(scope, state, violations);
+}
+
+pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
+    let violations: Vec<_> = {
+        let state_ref = state.borrow();
+        let Some(protected_url) = state_ref.current_script_url.as_ref() else {
+            return true;
+        };
+        trusted_types_policies(&state_ref)
+            .filter_map(|(policy, disposition, report_uri_enabled)| {
+                content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                    policy,
+                    worker_policy_url(&state_ref, protected_url),
+                    policy_name,
+                    is_duplicate,
+                    disposition,
+                    &state_ref.content_security_reporting_endpoints,
+                ).map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
+            })
+            .collect()
+    };
+    let allowed = !violations
+        .iter()
+        .any(|violation| violation.disposition == ContentSecurityPolicyDisposition::Enforce);
+    queue_worker_trusted_types_violations(scope, state, violations);
+    allowed
+}
+
+fn trusted_types_policies(
+    state: &WorkerGlobalState,
+) -> impl Iterator<Item = (&str, ContentSecurityPolicyDisposition, bool)> {
+    [
+        ContentSecurityPolicyDisposition::Enforce,
+        ContentSecurityPolicyDisposition::Report,
+    ]
+    .into_iter()
+    .flat_map(move |disposition| {
+        worker_policies(state, disposition).map(move |(policy, report_uri_enabled)| {
+            (policy.as_str(), disposition, report_uri_enabled)
+        })
+    })
+}
+
+fn queue_worker_trusted_types_violations(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violations: Vec<ContentSecurityPolicyUrlViolation>,
+) {
+    if violations.is_empty() {
+        return;
+    }
+    // Capture the caller before returning from the sink, but deliver events
+    // in a later task. In particular, a listener must not reenter createPolicy
+    // before the original call has recorded the newly created policy name.
+    let location = current_script_violation_location(scope);
+    let wake_tx = state.borrow().worker_wake_tx.clone();
+    for mut violation in violations {
+        if let Some((source_file, line_number, column_number)) = &location {
+            violation.source_file.clone_from(source_file);
+            violation.line_number = *line_number;
+            violation.column_number = *column_number;
+        }
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
     }
 }
 
@@ -123,11 +263,16 @@ fn send_worker_content_security_policy_reports_for_state(
     violation: &ContentSecurityPolicyUrlViolation,
 ) {
     let fields = ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
-    for request in content_security_policy_report_requests(
-        &fields,
-        &violation.report_uri_endpoints,
-        &violation.report_to_endpoints,
-    ) {
+    let requests = state
+        .borrow()
+        .loader
+        .content_security_policy_reports()
+        .requests(
+            &fields,
+            &violation.report_uri_endpoints,
+            &violation.report_to_endpoints,
+        );
+    for request in requests {
         send_worker_content_security_policy_report_for_state(state, request);
     }
 }
@@ -367,6 +512,7 @@ fn dispatch_worker_content_security_policy_report_to_service_worker(
     load.attach_cancel_handle(cancel_handle.clone());
     let request_metadata = service_worker_fetch_request_metadata(&request);
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: None,
         internal_id,
         request: ServiceWorkerFetchRequest {
             client_id,
@@ -790,6 +936,51 @@ pub(super) fn worker_content_security_policy_violation(
     )
 }
 
+pub(super) fn worker_compilation_content_security_policy_violations(
+    state: &WorkerGlobalState,
+    protected_url: &Url,
+    kind: ContentSecurityPolicyNonUrlKind,
+    source: Option<&str>,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Vec<ContentSecurityPolicyUrlViolation> {
+    worker_policies(state, disposition)
+        .filter_map(|(policy, report_uri_enabled)| {
+            content_security_policy_non_url_violation_with_source(
+                policy,
+                worker_policy_url(state, protected_url),
+                kind,
+                source,
+                disposition,
+                &state.content_security_reporting_endpoints,
+            )
+            .map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
+        })
+        .collect()
+}
+
+fn worker_url_policy_violation(
+    state: &WorkerGlobalState,
+    protected_url: &Url,
+    checked_url: &Url,
+    blocked_url: &Url,
+    kind: ContentSecurityPolicyResourceKind,
+    redirect_status: ContentSecurityPolicyRedirectStatus,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    worker_policies(state, disposition).find_map(|(policy, report_uri_enabled)| {
+        content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
+            std::slice::from_ref(policy),
+            worker_policy_url(state, protected_url),
+            checked_url,
+            blocked_url,
+            kind,
+            redirect_status,
+            disposition,
+            &state.content_security_reporting_endpoints,
+        ).map(|violation| worker_policy_violation(protected_url, report_uri_enabled, violation))
+    })
+}
+
 pub(super) fn worker_content_security_policy_violation_with_redirect_status(
     state: &WorkerGlobalState,
     protected_url: &Url,
@@ -797,14 +988,14 @@ pub(super) fn worker_content_security_policy_violation_with_redirect_status(
     kind: ContentSecurityPolicyResourceKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-        &state.content_security_policies,
+    worker_url_policy_violation(
+        state,
         protected_url,
+        request_url,
         request_url,
         kind,
         redirect_status,
         ContentSecurityPolicyDisposition::Enforce,
-        &state.content_security_reporting_endpoints,
     )
 }
 
@@ -816,15 +1007,14 @@ pub(super) fn worker_content_security_policy_violation_for_checked_url_with_redi
     kind: ContentSecurityPolicyResourceKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
-        &state.content_security_policies,
+    worker_url_policy_violation(
+        state,
         protected_url,
         checked_url,
         blocked_url,
         kind,
         redirect_status,
         ContentSecurityPolicyDisposition::Enforce,
-        &state.content_security_reporting_endpoints,
     )
 }
 
@@ -850,14 +1040,14 @@ pub(super) fn worker_content_security_policy_report_only_violation_with_redirect
     kind: ContentSecurityPolicyResourceKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-        &state.content_security_report_only_policies,
+    worker_url_policy_violation(
+        state,
         protected_url,
+        request_url,
         request_url,
         kind,
         redirect_status,
         ContentSecurityPolicyDisposition::Report,
-        &state.content_security_reporting_endpoints,
     )
 }
 
@@ -869,15 +1059,14 @@ pub(super) fn worker_content_security_policy_report_only_violation_for_checked_u
     kind: ContentSecurityPolicyResourceKind,
     redirect_status: ContentSecurityPolicyRedirectStatus,
 ) -> Option<ContentSecurityPolicyUrlViolation> {
-    content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints(
-        &state.content_security_report_only_policies,
+    worker_url_policy_violation(
+        state,
         protected_url,
         checked_url,
         blocked_url,
         kind,
         redirect_status,
         ContentSecurityPolicyDisposition::Report,
-        &state.content_security_reporting_endpoints,
     )
 }
 

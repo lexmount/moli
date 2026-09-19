@@ -5,7 +5,10 @@ use crate::frame_owner_model::{
     DocumentCreationKind, FrameDocumentInteractiveLifecycleAction,
     FrameDocumentLocalWindowTransition, FrameLocalWindowOwnerTransition,
 };
-use crate::{document_runtime::DomHandle, frame_owner_model::FrameDocumentOwnerTransition};
+use crate::{
+    document_runtime::DomHandle, dom::native::DocumentReadyState,
+    frame_owner_model::FrameDocumentOwnerTransition,
+};
 use moli_web_mime::is_dom_parser_xml_mime;
 use url::Url;
 
@@ -170,8 +173,16 @@ impl JsContextHost {
         navigation_loader: Option<crate::network::navigation::NavigationResourceLoader>,
         is_xml_document: bool,
     ) -> Option<ChildDocumentInstallResult> {
+        let is_plain_text_document = snapshot
+            .content_type
+            .as_deref()
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain"));
         let source = if is_xml_document {
             std::borrow::Cow::Borrowed(snapshot.markup.as_str())
+        } else if is_plain_text_document {
+            std::borrow::Cow::Owned(crate::dom_parser::plain_text_document_parser_input(
+                &snapshot.markup,
+            ))
         } else {
             crate::dom_parser::preserve_decoded_bom_only_browsing_context_body(
                 &snapshot.markup,
@@ -192,9 +203,17 @@ impl JsContextHost {
                 );
             document_handle
         };
+        // Navigation-created Documents start loading before parser scripts can
+        // observe them. Keep the generic detached/initial-empty default complete.
+        self.dom_host_mut()
+            .set_document_character_set_for_handle(document_handle, &snapshot.character_set);
+        self.dom_host_mut()
+            .set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
+        let _ = self
+            .set_dom_document_ready_state_for_handle(document_handle, DocumentReadyState::Loading);
         let document_url = self.document_url_for_handle(document_handle);
         let document_base_url = self.document_base_url_for_handle(document_handle);
-        let parser_base_url = document_base_url.clone();
+        let parser_document_url = document_url.clone();
         let referrer_policy = self
             .child_browsing_context_referrer_policy_for_document_handle(document_handle)
             .map(str::to_owned);
@@ -228,7 +247,7 @@ impl JsContextHost {
             document_handle,
             owner_local_window_id,
             owner_document_id,
-            parser_base_url,
+            parser_document_url,
             source.as_ref(),
             is_xml_document,
         );
@@ -309,6 +328,16 @@ impl JsContextHost {
                 expected_current_owner,
             )?;
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
+        unsafe { &*self.runtime }.initialize_inherited_meta_content_security_policies(
+            document_handle,
+            &document_policy_container.inherited_meta_content_security_policies,
+        );
+        let ancestor_origins_refreshed =
+            self.refresh_current_child_document_ancestor_origins(handle);
+        debug_assert!(
+            ancestor_origins_refreshed,
+            "committed child Document must capture its ancestor origins"
+        );
 
         match owner_transition.local_window_owner_transition() {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {

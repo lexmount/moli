@@ -19,6 +19,7 @@ struct ServiceWorkerNavigationPreloadDispatch {
     event_id: ServiceWorkerEventId,
     owner: ServiceWorkerRunOwner,
     request_url: url::Url,
+    request_method: String,
     request_mode: moli_fetch::RequestMode,
     request_client: ResourceRequestClient,
     resource_task_runner: crate::network::RendererResourceTaskRunner,
@@ -60,6 +61,8 @@ fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        cors_exposed_header_names: None,
+        status_text: head.status_text().to_owned(),
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),
         redirected: head.redirected,
@@ -120,6 +123,7 @@ async fn stream_navigation_preload_response(
         event_id: dispatch.event_id,
         owner: dispatch.owner.clone(),
         request_url: dispatch.request_url,
+        request_method: dispatch.request_method,
         request_mode: dispatch.request_mode,
         body_source_id,
         response_head,
@@ -175,9 +179,6 @@ impl ServiceWorkerRuntimeService {
             &mut launch,
             debugger_release_consumed,
         );
-        for notification in launch.lifecycle_notifications {
-            notification.send();
-        }
         launch
             .host
             .start_loading(self.clone(), launch.params, launch.preloaded_script);
@@ -243,7 +244,7 @@ impl ServiceWorkerRuntimeService {
         let fetch_job = ServiceWorkerFetchJob {
             request: {
                 let origin = dispatch.network_context.request_origin.clone();
-                moli_fetch::Request::new_browser(
+                let network_request = moli_fetch::Request::new_browser(
                     &request.method,
                     request.url.clone(),
                     request.body.clone(),
@@ -254,7 +255,11 @@ impl ServiceWorkerRuntimeService {
                 .with_request_mode(request.request_mode)
                 .with_credentials_mode(request.credentials_mode)
                 .with_redirect_mode(request.redirect_mode)
-                .with_fetch_priority_hint(request.priority)
+                .with_fetch_priority_hint(request.priority);
+                match dispatch.redirect_check {
+                    Some(check) => network_request.with_redirect_check(check),
+                    None => network_request,
+                }
             },
             internal_id: dispatch.internal_id,
             owner: None,
@@ -409,7 +414,6 @@ impl ServiceWorkerRuntimeService {
                             Some(ServiceWorkerQueuedLaunch {
                                 params,
                                 host,
-                                lifecycle_notifications: Vec::new(),
                                 preloaded_script: None,
                             }),
                             None,
@@ -1393,6 +1397,7 @@ impl ServiceWorkerRuntimeService {
 
         let request_url = job.request.url.clone();
         let request_mode = job.request.request_mode;
+        let request_method = job.request.method.clone();
         let request_client = job.request_client.clone();
         let resource_task_runner = job.resource_task_runner.clone();
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
@@ -1411,6 +1416,7 @@ impl ServiceWorkerRuntimeService {
             event_id: event.event_id,
             owner: event.owner.clone(),
             request_url,
+            request_method,
             request_mode,
             request_client,
             resource_task_runner,

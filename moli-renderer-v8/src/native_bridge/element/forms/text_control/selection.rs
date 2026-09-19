@@ -7,6 +7,7 @@ use super::value::{
 };
 use super::*;
 use crate::dom::forms::parse_non_negative_length_attribute;
+use crate::native_bridge::element::construct_editing_input_event;
 use crate::util::{utf16_replace_units_range_lossy, utf16_units, v8str};
 use crate::webidl;
 
@@ -70,15 +71,6 @@ fn text_control_selection_idl_owner(runtime: &JsContextHost, handle: DomHandle) 
         .unwrap_or("HTMLInputElement")
 }
 
-fn event_default_prevented(
-    scope: &mut v8::PinScope<'_, '_>,
-    event: v8::Local<'_, v8::Object>,
-) -> bool {
-    event
-        .get(scope, v8str(scope, "defaultPrevented").into())
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
 pub(crate) fn text_control_set_selection_range_internal(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -113,6 +105,9 @@ pub(crate) fn text_control_set_selection_range_with_direction_internal(
         (end, end)
     };
     let changed = runtime.set_selection_range_with_direction(handle, start, end, direction);
+    if runtime.active_element_handle() == Some(handle) {
+        runtime.note_text_control_selection(handle);
+    }
     if changed {
         queue_text_control_select_event(scope, runtime_ptr, handle);
         queue_text_control_selection_change_event(scope, runtime_ptr, handle);
@@ -126,20 +121,79 @@ pub(crate) fn replace_text_control_selection(
     handle: DomHandle,
     replacement_text: &str,
 ) -> bool {
+    replace_text_control_selection_with_input_type(
+        scope,
+        runtime_ptr,
+        handle,
+        replacement_text,
+        None,
+    )
+}
+
+pub(crate) fn replace_text_control_selection_with_input_type(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    replacement_text: &str,
+    input_type: Option<&str>,
+) -> bool {
     if !is_text_control(unsafe { &*runtime_ptr }, handle) {
         return false;
     }
 
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let event_data = input_type
+        .filter(|value| *value == "insertFromPaste" && !replacement_text.is_empty())
+        .map(|_| replacement_text);
+    let before_input = match input_type {
+        Some(input_type) => {
+            construct_editing_input_event(scope, "beforeinput", input_type, event_data, None)
+        }
+        None => construct_simple_event(scope, "beforeinput", true, true, true),
+    };
+    let Some(before_input) = before_input else {
         return false;
     };
-    let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
-    if event_default_prevented(scope, before_input) {
+    if !dispatch_public_event(scope, runtime_ptr, handle, before_input).allows_default() {
         return false;
     }
 
     let runtime = unsafe { &*runtime_ptr };
+    let handle = if input_type.is_some() {
+        let Some(active) = runtime
+            .active_element_handle()
+            .filter(|active| runtime.dom_host().is_connected(*active))
+        else {
+            return false;
+        };
+        active
+    } else {
+        handle
+    };
     if !is_text_control(runtime, handle) {
+        return false;
+    }
+    if input_type.is_some()
+        && (form_control_is_effectively_disabled(runtime, handle)
+            || runtime
+                .dom_host()
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_none_or(|element| {
+                    element.has_attribute("readonly")
+                        || !(element.is_html_textarea()
+                            || (element.is_html_input()
+                                && matches!(
+                                    element.input_type(),
+                                    InputType::Text
+                                        | InputType::Search
+                                        | InputType::Tel
+                                        | InputType::Url
+                                        | InputType::Email
+                                        | InputType::Password
+                                        | InputType::Number
+                                )))
+                }))
+    {
         return false;
     }
     let value = text_control_value(runtime, handle);
@@ -187,7 +241,18 @@ pub(crate) fn replace_text_control_selection(
     let selection_changed =
         text_control_set_selection_range_internal(scope, runtime_ptr, handle, caret, caret);
     if changed || selection_changed {
-        dispatch_text_control_event(scope, runtime_ptr, handle, "input");
+        if let Some(input_type) = input_type {
+            let inserted_text = String::from_utf16_lossy(&replacement_units);
+            let event_data = (input_type == "insertFromPaste" && !inserted_text.is_empty())
+                .then_some(inserted_text.as_str());
+            if let Some(event) =
+                construct_editing_input_event(scope, "input", input_type, event_data, None)
+            {
+                let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+            }
+        } else {
+            dispatch_text_control_event(scope, runtime_ptr, handle, "input");
+        }
     }
     changed || selection_changed
 }
@@ -575,7 +640,7 @@ pub(in crate::native_bridge) fn text_control_select_callback(
         return;
     };
     let len = text_control_value(unsafe { &*runtime_ptr }, handle)
-        .chars()
+        .encode_utf16()
         .count() as u32;
     let _ = text_control_set_selection_range_internal(scope, runtime_ptr, handle, 0, len);
     rv.set_undefined();

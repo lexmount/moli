@@ -19,23 +19,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_count_callback<
     let store = args.this();
     let Some((request, transaction, store_name)) = object_store_operation_common(scope, store)
     else {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
         return;
     };
     let query_value = parsed.query.unwrap_or_else(|| v8::undefined(scope).into());
     let query = match parse_key_or_range(scope, query_value) {
-        Err(_) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'count': the query is not a valid key or key range.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
         Ok(query) => query,
@@ -49,7 +38,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_count_callback<
             store,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::ObjectStoreCount { query: query_value },
+            IndexedDbTransactionOperation::ObjectStoreCount { query },
         );
         rv.set(request.into());
         return;

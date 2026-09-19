@@ -521,6 +521,9 @@ pub enum ParserDomMutation {
         parent: NativeNodeId,
         child: NativeNodeId,
     },
+    FinishParsingStyleChildren {
+        node: NativeNodeId,
+    },
 }
 
 impl ParserDomMutation {
@@ -533,6 +536,9 @@ impl ParserDomMutation {
                 reference_child,
             } => host.insert_before_effects(parent, child, reference_child),
             Self::RemoveChild { parent, child } => host.remove_child_effects(parent, child),
+            Self::FinishParsingStyleChildren { node } => {
+                host.finish_parsing_style_children_effects(node)
+            }
         }
     }
 
@@ -554,6 +560,7 @@ impl ParserDomMutation {
             Self::RemoveChild { parent, child } => {
                 host.remove_child_without_mutation_effects(parent, child)
             }
+            Self::FinishParsingStyleChildren { node } => host.finish_parsing_style_children(node),
         }
     }
 }
@@ -624,9 +631,13 @@ pub trait ParserDomMutationConsumer {
 
     fn mark_script_already_started_for_parser(&mut self, node_id: NativeNodeId);
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId);
+
     fn finish_parsing_script_children(&mut self, node_id: NativeNodeId);
 
     fn finish_parsing_link_children(&mut self, node_id: NativeNodeId);
+
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, _node_id: NativeNodeId) {}
 
     fn attach_declarative_shadow_for_parser(
         &mut self,
@@ -657,8 +668,10 @@ struct ParserDomMutationSink {
     push_parse_error: unsafe fn(NonNull<()>, String),
     set_html_quirks_mode_for_parser: unsafe fn(NonNull<()>, QuirksMode),
     mark_script_already_started_for_parser: unsafe fn(NonNull<()>, NativeNodeId),
+    mark_unclosed_form_control_for_parser: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_script_children: unsafe fn(NonNull<()>, NativeNodeId),
     finish_parsing_link_children: unsafe fn(NonNull<()>, NativeNodeId),
+    maybe_clone_an_option_into_selectedcontent: unsafe fn(NonNull<()>, NativeNodeId),
     attach_declarative_shadow_for_parser:
         unsafe fn(NonNull<()>, NativeNodeId, NativeNodeId, Vec<NativeAttribute>) -> bool,
     associate_parser_form_owner: unsafe fn(NonNull<()>, NativeNodeId, NativeNodeId) -> bool,
@@ -801,6 +814,14 @@ impl ParserDomMutationSink {
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.mark_script_already_started_for_parser(node_id);
         }
+        unsafe fn mark_unclosed_form_control_for_parser_impl<T: ParserDomMutationConsumer>(
+            data: NonNull<()>,
+            node_id: NativeNodeId,
+        ) {
+            // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
+            // pointed-to consumer to remain live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }.mark_unclosed_form_control_for_parser(node_id);
+        }
         unsafe fn finish_parsing_script_children_impl<T: ParserDomMutationConsumer>(
             data: NonNull<()>,
             node_id: NativeNodeId,
@@ -816,6 +837,15 @@ impl ParserDomMutationSink {
             // SAFETY: ParserDomMutationSink::from_consumer_unchecked requires the
             // pointed-to consumer to remain live and exclusive for the pump step.
             unsafe { data.cast::<T>().as_mut() }.finish_parsing_link_children(node_id);
+        }
+        unsafe fn maybe_clone_an_option_into_selectedcontent_impl<T: ParserDomMutationConsumer>(
+            data: NonNull<()>,
+            node_id: NativeNodeId,
+        ) {
+            // SAFETY: ParserDomMutationSink::from_consumer requires the
+            // pointed-to consumer to remain live and exclusive for the pump step.
+            unsafe { data.cast::<T>().as_mut() }
+                .maybe_clone_an_option_into_selectedcontent(node_id);
         }
         unsafe fn attach_declarative_shadow_for_parser_impl<T: ParserDomMutationConsumer>(
             data: NonNull<()>,
@@ -857,8 +887,11 @@ impl ParserDomMutationSink {
             push_parse_error: push_parse_error_impl::<T>,
             set_html_quirks_mode_for_parser: set_html_quirks_mode_for_parser_impl::<T>,
             mark_script_already_started_for_parser: mark_script_already_started_for_parser_impl::<T>,
+            mark_unclosed_form_control_for_parser: mark_unclosed_form_control_for_parser_impl::<T>,
             finish_parsing_script_children: finish_parsing_script_children_impl::<T>,
             finish_parsing_link_children: finish_parsing_link_children_impl::<T>,
+            maybe_clone_an_option_into_selectedcontent:
+                maybe_clone_an_option_into_selectedcontent_impl::<T>,
             attach_declarative_shadow_for_parser: attach_declarative_shadow_for_parser_impl::<T>,
             associate_parser_form_owner: associate_parser_form_owner_impl::<T>,
         }
@@ -969,6 +1002,12 @@ impl ParserDomMutationSink {
         unsafe { (self.mark_script_already_started_for_parser)(self.data, node_id) };
     }
 
+    fn mark_unclosed_form_control_for_parser(self, node_id: NativeNodeId) {
+        // SAFETY: construction ties the raw pointer and callback to the same
+        // consumer remains live for the current runtime-DOM sink step.
+        unsafe { (self.mark_unclosed_form_control_for_parser)(self.data, node_id) };
+    }
+
     fn finish_parsing_script_children(self, node_id: NativeNodeId) {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
@@ -979,6 +1018,12 @@ impl ParserDomMutationSink {
         // SAFETY: construction ties the raw pointer and callback to the same
         // consumer remains live for the current runtime-DOM sink step.
         unsafe { (self.finish_parsing_link_children)(self.data, node_id) };
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(self, node_id: NativeNodeId) {
+        // SAFETY: construction ties the raw pointer and callback to the same
+        // consumer remains live for the current runtime-DOM sink step.
+        unsafe { (self.maybe_clone_an_option_into_selectedcontent)(self.data, node_id) };
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -1535,6 +1580,12 @@ impl ParserDomMutationConsumer for TestMutationEffectCollector<'_> {
         let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
+        // parser pump through this collector for the duration of the step.
+        let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
@@ -1906,6 +1957,12 @@ impl ParserDomMutationConsumer for TestReadTrackingCollector<'_> {
         let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+        // SAFETY: tests keep the borrowed DomHost pointer alive and route the
+        // parser pump through this collector for the duration of the step.
+        let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
         // SAFETY: tests keep the borrowed DomHost pointer alive and route the
         // parser pump through this collector for the duration of the step.
@@ -2042,16 +2099,24 @@ impl ParserStreamHtmlTreeSinkTarget {
         Some(move || sink.finish())
     }
 
-    fn new(final_url: Url) -> Self {
-        Self::new_with_declarative_shadow_roots(final_url, true)
+    pub(super) fn has_runtime_dom_consumer(&self) -> bool {
+        self.runtime_dom_sinks.is_some()
     }
 
-    pub(super) fn new_with_declarative_shadow_roots(
+    pub(super) fn new_with_declarative_shadow_roots_and_scripting(
         final_url: Url,
         allow_declarative_shadow_roots: bool,
+        scripting_enabled: bool,
     ) -> Self {
-        let dom_host = DomHost::from_dom(NativeDom::new(final_url.clone()));
+        let mut dom_host = DomHost::from_dom(NativeDom::new_html_with_scripting(
+            final_url.clone(),
+            scripting_enabled,
+        ));
         let document_handle = dom_host.document_handle();
+        dom_host.set_document_allow_declarative_shadow_roots_for_handle(
+            document_handle,
+            allow_declarative_shadow_roots,
+        );
         Self {
             owned_dom_host: Some(dom_host),
             parser_root_handle: Some(document_handle),
@@ -2275,7 +2340,11 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
     }
 
-    fn read_is_html_element_named(&self, node_id: NativeNodeId, local_name: &str) -> bool {
+    pub(super) fn read_is_html_element_named(
+        &self,
+        node_id: NativeNodeId,
+        local_name: &str,
+    ) -> bool {
         if let Some(owner) = &self.runtime_dom_sinks {
             owner
                 .dom_read_sink()
@@ -2589,7 +2658,18 @@ impl ParserStreamHtmlTreeSinkTarget {
             .iter()
             .rposition(|candidate| candidate.node_id == node_id)
         {
-            self.open_parser_elements.remove(index);
+            let element = self.open_parser_elements.remove(index);
+            if element.name.local.as_ref() == "style"
+                && matches!(
+                    element.name.ns.as_ref(),
+                    "http://www.w3.org/1999/xhtml" | "http://www.w3.org/2000/svg"
+                )
+            {
+                self.record_parser_dom_mutation(ParserDomMutation::FinishParsingStyleChildren {
+                    node: node_id,
+                })
+                .consume();
+            }
         }
         if self.read_is_html_element_named(node_id, "link") {
             let _ = self.capture_parser_blocking_stylesheet(node_id);
@@ -2844,6 +2924,18 @@ impl ParserStreamHtmlTreeSinkTarget {
         }
     }
 
+    fn mark_unclosed_form_control_for_dom_host(&mut self, node_id: NativeNodeId) {
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner
+                .dom_mutation_sink()
+                .mark_unclosed_form_control_for_parser(node_id);
+        } else {
+            let _ = self
+                .dom_host_mut()
+                .set_blocks_form_submission(node_id, true);
+        }
+    }
+
     fn finish_parsing_script_children_for_dom_host(&mut self, node_id: NativeNodeId) {
         if let Some(owner) = &self.runtime_dom_sinks {
             owner
@@ -2861,6 +2953,14 @@ impl ParserStreamHtmlTreeSinkTarget {
                 .finish_parsing_link_children(node_id);
         } else {
             let _ = self.dom_host_mut().finish_parsing_link_children(node_id);
+        }
+    }
+
+    pub(super) fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: NativeNodeId) {
+        if let Some(owner) = &self.runtime_dom_sinks {
+            owner
+                .dom_mutation_sink()
+                .maybe_clone_an_option_into_selectedcontent(node_id);
         }
     }
 
@@ -2951,8 +3051,11 @@ impl ParserStreamHtmlTreeSinkTarget {
         self.state.pending_blocking_stylesheet_pause.take()
     }
 
-    pub(super) fn begin_tree_builder_finish(&mut self) {
+    pub(super) fn begin_tree_builder_finish(&mut self, unclosed_form_controls: &[NativeNodeId]) {
         self.state.finishing_tree_builder = true;
+        for &node_id in unclosed_form_controls {
+            self.mark_unclosed_form_control_for_dom_host(node_id);
+        }
     }
 
     pub(super) fn drain_discovered_blocking_stylesheet_inputs(
@@ -3120,6 +3223,7 @@ impl ParserStreamHtmlTreeSinkTarget {
         name: QualName,
         attrs: Vec<Attribute>,
         flags: ElementFlags,
+        script_nonceable: Option<bool>,
     ) -> ParseHandle {
         let parser_flags = ParserElementFlags::from_html5ever(&flags);
         let template_contents_insertion = self.take_template_contents_insertion_hint();
@@ -3196,6 +3300,7 @@ impl ParserStreamHtmlTreeSinkTarget {
                     &attributes,
                     has_null_custom_element_registry_attribute,
                     parser_flags,
+                    script_nonceable,
                 );
             }
         }
@@ -3221,6 +3326,7 @@ impl ParserStreamHtmlTreeSinkTarget {
             &token_attributes,
             has_null_custom_element_registry_attribute,
             parser_flags,
+            script_nonceable,
         )
     }
 
@@ -3235,12 +3341,16 @@ impl ParserStreamHtmlTreeSinkTarget {
         token_attributes: &[NativeAttribute],
         has_null_custom_element_registry_attribute: bool,
         parser_flags: ParserElementFlags,
+        script_nonceable: Option<bool>,
     ) -> ParseHandle {
         if has_null_custom_element_registry_attribute {
             self.pending_null_custom_element_registry_elements
                 .push(node_id);
         }
         if is_script {
+            if script_nonceable == Some(false) {
+                self.state.non_nonceable_parser_scripts.insert(node_id);
+            }
             self.state
                 .script_start_positions
                 .insert(node_id, self.state.current_position);
@@ -3377,6 +3487,14 @@ impl ParserStreamHtmlTreeSinkTarget {
         handle
     }
 
+    pub(super) fn template_contents_parent_handle(
+        &self,
+        node_id: NativeNodeId,
+    ) -> Option<ParseHandle> {
+        self.read_template_contents_handle(node_id)
+            .map(|handle| ParseHandle::new(handle, None))
+    }
+
     fn take_template_contents_insertion_hint(&mut self) -> Option<NativeNodeId> {
         self.next_template_contents_insertion.take()
     }
@@ -3486,10 +3604,10 @@ impl ParserStreamHtmlTreeSinkTarget {
         if self.read_is_html_element_named(node_id, "template") {
             self.open_template_element_depth = self.open_template_element_depth.saturating_sub(1);
         }
+        self.note_parser_element_popped(node_id);
         if self.read_is_html_element_named(node_id, "style") {
             self.note_blocking_stylesheet_pause_if_needed(node_id);
         }
-        self.note_parser_element_popped(node_id);
     }
 
     pub(super) fn restore_parser_stream_dom_host(&mut self, dom_host: DomHost) {
@@ -3560,8 +3678,13 @@ impl ParserStreamHtmlTreeSinkTarget {
 
 pub(super) fn new_parser_stream_html_tree_sink_target(
     final_url: Url,
+    scripting_enabled: bool,
 ) -> ParserStreamHtmlTreeSinkTarget {
-    ParserStreamHtmlTreeSinkTarget::new(final_url)
+    ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+        final_url,
+        true,
+        scripting_enabled,
+    )
 }
 
 pub(super) fn new_parser_stream_html_tree_sink_stream(
@@ -3569,7 +3692,7 @@ pub(super) fn new_parser_stream_html_tree_sink_stream(
     scripting_enabled: bool,
 ) -> HtmlTreeSinkStream {
     HtmlTreeSinkStream::from_target_with_scripting(
-        new_parser_stream_html_tree_sink_target(final_url),
+        new_parser_stream_html_tree_sink_target(final_url, scripting_enabled),
         scripting_enabled,
     )
 }
@@ -3578,9 +3701,18 @@ pub(super) fn new_live_document_root_html_tree_sink_stream(
     final_url: Url,
     document_handle: NativeNodeId,
     scripting_enabled: bool,
+    allow_declarative_shadow_roots: bool,
 ) -> HtmlTreeSinkStream {
     HtmlTreeSinkStream::from_target_with_scripting(
-        ParserStreamHtmlTreeSinkTarget::new_live_document_root(final_url, document_handle),
+        if allow_declarative_shadow_roots {
+            ParserStreamHtmlTreeSinkTarget::new_live_document_root(final_url, document_handle)
+        } else {
+            ParserStreamHtmlTreeSinkTarget::new_live_document_root_with_declarative_shadow_roots(
+                final_url,
+                document_handle,
+                false,
+            )
+        },
         scripting_enabled,
     )
 }
@@ -3615,7 +3747,11 @@ pub(super) fn new_live_fragment_root_html_tree_sink_stream(
 
 impl ParserPlanningReadView for ParserStreamHtmlTreeSinkTarget {
     fn parser_script_read(&self, node_id: NativeNodeId) -> Option<ParserScriptRead> {
-        self.read_parser_script(node_id)
+        let mut script = self.read_parser_script(node_id)?;
+        if self.state.non_nonceable_parser_scripts.contains(&node_id) {
+            script.fetch_metadata.nonce = None;
+        }
+        Some(script)
     }
 
     fn script_handles(&self) -> Vec<NativeNodeId> {
@@ -3668,6 +3804,10 @@ impl StylesheetBlockingReadView for ParserStreamHtmlTreeSinkTarget {
 
     fn document_node_id(&self) -> NativeNodeId {
         self.parser_owner_document_node_id()
+    }
+
+    fn document_is_quirks_mode(&self) -> bool {
+        matches!(self.state.html_quirks_mode, QuirksMode::Quirks)
     }
 
     fn document_order_stylesheet_candidate_ids_before(
@@ -3744,6 +3884,53 @@ fn parser_stream_html_tree_sink_target_builds_dom_and_records_parser_state() {
         template_contents.is_some(),
         "template contents should be preserved"
     );
+}
+
+#[test]
+fn parser_stream_marks_only_eof_unclosed_form_controls_as_submission_blocking() {
+    let cases = [
+        (
+            "select",
+            "<!doctype html><form><select><option>secret<element attribute></element>",
+            true,
+        ),
+        (
+            "select",
+            "<!doctype html><form><select><option>safe</option></select></form>",
+            false,
+        ),
+        (
+            "textarea",
+            "<!doctype html><form><textarea>secret<element attribute></element>",
+            true,
+        ),
+        (
+            "textarea",
+            "<!doctype html><form><textarea>safe</textarea></form>",
+            false,
+        ),
+    ];
+
+    for (tag_name, html, expected) in cases {
+        let url = Url::parse("https://dangling-markup.test/").expect("test url");
+        let stream = crate::DocumentStream::new_scripting_enabled_parser_stream_for_testing(url);
+        stream.feed(html);
+        let document = stream.finish();
+        let control = document
+            .elements_by_tag_name(document.document_node_id(), tag_name, false)
+            .into_iter()
+            .next()
+            .expect("form control should be parsed");
+
+        assert_eq!(
+            document
+                .node(control)
+                .and_then(Node::as_element)
+                .is_some_and(|element| element.blocks_form_submission()),
+            expected,
+            "{tag_name} EOF state for {html:?}"
+        );
+    }
 }
 
 #[test]
@@ -4310,6 +4497,55 @@ fn parser_stream_live_fragment_root_writes_fragment() {
             .elements_by_tag_name(dom_host.document_handle(), "span", false)
             .is_empty(),
         "live fragment root parse must not append roots under the document"
+    );
+}
+
+#[test]
+fn live_fragment_parser_preserves_noscript_when_scripting_is_disabled() {
+    let url = Url::parse("https://example.test/").expect("test url");
+    let mut dom_host = DomHost::from_dom(NativeDom::new_html_with_scripting(url.clone(), false));
+    let document = dom_host.document_handle();
+    let html = dom_host.create_element("html");
+    let body = dom_host.create_element("body");
+    assert!(dom_host.append_child(document, html));
+    assert!(dom_host.append_child(html, body));
+    let existing_noscript = dom_host.create_element("noscript");
+    let existing_text = dom_host.create_text_node("<em>existing&</em>");
+    assert!(dom_host.append_child(existing_noscript, existing_text));
+    assert!(dom_host.append_child(body, existing_noscript));
+    let fragment = dom_host.create_document_fragment_for_document(document);
+    let ptr = &mut dom_host as *mut DomHost;
+    let mut effects = DomMutationEffects::default();
+
+    {
+        let mut collector = TestMutationEffectCollector {
+            host: ptr,
+            effects: &mut effects,
+            panic_on_mutation: false,
+        };
+        crate::HtmlParser::with_scripting_enabled(false).parse_fragment_into_live_dom(
+            url,
+            fragment,
+            document,
+            body,
+            "http://www.w3.org/1999/xhtml",
+            "body",
+            "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript><span>tail</span>",
+            &mut collector,
+            false,
+        );
+    }
+
+    assert_eq!(
+        dom_host
+            .elements_by_tag_name(fragment, "noscript", false)
+            .len(),
+        1,
+        "a scripting-disabled live fragment must preserve its noscript root"
+    );
+    assert_eq!(
+        dom_host.elements_by_tag_name(fragment, "span", false).len(),
+        1
     );
 }
 

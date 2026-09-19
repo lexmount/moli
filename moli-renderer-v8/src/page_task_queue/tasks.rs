@@ -6,7 +6,7 @@ use crate::{
     host::ScriptEventTask,
     planning::PreparedScript,
     stylesheet_blocking::DocumentOwnedBlockingStylesheetDiscoveryInput,
-    types::ScriptErrorConstructorKind,
+    types::ScriptErrorValue,
     types::ScriptRun,
 };
 use url::Url;
@@ -70,23 +70,23 @@ pub(crate) enum PageOwnedInternalLoadingTaskEffect {
 pub(crate) struct WindowScriptFailureReportTask {
     pub(crate) message: String,
     pub(crate) filename: Option<String>,
-    pub(crate) error_constructor: Option<ScriptErrorConstructorKind>,
+    pub(crate) error_value: Option<ScriptErrorValue>,
 }
 
 impl WindowScriptFailureReportTask {
     pub(crate) fn new(message: impl Into<String>, filename: Option<String>) -> Self {
-        Self::new_with_error_constructor(message, filename, None)
+        Self::new_with_error_value(message, filename, None)
     }
 
-    pub(crate) fn new_with_error_constructor(
+    pub(crate) fn new_with_error_value(
         message: impl Into<String>,
         filename: Option<String>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Self {
         Self {
             message: message.into(),
             filename,
-            error_constructor,
+            error_value,
         }
     }
 }
@@ -94,6 +94,7 @@ impl WindowScriptFailureReportTask {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ContentSecurityPolicyViolationEventTask {
     owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    event_document_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
     target: Option<DomHandle>,
     violation: ContentSecurityPolicyUrlViolation,
 }
@@ -105,6 +106,7 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Self {
         Self {
             owner,
+            event_document_owner: None,
             target: None,
             violation,
         }
@@ -117,6 +119,7 @@ impl ContentSecurityPolicyViolationEventTask {
     ) -> Self {
         Self {
             owner,
+            event_document_owner: None,
             target: Some(target),
             violation,
         }
@@ -132,6 +135,20 @@ impl ContentSecurityPolicyViolationEventTask {
 
     pub(crate) fn target(&self) -> Option<DomHandle> {
         self.target
+    }
+
+    pub(crate) fn with_event_document_owner(
+        mut self,
+        owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    ) -> Self {
+        self.event_document_owner = owner;
+        self
+    }
+
+    pub(crate) fn event_document_owner(
+        &self,
+    ) -> Option<crate::frame_owner_model::FrameDocumentTaskOwner> {
+        self.event_document_owner
     }
 }
 
@@ -162,6 +179,9 @@ pub(crate) enum PageTask {
     //   into "script loop followed by immediate host callback".
     // - Keeping it in the queue means the owner lane sees one explicit task:
     //   pre-task checkpoint -> dispatch DOMContentLoaded -> post-task effects.
+    // - Its initial placement is a lifecycle sentinel. Reaching the queue
+    //   front after defer-like work establishes the actual DCL task queue
+    //   point; ready timers recorded during classic defer tasks run first.
     //
     DispatchDomContentLoaded,
     DispatchConnectedStyleLoad(ReadyConnectedStyleLoad),

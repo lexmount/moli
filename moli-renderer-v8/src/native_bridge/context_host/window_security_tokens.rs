@@ -1,5 +1,6 @@
 use super::{
     JsContextHost, OwnerDispatchScope, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+    child_frames::{ChildAncestorOriginsReferrerPolicy, ChildBrowsingContextEntry},
 };
 use crate::document_runtime::DomHandle;
 
@@ -7,6 +8,79 @@ const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
 impl JsContextHost {
+    pub(in crate::native_bridge::context_host) fn child_ancestor_origins_referrer_policy_from_owner_attribute(
+        &self,
+        handle: DomHandle,
+    ) -> ChildAncestorOriginsReferrerPolicy {
+        match self
+            .dom_host()
+            .get_attribute(handle, "referrerpolicy")
+            .as_deref()
+            .and_then(crate::referrer_policy::normalize_referrer_policy)
+            .as_deref()
+        {
+            Some("no-referrer") => ChildAncestorOriginsReferrerPolicy::NoReferrer,
+            Some("same-origin") => ChildAncestorOriginsReferrerPolicy::SameOrigin,
+            Some(_) | None => ChildAncestorOriginsReferrerPolicy::Default,
+        }
+    }
+
+    pub(in crate::native_bridge::context_host) fn refresh_current_child_document_ancestor_origins(
+        &mut self,
+        handle: DomHandle,
+    ) -> bool {
+        let Some(child_origin) = self.child_window_access_origin(handle) else {
+            return false;
+        };
+        let Some(parent_scope) = self.owner_dispatch_scope_for_node(handle) else {
+            return false;
+        };
+        let Some(parent_origin) = self.window_access_origin_for_dispatch_scope(parent_scope) else {
+            return false;
+        };
+        let parent_ancestor_origins = match parent_scope {
+            OwnerDispatchScope::Child(parent) => self
+                .child_browsing_contexts
+                .get(&parent)
+                .map(ChildBrowsingContextEntry::document_internal_ancestor_origins)
+                .unwrap_or_default(),
+            OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => Vec::new(),
+        };
+        let Some(policy) = self
+            .child_browsing_contexts
+            .get(&handle)
+            .map(ChildBrowsingContextEntry::ancestor_origins_referrer_policy_snapshot)
+        else {
+            return false;
+        };
+        let origins = build_child_document_internal_ancestor_origins(
+            parent_origin,
+            &parent_ancestor_origins,
+            &child_origin,
+            policy,
+        );
+        let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
+            return false;
+        };
+        entry.set_document_internal_ancestor_origins(origins);
+        true
+    }
+
+    pub(crate) fn child_browsing_context_ancestor_origins(
+        &self,
+        handle: DomHandle,
+    ) -> Option<Vec<String>> {
+        self.current_child_document_task_owner(handle)?;
+        Some(
+            self.child_browsing_contexts
+                .get(&handle)?
+                .document_internal_ancestor_origins()
+                .into_iter()
+                .map(|origin| origin.serialized_origin())
+                .collect(),
+        )
+    }
+
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
         let origin = moli_url::origin_ascii_serialization(self.document_url());
         if self.document_domain_override.is_some() {
@@ -137,6 +211,33 @@ impl JsContextHost {
             return false;
         };
         top.can_access(&child)
+    }
+
+    /// Compares the Window's origin with its top-level origin without applying
+    /// `document.domain` relaxation. Algorithms that require "same origin"
+    /// use this rather than the broader Window access check.
+    pub(crate) fn child_window_has_same_origin_with_its_top_level_origin(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        let mut top_child = handle;
+        for _ in 0..=self.child_browsing_contexts.len() {
+            let Some(parent) = self.child_browsing_context_parent_handle(top_child) else {
+                break;
+            };
+            top_child = parent;
+        }
+        let top = match self.child_browsing_context_popup_owner_id(top_child) {
+            Some(popup_id) => self.lightweight_popup_window_access_origin(popup_id),
+            None => self.main_window_access_origin(),
+        };
+        let Some(top) = top else {
+            return false;
+        };
+        let Some(child) = self.child_window_access_origin(handle) else {
+            return false;
+        };
+        top.has_same_origin(&child)
     }
 
     pub(in crate::native_bridge::context_host) fn child_window_can_access_lightweight_popup(
@@ -331,6 +432,10 @@ impl WindowAccessOrigin {
         }
     }
 
+    fn opaque_without_identity() -> Self {
+        Self::Opaque { identity: None }
+    }
+
     pub(in crate::native_bridge::context_host) fn from_serialized_origin(
         serialized_origin: String,
         document_domain: Option<String>,
@@ -385,6 +490,30 @@ impl WindowAccessOrigin {
         }
     }
 
+    pub(in crate::native_bridge::context_host) fn has_same_origin(&self, target: &Self) -> bool {
+        match (self, target) {
+            (
+                Self::Opaque {
+                    identity: Some(origin),
+                },
+                Self::Opaque {
+                    identity: Some(target_origin),
+                },
+            ) => origin == target_origin,
+            (
+                Self::Tuple {
+                    serialized_origin: origin,
+                    ..
+                },
+                Self::Tuple {
+                    serialized_origin: target_origin,
+                    ..
+                },
+            ) => origin == target_origin,
+            _ => false,
+        }
+    }
+
     pub(in crate::native_bridge::context_host) fn serialized_origin(&self) -> String {
         match self {
             Self::Opaque { .. } => "null".to_owned(),
@@ -393,6 +522,36 @@ impl WindowAccessOrigin {
             } => serialized_origin.clone(),
         }
     }
+}
+
+fn build_child_document_internal_ancestor_origins(
+    parent_origin: WindowAccessOrigin,
+    parent_ancestor_origins: &[WindowAccessOrigin],
+    child_origin: &WindowAccessOrigin,
+    policy: ChildAncestorOriginsReferrerPolicy,
+) -> Vec<WindowAccessOrigin> {
+    let mut masked = match policy {
+        ChildAncestorOriginsReferrerPolicy::NoReferrer => true,
+        ChildAncestorOriginsReferrerPolicy::SameOrigin => {
+            !parent_origin.has_same_origin(child_origin)
+        }
+        ChildAncestorOriginsReferrerPolicy::Default => false,
+    };
+    let mut origins = Vec::with_capacity(1 + parent_ancestor_origins.len());
+    origins.push(if masked {
+        WindowAccessOrigin::opaque_without_identity()
+    } else {
+        parent_origin.clone()
+    });
+    for ancestor_origin in parent_ancestor_origins {
+        if masked && ancestor_origin.has_same_origin(&parent_origin) {
+            origins.push(WindowAccessOrigin::opaque_without_identity());
+        } else {
+            masked = false;
+            origins.push(ancestor_origin.clone());
+        }
+    }
+    origins
 }
 
 pub(crate) fn set_window_security_token(
@@ -436,7 +595,9 @@ fn window_isolated_world_security_token_key(
 #[cfg(test)]
 mod tests {
     use super::{
-        WindowAccessOrigin, window_isolated_world_security_token_key, window_security_token_key,
+        ChildAncestorOriginsReferrerPolicy, WindowAccessOrigin,
+        build_child_document_internal_ancestor_origins, window_isolated_world_security_token_key,
+        window_security_token_key,
     };
     use crate::{frame_owner_model::LocalWindowId, native_bridge::WindowExecutionContextOwner};
 
@@ -484,6 +645,85 @@ mod tests {
 
         assert!(accessing.can_access(&target));
         assert!(!accessing.can_access(&target_without_domain));
+    }
+
+    #[test]
+    fn same_origin_check_does_not_use_document_domain_relaxation() {
+        let original = WindowAccessOrigin::from_serialized_origin(
+            "https://www.example.test:8443".to_owned(),
+            None,
+        )
+        .expect("original origin");
+        let original_with_domain = WindowAccessOrigin::from_serialized_origin(
+            "https://www.example.test:8443".to_owned(),
+            Some("example.test".to_owned()),
+        )
+        .expect("original origin with document.domain");
+        let relaxed_peer = WindowAccessOrigin::from_serialized_origin(
+            "https://sub.example.test:9443".to_owned(),
+            Some("example.test".to_owned()),
+        )
+        .expect("relaxed peer origin");
+
+        assert!(original.has_same_origin(&original_with_domain));
+        assert!(!original_with_domain.has_same_origin(&relaxed_peer));
+        assert!(original_with_domain.can_access(&relaxed_peer));
+    }
+
+    #[test]
+    fn ancestor_origins_mask_the_same_origin_parent_prefix_only() {
+        let origin_a =
+            WindowAccessOrigin::from_serialized_origin("https://a.example.test".to_owned(), None)
+                .expect("origin A");
+        let origin_b =
+            WindowAccessOrigin::from_serialized_origin("https://b.example.test".to_owned(), None)
+                .expect("origin B");
+
+        let no_referrer = build_child_document_internal_ancestor_origins(
+            origin_b.clone(),
+            &[origin_b.clone(), origin_a.clone()],
+            &origin_a,
+            ChildAncestorOriginsReferrerPolicy::NoReferrer,
+        );
+        assert_eq!(
+            no_referrer
+                .iter()
+                .map(WindowAccessOrigin::serialized_origin)
+                .collect::<Vec<_>>(),
+            vec!["null", "null", "https://a.example.test"]
+        );
+
+        let same_origin = build_child_document_internal_ancestor_origins(
+            origin_b.clone(),
+            std::slice::from_ref(&origin_a),
+            &origin_a,
+            ChildAncestorOriginsReferrerPolicy::SameOrigin,
+        );
+        assert_eq!(
+            same_origin
+                .iter()
+                .map(WindowAccessOrigin::serialized_origin)
+                .collect::<Vec<_>>(),
+            vec!["null", "https://a.example.test"]
+        );
+
+        let default = build_child_document_internal_ancestor_origins(
+            origin_b,
+            &[origin_a],
+            &WindowAccessOrigin::from_serialized_origin(
+                "https://child.example.test".to_owned(),
+                None,
+            )
+            .expect("child origin"),
+            ChildAncestorOriginsReferrerPolicy::Default,
+        );
+        assert_eq!(
+            default
+                .iter()
+                .map(WindowAccessOrigin::serialized_origin)
+                .collect::<Vec<_>>(),
+            vec!["https://b.example.test", "https://a.example.test"]
+        );
     }
 
     #[test]

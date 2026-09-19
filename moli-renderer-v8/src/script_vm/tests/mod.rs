@@ -9,8 +9,8 @@ use super::{
 };
 use crate::document_runtime::{
     CurrentScriptContextSpec, DeferredPageTask, DeferredPageTaskLane, DeferredPageTaskState,
-    DocumentProcessingAction, DomHandle, FollowupPageTaskDisposition, PostParseOwnerDriverStep,
-    RuntimeScriptWorkPauseKind, RuntimeScriptWorkState,
+    DocumentProcessingAction, DomHandle, FollowupPageTaskDisposition, ParserConnectedScriptBridge,
+    PostParseOwnerDriverStep, RuntimeScriptWorkPauseKind, RuntimeScriptWorkState,
 };
 use crate::dom::{
     NodeId,
@@ -240,6 +240,7 @@ fn register_pending_window_xhr_for_test(
     let internal_id = host.record_async_subresource_xhr(
         execution_context,
         v8::Global::new(scope, v8::Object::new(scope)),
+        false,
         Some(cancel_handle),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         None,
@@ -303,12 +304,14 @@ fn register_pending_window_fetch_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         connect_policy,
         csp_report_context,
         Some(cancel_handle.clone()),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         moli_fetch::RequestMode::Cors,
         (&url).into(),
+        moli_fetch::RequestRedirectMode::Follow,
         None,
         Default::default(),
         crate::types::PendingSubresourceFetchInfo {
@@ -351,6 +354,7 @@ fn register_pending_window_fetch_for_test(
                 host.record_streaming_subresource_fetch(
                     crate::types::StreamingSubresourceFetchState {
                         response_filter: None,
+                        skip_fetch_security_validation: false,
                         pending,
                         request_url: url.clone(),
                         request_method: "GET".to_owned(),
@@ -358,6 +362,7 @@ fn register_pending_window_fetch_for_test(
                         request_body: None,
                         body_source_id: 10_000 + internal_id,
                         head: moli_fetch::ResponseHead {
+                            status_text: None,
                             final_url: url.clone(),
                             status: 200,
                             headers: Vec::new(),
@@ -465,12 +470,14 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         fetch_context,
         v8::Global::new(scope, resolver),
         keepalive,
+        String::new(),
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
         Some(cancel_handle.clone()),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         moli_fetch::RequestMode::Cors,
         (&document_url).into(),
+        moli_fetch::RequestRedirectMode::Follow,
         None,
         Default::default(),
         crate::types::PendingSubresourceFetchInfo {
@@ -1098,6 +1105,21 @@ async fn opaque_child_isolated_world_projects_only_its_own_document() {
             .borrow()
             .child_browsing_context_has_opaque_origin(child_handle),
         "sandbox without allow-same-origin must create an opaque child origin"
+    );
+    let child_request_origin = {
+        let host = vm._context_host.borrow();
+        let owner = crate::native_bridge::OwnerDispatchScope::Child(child_handle);
+        let loader = host
+            .document_resource_loader_for_dispatch_scope(owner)
+            .expect("opaque child resource loader should exist");
+        host.subresource_request_environment(&loader, owner)
+            .expect("opaque child request environment should exist")
+            .request_origin
+    };
+    assert_eq!(
+        child_request_origin,
+        moli_url::WebOrigin::Opaque,
+        "sandboxed child subresource requests must use an opaque client origin"
     );
     assert_eq!(
         vm.eval("document.getElementById('opaque-isolated-frame').contentDocument === null")
@@ -2296,7 +2318,12 @@ async fn child_navigation_retires_local_window_owned_xhr() {
         .expect("child XHR realm should exist");
     vm.eval_in_child_default_context(
         child_context_id,
-        "parent.__retiredChildXhrWrapper = new XMLHttpRequest(); 'captured'",
+        r#"
+        parent.__retiredChildXhrWrapper = new XMLHttpRequest();
+        // Keep the realm's Error prototype without materializing DOMException.
+        parent.__retiredChildErrorPrototype = Error.prototype;
+        'captured'
+        "#,
     )
     .expect("parent should retain the child-created XHR wrapper for stale-owner proof");
     let child_context_ptr = {
@@ -2379,13 +2406,18 @@ async fn child_navigation_retires_local_window_owned_xhr() {
             );
             return "no-error";
           } catch (error) {
-            return [error.name, error.code, error instanceof DOMException].join("|");
+            return [
+              error.name,
+              error.code,
+              Object.getPrototypeOf(Object.getPrototypeOf(error)) === __retiredChildErrorPrototype,
+              error instanceof DOMException
+            ].join("|");
           }
         })()
         "#,
         )
         .expect("calling open on a retained old-child XHR wrapper should fail closed");
-    assert_eq!(stale_open, "InvalidStateError|11|true");
+    assert_eq!(stale_open, "InvalidStateError|11|true|false");
     assert!(
         vm._context_host
             .borrow()
@@ -2744,6 +2776,155 @@ fn main_document_open_preserves_ordinary_and_keepalive_fetches() {
     );
     assert!(ordinary.3.is_cancelled());
     assert!(keepalive.3.is_cancelled());
+}
+
+#[test]
+fn fetch_csp_redirect_reports_initial_url_without_a_script_location() {
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://fetch-csp-redirect.test/page.html");
+        vm.eval(
+            r#"
+globalThis.redirectCspEvents = [];
+document.addEventListener('securitypolicyviolation', e => {
+  redirectCspEvents.push([e.blockedURI, e.sourceFile, e.lineNumber, e.columnNumber]);
+});
+"#,
+        )
+        .unwrap();
+        let policies = vec!["connect-src 'self'".to_owned()];
+        let policy = if enforce {
+            crate::document_runtime::DocumentPolicyContainer {
+                response_content_security_policies: policies,
+                ..Default::default()
+            }
+        } else {
+            crate::document_runtime::DocumentPolicyContainer {
+                response_content_security_report_only_policies: policies,
+                ..Default::default()
+            }
+        };
+        let request_url = Url::parse("https://fetch-csp-redirect.test/request?public").unwrap();
+        let final_url = Url::parse("https://private-redirect.test/secret?token").unwrap();
+        let registered = vm
+            .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+                Ok(register_pending_window_fetch_with_connect_policy_for_test(
+                    scope,
+                    unsafe { &mut *host_ptr },
+                    false,
+                    policy,
+                    request_url.clone(),
+                ))
+            })
+            .unwrap();
+        vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+            internal_id: registered.0,
+            request_url: request_url.clone(),
+            request_method: "GET".to_owned(),
+            request_headers: Vec::new(),
+            request_body: None,
+            response_status_text: Some("OK".to_owned()),
+            skip_fetch_security_validation: true,
+            response_filter: None,
+            network_error_text: None,
+            result: Ok(redirected_fetch_response(&request_url, final_url)),
+        })
+        .unwrap();
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("JSON.stringify(redirectCspEvents)").unwrap(),
+            r#"[["https://fetch-csp-redirect.test/request?public","",0,0]]"#,
+            "redirect CSP fields, enforce={enforce}",
+        );
+    }
+}
+
+#[test]
+fn async_fetch_csp_violation_survives_abort_and_keeps_its_source_document() {
+    for replace_document in [false, true] {
+        let mut vm = new_storage_test_vm("https://fetch-csp-queued.test/source");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::CspReport),
+        );
+        let request_url = Url::parse("https://fetch-csp-queued.test/request").unwrap();
+        let policy = crate::document_runtime::DocumentPolicyContainer {
+            response_content_security_policies: vec![
+                "connect-src 'self'; report-uri /report".to_owned(),
+            ],
+            ..Default::default()
+        };
+        let snapshot =
+            crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy);
+        let (registered, report_context) = vm
+            .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
+                let host = unsafe { &mut *host_ptr };
+                let report_context =
+                    crate::network_host::capture_window_csp_report_request_context(
+                        scope,
+                        host,
+                        crate::native_bridge::OwnerDispatchScope::Top,
+                    )
+                    .unwrap();
+                Ok((
+                    register_pending_window_fetch_with_connect_policy_for_test(
+                        scope,
+                        host,
+                        false,
+                        policy,
+                        request_url.clone(),
+                    ),
+                    report_context,
+                ))
+            })
+            .unwrap();
+        assert!(
+            vm._context_host
+                .borrow_mut()
+                .abort_subresource_fetch(registered.0)
+        );
+        if replace_document {
+            vm.eval("document.open(); document.write('<!doctype html><body>replacement'); document.close()").unwrap();
+        }
+        vm.eval("globalThis.queuedCspEvents = 0; document.addEventListener('securitypolicyviolation', () => queuedCspEvents++)").unwrap();
+        let mut violation = snapshot.enforce_violation(
+            &Url::parse("https://fetch-csp-queued.test/source").unwrap(),
+            &Url::parse("https://forbidden.test/private").unwrap(),
+            crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+        ).unwrap();
+        violation.blocked_uri = request_url.to_string();
+        crate::content_security_policy::ContentSecurityPolicySourceLocation::default()
+            .apply_to(&mut violation);
+        let activity = vm
+            .complete_async_subresource_fetch_event_body(
+                crate::types::AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
+                    report_context: Box::new(report_context),
+                    violation: Box::new(violation),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            matches!(
+                activity,
+                crate::script_vm::AsyncSubresourceFetchBodyActivity::WindowRealmEntered
+            ),
+            !replace_document
+        );
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("String(queuedCspEvents)").unwrap(),
+            if replace_document { "0" } else { "1" }
+        );
+        let reports = vm
+            ._context_host
+            .borrow()
+            .pending_window_csp_report_execution_contexts_for_test();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].1, registered.4);
+        assert!(
+            !reports[0].2,
+            "network reporting must not retain the source V8 realm"
+        );
+    }
 }
 
 #[test]
@@ -3352,6 +3533,7 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url,
             status: 204,
             headers: Vec::new(),
@@ -3595,6 +3777,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: report_url.clone(),
             status: 204,
             headers: Vec::new(),
@@ -3796,6 +3979,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         body_source_id,
         network_request_headers: None,
         head: moli_fetch::ResponseHead {
+            status_text: None,
             final_url: request_url,
             status: 200,
             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -4706,11 +4890,16 @@ async fn run_child_document_lifecycle_and_host_load_for_test(vm: &mut ScriptVm, 
         // Only consecutive materialization tasks at the stable family head
         // belong here. Never jump over an earlier DocumentScriptReady task.
     }
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
+    if matches!(vm._page_task_residence_for_executor_test.as_ref().expect("child fixture sources").task_sources().next_child_frame_task_target(), Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(target)) if matches!(target.action(), crate::frame_owner_model::FrameDocumentLifecycleAction::Interactive(_)))
+    {
+        assert!(
+            vm.run_child_frame_task_source_once_for_test(
+                ChildFrameSemanticTurnKind::DocumentLifecycle
+            )
             .await,
-        "{message}: DocumentLifecycle should make the installed document interactive"
-    );
+            "{message}: a child without a parser realm must apply its queued interactive transition"
+        );
+    }
     assert!(
         vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
             .await,
@@ -5846,6 +6035,226 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
     );
 }
 
+#[test]
+fn frame_owner_content_accessors_live_on_exact_owner_prototypes() {
+    let mut vm = new_storage_test_vm("https://frame-owner-content-accessors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const frame = document.createElement("frame");
+  frame.src = "about:blank";
+  const iframe = document.createElement("iframe");
+  iframe.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+
+  const owners = [
+    [HTMLFrameElement.prototype, frame],
+    [HTMLIFrameElement.prototype, iframe],
+    [HTMLObjectElement.prototype, object]
+  ];
+  for (const [, element] of owners) {
+    root.appendChild(element);
+  }
+
+  const properties = ["contentDocument", "contentWindow"];
+  const descriptors = owners.map(([prototype]) =>
+    Object.fromEntries(properties.map(property => {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+      return [property, {
+        get: typeof descriptor.get,
+        set: typeof descriptor.set,
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable
+      }];
+    }))
+  );
+  const sameOriginValues = owners.map(([, element]) =>
+    element.contentDocument !== null &&
+      element.contentWindow !== null &&
+      element.contentDocument === element.contentWindow.document
+  );
+  const brandErrors = owners.map(([prototype], index) =>
+    properties.map(property => {
+      const getter = Object.getOwnPropertyDescriptor(prototype, property).get;
+      try {
+        getter.call(owners[(index + 1) % owners.length][1]);
+        return "accepted";
+      } catch (error) {
+        return error.name;
+      }
+    })
+  );
+
+  return JSON.stringify({
+    descriptors,
+    sameOriginValues,
+    brandErrors,
+    absentFromBase: properties.every(property =>
+      !Object.hasOwn(HTMLElement.prototype, property))
+  });
+})()
+"#,
+        )
+        .expect("frame owner content accessors should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}}],"sameOriginValues":[true,true,true],"brandErrors":[["TypeError","TypeError"],["TypeError","TypeError"],["TypeError","TypeError"]],"absentFromBase":true}"#
+    );
+}
+
+#[test]
+fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enforce_brands() {
+    let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<body>iframe child</body>";
+  const embed = document.createElement("embed");
+  embed.type = "text/html";
+  embed.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+  root.appendChild(iframe);
+  root.appendChild(embed);
+  root.appendChild(object);
+
+  const interfaces = [
+    [HTMLIFrameElement.prototype, iframe, "HTMLIFrameElement"],
+    [HTMLEmbedElement.prototype, embed, "HTMLEmbedElement"],
+    [HTMLObjectElement.prototype, object, "HTMLObjectElement"]
+  ];
+  const descriptors = interfaces.map(([prototype]) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "getSVGDocument");
+    return {
+      type: typeof descriptor.value,
+      name: descriptor.value.name,
+      length: descriptor.value.length,
+      writable: descriptor.writable,
+      enumerable: descriptor.enumerable,
+      configurable: descriptor.configurable
+    };
+  });
+  const brandErrors = interfaces.map(([prototype], index) => {
+    try {
+      prototype.getSVGDocument.call(interfaces[(index + 1) % interfaces.length][1]);
+      return "accepted";
+    } catch (error) {
+      return error.name;
+    }
+  });
+
+  return JSON.stringify({
+    descriptors,
+    iframeMatches: iframe.getSVGDocument() !== null &&
+      iframe.getSVGDocument() === iframe.contentDocument,
+    embedHasDocument: embed.getSVGDocument() !== null,
+    objectMatches: object.getSVGDocument() !== null &&
+      object.getSVGDocument() === object.contentDocument,
+    brandErrors,
+    absentFromBase: !("getSVGDocument" in HTMLElement.prototype)
+  });
+})()
+"#,
+        )
+        .expect("frame owner getSVGDocument methods should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeMatches":true,"embedHasDocument":true,"objectMatches":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+    );
+}
+
+#[tokio::test]
+async fn failed_object_attribute_navigation_enters_fallback_without_recreating_child_context() {
+    let (object_url, request_rx, release_tx, server) =
+        spawn_gated_child_document_resource_server(404).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &object_url.replace("/child.html", "/page"),
+        &loader,
+    );
+
+    assert_eq!(
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const root = document.body || document.documentElement || document;
+  const object = document.createElement('object');
+  object.type = 'text/html';
+  object.data = {object_url:?};
+  globalThis.__failedObjectEvents = [];
+  object.addEventListener('load', () => __failedObjectEvents.push('load'));
+  object.addEventListener('error', event => __failedObjectEvents.push(
+    `error:${{event.isTrusted}}:${{object.contentWindow === null}}`
+  ));
+  const fallback = document.createElement('span');
+  fallback.id = 'object-fallback';
+  fallback.textContent = 'fallback';
+  object.appendChild(fallback);
+  root.appendChild(object);
+  globalThis.__failedObject = object;
+  return [object.contentWindow !== null, window.length].join('|');
+}})()
+"#
+        ))
+        .expect("failed object setup should evaluate"),
+        "true|1",
+        "the object should expose its initial child browsing context while loading"
+    );
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "object attribute navigation should start from its frame-lane commit",
+    )
+    .await;
+    request_rx
+        .await
+        .expect("failed object document request should arrive");
+    release_tx
+        .send(())
+        .expect("release failed object document response");
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "failed object document completion",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+JSON.stringify({
+  contentWindowIsNull: __failedObject.contentWindow === null,
+  contentDocumentIsNull: __failedObject.contentDocument === null,
+  childCount: window.length,
+  fallbackConnected: document.getElementById('object-fallback').isConnected,
+  events: __failedObjectEvents
+})
+"#,
+        )
+        .expect("failed object fallback state should evaluate"),
+        r#"{"contentWindowIsNull":true,"contentDocumentIsNull":true,"childCount":0,"fallbackConnected":true,"events":["error:true:true"]}"#
+    );
+    assert_eq!(
+        vm._context_host.borrow().child_browsing_context_count(),
+        0,
+        "contentWindow and contentDocument getters must not recreate a failed object context"
+    );
+    server.await.expect("failed object server should finish");
+}
+
 #[tokio::test]
 async fn child_document_open_nested_frame_uses_inherited_frame_src_policy() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -6666,95 +7075,6 @@ async fn child_document_script_owner_hooks_select_current_realm() {
 }
 
 #[tokio::test]
-async fn child_dynamic_execution_action_requires_materialized_current_realm() {
-    use crate::frame_owner_model::{
-        FrameDocumentTaskOwner, FrameRealmId, PendingChildDynamicDocumentScript,
-    };
-
-    let mut vm = new_storage_test_vm("https://child-dynamic-current-realm.test/");
-
-    vm.eval(
-        r#"
-(() => {
-  const root = document.documentElement || document.appendChild(document.createElement("html"));
-  const body = document.body || root.appendChild(document.createElement("body"));
-  const frame = document.createElement("iframe");
-  body.appendChild(frame);
-})()
-"#,
-    )
-    .expect("child dynamic current-realm setup should evaluate");
-    assert_initial_about_blank_child_completed_synchronously_for_test(
-        &mut vm,
-        "child dynamic current-realm setup",
-    )
-    .await;
-    let child_context_id = materialize_single_child_default_realm_for_test(
-        &mut vm,
-        "child dynamic current-realm setup",
-    );
-    let (child_handle, task_owner, owner_realm_id) = {
-        let realm = vm
-            .child_frame_realm_store
-            .get(&child_context_id)
-            .expect("child realm record should exist");
-        let snapshot = vm
-            ._context_host
-            .borrow()
-            .frame_owner_current_child_snapshot(realm.child_handle)
-            .expect("child frame should expose a current owner snapshot");
-        (
-            realm.child_handle,
-            FrameDocumentTaskOwner::new(
-                snapshot.scheduler_lane_id,
-                snapshot.local_window_id,
-                snapshot.document_id,
-            ),
-            realm.owner_realm_id,
-        )
-    };
-    let script_handle = DomHandle::new(9001);
-    let work_without_realm = PendingChildDynamicDocumentScript {
-        child_handle,
-        owner: task_owner,
-        realm_id: None,
-        script_handle,
-        source: "globalThis.__childDynamicMaterializedRealm = true;".to_owned(),
-        script_nonce: Some("captured-nonce".to_owned()),
-        script_integrity: Some("sha256-captured-integrity".to_owned()),
-    };
-
-    let action = vm
-        ._context_host
-        .borrow()
-        .child_dynamic_classic_script_execution_action_for_owner(
-            &work_without_realm,
-            owner_realm_id,
-        )
-        .expect("current dynamic work should materialize an execution action");
-    assert_eq!(action.target().task_owner(), task_owner);
-    assert_eq!(action.target().realm_id(), owner_realm_id);
-    let job = action.into_job();
-    assert_eq!(job.script_nonce.as_deref(), Some("captured-nonce"));
-    assert_eq!(
-        job.script_integrity.as_deref(),
-        Some("sha256-captured-integrity")
-    );
-
-    let stale_work = PendingChildDynamicDocumentScript {
-        realm_id: Some(FrameRealmId(owner_realm_id.0 + 1)),
-        ..work_without_realm
-    };
-    assert!(
-        vm._context_host
-            .borrow()
-            .child_dynamic_classic_script_execution_action_for_owner(&stale_work, owner_realm_id)
-            .is_none(),
-        "stale dynamic child work must not produce an execution action"
-    );
-}
-
-#[tokio::test]
 async fn function_constructor_frame_script_job_returns_child_realm_function() {
     let mut vm = new_storage_test_vm("https://child-function-job.test/");
 
@@ -6944,7 +7264,7 @@ async fn child_srcdoc_inline_classic_script_runs_as_frame_script_job() {
         "child:true|current:inline-classic",
         "DocumentScriptReady should execute the inline classic script without firing iframe load"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         assert!(
             vm.run_child_frame_task_source_once_for_test(
                 ChildFrameSemanticTurnKind::DocumentLifecycle
@@ -7061,7 +7381,7 @@ async fn child_inline_classic_script_moved_from_original_document_is_skipped() {
         "after:after-stale-inline",
         "parser continuation should run the next inline classic script without firing iframe load"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -7390,7 +7710,7 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
         "external:true|external-current:external-classic|external-write:true|script-load|inline-current:after-external-classic|inline:73",
         "ignored document.open() must leave the parser owner alive for the following inline script"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
             &mut vm,
             &loader,
@@ -8732,10 +9052,11 @@ async fn child_inline_parser_module_executes_from_registered_pending_script() {
         "parser should continue past the deferred inline module after graph start",
     )
     .await;
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
-            .await,
-        "parser EOF should make the child document interactive before defer execution"
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
     );
     assert!(
         vm.run_child_frame_task_source_once_for_test(
@@ -8845,13 +9166,12 @@ async fn child_external_parser_module_executes_from_document_ready_lane() {
         "parser should continue past module-defer script from DocumentScriptReady after fetch start",
     )
     .await;
-    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "child parser module should enter interactive before module-defer execution",
-    )
-    .await;
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
+    );
     assert!(
         !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
             .await
@@ -8991,7 +9311,7 @@ async fn child_dynamic_import_root_fetch_uses_child_import_map_and_initiator_url
             .expect("child dynamic import owner ready flag should evaluate"),
         "true"
     );
-    for transition in ["interactive", "DOMContentLoaded", "complete"] {
+    for transition in ["DOMContentLoaded", "complete"] {
         run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
             &mut vm,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
@@ -9248,14 +9568,11 @@ async fn child_external_classic_source_error_dispatches_before_later_inline() {
         "script-error|after-inline",
         "parser continuation should execute the following inline script without firing iframe load"
     );
-    assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
-            &loader,
-        )
-        .await
-        .expect("child interactive task should use the selected-task dispatcher"),
-        "parser EOF should dispatch interactive before HostLoad"
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
     );
     assert!(
         vm.run_one_child_frame_task_executor_turn(
@@ -9393,10 +9710,11 @@ async fn child_inline_classic_throw_reports_to_child_window_and_continues() {
         "child-error:Uncaught Error: child-boom:child-boom:true|after-inline:true",
         "parser continuation should run the following inline script without firing iframe load"
     );
-    assert!(
-        vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
-            .await,
-        "parser EOF should dispatch interactive before HostLoad"
+    assert_eq!(
+        vm.eval("document.querySelector('iframe').contentDocument.readyState")
+            .expect("child readiness"),
+        "interactive",
+        "parser EOF must apply interactive synchronously"
     );
     assert!(
         vm.run_child_frame_task_source_once_for_test(ChildFrameSemanticTurnKind::DocumentLifecycle)
@@ -9530,6 +9848,65 @@ async fn spawn_gated_media_resource_server(
     });
     (
         format!("http://{addr}/media"),
+        request_rx,
+        release_tx,
+        server,
+    )
+}
+
+async fn spawn_gated_child_document_resource_server(
+    status: u16,
+) -> (
+    String,
+    tokio::sync::oneshot::Receiver<String>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind gated child document resource server");
+    let addr = listener
+        .local_addr()
+        .expect("gated child document resource server addr");
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept gated child document resource request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("read gated child document resource request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        let _ = release_rx.await;
+        let (status_text, body) = if status == 200 {
+            ("OK", "<!doctype html><p>child document</p>")
+        } else {
+            ("Not Found", "<!doctype html><p>missing child document</p>")
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {status_text}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    (
+        format!("http://{addr}/child.html"),
         request_rx,
         release_tx,
         server,
@@ -9917,7 +10294,7 @@ async fn spawn_child_external_parser_module_ready_lane_server() -> (
         let body = r#"parent.__childExternalParserModuleEvents.push("module:" + (globalThis === self));
 globalThis.__childExternalParserModuleValue = 188;"#;
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: application/javascript\r\nAccess-Control-Allow-Origin: http://child-parser-module-driver.test\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
@@ -11090,7 +11467,7 @@ fn detached_first_exposure_retires_prebootstrapped_child_realm() {
         vm.prebootstrapped_child_default_contexts
             .borrow()
             .is_empty(),
-        "the owner source must detach and release an unclaimed realm for a removed LocalWindow"
+        "the owner source must release its unclaimed realm record for a removed LocalWindow"
     );
     assert_eq!(
         vm._context_host
@@ -12016,6 +12393,119 @@ async fn main_document_replacement_retires_pending_image_request_sequence() {
         vm.current_main_document_task_owner(),
         Some(current_owner),
         "stale image event must not replace or mutate the new owner"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn web_font_reconciliation_keeps_style_world_lazy_without_active_author_sources() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, _resource_completions) =
+        new_parsed_test_vm_with_loader_and_resource_completion_queue(
+            "https://font-reconciliation-fast-path.test/",
+            concat!(
+                "<!doctype html><html><head>",
+                "<link rel='author' href='/not-a-stylesheet.css'>",
+                "</head><body></body></html>",
+            ),
+            &loader,
+        );
+    let document = vm._context_host.borrow().document_handle();
+
+    let rebuilds = vm.retained_style_system_rebuild_count_for_document_for_test(document);
+    let materializations = vm
+        ._context_host
+        .borrow()
+        .style_world_update_materializations_for_test();
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    vm.reconcile_document_web_fonts_for_layout();
+    assert_eq!(
+        vm.retained_style_system_rebuild_count_for_document_for_test(document),
+        rebuilds,
+        "font reconciliation must not build retained styles without an active author source",
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .style_world_update_materializations_for_test(),
+        materializations,
+        "font reconciliation must not materialize a style-world update without an active author source",
+    );
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const host = document.createElement('div');
+host.attachShadow({mode: 'open'}).innerHTML = '<style>div { color: red }</style><div></div>';
+document.body.appendChild(host);
+const target = host.shadowRoot.querySelector('div');
+const initial = getComputedStyle(target).color;
+host.remove();
+host.shadowRoot.querySelector('style').remove();
+globalThis.__fontReconciliationDetachedShadow = {host, target};
+initial;
+"#,
+        )
+        .expect("detached shadow style fixture should evaluate"),
+        "rgb(255, 0, 0)",
+    );
+    let materializations = vm
+        ._context_host
+        .borrow()
+        .style_world_update_materializations_for_test();
+    vm.reconcile_document_web_fonts_for_layout();
+    assert!(
+        vm._context_host
+            .borrow()
+            .style_world_update_materializations_for_test()
+            > materializations,
+        "an existing style world must still reconcile after its active sources disappear",
+    );
+    assert_ne!(
+        vm.eval(
+            r#"
+document.body.appendChild(__fontReconciliationDetachedShadow.host);
+getComputedStyle(__fontReconciliationDetachedShadow.target).color;
+"#,
+        )
+        .expect("reconnected shadow style should evaluate"),
+        "rgb(255, 0, 0)",
+    );
+}
+
+#[test]
+fn web_font_active_author_stylesheet_probe_includes_connected_shadow_adopted_sheets() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-adopted-font-source.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let document = vm._context_host.borrow().document_handle();
+    vm.eval(
+        r#"
+const host = document.createElement('div');
+const shadow = host.attachShadow({mode: 'open'});
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(':host { color: red; }');
+shadow.adoptedStyleSheets = [sheet];
+globalThis.__detachedShadowStylesheetHost = host;
+"#,
+    )
+    .expect("detached shadow adopted stylesheet fixture should evaluate");
+
+    assert!(
+        !vm._context_host
+            .borrow()
+            .document_has_active_author_stylesheet_sources(document),
+        "a detached shadow scope must not count as an active document source",
+    );
+    vm.eval("document.body.appendChild(__detachedShadowStylesheetHost)")
+        .expect("shadow stylesheet host should connect");
+    assert!(
+        vm._context_host
+            .borrow()
+            .document_has_active_author_stylesheet_sources(document),
+        "a connected shadow adopted stylesheet must prevent the font fast path",
     );
 }
 
@@ -15196,28 +15686,39 @@ fn decode_png_dimensions_from_data_url(data_url: &str) -> (u32, u32) {
     (info.width, info.height)
 }
 
+mod blob_range;
+mod blob_response_headers;
 mod browser_api;
 mod canvas_arguments;
 mod canvas_paths;
 mod canvas_webgl;
+mod child_dynamic_inline_scripts;
+mod close_watchers;
 mod dom_elements;
 mod dom_xhr;
+mod fetch_integrity;
+mod fetch_referrer;
+mod fetch_request_guard;
+mod headers_list;
 mod http_fixture;
 mod indexed_db;
 mod inspector_unwrap;
 mod lazy_storage;
 mod lazy_window_surfaces;
+mod no_cors_header_fill;
+mod observable;
 mod observer_callbacks;
 mod post_parse;
 mod queue_microtask;
 mod rendering_update;
+mod retained_child_window;
 mod script_terminal_completion;
 mod streams;
+mod string_timers;
+mod url_components;
 mod webidl_collections;
 mod webidl_fetch;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
 mod window_execution_context;
-
-mod string_timers;

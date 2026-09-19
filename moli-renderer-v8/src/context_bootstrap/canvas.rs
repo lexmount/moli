@@ -242,7 +242,10 @@ pub(crate) use context2d::{
     canvas_context_transform_callback, canvas_context_translate_callback,
     canvas_gradient_add_color_stop_callback,
 };
-pub(crate) use image_bitmap::window_create_image_bitmap_callback;
+pub(crate) use image_bitmap::{
+    BitmapRejection, BitmapTaskResult, settle_bitmap_task_result,
+    window_create_image_bitmap_callback,
+};
 pub(crate) use objects::{
     build_canvas_rendering_context_2d_object, build_offscreen_canvas_object,
     build_webgl_context_object, build_webgl2_context_object,

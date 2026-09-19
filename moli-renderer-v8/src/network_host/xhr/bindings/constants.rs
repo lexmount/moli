@@ -199,8 +199,13 @@ fn xhr_string_getter(
         return;
     };
     let value = xhr_state_string_property(scope, xhr, key).unwrap_or_default();
+    let value = if key == XHR_RESPONSE_URL_SLOT {
+        value.split_once('#').map_or(value.as_str(), |(url, _)| url)
+    } else {
+        value.as_str()
+    };
     rv.set(
-        v8_string(scope, &value)
+        v8_string(scope, value)
             .map(|string| string.into())
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
@@ -429,7 +434,7 @@ fn xhr_value_setter(
         v8::undefined(scope).into()
     };
     let stored = if xhr_event_type_for_handler_slot(key).is_some() {
-        if value.is_function() {
+        if value.is_object() {
             value
         } else {
             v8::null(scope).into()
@@ -446,7 +451,7 @@ fn xhr_value_setter(
             XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
             event_type,
             key,
-            stored.is_function(),
+            stored.is_object(),
         );
     }
 }

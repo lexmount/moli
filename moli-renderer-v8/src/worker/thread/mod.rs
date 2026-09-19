@@ -11,6 +11,8 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) use dispatch::perform_callback_cleanup_checkpoint_if_worker;
+
 #[cfg(test)]
 use crate::broadcast_channel_runtime::new_broadcast_channel_registry;
 use crate::broadcast_channel_runtime::{
@@ -19,7 +21,6 @@ use crate::broadcast_channel_runtime::{
 use crate::content_security_policy::{
     ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
     ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyUrlViolation,
-    content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
 };
 use crate::context_bootstrap::flush_one_pending_file_reader;
 use crate::exception_reporting::{V8ExceptionReport, build_event_handler_exception_report};
@@ -53,7 +54,7 @@ use dispatch::{
     dispatch_service_worker_notification_event, dispatch_service_worker_periodic_sync_event,
     dispatch_service_worker_push_event, dispatch_service_worker_sync_event,
     dispatch_shared_worker_connect_event, dispatch_worker_error_event,
-    dispatch_worker_exception_with_phase, dispatch_worker_exception_with_phase_and_source,
+    dispatch_worker_exception_with_phase_and_source,
     enqueue_service_worker_navigation_preload_stream_chunk,
     fail_service_worker_navigation_preload_response,
     finish_service_worker_navigation_preload_stream, fire_timer_callback,
@@ -68,35 +69,35 @@ use runtime_inspector::WorkerRuntimeInspector;
 
 use super::global_scope::{
     WorkerFetchEvent, WorkerGlobalState, WorkerIsolateTimerQueues, WorkerOpfsCompletion,
-    WorkerWebCryptoCompletion, WorkerXhrCompletion, close_worker_owned_broadcast_channels,
+    WorkerWebCryptoCompletion, WorkerXhrEvent, close_worker_owned_broadcast_channels,
     close_worker_owned_message_ports, continue_pending_worker_csp_report,
     continue_pending_worker_fetch, continue_pending_worker_fetch_response,
     continue_pending_worker_xhr, continue_pending_worker_xhr_response,
     dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    dispatch_worker_csp_violation_event_for_state, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
     drain_service_worker_push_get_subscription_result, drain_service_worker_push_subscribe_result,
     drain_service_worker_push_unsubscribe_result, drain_service_worker_show_notification_result,
     drain_service_worker_sync_get_tags_result, drain_service_worker_sync_registration_result,
-    drain_worker_fetch_completion, drain_worker_opfs_completion, drain_worker_webcrypto_completion,
-    drain_worker_xhr_completion, fail_pending_worker_csp_report, fail_pending_worker_fetch,
-    fail_pending_worker_fetch_auth, fail_pending_worker_fetch_response, fail_pending_worker_xhr,
-    fail_pending_worker_xhr_auth, fail_pending_worker_xhr_response,
-    fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
-    fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
-    fulfill_pending_worker_xhr_response, install_worker_global_scope,
-    service_worker_fetch_handler_type,
+    drain_service_worker_update_result, drain_worker_fetch_completion,
+    drain_worker_opfs_completion, drain_worker_webcrypto_completion, drain_worker_xhr_event,
+    fail_pending_worker_csp_report, fail_pending_worker_fetch, fail_pending_worker_fetch_auth,
+    fail_pending_worker_fetch_response, fail_pending_worker_xhr, fail_pending_worker_xhr_auth,
+    fail_pending_worker_xhr_response, fulfill_pending_worker_csp_report,
+    fulfill_pending_worker_fetch, fulfill_pending_worker_fetch_response,
+    fulfill_pending_worker_xhr, fulfill_pending_worker_xhr_response, install_worker_global_scope,
+    prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
     WorkerDevToolsHandle, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
     WorkerHandle, WorkerMessage, WorkerNetworkPolicy, WorkerParentErrorEventKind,
-    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
-    WorkerToParentMessage,
+    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerToParentMessage,
 };
 use super::inspector_task_runner::{
     WorkerInspectorTask, WorkerInspectorTaskMode, WorkerInspectorTaskRunner,
@@ -105,12 +106,11 @@ use super::module_runtime::{
     WorkerBootstrapError, WorkerDynamicModuleImportAdvance, WorkerModuleBootstrapResume,
     WorkerModuleBootstrapStart, WorkerModuleEvaluationCompletion, WorkerModuleFetchedSource,
     WorkerModuleGraphFetchBatch, WorkerModuleGraphFetchCompletion, WorkerModuleGraphFetchCspSource,
-    WorkerModuleGraphFetchRequest, WorkerModuleKind, WorkerModulePendingBootstrap,
-    WorkerModuleSource, evaluate_module_worker_bootstrap_source,
-    install_classic_worker_dynamic_module_runtime, resume_worker_dynamic_module_evaluation,
-    resume_worker_dynamic_module_fetch, run_next_worker_dynamic_module_import,
-    worker_dynamic_module_import_waits_for_fetch, worker_has_pending_dynamic_module_imports,
-    worker_has_runnable_dynamic_module_imports,
+    WorkerModuleGraphFetchRequest, WorkerModulePendingBootstrap, WorkerModuleSource,
+    evaluate_module_worker_bootstrap_source, install_classic_worker_dynamic_module_runtime,
+    resume_worker_dynamic_module_evaluation, resume_worker_dynamic_module_fetch,
+    run_next_worker_dynamic_module_import, worker_dynamic_module_import_waits_for_fetch,
+    worker_has_pending_dynamic_module_imports, worker_has_runnable_dynamic_module_imports,
 };
 
 pub(super) type WorkerExceptionError = Box<(V8ExceptionReport, Option<v8::Global<v8::Value>>)>;
@@ -189,6 +189,8 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) content_security_policies: Vec<String>,
     pub(crate) content_security_report_only_policies: Vec<String>,
     pub(crate) content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    pub(crate) content_security_policy_snapshot:
+        Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     pub(crate) network_policy: WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
     pub(crate) worker_context_runtime: RendererWorkerContextRuntime,
@@ -199,6 +201,9 @@ pub(crate) struct WorkerSpawnOptions {
     pub(crate) broadcast_channel_top_level_site: Option<String>,
     pub(crate) creator_storage_key: Option<MoliStorageKey>,
     pub(crate) service_worker_runtime: Option<ServiceWorkerRuntimeService>,
+    pub(crate) service_worker_script_resources: Vec<WorkerScriptResource>,
+    pub(crate) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
+    pub(crate) service_worker_can_import_new_scripts: bool,
     pub(crate) reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
@@ -316,6 +321,7 @@ impl WorkerSpawnOptions {
             module_credentials_mode: RequestCredentialsMode::SameOrigin,
             referrer_policy: None,
             module_static_import_content_security_policies: Vec::new(),
+            content_security_policy_snapshot: None,
             content_security_policies: Vec::new(),
             content_security_report_only_policies: Vec::new(),
             content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints::default(
@@ -333,6 +339,9 @@ impl WorkerSpawnOptions {
             broadcast_channel_top_level_site: None,
             creator_storage_key: None,
             service_worker_runtime: None,
+            service_worker_script_resources: Vec::new(),
+            service_worker_updated_script_resources: Default::default(),
+            service_worker_can_import_new_scripts: true,
             reserved_service_worker_client_id: None,
             indexed_db_manager: None,
             storage_bucket_store: None,
@@ -405,6 +414,17 @@ impl WorkerSpawnOptions {
         self
     }
 
+    pub(crate) fn with_content_security_policy_snapshot(
+        mut self,
+        policy: crate::content_security_policy::InheritedContentSecurityPolicy,
+    ) -> Self {
+        self.content_security_policies = policy.enforced_strings();
+        self.content_security_report_only_policies = policy.report_only_policies.clone();
+        self.content_security_reporting_endpoints = policy.reporting_endpoints.clone();
+        self.content_security_policy_snapshot = Some(policy);
+        self
+    }
+
     pub(crate) fn with_content_security_reporting_endpoints(
         mut self,
         endpoints: ContentSecurityPolicyReportingEndpoints,
@@ -436,6 +456,24 @@ impl WorkerSpawnOptions {
 
     pub(crate) fn with_global_kind(mut self, global_kind: WorkerGlobalKind) -> Self {
         self.global_kind = global_kind;
+        self
+    }
+
+    pub(crate) fn with_service_worker_script_resources(
+        mut self,
+        resources: Vec<WorkerScriptResource>,
+        can_import_new_scripts: bool,
+    ) -> Self {
+        self.service_worker_script_resources = resources;
+        self.service_worker_can_import_new_scripts = can_import_new_scripts;
+        self
+    }
+
+    pub(crate) fn with_service_worker_updated_script_resources(
+        mut self,
+        resources: crate::worker::WorkerScriptUpdateResources,
+    ) -> Self {
+        self.service_worker_updated_script_resources = resources;
         self
     }
 
@@ -554,6 +592,7 @@ fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
         || !state.pending_service_worker_client_focuses.is_empty()
         || !state.pending_service_worker_clients_open_windows.is_empty()
         || !state.pending_service_worker_show_notifications.is_empty()
+        || !state.pending_service_worker_updates.is_empty()
         || !state.pending_service_worker_get_notifications.is_empty()
         || !state.pending_service_worker_sync_registrations.is_empty()
         || !state.pending_service_worker_sync_get_tags.is_empty()
@@ -587,50 +626,37 @@ fn start_worker_module_graph_fetch(
     loader: WorkerResourceLoader,
     network_partition_key: Option<String>,
     module_static_import_content_security_policies: Vec<String>,
-    worker_global_content_security_policies: Vec<String>,
-    worker_global_content_security_report_only_policies: Vec<String>,
-    worker_global_content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    worker_global_policy: crate::content_security_policy::InheritedContentSecurityPolicy,
     completion_tx: mpsc::UnboundedSender<WorkerModuleGraphFetchCompletion>,
 ) {
     let fetch_id = request.fetch_id();
-    let (
-        content_security_policies,
-        content_security_report_only_policies,
-        content_security_reporting_endpoints,
-        resource_kind,
-    ) =
-        match request.csp_source() {
+    let (policy, resource_kind) = match request.csp_source() {
         WorkerModuleGraphFetchCspSource::StaticModuleGraph => (
-            module_static_import_content_security_policies,
-            Vec::new(),
-            ContentSecurityPolicyReportingEndpoints::default(),
+            crate::content_security_policy::InheritedContentSecurityPolicy {
+                self_url: Some(request.initiator_url().clone()),
+                header_policies: module_static_import_content_security_policies,
+                ..Default::default()
+            },
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerStaticModuleImport,
         ),
         WorkerModuleGraphFetchCspSource::DynamicImportGraph => (
-            worker_global_content_security_policies,
-            worker_global_content_security_report_only_policies,
-            worker_global_content_security_reporting_endpoints,
+            worker_global_policy,
             crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
-    let initial_csp_report_only_violation =
-        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-            &content_security_report_only_policies,
-            request.initiator_url(),
-            request.url(),
-            resource_kind,
-            ContentSecurityPolicyRedirectStatus::NoRedirect,
-            ContentSecurityPolicyDisposition::Report,
-            &content_security_reporting_endpoints,
-        );
-    if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-        &content_security_policies,
+    let initial_csp_report_only_violation = policy.url_violation(
+        request.initiator_url(),
+        request.url(),
+        resource_kind,
+        ContentSecurityPolicyRedirectStatus::NoRedirect,
+        ContentSecurityPolicyDisposition::Report,
+    );
+    if let Some(violation) = policy.url_violation(
         request.initiator_url(),
         request.url(),
         resource_kind,
         ContentSecurityPolicyRedirectStatus::NoRedirect,
         ContentSecurityPolicyDisposition::Enforce,
-        &content_security_reporting_endpoints,
     ) {
         let message = module_graph_csp_violation_message(&violation);
         let mut completion = WorkerModuleGraphFetchCompletion::new(fetch_id, Err(message))
@@ -669,14 +695,9 @@ fn start_worker_module_graph_fetch(
         .with_credentials_mode(request.credentials_mode());
     let requested_url = request.url().clone();
     let request_initiator_url = request.initiator_url().clone();
-    let requested_module_type = request.module_type().map(str::to_owned);
-    let requested_kind = request.kind();
+    let requested_module_type = request.module_type();
     let request_credentials_mode = request.credentials_mode();
-    let response_content_security_policies = content_security_policies.clone();
-    let response_content_security_report_only_policies =
-        content_security_report_only_policies.clone();
-    let response_content_security_reporting_endpoints =
-        content_security_reporting_endpoints.clone();
+    let response_policy = policy.clone();
     let response_resource_kind = resource_kind;
     let completion_tx_for_callback = completion_tx.clone();
     let response_started_at = Instant::now();
@@ -702,25 +723,20 @@ fn start_worker_module_graph_fetch(
                 if redirect_status == ContentSecurityPolicyRedirectStatus::FollowedRedirect
                     && csp_report_only_violation.is_none()
                 {
-                    csp_report_only_violation =
-                        content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                            &response_content_security_report_only_policies,
-                            &request_initiator_url,
-                            &response.final_url,
-                            response_resource_kind,
-                            redirect_status,
-                            ContentSecurityPolicyDisposition::Report,
-                            &response_content_security_reporting_endpoints,
-                        );
+                    csp_report_only_violation = response_policy.url_violation(
+                        &request_initiator_url,
+                        &response.final_url,
+                        response_resource_kind,
+                        redirect_status,
+                        ContentSecurityPolicyDisposition::Report,
+                    );
                 }
-                if let Some(violation) = content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                    &response_content_security_policies,
+                if let Some(violation) = response_policy.url_violation(
                     &request_initiator_url,
                     &response.final_url,
                     response_resource_kind,
                     redirect_status,
                     ContentSecurityPolicyDisposition::Enforce,
-                    &response_content_security_reporting_endpoints,
                 ) {
                     let message = module_graph_csp_violation_message(&violation);
                     csp_violation = Some(violation);
@@ -733,24 +749,11 @@ fn start_worker_module_graph_fetch(
                     request_credentials_mode,
                     Default::default(),
                 )?;
-                if requested_kind == WorkerModuleKind::WebAssembly {
-                    crate::worker::ensure_worker_wasm_module_mime(&response)?;
-                } else {
-                    match requested_module_type.as_deref() {
-                        Some("json") => crate::worker::ensure_worker_json_module_mime(&response)?,
-                        _ => crate::worker::ensure_worker_script_mime_acceptable(
-                            &response.final_url,
-                            &response.headers,
-                            response.body_bytes(),
-                        )
-                        .map_err(|error| {
-                            error.replace(
-                                "unsupported script MIME type",
-                                "unsupported module script MIME type",
-                            )
-                        })?,
-                    }
-                }
+                let response_kind = requested_module_type.response_kind(
+                    &response.final_url,
+                    &response.headers,
+                    response.body_bytes(),
+                )?;
                 let response_time_ms = response_started_at
                     .elapsed()
                     .as_millis()
@@ -764,13 +767,9 @@ fn start_worker_module_graph_fetch(
                     &body_bytes,
                     response_time_ms,
                 )
-                .with_kind(worker_script_resource_kind_for_module(requested_kind));
+                .with_kind(response_kind);
                 let final_url = head.final_url.clone();
-                let source = if requested_kind == WorkerModuleKind::WebAssembly {
-                    WorkerModuleSource::binary(body_bytes)
-                } else {
-                    WorkerModuleSource::text(moli_encoding::decode_utf8(&body_bytes))
-                };
+                let source = WorkerModuleSource::from_bytes(response_kind, body_bytes);
                 Ok(WorkerModuleFetchedSource::new(final_url, source)
                     .with_resource(resource)
                     .with_response_referrer_policy(response_referrer_policy))
@@ -806,17 +805,13 @@ fn start_worker_module_graph_fetch(
                 request.url()
             )),
         );
-        if let Some(violation) =
-            content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints(
-                &content_security_report_only_policies,
-                request.initiator_url(),
-                request.url(),
-                resource_kind,
-                ContentSecurityPolicyRedirectStatus::NoRedirect,
-                ContentSecurityPolicyDisposition::Report,
-                &content_security_reporting_endpoints,
-            )
-        {
+        if let Some(violation) = policy.url_violation(
+            request.initiator_url(),
+            request.url(),
+            resource_kind,
+            ContentSecurityPolicyRedirectStatus::NoRedirect,
+            ContentSecurityPolicyDisposition::Report,
+        ) {
             completion = completion.with_csp_report_only_violation(violation);
         }
         let _ = completion_tx.send(completion);
@@ -837,19 +832,11 @@ fn start_worker_module_graph_fetch_batch(
                 .borrow()
                 .module_static_import_content_security_policies
                 .clone(),
-            state.borrow().content_security_policies.clone(),
-            state.borrow().content_security_report_only_policies.clone(),
-            state.borrow().content_security_reporting_endpoints.clone(),
+            state
+                .borrow()
+                .content_security_policy_snapshot_for_inheritance(),
             module_graph_fetch_tx.clone(),
         );
-    }
-}
-
-fn worker_script_resource_kind_for_module(kind: WorkerModuleKind) -> WorkerScriptResourceKind {
-    match kind {
-        WorkerModuleKind::JavaScript => WorkerScriptResourceKind::JavaScript,
-        WorkerModuleKind::Json => WorkerScriptResourceKind::JsonModule,
-        WorkerModuleKind::WebAssembly => WorkerScriptResourceKind::WebAssemblyModule,
     }
 }
 
@@ -1350,6 +1337,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         content_security_policies,
         content_security_report_only_policies,
         content_security_reporting_endpoints,
+        content_security_policy_snapshot,
         network_policy,
         policy_context,
         worker_context_runtime,
@@ -1358,6 +1346,9 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
         broadcast_channel_top_level_site,
         creator_storage_key,
         service_worker_runtime,
+        service_worker_script_resources,
+        service_worker_updated_script_resources,
+        service_worker_can_import_new_scripts,
         reserved_service_worker_client_id,
         indexed_db_manager,
         storage_bucket_store,
@@ -1401,6 +1392,7 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 content_security_policies,
                 content_security_report_only_policies,
                 content_security_reporting_endpoints,
+                content_security_policy_snapshot,
                 network_policy,
                 policy_context,
                 worker_context_runtime,
@@ -1409,6 +1401,9 @@ pub(crate) fn spawn_worker_with_options(options: WorkerSpawnOptions) -> WorkerHa
                 broadcast_channel_top_level_site,
                 creator_storage_key,
                 service_worker_runtime,
+                service_worker_script_resources,
+                service_worker_updated_script_resources,
+                service_worker_can_import_new_scripts,
                 reserved_service_worker_client_id,
                 indexed_db_manager,
                 storage_bucket_store,
@@ -1532,6 +1527,9 @@ async fn worker_main(
     content_security_policies: Vec<String>,
     content_security_report_only_policies: Vec<String>,
     content_security_reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
+    content_security_policy_snapshot: Option<
+        crate::content_security_policy::InheritedContentSecurityPolicy,
+    >,
     network_policy: WorkerNetworkPolicy,
     policy_context: crate::types::SubresourcePolicyContext,
     worker_context_runtime: RendererWorkerContextRuntime,
@@ -1540,6 +1538,9 @@ async fn worker_main(
     broadcast_channel_top_level_site: Option<String>,
     creator_storage_key: Option<MoliStorageKey>,
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
+    service_worker_script_resources: Vec<WorkerScriptResource>,
+    service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
+    service_worker_can_import_new_scripts: bool,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
@@ -1605,8 +1606,7 @@ async fn worker_main(
     // Worker global state (accessible from JS callbacks).
     let (fetch_completion_tx, mut fetch_completion_rx) =
         mpsc::unbounded_channel::<WorkerFetchEvent>();
-    let (xhr_completion_tx, mut xhr_completion_rx) =
-        mpsc::unbounded_channel::<WorkerXhrCompletion>();
+    let (xhr_completion_tx, mut xhr_completion_rx) = mpsc::unbounded_channel::<WorkerXhrEvent>();
     let (module_graph_fetch_tx, mut module_graph_fetch_rx) =
         mpsc::unbounded_channel::<WorkerModuleGraphFetchCompletion>();
     let (module_evaluation_tx, mut module_evaluation_rx) =
@@ -1655,16 +1655,24 @@ async fn worker_main(
         worker_wake_tx,
         termination_requested: Arc::clone(&termination_requested),
         closed: false,
+        in_error_reporting_mode: false,
         next_timer_id: 0,
         loader,
         global_kind,
         script_kind,
         current_script_url,
+        service_worker_script_resources: service_worker_script_resources
+            .into_iter()
+            .map(|resource| (resource.request_url.clone(), resource))
+            .collect(),
+        service_worker_updated_script_resources,
+        service_worker_can_import_new_scripts,
         referrer_policy,
         module_static_import_content_security_policies,
         content_security_policies,
         content_security_report_only_policies,
         content_security_reporting_endpoints,
+        content_security_policy_snapshot,
         secure_context,
         permission_overrides: network_policy.permission_overrides,
         extra_http_headers: network_policy.extra_http_headers,
@@ -1715,6 +1723,8 @@ async fn worker_main(
         pending_service_worker_client_focuses: std::collections::HashMap::new(),
         pending_service_worker_clients_open_windows: std::collections::HashMap::new(),
         pending_service_worker_show_notifications: std::collections::HashMap::new(),
+        pending_service_worker_updates: std::collections::HashMap::new(),
+        service_worker_update_request_ids: Default::default(),
         pending_service_worker_get_notifications: std::collections::HashMap::new(),
         pending_service_worker_sync_registrations: std::collections::HashMap::new(),
         pending_service_worker_sync_get_tags: std::collections::HashMap::new(),
@@ -1759,7 +1769,31 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         *isolate_handle.lock() = Some(scope.thread_safe_handle());
-        let ctx = v8::Context::new(scope, Default::default());
+        let worker_templates =
+            match prepare_worker_global_scope_templates(scope, &state.borrow().global_kind) {
+                Ok(templates) => Some(templates),
+                Err(error) => {
+                    tracing::error!(
+                        url = %script_url,
+                        error = %error,
+                        "failed to prepare worker global templates"
+                    );
+                    bootstrap_completion
+                        .mark_install_global_failure(&script_url, error.to_string());
+                    install_global_failed = true;
+                    None
+                }
+            };
+        let global_template = worker_templates
+            .as_ref()
+            .map(|templates| templates.global_template(scope));
+        let ctx = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template,
+                ..Default::default()
+            },
+        );
         crate::resource_owner::install_resource_owner_for_context(ctx, resource_owner_id);
         crate::context_bootstrap::set_indexed_db_manager_for_context(
             ctx,
@@ -1778,17 +1812,21 @@ async fn worker_main(
 
         let scope = &mut v8::ContextScope::new(scope, ctx);
         let global = ctx.global(scope);
-        if let Err(e) = install_worker_global_scope(scope, global, state.clone()) {
-            tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
-            bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
-            install_global_failed = true;
-        } else if script_kind == WorkerScriptKind::Classic {
-            let referrer_policy = { state.borrow().referrer_policy.clone() };
-            install_classic_worker_dynamic_module_runtime(
-                scope,
-                referrer_policy,
-                module_evaluation_tx.clone(),
-            );
+        if !install_global_failed {
+            if let Err(e) =
+                install_worker_global_scope(scope, global, state.clone(), worker_templates.as_ref())
+            {
+                tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
+                bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
+                install_global_failed = true;
+            } else if script_kind == WorkerScriptKind::Classic {
+                let referrer_policy = { state.borrow().referrer_policy.clone() };
+                install_classic_worker_dynamic_module_runtime(
+                    scope,
+                    referrer_policy,
+                    module_evaluation_tx.clone(),
+                );
+            }
         }
     }
     if install_global_failed {
@@ -1829,6 +1867,7 @@ async fn worker_main(
         let referrer_policy = { state.borrow().referrer_policy.clone() };
 
         // ── Evaluate the worker script ─────────────────────────────────────
+        let execution_scope = crate::script_cleanup::ScriptExecutionScope::enter(scope);
         match evaluate_worker_bootstrap_script(
             scope,
             &script_source,
@@ -1851,11 +1890,7 @@ async fn worker_main(
             WorkerBootstrapStart::Failed { error, phase } => {
                 let (report, exception, parent_event_kind) = *error;
                 let exception = exception.as_ref().map(|value| v8::Local::new(scope, value));
-                let error_source = if script_kind == WorkerScriptKind::Classic {
-                    WorkerErrorSource::InitialScriptEvaluation
-                } else {
-                    WorkerErrorSource::Runtime
-                };
+                let error_source = WorkerErrorSource::InitialScriptEvaluation;
                 bootstrap_completion.mark_failure(
                     &report,
                     &script_url,
@@ -1863,7 +1898,7 @@ async fn worker_main(
                     phase,
                     error_source,
                 );
-                let handled = dispatch_worker_exception_with_phase_and_source(
+                dispatch_worker_exception_with_phase_and_source(
                     scope,
                     global,
                     report,
@@ -1875,12 +1910,12 @@ async fn worker_main(
                     &script_url,
                 );
                 bootstrap_failed = phase == WorkerErrorPhase::Bootstrap
-                    && !handled
-                    && parent_event_kind == WorkerParentErrorEventKind::Event;
+                    || matches!(state.borrow().global_kind, WorkerGlobalKind::Service { .. });
             }
         }
 
         // Run microtask checkpoint after initial script evaluation.
+        drop(execution_scope);
         perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
     }
@@ -1948,7 +1983,7 @@ async fn worker_main(
         enum WorkerLoopWake {
             Message(Option<WorkerMessage>),
             Fetch(Option<WorkerFetchEvent>),
-            Xhr(Option<WorkerXhrCompletion>),
+            Xhr(Option<WorkerXhrEvent>),
             ModuleGraphFetch(Option<Box<WorkerModuleGraphFetchCompletion>>),
             ModuleEvaluation(Option<WorkerModuleEvaluationCompletion>),
             ModuleRuntime,
@@ -2453,6 +2488,37 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerUpdateResult {
+                request_id,
+                result,
+            })) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages
+                        .push_back(WorkerMessage::ServiceWorkerUpdateResult { request_id, result });
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                drain_service_worker_update_result(scope, &state, request_id, *result);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerRegistrationUpdateFound)) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages
+                        .push_back(WorkerMessage::ServiceWorkerRegistrationUpdateFound);
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                super::global_scope::dispatch_service_worker_registration_update_found(scope);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::ServiceWorkerShowNotificationResult(
                 result,
             ))) => {
@@ -2631,6 +2697,23 @@ async fn worker_main(
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
+            WorkerLoopWake::Message(Some(
+                WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+            )) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(
+                        WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+                    );
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                dispatch_worker_csp_violation_event_for_state(scope, &state, &violation);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
             WorkerLoopWake::Message(Some(WorkerMessage::NestedWorkerEvent {
                 worker_id,
                 message,
@@ -2648,6 +2731,7 @@ async fn worker_main(
                 if let Some(error) = result.unhandled_error {
                     let global = ctx.global(scope);
                     let report = V8ExceptionReport {
+                        muted_errors: false,
                         summary: error.message,
                         source: Some(error.filename),
                         line: Some(error.lineno as usize),
@@ -2657,14 +2741,7 @@ async fn worker_main(
                         callback_context: None,
                         exception: None,
                     };
-                    if !dispatch_worker_error_event(
-                        scope,
-                        global,
-                        &report,
-                        None,
-                        &parent_tx,
-                        &script_url,
-                    ) {
+                    if !dispatch_worker_error_event(scope, global, &report, None, &script_url) {
                         report_exception_to_parent(
                             &report,
                             &script_url,
@@ -2981,7 +3058,7 @@ async fn worker_main(
                 let scope = &mut scope.init();
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
-                drain_worker_xhr_completion(scope, &state, completion);
+                drain_worker_xhr_event(scope, &state, completion);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
@@ -3117,8 +3194,10 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::WaitingFetches => {}
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
-                        WorkerModuleBootstrapResume::Failed(error) => {
-                            let (report, exception, parent_event_kind) = *error;
+                        WorkerModuleBootstrapResume::Failed(failure) => {
+                            pending_module_bootstrap = None;
+                            let phase = failure.phase;
+                            let (report, exception, parent_event_kind) = *failure.error;
                             let exception =
                                 exception.as_ref().map(|value| v8::Local::new(scope, value));
                             let global = ctx.global(scope);
@@ -3126,21 +3205,35 @@ async fn worker_main(
                                 &report,
                                 &script_url,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                             );
-                            dispatch_worker_exception_with_phase(
+                            dispatch_worker_exception_with_phase_and_source(
                                 scope,
                                 global,
                                 report,
                                 exception,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                                 &parent_tx,
                                 &script_url,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                            break;
+                            if phase == WorkerErrorPhase::Bootstrap
+                                || matches!(
+                                    state.borrow().global_kind,
+                                    WorkerGlobalKind::Service { .. }
+                                )
+                            {
+                                break;
+                            }
+                            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                            drain_worker_dynamic_module_imports(
+                                scope,
+                                &state,
+                                &module_graph_fetch_tx,
+                            );
                         }
                     }
                 } else {
@@ -3202,8 +3295,10 @@ async fn worker_main(
                         }
                         WorkerModuleBootstrapResume::WaitingFetches => {}
                         WorkerModuleBootstrapResume::WaitingEvaluation => {}
-                        WorkerModuleBootstrapResume::Failed(error) => {
-                            let (report, exception, parent_event_kind) = *error;
+                        WorkerModuleBootstrapResume::Failed(failure) => {
+                            pending_module_bootstrap = None;
+                            let phase = failure.phase;
+                            let (report, exception, parent_event_kind) = *failure.error;
                             let exception =
                                 exception.as_ref().map(|value| v8::Local::new(scope, value));
                             let global = ctx.global(scope);
@@ -3211,21 +3306,35 @@ async fn worker_main(
                                 &report,
                                 &script_url,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
-                                WorkerErrorSource::Runtime,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                             );
-                            dispatch_worker_exception_with_phase(
+                            dispatch_worker_exception_with_phase_and_source(
                                 scope,
                                 global,
                                 report,
                                 exception,
                                 parent_event_kind,
-                                WorkerErrorPhase::Bootstrap,
+                                phase,
+                                WorkerErrorSource::InitialScriptEvaluation,
                                 &parent_tx,
                                 &script_url,
                             );
                             forward_worker_script_loaded(&runtime_inspector, &parent_tx);
-                            break;
+                            if phase == WorkerErrorPhase::Bootstrap
+                                || matches!(
+                                    state.borrow().global_kind,
+                                    WorkerGlobalKind::Service { .. }
+                                )
+                            {
+                                break;
+                            }
+                            perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                            drain_worker_dynamic_module_imports(
+                                scope,
+                                &state,
+                                &module_graph_fetch_tx,
+                            );
                         }
                     }
                 } else {
@@ -3328,6 +3437,7 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         let ctx = v8::Local::new(scope, &context);
+        crate::context_bootstrap::retire_indexed_db_context(ctx);
         runtime_inspector.context_destroyed(ctx);
     }
     state
@@ -3464,6 +3574,7 @@ fn worker_bootstrap_error(
         v8::String::new(scope, summary).map(|message| v8::Exception::syntax_error(scope, message));
     (
         V8ExceptionReport {
+            muted_errors: false,
             summary: summary.to_owned(),
             source: Some(script_url.to_owned()),
             line: Some(1),
@@ -3540,9 +3651,9 @@ impl From<WorkerModuleBootstrapStart> for WorkerBootstrapStart {
         match start {
             WorkerModuleBootstrapStart::Complete => Self::Complete,
             WorkerModuleBootstrapStart::Pending(pending) => Self::Pending(pending),
-            WorkerModuleBootstrapStart::Failed(error) => Self::Failed {
-                error,
-                phase: WorkerErrorPhase::Bootstrap,
+            WorkerModuleBootstrapStart::Failed(failure) => Self::Failed {
+                error: failure.error,
+                phase: failure.phase,
             },
         }
     }

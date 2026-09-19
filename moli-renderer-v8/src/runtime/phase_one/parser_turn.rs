@@ -330,6 +330,14 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .mark_script_already_started_for_parser_in_live_dom_host(node_id);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+        let _ = self
+            .vm
+            .document_runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
         let _ = self
             .vm
@@ -344,6 +352,12 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .document_runtime
             .dom_host_mut()
             .finish_parsing_link_children(node_id);
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: NativeNodeId) {
+        let _ = self
+            .vm
+            .sync_selectedcontents_after_parser_option_finished_in_default_context(node_id);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -369,13 +383,9 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<NativeNodeId> {
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         self.vm
             .create_and_construct_parser_custom_element_direct_in_default_context(
                 request.document_handle,
-                document_has_body,
                 request.local_name,
                 request.namespace,
                 request.prefix,
@@ -385,6 +395,15 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
             .ok()
             .flatten()
     }
+}
+
+#[cfg(test)]
+pub(super) fn finish_parser_session_for_test(
+    parser_session: &mut DocumentParserSession,
+    vm: &mut ScriptVm,
+) {
+    let mut parser_owner = PhaseOneParserOwner { vm };
+    let _ = parser_session.finish(&mut parser_owner);
 }
 
 pub(super) enum PageTaskTurnResult {
@@ -1216,7 +1235,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     start_line,
                     start_column,
                     import_map,
-                );
+                )?;
                 Ok(ScriptHandoffOutcome::NoNavigation)
             }
             ParserScriptHandoff::NoExecution {
@@ -1225,18 +1244,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 start_column,
                 outcome,
             } => {
-                // HTML's parser script processing performs a microtask
-                // checkpoint before PrepareScript, including for data blocks
-                // and other non-executable script elements. The parser crate
-                // has already classified the element, but classification does
-                // not run JavaScript, so this is the equivalent observable
-                // boundary on the renderer owner lane.
-                page_vm
-                    .perform_script_task_checkpoint_on_named_owner_local_task(None)
-                    .await?;
-                if page_vm.vm().current_main_document_task_owner() != Some(parser_document_owner) {
-                    return Ok(ScriptHandoffOutcome::StoppedCurrentDocument);
-                }
                 crate::host::apply_parser_script_element_state_transition(
                     page_vm.vm_mut().document_runtime.dom_host_mut(),
                     handle,
@@ -1268,12 +1275,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 start_column,
                 failure,
             } => {
-                page_vm
-                    .perform_script_task_checkpoint_on_named_owner_local_task(None)
-                    .await?;
-                if page_vm.vm().current_main_document_task_owner() != Some(parser_document_owner) {
-                    return Ok(ScriptHandoffOutcome::StoppedCurrentDocument);
-                }
                 crate::host::apply_parser_script_element_state_transition(
                     page_vm.vm_mut().document_runtime.dom_host_mut(),
                     handle,
@@ -1293,6 +1294,13 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         .dom_host_mut()
                         .set_script_already_started(handle, true);
                     let _ = self.scheduler.grant_parse_visible_reevaluation_credit();
+                } else if failure.is_external_source_failure() {
+                    let runtime = &page_vm.vm().document_runtime;
+                    if runtime.dom_host().owner_document_handle(handle)
+                        == Some(runtime.document_handle())
+                    {
+                        page_vm.vm_mut().queue_script_preparation_error(handle)?;
+                    }
                 } else {
                     page_vm
                         .vm_mut()
@@ -1332,12 +1340,15 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                         &mut parser_owner,
                     )
             });
-        self.finish_parser_pump_step(
+        let outcome = self.finish_parser_pump_step(
             page_vm,
             parser_document_owner,
             outcome,
             null_custom_element_registry_elements,
-        )
+        );
+        self.resolve_parser_script_preparation(page_vm, parser_document_owner, outcome)
+            .expect("parser preparation checkpoint")
+            .unwrap_or(LiveDocumentParserStepOutcome::InputBoundary)
     }
 
     fn pump_next_parse_step_with_signals(
@@ -1505,44 +1516,8 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             .vm_mut()
             .accept_parser_discovered_native_modulepreloads(modulepreload_link_candidates);
         if page_vm.main_document_scripting_enabled() {
-            for mut script in async_prefetch_scripts {
-                bind_parser_owned_script_handle(page_vm, &mut script);
-                self.buffered_document_preloads
-                    .claim_pending_script_preload_for_parser(&script);
-                let shared_preload = self
-                    .buffered_document_preloads
-                    .shared_preload_for_script(&script);
-                let document_character_set = page_vm
-                    .vm()
-                    .document_runtime
-                    .document_character_set()
-                    .to_owned();
-                let resource_task_runner = page_vm.resource_task_runner();
-                let _ = self.scheduler.accept_parser_discovered_async_candidate(
-                    script,
-                    self.loader,
-                    page_vm.vm().current_main_document_resource_loader().expect("parser script requires its Document authority").fetch_context().request_origin(),
-                    resource_task_runner,
-                    shared_preload,
-                    Some(&document_character_set),
-                    |script| {
-                        let binding = page_vm
-                            .vm_mut()
-                            .accept_main_document_script_load_delay_binding(
-                                parser_document_owner,
-                                crate::frame_owner_model::MainDocumentScriptLoadDelayKind::Classic,
-                            )
-                            .expect("current parser async discovery must bind lifecycle ownership");
-                        tracing::debug!(
-                            ?parser_document_owner,
-                            script_node_id = ?script.node_id,
-                            script_url = %script.url,
-                            load_delay_token = ?binding.load_delay_token(),
-                            "accepted main parser async classic lifecycle binding before source work"
-                        );
-                        binding
-                    },
-                );
+            for script in async_prefetch_scripts {
+                self.admit_prepared_parser_async_script(page_vm, parser_document_owner, script);
             }
         }
         page_vm
@@ -1551,6 +1526,56 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 parser_document_owner,
                 &blocking_stylesheet_inputs,
             );
+    }
+
+    fn admit_prepared_parser_async_script(
+        &mut self,
+        page_vm: &mut PageVm,
+        parser_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        mut script: PreparedScript,
+    ) {
+        bind_parser_owned_script_handle(page_vm, &mut script);
+        self.buffered_document_preloads
+            .claim_pending_script_preload_for_parser(&script);
+        let shared_preload = self
+            .buffered_document_preloads
+            .shared_preload_for_script(&script);
+        let document_character_set = page_vm
+            .vm()
+            .document_runtime
+            .document_character_set()
+            .to_owned();
+        let resource_task_runner = page_vm.resource_task_runner();
+        let _ = self.scheduler.accept_parser_discovered_async_candidate(
+            script,
+            self.loader,
+            page_vm
+                .vm()
+                .current_main_document_resource_loader()
+                .expect("parser script requires its Document authority")
+                .fetch_context()
+                .request_origin(),
+            resource_task_runner,
+            shared_preload,
+            Some(&document_character_set),
+            |script| {
+                let binding = page_vm
+                    .vm_mut()
+                    .accept_main_document_script_load_delay_binding(
+                        parser_document_owner,
+                        crate::frame_owner_model::MainDocumentScriptLoadDelayKind::Classic,
+                    )
+                    .expect("current parser async discovery must bind lifecycle ownership");
+                tracing::debug!(
+                    ?parser_document_owner,
+                    script_node_id = ?script.node_id,
+                    script_url = %script.url,
+                    load_delay_token = ?binding.load_delay_token(),
+                    "accepted main parser async classic lifecycle binding before source work"
+                );
+                binding
+            },
+        );
     }
 
     async fn advance_next_parser_step_for_owner(
@@ -1586,7 +1611,16 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 break ParserStepAdvanceOutcome::StoppedCurrentDocument;
             }
 
+            let Some(outcome) =
+                self.resolve_parser_script_preparation(page_vm, parser_document_owner, outcome)?
+            else {
+                break ParserStepAdvanceOutcome::StoppedCurrentDocument;
+            };
+
             match outcome {
+                LiveDocumentParserStepOutcome::ScriptPreparation(_) => {
+                    unreachable!("parser preparation was resolved before dispatch")
+                }
                 LiveDocumentParserStepOutcome::InputBoundary => {
                     break ParserStepAdvanceOutcome::Continue;
                 }
@@ -1697,6 +1731,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             }
 
             match outcome {
+                LiveDocumentParserStepOutcome::ScriptPreparation(_) => {
+                    unreachable!("test parser pump resolves preparation before dispatch")
+                }
                 LiveDocumentParserStepOutcome::InputBoundary => {
                     break ParserStepAdvanceOutcome::Continue;
                 }
@@ -1781,5 +1818,38 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             )
             | None => None,
         }
+    }
+
+    fn resolve_parser_script_preparation(
+        &mut self,
+        page_vm: &mut PageVm,
+        parser_document_owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+        outcome: LiveDocumentParserStepOutcome,
+    ) -> Result<Option<LiveDocumentParserStepOutcome>> {
+        let LiveDocumentParserStepOutcome::ScriptPreparation(request) = outcome else {
+            return Ok(Some(outcome));
+        };
+        if request.needs_microtask_checkpoint() {
+            page_vm
+                .vm_mut()
+                .perform_parser_script_preparation_checkpoint()?;
+            page_vm.absorb_parser_no_execution_runs();
+        }
+        if page_vm.vm().current_main_document_task_owner() != Some(parser_document_owner) {
+            return Ok(None);
+        }
+        let handoff = page_vm.vm_mut().with_dom_host_parse_step(|vm| {
+            let mut owner = PhaseOneParserOwner { vm };
+            self.parser_session.prepare_script(*request, &mut owner)
+        });
+        if page_vm.main_document_scripting_enabled()
+            && let ParserScriptHandoff::AsyncPostParse { script, .. } = &handoff
+            && script.kind == crate::types::ScriptKind::Classic
+        {
+            self.admit_prepared_parser_async_script(page_vm, parser_document_owner, script.clone());
+        }
+        Ok(Some(LiveDocumentParserStepOutcome::ScriptHandoff(
+            Box::new(handoff),
+        )))
     }
 }

@@ -123,8 +123,9 @@ promise_test(async function () {
         "  results.push(String(error));",
         "}",
         "try {",
-        "  self.onconnect = { handleEvent: function () {} };",
-        "  results.push(String(onconnect));",
+        "  const object = { handleEvent: function () {} };",
+        "  self.onconnect = object;",
+        "  results.push(onconnect === object);",
         "} catch (error) {",
         "  results.push(String(error));",
         "}",
@@ -138,8 +139,8 @@ promise_test(async function () {
     unique_name("onconnect"),
   );
   const event = await next_port_message(worker.port);
-  assert_array_equals(event.data, ["null", "null", "function", ""]);
-}, "SharedWorkerGlobalScope.onconnect clears non-callable assignments and dispatches connect");
+  assert_array_equals(event.data, ["null", true, "function", ""]);
+}, "SharedWorkerGlobalScope.onconnect preserves objects, clears primitives, and dispatches connect");
 
 promise_test(async function () {
   const blobUrl = URL.createObjectURL(

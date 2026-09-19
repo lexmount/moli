@@ -393,7 +393,7 @@ pub(crate) fn schedule_event_source_connect<'s>(
     let timer_id = unsafe { &mut *host_ptr }.queue_timeout(
         scope,
         callback,
-        delay_ms.min(u32::MAX as u64) as u32,
+        delay_ms.min(u64::from(u32::MAX)),
         crate::host::HostTimerOwner::Window,
         Vec::new(),
     );
@@ -560,7 +560,7 @@ fn event_source_event_handler_setter<'s>(
         return;
     };
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -572,7 +572,7 @@ fn event_source_event_handler_setter<'s>(
         EVENT_SOURCE_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 

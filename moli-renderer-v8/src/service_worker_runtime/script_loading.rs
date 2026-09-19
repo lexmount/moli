@@ -2,8 +2,8 @@ use std::time::Instant;
 
 use moli_crypto::sha256_hex;
 use moli_fetch::{
-    FetchCancelHandle, Request, RequestCacheMode, RequestCredentialsMode, ResponseHead,
-    ScriptFetchRequestMetadata,
+    FetchCancelHandle, Request, RequestCacheMode, RequestCredentialsMode, RequestMode,
+    RequestRedirectMode, ResponseHead, ScriptFetchRequestMetadata,
 };
 use url::Url;
 
@@ -12,6 +12,7 @@ use crate::network::ResourceRequestClient;
 use crate::worker::WorkerScriptResourceKind;
 
 use super::{
+    errors::{ServiceWorkerRegistrationError, ServiceWorkerRegistrationErrorKind},
     jobs::ServiceWorkerLaunchParams,
     path_restriction::{
         service_worker_allowed_header_value, verify_service_worker_script_path_restriction,
@@ -41,6 +42,7 @@ impl ServiceWorkerScriptLoadParams {
 
 #[derive(Clone)]
 pub(super) struct ServiceWorkerScriptUpdateCheckParams {
+    pub(super) script_kind: crate::worker::WorkerScriptKind,
     pub(super) main_script: ServiceWorkerScriptLoadParams,
     pub(super) newest_main_body_sha256: String,
     pub(super) imported_scripts: Vec<ServiceWorkerScriptResource>,
@@ -59,6 +61,7 @@ pub(super) struct ServiceWorkerScriptResource {
     pub(super) body_sha256: String,
     pub(super) response_time_ms: u64,
     pub(super) mime_type: Option<String>,
+    pub(super) classic_script: Option<crate::worker::WorkerStoredClassicScript>,
 }
 
 impl ServiceWorkerScriptResource {
@@ -80,6 +83,7 @@ impl ServiceWorkerScriptResource {
             body_sha256,
             response_time_ms,
             mime_type,
+            classic_script: None,
         }
     }
 
@@ -96,11 +100,34 @@ impl ServiceWorkerScriptResource {
             body_sha256: resource.body_sha256,
             response_time_ms: resource.response_time_ms,
             mime_type: resource.mime_type,
+            classic_script: resource.classic_script,
+        }
+    }
+
+    pub(super) fn to_worker_script_resource(&self) -> crate::worker::WorkerScriptResource {
+        crate::worker::WorkerScriptResource {
+            request_url: self.request_url.clone(),
+            final_url: self.final_url.clone(),
+            kind: self.kind,
+            status: self.status,
+            headers: self.headers.clone(),
+            body_len: self.body_len,
+            body_sha256: self.body_sha256.clone(),
+            response_time_ms: self.response_time_ms,
+            mime_type: self.mime_type.clone(),
+            classic_script: self.classic_script.clone(),
         }
     }
 }
 
+pub(super) struct ServiceWorkerScriptMapSnapshot {
+    pub(super) main_script: Option<ServiceWorkerScriptResource>,
+    pub(super) imported_scripts: Vec<crate::worker::WorkerScriptResource>,
+    pub(super) can_import_new_scripts: bool,
+}
+
 pub(super) struct LoadedServiceWorkerScript {
+    pub(super) updated_imports: crate::worker::WorkerScriptUpdateResources,
     pub(super) resource: ServiceWorkerScriptResource,
     pub(super) source: String,
     pub(super) response_referrer_policy: Option<String>,
@@ -108,6 +135,30 @@ pub(super) struct LoadedServiceWorkerScript {
     pub(super) response_content_security_report_only_policies: Vec<String>,
     pub(super) response_content_security_reporting_endpoints:
         ContentSecurityPolicyReportingEndpoints,
+}
+
+impl LoadedServiceWorkerScript {
+    pub(super) fn from_stored_resource(resource: ServiceWorkerScriptResource) -> Option<Self> {
+        let source = resource.classic_script.as_ref()?.source.to_string();
+        let response_referrer_policy =
+            crate::referrer_policy::response_referrer_policy_from_headers(&resource.headers);
+        let response_content_security_policies =
+            crate::content_security_policy::content_security_policy_headers(&resource.headers);
+        let response_content_security_report_only_policies =
+            crate::content_security_policy::content_security_policy_report_only_headers(
+                &resource.headers,
+            );
+        let response_content_security_reporting_endpoints = crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(&resource.headers, &resource.final_url);
+        Some(Self {
+            updated_imports: Default::default(),
+            resource,
+            source,
+            response_referrer_policy,
+            response_content_security_policies,
+            response_content_security_report_only_policies,
+            response_content_security_reporting_endpoints,
+        })
+    }
 }
 
 pub(super) struct ServiceWorkerScriptUpdateCheckResult {
@@ -126,6 +177,7 @@ pub(super) enum ServiceWorkerScriptUpdateCheckChange {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ServiceWorkerScriptUpdateCheckFailureStatus {
     ScriptLoadFailed,
+    Security,
     Internal,
     Stale,
 }
@@ -134,6 +186,7 @@ impl ServiceWorkerScriptUpdateCheckFailureStatus {
     pub(super) fn as_str(self) -> &'static str {
         match self {
             Self::ScriptLoadFailed => "script-load-failed",
+            Self::Security => "security",
             Self::Internal => "internal",
             Self::Stale => "stale",
         }
@@ -182,18 +235,21 @@ pub(super) fn load_service_worker_script_source(
     load_service_worker_script_source_for_params(
         &ServiceWorkerScriptLoadParams::from_launch_params(params),
     )
+    .map_err(|error| error.message)
 }
 
 pub(super) fn load_service_worker_script_source_for_params(
     params: &ServiceWorkerScriptLoadParams,
-) -> Result<LoadedServiceWorkerScript, String> {
+) -> Result<LoadedServiceWorkerScript, ServiceWorkerRegistrationError> {
     let request_client = &params.request_client;
     let mut request_url = params.script_url.clone();
     request_url.set_fragment(None);
     let response_started_at = Instant::now();
     let request = Request::new("GET", request_url.as_str(), None, vec![])
-        .map_err(|error| error.to_string())?
+        .map_err(|error| ServiceWorkerRegistrationError::network(error.to_string()))?
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_request_mode(RequestMode::SameOrigin)
+        .with_redirect_mode(RequestRedirectMode::Error)
         .with_cache_mode(params.cache_mode)
         .with_page_network_policy()
         .with_initiator_url(&params.document_url)
@@ -204,7 +260,9 @@ pub(super) fn load_service_worker_script_source_for_params(
     let response = request_client
         .fetch_text_for_worker_blocking_boundary_with_cancel(request, FetchCancelHandle::new())
         .map_err(|error| {
-            format!("Failed to load service worker script `{request_url}`: {error}")
+            ServiceWorkerRegistrationError::network(format!(
+                "Failed to load service worker script `{request_url}`: {error}"
+            ))
         })?;
     let response_time_ms = response_started_at
         .elapsed()
@@ -216,21 +274,30 @@ pub(super) fn load_service_worker_script_source_for_params(
         &response.final_url,
     )
     .map_err(|message| {
-        format!("Failed to load service worker script `{request_url}`: {message}")
+        ServiceWorkerRegistrationError::new(
+            ServiceWorkerRegistrationErrorKind::Security,
+            format!("Failed to load service worker script `{request_url}`: {message}"),
+        )
     })?;
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| ServiceWorkerRegistrationError::network(error.to_string()))?;
     crate::worker::ensure_worker_script_mime_acceptable(
         &response.final_url,
         &response.headers,
         response.body_bytes(),
-    )?;
+    )
+    .map_err(|message| {
+        ServiceWorkerRegistrationError::new(ServiceWorkerRegistrationErrorKind::Security, message)
+    })?;
     let service_worker_allowed_header = service_worker_allowed_header_value(&response.headers);
     verify_service_worker_script_path_restriction(
         &params.scope_url,
         &response.final_url,
         service_worker_allowed_header.as_deref(),
-    )?;
+    )
+    .map_err(|message| {
+        ServiceWorkerRegistrationError::new(ServiceWorkerRegistrationErrorKind::Security, message)
+    })?;
     let response_referrer_policy =
         crate::referrer_policy::response_referrer_policy_from_headers(&response.headers);
     let response_content_security_policies =
@@ -251,10 +318,20 @@ pub(super) fn load_service_worker_script_source_for_params(
         &body_bytes,
         response_time_ms,
     );
+    resource.classic_script = Some(crate::worker::WorkerStoredClassicScript {
+        source: body.clone().into(),
+        muted_errors: false,
+        redirect_urls: head
+            .redirect_chain
+            .iter()
+            .map(|redirect| redirect.to_url.clone())
+            .collect(),
+    });
     let mut final_url = head.final_url;
     final_url.set_fragment(params.script_url.fragment());
     resource.final_url = final_url;
     Ok(LoadedServiceWorkerScript {
+        updated_imports: Default::default(),
         resource,
         source: body,
         response_referrer_policy,
@@ -267,8 +344,14 @@ pub(super) fn load_service_worker_script_source_for_params(
 pub(super) fn load_service_worker_script_update_check(
     params: &ServiceWorkerScriptUpdateCheckParams,
 ) -> ServiceWorkerScriptUpdateCheckCompletion {
-    let main_script = load_service_worker_script_source_for_params(&params.main_script)
-        .map_err(ServiceWorkerScriptUpdateCheckFailure::script_load)?;
+    let mut main_script = load_service_worker_script_source_for_params(&params.main_script)
+        .map_err(|error| {
+            let mut failure = ServiceWorkerScriptUpdateCheckFailure::script_load(error.message);
+            if error.kind == ServiceWorkerRegistrationErrorKind::Security {
+                failure.status = ServiceWorkerScriptUpdateCheckFailureStatus::Security;
+            }
+            failure
+        })?;
     if params.skip_script_comparison {
         return Ok(ServiceWorkerScriptUpdateCheckResult {
             main_script,
@@ -282,22 +365,26 @@ pub(super) fn load_service_worker_script_update_check(
         });
     }
     let request_client = &params.main_script.request_client;
+    let mut change = ServiceWorkerScriptUpdateCheckChange::Identical;
     for imported_script in &params.imported_scripts {
+        if !matches!(imported_script.request_url.scheme(), "http" | "https") {
+            continue;
+        }
         let result = load_imported_script_resource_for_update_check(
             request_client,
             &imported_script.request_url,
             &main_script.resource.final_url,
             params.imported_script_cache_mode,
             imported_script.kind,
+            params.script_kind == crate::worker::WorkerScriptKind::Classic,
         );
-        match result {
+        match &result {
             Ok(updated_resource) if updated_resource.body_sha256 != imported_script.body_sha256 => {
-                return Ok(ServiceWorkerScriptUpdateCheckResult {
-                    main_script,
-                    change: ServiceWorkerScriptUpdateCheckChange::ImportedScriptDifferent {
+                if change == ServiceWorkerScriptUpdateCheckChange::Identical {
+                    change = ServiceWorkerScriptUpdateCheckChange::ImportedScriptDifferent {
                         script_url: imported_script.request_url.clone(),
-                    },
-                });
+                    };
+                }
             }
             Ok(_) => {}
             Err(message) => {
@@ -308,10 +395,16 @@ pub(super) fn load_service_worker_script_update_check(
                 );
             }
         }
+        // The candidate worker must consume these exact responses, including
+        // failures, rather than fetching a third version during evaluation.
+        main_script.updated_imports.insert(
+            imported_script.request_url.clone(),
+            result.map(|resource| resource.to_worker_script_resource()),
+        );
     }
     Ok(ServiceWorkerScriptUpdateCheckResult {
         main_script,
-        change: ServiceWorkerScriptUpdateCheckChange::Identical,
+        change,
     })
 }
 
@@ -321,12 +414,18 @@ fn load_imported_script_resource_for_update_check(
     initiator_url: &Url,
     cache_mode: RequestCacheMode,
     kind: WorkerScriptResourceKind,
+    classic: bool,
 ) -> Result<ServiceWorkerScriptResource, String> {
     let mut request_url_without_fragment = request_url.clone();
     request_url_without_fragment.set_fragment(None);
     let request = Request::new("GET", request_url_without_fragment.as_str(), None, vec![])
         .map_err(|error| error.to_string())?
         .with_credentials_mode(RequestCredentialsMode::SameOrigin)
+        .with_request_mode(if classic {
+            RequestMode::NoCors
+        } else {
+            RequestMode::Cors
+        })
         .with_cache_mode(cache_mode)
         .with_page_network_policy()
         .with_initiator_url(initiator_url)
@@ -346,7 +445,8 @@ fn load_imported_script_resource_for_update_check(
         .elapsed()
         .as_millis()
         .min(u64::MAX as u128) as u64;
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
+    if !classic {
+        crate::worker::ensure_worker_script_redirect_chain_same_origin(
         initiator_url,
         &response.redirect_chain,
         &response.final_url,
@@ -356,19 +456,38 @@ fn load_imported_script_resource_for_update_check(
             "Failed to load service worker imported script `{request_url_without_fragment}`: {message}"
         )
     })?;
+    }
     moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
         .map_err(|error| error.to_string())?;
     ensure_imported_script_resource_mime(kind, &response)?;
-    let (head, body_bytes) = response.into_byte_parts();
+    let (head, body, body_bytes) = response.into_parts();
     let mut resource = ServiceWorkerScriptResource::from_response_parts(
-        request_url_without_fragment,
+        request_url.clone(),
         &head,
         &body_bytes,
         response_time_ms,
     );
     resource.kind = kind;
+    if classic {
+        resource.classic_script = Some(crate::worker::WorkerStoredClassicScript {
+            source: body.into(),
+            muted_errors: moli_url::WebOrigin::from_url(initiator_url)
+                != moli_url::WebOrigin::from_url(&head.final_url)
+                || head.redirect_chain.iter().any(|redirect| {
+                    moli_url::WebOrigin::from_url(initiator_url)
+                        != moli_url::WebOrigin::from_url(&redirect.to_url)
+                }),
+            redirect_urls: head
+                .redirect_chain
+                .iter()
+                .map(|redirect| redirect.to_url.clone())
+                .collect(),
+        });
+    }
     let mut final_url = head.final_url;
-    final_url.set_fragment(request_url.fragment());
+    if !classic {
+        final_url.set_fragment(request_url.fragment());
+    }
     resource.final_url = final_url;
     Ok(resource)
 }
@@ -426,6 +545,7 @@ mod tests {
     fn script_resource_records_response_metadata_and_body_hash() {
         let request_url = Url::parse("https://example.test/app/sw.js").unwrap();
         let head = ResponseHead {
+            status_text: None,
             final_url: Url::parse("https://example.test/app/sw.js?final").unwrap(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
@@ -478,6 +598,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Classic,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url: script_url.clone(),
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -519,6 +640,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Classic,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url: script_url.clone(),
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -566,6 +688,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Module,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url,
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -619,6 +742,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Module,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url,
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -672,6 +796,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Module,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url,
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -725,6 +850,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Module,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url,
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -777,6 +903,7 @@ mod tests {
 
         let result =
             load_service_worker_script_update_check(&ServiceWorkerScriptUpdateCheckParams {
+                script_kind: crate::worker::WorkerScriptKind::Classic,
                 main_script: ServiceWorkerScriptLoadParams {
                     script_url: Url::parse(&format!("{base_url}/app/sw.js")).unwrap(),
                     scope_url: Url::parse(&format!("{base_url}/app/")).unwrap(),
@@ -814,6 +941,7 @@ mod tests {
         kind: WorkerScriptResourceKind,
     ) -> ServiceWorkerScriptResource {
         let head = ResponseHead {
+            status_text: None,
             final_url: script_url.clone(),
             status: 200,
             headers: vec![("Content-Type".to_owned(), mime_type.to_owned())],

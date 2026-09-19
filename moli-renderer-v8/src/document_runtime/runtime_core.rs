@@ -63,6 +63,8 @@ impl DocumentRuntime {
         // initial "loading". Without this, the DomHost keeps its default "complete"
         // (from NativeDom Document::new) and scripts see the wrong readyState.
         let _ = dom_host.set_document_ready_state(document.ready_state());
+        let document_handle = dom_host.document_handle();
+        dom_host.set_document_allow_declarative_shadow_roots_for_handle(document_handle, true);
         let parser_boundary_lifecycle_tx = page_task_parser_boundary_injection_tx.clone();
         Self {
             dom_host,
@@ -73,17 +75,20 @@ impl DocumentRuntime {
             selector_engine: QueryEngine,
             selector_debug: SelectorDebugCounters::default(),
             document,
-            design_mode_documents: HashSet::new(),
             script_execution_control: Default::default(),
             author_styles_disabled: false,
             bypass_content_security_policy: false,
             policy_container: DocumentPolicyContainer::default(),
             delivered_meta_content_security_policies: RefCell::new(HashMap::new()),
+            local_worker_policy_sources: RefCell::new(HashMap::new()),
             processed_meta_content_security_policy_handles: RefCell::new(HashSet::new()),
             document_character_set: "UTF-8".to_owned(),
             resource_loader_binding: None,
             script_context_stack: Vec::new(),
+            destructive_write_counters: Default::default(),
+            document_unload_counters: Default::default(),
             root_document_parser: None,
+            windowless_document_parsers: HashMap::new(),
             post_parse_schedule_invalidated: false,
             stylesheet_lifecycle,
             main_parser_continuation:
@@ -111,12 +116,15 @@ impl DocumentRuntime {
             ),
             parser_script_start_positions: HashMap::new(),
             timeouts: HostTimeoutScheduler::default(),
+            classic_defer_timer_schedule_start: None,
+            classic_defer_timer_schedule_ranges: Vec::new(),
             events: HostEventTargetRegistry::default(),
             mutations: MutationCoordinator,
             meta_refresh_scheduler: super::meta_refresh::MetaRefreshScheduler::default(),
             custom_element_reaction_depth: 0,
             structural_mutation_depth: 0,
             dom_content_loaded_dispatched: false,
+            autofocus_processed: false,
             document_incarnation,
             document_input_stream_opened: false,
             next_document_write_external_script_load_id: 0,
@@ -204,17 +212,20 @@ impl DocumentRuntime {
             selector_engine: _,
             selector_debug: _,
             document: _,
-            design_mode_documents: _,
             script_execution_control: _,
             author_styles_disabled: _,
             bypass_content_security_policy: _,
             policy_container: _,
             delivered_meta_content_security_policies: _,
+            local_worker_policy_sources: _,
             processed_meta_content_security_policy_handles: _,
             document_character_set: _,
             resource_loader_binding: _,
             script_context_stack: _,
+            destructive_write_counters: _,
+            document_unload_counters: _,
             root_document_parser: _,
+            windowless_document_parsers: _,
             post_parse_schedule_invalidated: _,
             stylesheet_lifecycle: _,
             main_parser_continuation: _,
@@ -234,12 +245,15 @@ impl DocumentRuntime {
             script_lifecycle: _,
             parser_script_start_positions: _,
             timeouts: _,
+            classic_defer_timer_schedule_start: _,
+            classic_defer_timer_schedule_ranges: _,
             events: _,
             mutations: _,
             meta_refresh_scheduler: _,
             custom_element_reaction_depth: _,
             structural_mutation_depth: _,
             dom_content_loaded_dispatched: _,
+            autofocus_processed: _,
             document_incarnation: _,
             document_input_stream_opened: _,
             next_document_write_external_script_load_id: _,
@@ -264,6 +278,15 @@ impl DocumentRuntime {
 
     pub(crate) fn document_character_set(&self) -> &str {
         &self.document_character_set
+    }
+
+    pub(crate) fn document_character_set_for_handle(&self, handle: DomHandle) -> Option<&str> {
+        let document = self.dom_host().node(handle)?.as_document()?;
+        Some(if handle == self.dom_host().document_handle() {
+            self.document_character_set()
+        } else {
+            document.character_set()
+        })
     }
 
     pub(crate) fn set_script_execution_disabled(&mut self, disabled: bool) {
@@ -301,6 +324,9 @@ impl DocumentRuntime {
 
     pub(crate) fn set_document_character_set(&mut self, character_set: impl Into<String>) {
         self.document_character_set = character_set.into();
+        let document_handle = self.dom_host.document_handle();
+        self.dom_host
+            .set_document_character_set_for_handle(document_handle, &self.document_character_set);
     }
 
     pub(crate) fn set_document_default_language(&mut self, language: Option<String>) {

@@ -4,22 +4,28 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_delete_requ
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
-    key_value: v8::Local<'s, v8::Value>,
+    store_name: &IndexedDbName,
+    query: &IdbKeyRangeQuery,
 ) {
-    let key = match parse_idb_key(scope, key_value) {
-        Ok(Some(key)) => key,
-        _ => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'delete': invalid key.",
-                "TypeError",
-            );
-            store_request_error(scope, request, error);
-            return;
+    let result = with_indexed_db_manager(scope, |manager| {
+        // Preserve the direct lookup for a single key. Ranges are evaluated
+        // when the operation executes, after earlier writes in the transaction.
+        if let Some(key) = &query.lower
+            && query.upper.as_ref() == Some(key)
+            && !query.lower_open
+            && !query.upper_open
+        {
+            return manager.delete(handle, store_name, key);
         }
-    };
-    match with_indexed_db_manager(scope, |manager| manager.delete(handle, store_name, &key)) {
+        let entries = manager.entries(handle, store_name)?;
+        for (key, _) in entries {
+            if key_in_range(&key, query) {
+                manager.delete(handle, store_name, &key)?;
+            }
+        }
+        Ok(())
+    });
+    match result {
         Ok(()) => store_request_success(scope, request, v8::undefined(scope).into()),
         Err(error) => {
             let error = request_error_object(scope, &error);
@@ -32,7 +38,7 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_clear_reque
     scope: &mut v8::PinScope<'s, '_>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
 ) {
     match with_indexed_db_manager(scope, |manager| manager.clear(handle, store_name)) {
         Ok(()) => store_request_success(scope, request, v8::undefined(scope).into()),

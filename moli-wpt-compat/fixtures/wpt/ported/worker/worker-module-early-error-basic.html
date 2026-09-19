@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function worker_url(source) {
   return "data:text/javascript," + encodeURIComponent(source);
@@ -23,7 +24,7 @@ function wait_for(promise, description) {
   ]);
 }
 
-async function assert_module_parse_failure(source, expectedFragments, description) {
+async function assert_module_parse_failure(source, description) {
   const previousOnerror = window.onerror;
   let messageSeen = false;
   const worker = new Worker(worker_url(source), { type: "module" });
@@ -46,11 +47,7 @@ async function assert_module_parse_failure(source, expectedFragments, descriptio
       "module worker " + description + " early error",
     );
 
-    assert_equals(event.type, "error", "module parse failure should dispatch an error event");
-    const lowerMessage = String(event.message).toLowerCase();
-    assert_true(expectedFragments.some(function (fragment) {
-      return lowerMessage.indexOf(fragment.toLowerCase()) !== -1;
-    }), "parse failure should expose a syntax error message");
+    assert_worker_bootstrap_error(event, worker);
     assert_false(messageSeen, "module evaluation should not continue after the early error");
   } finally {
     window.onerror = previousOnerror;
@@ -63,14 +60,14 @@ promise_test(async function () {
     "return;",
     "postMessage('unexpected');",
   ].join("\n");
-  await assert_module_parse_failure(topLevelSource, ["return", "SyntaxError"], "top-level return");
+  await assert_module_parse_failure(topLevelSource, "top-level return");
 
   const withSource = [
     "with ({ value: 1 }) {",
     "  postMessage(value);",
     "}",
   ].join("\n");
-  await assert_module_parse_failure(withSource, ["with", "strict", "SyntaxError"], "with statement");
+  await assert_module_parse_failure(withSource, "with statement");
 
   const deleteSource = [
     "var target = 1;",
@@ -79,7 +76,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_parse_failure(
     deleteSource,
-    ["delete", "strict", "SyntaxError"],
     "delete identifier",
   );
 
@@ -94,7 +90,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_parse_failure(
     dependencySource,
-    ["with", "strict", "SyntaxError"],
     "dependency with statement",
   );
 }, "Dedicated module workers reject parse-time early errors before evaluation");

@@ -18,7 +18,10 @@ pub(crate) fn link_rel_qualifies_as_stylesheet(rel: Option<&str>, title: Option<
         && (!includes_token("alternate") || title.is_some_and(|title| !title.is_empty()))
 }
 
-pub(crate) fn stylesheet_owner_type_is_supported(element: &Element) -> bool {
+pub(crate) fn stylesheet_owner_can_have_sheet(element: &Element) -> bool {
+    if element.style_parser_children_pending() {
+        return false;
+    }
     let type_attribute = element.attribute("type");
     if element.is_html_element("style")
         || (element.namespace() == "http://www.w3.org/2000/svg" && element.local_name() == "style")
@@ -75,7 +78,7 @@ fn style_element_is_stylesheet_source_enabled(
     };
     element.is_inline_style_element()
         && host.get_attribute(handle, "disabled").is_none()
-        && stylesheet_owner_type_is_supported(element)
+        && stylesheet_owner_can_have_sheet(element)
         && stylesheet_source_media_matches(media_text, emulated_media, viewport)
 }
 

@@ -1,4 +1,7 @@
 use super::IndexedDbManager;
+pub(crate) use moli_indexeddb::{
+    ConnectionRequestHandle, ConnectionRequestLease, ConnectionRequestWake,
+};
 use parking_lot::Mutex;
 use std::{
     fmt,
@@ -28,7 +31,7 @@ impl WeakIndexedDbManager {
         let mut manager = manager.lock();
         handles
             .into_iter()
-            .filter(|handle| manager.close_database(*handle).is_ok())
+            .filter(|handle| manager.force_close_database(*handle).is_ok())
             .count()
     }
 }
@@ -127,7 +130,7 @@ mod tests {
             let opened = manager
                 .open(OpenOptions {
                     origin: origin.to_owned(),
-                    name: "app".to_owned(),
+                    name: "app".into(),
                     version: None,
                 })
                 .expect("open should succeed");
@@ -143,7 +146,7 @@ mod tests {
             let tx = manager
                 .begin_transaction(
                     opened.database,
-                    &[String::from("items")],
+                    &["items".into()],
                     TransactionMode::ReadWrite,
                 )
                 .expect("readwrite transaction should start");

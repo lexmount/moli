@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::save_indexed_db_upgrade_metadata;
 
 pub(super) fn enqueue_upgrade_needed_open_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -24,6 +25,7 @@ pub(super) fn enqueue_upgrade_needed_open_task<'s>(
         database,
         Some(upgrade_handle),
         TransactionMode::VersionChange,
+        crate::context_bootstrap::indexed_db::IdbTransactionDurability::Default,
         &store_names,
     ) else {
         return;
@@ -34,6 +36,7 @@ pub(super) fn enqueue_upgrade_needed_open_task<'s>(
         INDEXED_DB_DATABASE_UPGRADE_TRANSACTION_SLOT,
         transaction.into(),
     );
+    save_indexed_db_upgrade_metadata(scope, database, old_version);
     enqueue_open_task(
         scope,
         request,

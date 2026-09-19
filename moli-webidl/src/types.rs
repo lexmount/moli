@@ -12,6 +12,11 @@ pub struct EnumValue<T>(pub T);
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct DomString(pub String);
 
+/// Lossless WebIDL DOMString storage for APIs whose identity depends on the
+/// original UTF-16 units, including unpaired surrogates.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct DomString16(pub Vec<u16>);
+
 impl From<DomString> for String {
     fn from(value: DomString) -> Self {
         value.0
@@ -143,8 +148,15 @@ pub struct EventListenerOptions {
 }
 
 #[derive(WebIdlDictionary)]
-#[webidl(prefix = "AddEventListenerOptions")]
+#[webidl(prefix = "EventListenerOptions")]
 pub(crate) struct EventListenerOptionsMembers {
+    #[webidl(default = false)]
+    pub(crate) capture: bool,
+}
+
+#[derive(WebIdlDictionary)]
+#[webidl(prefix = "AddEventListenerOptions")]
+pub(crate) struct AddEventListenerOptionsMembers {
     #[webidl(default = false)]
     pub(crate) capture: bool,
     #[webidl(default = false)]

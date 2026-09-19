@@ -25,6 +25,7 @@ mod runtime;
 mod streaming_response;
 #[cfg(test)]
 mod tests;
+mod upload;
 mod url_pattern;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -59,13 +60,15 @@ pub use network_fetch_result::{
     NetworkResponseObservation,
 };
 pub use referrer_policy::{
-    DEFAULT_REFERRER_POLICY, origin_referrer_url, referrer_header_value, sanitized_referrer_url,
+    DEFAULT_REFERRER_POLICY, origin_referrer_url, referrer_header_value, referrer_value,
+    sanitized_referrer_url,
 };
 pub use request::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, FetchPriorityHint, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode, RequestMode,
-    RequestPriorityHints, RequestRedirectMode, RequestResourceType, ResourceLoadPriority,
-    ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
+    RequestPriorityHints, RequestRedirectCheck, RequestRedirectMode, RequestResourceType,
+    ResourceLoadPriority, ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority,
+    SubresourceRequestMetadata,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
@@ -77,4 +80,5 @@ pub use runtime::{
     FetchRuntimeIdentity, FetchRuntimeJoinReport, FetchRuntimeJoinStatus, FetchRuntimePanicReport,
 };
 pub use streaming_response::{StreamingHtmlResponse, StreamingRawResponse};
+pub use upload::{UploadEvent, UploadObserver};
 pub use url_pattern::url_pattern_matches;

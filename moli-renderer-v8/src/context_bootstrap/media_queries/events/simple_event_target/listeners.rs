@@ -1,8 +1,11 @@
 use super::*;
-use crate::abort_signal_route::{ResolvedAbortSignal, event_listener_signal_from_options_value};
+use crate::abort_signal_route::ResolvedAbortSignal;
 use crate::callback_invocation::CallbackInvocation;
+use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
+use crate::native_bridge::WindowExecutionContextIdentity;
 use crate::util::{
-    get_private_object, get_private_value, new_null_prototype_object, set_private_value, v8_string,
+    context_host_ptr_from_global_bridge, get_private_object, get_private_value,
+    new_null_prototype_object, set_private_value, v8_string,
 };
 use crate::webidl;
 use moli_webapi_declare::WebApiObject;
@@ -13,6 +16,8 @@ const SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_CONTEXT_ANCHOR_SLOT: &str =
     "__moliSimpleEventTargetListenerRelevantContextAnchor";
 const SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT: &str =
     "__moliSimpleEventTargetListenerIncumbentContextAnchor";
+const SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_IDENTITY_SLOT: &str =
+    "__moliSimpleEventTargetListenerRelevantIdentity";
 const SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT: &str = "__moliSimpleEventTargetListenerCallable";
 const SIMPLE_EVENT_TARGET_LISTENER_CAPTURE_SLOT: &str = "__moliSimpleEventTargetListenerCapture";
 const SIMPLE_EVENT_TARGET_LISTENER_ONCE_SLOT: &str = "__moliSimpleEventTargetListenerOnce";
@@ -79,11 +84,14 @@ struct SimpleObjectEventHandlerEntryDeclaration<'scope> {
     callable: bool,
 }
 
+#[derive(Clone)]
 pub(crate) struct SimpleObjectEventListenerSnapshot<'s> {
+    entry: v8::Local<'s, v8::Object>,
     pub(crate) original: v8::Local<'s, v8::Value>,
     callback: v8::Local<'s, v8::Object>,
     relevant_context: v8::Local<'s, v8::Context>,
     incumbent_context: v8::Local<'s, v8::Context>,
+    relevant_identity: Option<WindowExecutionContextIdentity>,
     is_callable: bool,
     pub(crate) capture: bool,
     pub(crate) once: bool,
@@ -107,17 +115,52 @@ struct SimpleObjectResolvedEventListener<'s> {
     callback: v8::Local<'s, v8::Object>,
     relevant_context_anchor: v8::Local<'s, v8::Object>,
     incumbent_context_anchor: v8::Local<'s, v8::Object>,
+    relevant_identity: Option<WindowExecutionContextIdentity>,
     is_callable: bool,
 }
 
 impl<'s> SimpleObjectEventListenerSnapshot<'s> {
+    pub(crate) fn prepare_for_invocation(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: v8::Local<'s, v8::Object>,
+        slot_name: &str,
+        event_type: &str,
+    ) -> Option<Self> {
+        // Removing and re-adding the same callback creates a different entry.
+        // The removed entry must stay inactive in an existing dispatch snapshot.
+        if !simple_object_event_listener_entry_registered(
+            scope, target, slot_name, event_type, self.entry,
+        ) {
+            return None;
+        }
+        let listener = if self.handler_slot.is_some() {
+            // An active handler keeps its registration position, but its value
+            // and callback contexts can change before dispatch reaches it.
+            simple_object_event_listener_snapshot_entry(scope, self.entry.into())?
+        } else {
+            self.clone()
+        };
+        if listener.once {
+            simple_object_event_remove_listener_value_for_type(
+                scope,
+                target,
+                slot_name,
+                event_type,
+                listener.original,
+                listener.capture,
+            );
+        }
+        Some(listener)
+    }
+
     pub(crate) fn invocation<'a>(
         &self,
         callback_this: v8::Local<'s, v8::Value>,
         arguments: &'a [v8::Local<'s, v8::Value>],
         current_event: Option<v8::Local<'s, v8::Object>>,
     ) -> CallbackInvocation<'s, 'a> {
-        CallbackInvocation::new(
+        let invocation = CallbackInvocation::new(
             self.callback,
             callback_this,
             self.relevant_context,
@@ -126,11 +169,20 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
             "handleEvent",
             arguments,
             current_event,
-        )
+        );
+        if self.handler_slot.is_some() {
+            invocation.with_legacy_event_handler()
+        } else {
+            invocation
+        }
     }
 
     pub(crate) fn relevant_context(&self) -> v8::Local<'s, v8::Context> {
         self.relevant_context
+    }
+
+    pub(crate) fn relevant_identity(&self) -> Option<WindowExecutionContextIdentity> {
+        self.relevant_identity
     }
 
     pub(crate) fn callable_function(&self) -> Option<v8::Local<'s, v8::Function>> {
@@ -139,117 +191,26 @@ impl<'s> SimpleObjectEventListenerSnapshot<'s> {
     }
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.addEventListener")]
-struct SimpleObjectAddListenerArgs<'s> {
-    #[webidl(with = simple_object_add_listener_call)]
-    call: webidl::ParseOutcome<SimpleObjectAddListenerCall<'s>>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.removeEventListener")]
-struct SimpleObjectRemoveListenerArgs<'s> {
-    #[webidl(with = simple_object_remove_listener_call)]
-    call: webidl::ParseOutcome<SimpleObjectRemoveListenerCall<'s>>,
-}
-
-struct SimpleObjectAddListenerCall<'s> {
-    event_type: String,
-    listener: SimpleObjectResolvedEventListener<'s>,
-    options: webidl::EventListenerOptions,
-    signal: Option<ResolvedAbortSignal<'s>>,
-}
-
-struct SimpleObjectRemoveListenerCall<'s> {
-    event_type: String,
-    listener: v8::Local<'s, v8::Value>,
-    options: webidl::EventListenerOptions,
-}
-
-fn required_simple_object_event_type<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    prefix: &'static str,
-    missing_message: &'static str,
-) -> Result<String, webidl::WebIdlError> {
-    if args.length() == 0 {
-        return Err(webidl::WebIdlError::custom_message(missing_message));
-    }
-    webidl::convert::<webidl::DomString>(scope, args.get(0), webidl::Context::argument(prefix, 1))
-        .map(Into::into)
-}
-
-fn simple_object_add_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<SimpleObjectAddListenerCall<'s>>, webidl::WebIdlError> {
-    let event_type = required_simple_object_event_type(
-        scope,
-        args,
-        "EventTarget.addEventListener",
-        "Failed to execute 'addEventListener' on 'EventTarget': 1 argument required, but only 0 present.",
-    )?;
-    let options = webidl::event_listener_options(scope, args, 2, true);
-    let Some(signal) = event_listener_signal_from_options_value(scope, args.get(2)) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let Some(listener) = simple_object_event_listener_parts(scope, args.get(1)) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    Ok(webidl::ParseOutcome::Parsed(SimpleObjectAddListenerCall {
-        event_type,
-        listener,
-        options,
-        signal,
-    }))
-}
-
-fn simple_object_remove_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<SimpleObjectRemoveListenerCall<'s>>, webidl::WebIdlError> {
-    let event_type = required_simple_object_event_type(
-        scope,
-        args,
-        "EventTarget.removeEventListener",
-        "Failed to execute 'removeEventListener' on 'EventTarget': 1 argument required, but only 0 present.",
-    )?;
-    let listener = args.get(1);
-    if listener.is_null_or_undefined() {
-        return Ok(webidl::ParseOutcome::Skip);
-    }
-    let options = webidl::event_listener_options(scope, args, 2, false);
-    Ok(webidl::ParseOutcome::Parsed(
-        SimpleObjectRemoveListenerCall {
-            event_type,
-            listener,
-            options,
-        },
-    ))
-}
-
 pub(crate) fn simple_object_event_target_add_listener<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     slot_name: &str,
 ) {
-    let Some(parsed) = webidl::parse_args::<SimpleObjectAddListenerArgs>(scope, args) else {
+    let Some(call) = webidl::parse_args::<AddEventListenerArgs>(scope, args) else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(listener) = call.listener else {
         return;
     };
     let target = args.this();
-    simple_object_event_target_register_resolved_listener(
+    simple_object_event_target_register_webidl_listener(
         scope,
         target,
         slot_name,
         call.event_type,
-        call.listener,
-        call.options,
-        call.signal,
+        listener,
+        call.options.options,
+        call.options.signal,
     );
 }
 
@@ -268,23 +229,11 @@ pub(crate) fn simple_object_event_target_register_webidl_listener<'s>(
     event_type: String,
     listener: webidl::WebIdlCallbackInterface,
     options: webidl::EventListenerOptions,
+    signal: Option<ResolvedAbortSignal<'s>>,
 ) {
-    let callback_value = listener.value(scope);
-    let callback = v8::Local::<v8::Object>::try_from(callback_value)
-        .expect("converted EventListener callback must remain an object");
-    let relevant_context = listener.relevant_context(scope);
-    let incumbent_context = listener.incumbent_context(scope);
-    let (relevant_context_anchor, incumbent_context_anchor) =
-        simple_callback_context_anchors_for_contexts(scope, relevant_context, incumbent_context);
-    let listener = SimpleObjectResolvedEventListener {
-        original: callback.into(),
-        callback,
-        relevant_context_anchor,
-        incumbent_context_anchor,
-        is_callable: listener.callable_at_conversion(),
-    };
+    let listener = simple_object_event_listener_parts(scope, listener);
     simple_object_event_target_register_resolved_listener(
-        scope, target, slot_name, event_type, listener, options, None,
+        scope, target, slot_name, event_type, listener, options, signal,
     );
 }
 
@@ -319,6 +268,7 @@ fn simple_object_event_target_register_resolved_listener<'s>(
             listener.callback,
             listener.relevant_context_anchor,
             listener.incumbent_context_anchor,
+            listener.relevant_identity,
             listener.is_callable,
             options.capture,
             options.once,
@@ -363,19 +313,20 @@ pub(crate) fn simple_object_event_target_remove_listener<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     slot_name: &str,
 ) {
-    let Some(parsed) = webidl::parse_args::<SimpleObjectRemoveListenerArgs>(scope, args) else {
+    let Some(call) = webidl::parse_args::<RemoveEventListenerArgs>(scope, args) else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(listener) = call.listener else {
         return;
     };
+    let listener = listener.value(scope);
     let target = args.this();
     simple_object_event_remove_listener_value_for_type(
         scope,
         target,
         slot_name,
         &call.event_type,
-        call.listener,
+        listener,
         call.options.capture,
     );
 }
@@ -552,6 +503,34 @@ pub(crate) fn simple_object_event_listeners_snapshot<'s>(
     snapshot
 }
 
+pub(crate) fn simple_object_has_event_listeners<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    slot_name: &str,
+) -> bool {
+    let Some(registry) = simple_object_event_listener_registry(scope, target, slot_name, false)
+    else {
+        return false;
+    };
+    let Some(event_types) = simple_object_event_type_order(scope, registry, false) else {
+        return false;
+    };
+    for index in 0..event_types.length() {
+        let Some(event_type) = event_types
+            .get_index(scope, index)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+        else {
+            continue;
+        };
+        if !simple_object_event_listeners_snapshot(scope, target, slot_name, &event_type).is_empty()
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub(crate) fn simple_event_target_inspector_listener_snapshots<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
@@ -618,11 +597,10 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
                 target.get(scope, key.into())
             })
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .filter(|callback| callback.is_callable())
         else {
             return;
         };
-        let (relevant_context_anchor, incumbent_context_anchor) =
+        let (relevant_context_anchor, incumbent_context_anchor, relevant_identity) =
             simple_callback_context_anchors(scope, callback);
         for index in 0..listeners.length() {
             let Some(candidate) = listeners.get_index(scope, index) else {
@@ -638,6 +616,13 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
                         SIMPLE_EVENT_TARGET_LISTENER_CALLBACK_SLOT,
                         callback.into(),
                     );
+                    let callable = v8::Boolean::new(scope, callback.is_callable());
+                    set_private_value(
+                        scope,
+                        entry,
+                        SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT,
+                        callable.into(),
+                    );
                     set_private_value(
                         scope,
                         entry,
@@ -650,6 +635,11 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
                         SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT,
                         incumbent_context_anchor.into(),
                     );
+                    set_simple_object_event_listener_relevant_identity(
+                        scope,
+                        entry,
+                        relevant_identity,
+                    );
                 }
                 ensure_simple_object_event_type_order(scope, target, slot_name, event_type);
                 return;
@@ -661,6 +651,7 @@ pub(crate) fn simple_object_event_set_ordered_handler<'s>(
             callback,
             relevant_context_anchor,
             incumbent_context_anchor,
+            relevant_identity,
         );
         let _ = listeners.set_index(scope, listeners.length(), entry.into());
         ensure_simple_object_event_type_order(scope, target, slot_name, event_type);
@@ -856,27 +847,33 @@ fn remove_simple_object_event_type_order<'s>(
 
 fn simple_object_event_listener_parts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<SimpleObjectResolvedEventListener<'s>> {
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    let callback = v8::Local::<v8::Object>::try_from(value).ok()?;
-    let (relevant_context_anchor, incumbent_context_anchor) =
-        simple_callback_context_anchors(scope, callback);
-    Some(SimpleObjectResolvedEventListener {
-        original: value,
+    listener: webidl::WebIdlCallbackInterface,
+) -> SimpleObjectResolvedEventListener<'s> {
+    let callback_value = listener.value(scope);
+    let callback = v8::Local::<v8::Object>::try_from(callback_value)
+        .expect("converted EventListener callback must remain an object");
+    let relevant_context = listener.relevant_context(scope);
+    let incumbent_context = listener.incumbent_context(scope);
+    let (relevant_context_anchor, incumbent_context_anchor, relevant_identity) =
+        simple_callback_context_anchors_for_contexts(scope, relevant_context, incumbent_context);
+    SimpleObjectResolvedEventListener {
+        original: callback.into(),
         callback,
         relevant_context_anchor,
         incumbent_context_anchor,
-        is_callable: callback.is_callable(),
-    })
+        relevant_identity,
+        is_callable: listener.callable_at_conversion(),
+    }
 }
 
 fn simple_callback_context_anchors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     callback: v8::Local<'s, v8::Object>,
-) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
+) -> (
+    v8::Local<'s, v8::Object>,
+    v8::Local<'s, v8::Object>,
+    Option<WindowExecutionContextIdentity>,
+) {
     let current_context = scope.get_current_context();
     let relevant_context = callback
         .get_creation_context(scope)
@@ -889,7 +886,15 @@ fn simple_callback_context_anchors_for_contexts<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     relevant_context: v8::Local<'s, v8::Context>,
     incumbent_context: v8::Local<'s, v8::Context>,
-) -> (v8::Local<'s, v8::Object>, v8::Local<'s, v8::Object>) {
+) -> (
+    v8::Local<'s, v8::Object>,
+    v8::Local<'s, v8::Object>,
+    Option<WindowExecutionContextIdentity>,
+) {
+    let relevant_identity = context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+        unsafe { &*host_ptr }
+            .window_execution_context_identity_for_v8_context(scope, relevant_context)
+    });
     let relevant_context_anchor = {
         let scope = &mut v8::ContextScope::new(scope, relevant_context);
         v8::Object::new(scope)
@@ -898,7 +903,11 @@ fn simple_callback_context_anchors_for_contexts<'s>(
         let scope = &mut v8::ContextScope::new(scope, incumbent_context);
         v8::Object::new(scope)
     };
-    (relevant_context_anchor, incumbent_context_anchor)
+    (
+        relevant_context_anchor,
+        incumbent_context_anchor,
+        relevant_identity,
+    )
 }
 
 fn simple_object_event_listener_entry_object<'s>(
@@ -907,12 +916,13 @@ fn simple_object_event_listener_entry_object<'s>(
     callback: v8::Local<'s, v8::Object>,
     relevant_context_anchor: v8::Local<'s, v8::Object>,
     incumbent_context_anchor: v8::Local<'s, v8::Object>,
+    relevant_identity: Option<WindowExecutionContextIdentity>,
     is_callable: bool,
     capture: bool,
     once: bool,
     passive: bool,
 ) -> v8::Local<'s, v8::Object> {
-    SimpleObjectEventListenerEntryDeclaration::new(
+    let entry = SimpleObjectEventListenerEntryDeclaration::new(
         original,
         callback,
         relevant_context_anchor,
@@ -923,7 +933,9 @@ fn simple_object_event_listener_entry_object<'s>(
         passive,
     )
     .bind(scope)
-    .expect("SimpleObject event listener entry declaration should bind")
+    .expect("SimpleObject event listener entry declaration should bind");
+    set_simple_object_event_listener_relevant_identity(scope, entry, relevant_identity);
+    entry
 }
 
 fn simple_object_event_handler_entry_object<'s>(
@@ -932,18 +944,38 @@ fn simple_object_event_handler_entry_object<'s>(
     callback: v8::Local<'s, v8::Object>,
     relevant_context_anchor: v8::Local<'s, v8::Object>,
     incumbent_context_anchor: v8::Local<'s, v8::Object>,
+    relevant_identity: Option<WindowExecutionContextIdentity>,
 ) -> v8::Local<'s, v8::Object> {
     let marker = format!("event-handler:{handler_slot_name}");
-    SimpleObjectEventHandlerEntryDeclaration::new(
+    let entry = SimpleObjectEventHandlerEntryDeclaration::new(
         v8_string(scope, &marker),
         handler_slot_name,
         callback,
         relevant_context_anchor,
         incumbent_context_anchor,
-        true,
+        callback.is_callable(),
     )
     .bind(scope)
-    .expect("SimpleObject event handler entry declaration should bind")
+    .expect("SimpleObject event handler entry declaration should bind");
+    set_simple_object_event_listener_relevant_identity(scope, entry, relevant_identity);
+    entry
+}
+
+fn set_simple_object_event_listener_relevant_identity<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    entry: v8::Local<'s, v8::Object>,
+    identity: Option<WindowExecutionContextIdentity>,
+) {
+    let value = identity
+        .and_then(|identity| v8_string(scope, &identity.serialize_for_internal_slot()))
+        .map(v8::Local::<v8::Value>::from)
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    set_private_value(
+        scope,
+        entry,
+        SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_IDENTITY_SLOT,
+        value,
+    );
 }
 
 fn simple_object_event_listener_array_contains_original(
@@ -999,22 +1031,6 @@ fn simple_object_event_listener_entry_registered<'s>(
     simple_object_event_listener_array_contains_entry(scope, listeners, entry)
 }
 
-pub(crate) fn simple_object_event_listener_is_registered<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    slot_name: &str,
-    event_type: &str,
-    original: v8::Local<'s, v8::Value>,
-    capture: bool,
-) -> bool {
-    let Some(listeners) =
-        simple_object_event_listener_array(scope, target, slot_name, event_type, false)
-    else {
-        return false;
-    };
-    simple_object_event_listener_array_contains_original(scope, listeners, original, capture)
-}
-
 fn simple_object_event_listener_original<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     candidate: v8::Local<'s, v8::Value>,
@@ -1046,6 +1062,16 @@ fn simple_object_event_listener_snapshot_entry<'s>(
         entry,
         SIMPLE_EVENT_TARGET_LISTENER_INCUMBENT_CONTEXT_ANCHOR_SLOT,
     )?;
+    let relevant_identity = get_private_value(
+        scope,
+        entry,
+        SIMPLE_EVENT_TARGET_LISTENER_RELEVANT_IDENTITY_SLOT,
+    )
+    .and_then(|value| value.to_string(scope))
+    .map(|value| value.to_rust_string_lossy(scope))
+    .and_then(|serialized| {
+        WindowExecutionContextIdentity::deserialize_from_internal_slot(&serialized)
+    });
     let is_callable =
         simple_object_private_bool_slot(scope, entry, SIMPLE_EVENT_TARGET_LISTENER_CALLABLE_SLOT)
             .unwrap_or(false);
@@ -1059,10 +1085,12 @@ fn simple_object_event_listener_snapshot_entry<'s>(
         simple_object_private_bool_slot(scope, entry, SIMPLE_EVENT_TARGET_LISTENER_PASSIVE_SLOT)
             .unwrap_or(false);
     Some(SimpleObjectEventListenerSnapshot {
+        entry,
         original,
         callback,
         relevant_context,
         incumbent_context,
+        relevant_identity,
         is_callable,
         capture,
         once,

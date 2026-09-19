@@ -4,19 +4,19 @@ use std::{
 };
 
 use crate::{
-    DatabaseHandle, IndexedDbValue, Key, KeyPath, TransactionHandle, TransactionMode,
-    persistence::IndexedDbPersistenceBackend,
+    DatabaseHandle, IndexedDbName, IndexedDbValue, Key, KeyPath, TransactionHandle,
+    TransactionMode, persistence::IndexedDbPersistenceBackend,
 };
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct OriginState {
-    pub(crate) databases: BTreeMap<String, DatabaseData>,
+    pub(crate) databases: BTreeMap<IndexedDbName, DatabaseData>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct DatabaseData {
     pub(crate) version: u64,
-    pub(crate) stores: BTreeMap<String, ObjectStoreData>,
+    pub(crate) stores: BTreeMap<IndexedDbName, ObjectStoreData>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,7 +24,7 @@ pub(crate) struct ObjectStoreData {
     pub(crate) key_path: Option<KeyPath>,
     pub(crate) auto_increment: bool,
     pub(crate) auto_increment_counter: u64,
-    pub(crate) indexes: BTreeMap<String, IndexData>,
+    pub(crate) indexes: BTreeMap<IndexedDbName, IndexData>,
     pub(crate) records: BTreeMap<Key, IndexedDbValue>,
 }
 
@@ -38,18 +38,20 @@ pub(crate) struct IndexData {
 #[derive(Debug, Clone)]
 pub(crate) struct DatabaseHandleState {
     pub(crate) origin: String,
-    pub(crate) name: String,
+    pub(crate) name: IndexedDbName,
     pub(crate) closed: bool,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct TransactionState {
+    pub(crate) database: DatabaseHandle,
     pub(crate) origin: String,
-    pub(crate) db_name: String,
+    pub(crate) db_name: IndexedDbName,
     pub(crate) mode: TransactionMode,
-    pub(crate) stores: BTreeSet<String>,
+    pub(crate) stores: BTreeSet<IndexedDbName>,
     pub(crate) state: TransactionLifecycle,
     pub(crate) working_copy: DatabaseData,
+    pub(crate) record_revision: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +62,10 @@ pub(crate) enum TransactionLifecycle {
 }
 
 pub struct IndexedDbManager {
+    pub(crate) connection_notifications: std::sync::Arc<crate::ConnectionNotifications>,
+    pub(crate) connection_requests: std::sync::Arc<crate::ConnectionRequestQueues>,
+    pub(crate) transaction_requests:
+        std::sync::Arc<crate::transaction_queue::TransactionRequestQueues>,
     pub(crate) backend: IndexedDbPersistenceBackend,
     pub(crate) origins: BTreeMap<String, OriginState>,
     pub(crate) databases: BTreeMap<DatabaseHandle, DatabaseHandleState>,

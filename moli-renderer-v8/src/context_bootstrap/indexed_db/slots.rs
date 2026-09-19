@@ -1,6 +1,6 @@
 pub(super) const INDEXED_DB_TYPED_STATE_ID_SLOT: &str = "moli.IndexedDb.typedStateId";
 pub(super) const INDEXED_DB_TYPED_TASK_ID_SLOT: &str = "moli.IndexedDb.typedTaskId";
-pub(super) const INDEXED_DB_EVENT_LISTENERS_SLOT: &str = "moli.IndexedDb.eventListeners";
+pub(crate) const INDEXED_DB_EVENT_LISTENERS_SLOT: &str = "moli.IndexedDb.eventListeners";
 pub(super) const INDEXED_DB_PENDING_RESULT_SLOT: &str = "moli.IndexedDb.pendingResult";
 pub(super) const INDEXED_DB_PENDING_ERROR_SLOT: &str = "moli.IndexedDb.pendingError";
 pub(super) const INDEXED_DB_PENDING_CURSOR_SLOT: &str = "moli.IndexedDb.pendingCursor";
@@ -22,6 +22,8 @@ pub(super) const INDEXED_DB_DATABASE_STORAGE_KEY_SLOT: &str = "moli.IndexedDb.da
 pub(super) const INDEXED_DB_DATABASE_CLOSED_SLOT: &str = "moli.IndexedDb.databaseClosed";
 pub(super) const INDEXED_DB_TRANSACTION_HANDLE_SLOT: &str = "moli.IndexedDb.transactionHandle";
 pub(super) const INDEXED_DB_TRANSACTION_ACTIVE_SLOT: &str = "moli.IndexedDb.transactionActive";
+pub(super) const INDEXED_DB_TRANSACTION_COMMITTING_SLOT: &str =
+    "moli.IndexedDb.transactionCommitting";
 pub(super) const INDEXED_DB_TRANSACTION_FINISHED_SLOT: &str = "moli.IndexedDb.transactionFinished";
 pub(super) const INDEXED_DB_TRANSACTION_ABORTED_SLOT: &str = "moli.IndexedDb.transactionAborted";
 pub(super) const INDEXED_DB_TRANSACTION_STARTED_SLOT: &str = "moli.IndexedDb.transactionStarted";
@@ -36,8 +38,3 @@ pub(super) const INDEXED_DB_TRANSACTION_ABORT_DISPATCHED_SLOT: &str =
 pub(super) const INDEXED_DB_OBJECT_STORE_NAME_SLOT: &str = "moli.IndexedDb.objectStoreName";
 pub(super) const INDEXED_DB_OBJECT_STORE_METADATA_SLOT: &str = "moli.IndexedDb.objectStoreMetadata";
 pub(super) const INDEXED_DB_INDEX_MARKER_SLOT: &str = "moli.IndexedDb.indexMarker";
-pub(super) const INDEXED_DB_KEY_RANGE_MARKER_SLOT: &str = "moli.IndexedDb.keyRangeMarker";
-pub(super) const INDEXED_DB_CURSOR_REQUEST_SLOT: &str = "moli.IndexedDb.cursorRequest";
-pub(super) const INDEXED_DB_CURSOR_ENTRIES_SLOT: &str = "moli.IndexedDb.cursorEntries";
-pub(super) const INDEXED_DB_CURSOR_POSITION_SLOT: &str = "moli.IndexedDb.cursorPosition";
-pub(super) const INDEXED_DB_CURSOR_KEY_ONLY_SLOT: &str = "moli.IndexedDb.cursorKeyOnly";

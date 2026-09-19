@@ -3,7 +3,10 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
-use crate::native_bridge::document::set_document_associated_window;
+use crate::native_bridge::document::{
+    document_associated_window_for_object, set_document_associated_window,
+};
+use crate::native_bridge::node_runtime_and_handle_from_object_or_detached;
 
 use super::super::super::detached_owner_document_object;
 use super::iframe_style::install_detached_iframe_get_computed_style;
@@ -45,6 +48,7 @@ pub(super) fn build_detached_iframe_content_window<'s>(
     let window = DetachedIframeWindowDeclaration::new(parent, top, document)
         .bind(scope)
         .ok()?;
+    crate::context_bootstrap::mark_window_receiver(scope, window);
     set_document_associated_window(scope, document, window);
     crate::network_host::install_fetch_constructors_for_base_url(scope, window, base_url);
     install_detached_iframe_window_messaging(scope, window);
@@ -56,7 +60,8 @@ fn detached_iframe_parent_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     iframe: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    detached_owner_document_object(scope, iframe)?
-        .get(scope, v8str(scope, "defaultView").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    let document = detached_owner_document_object(scope, iframe)?;
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, document).ok()?;
+    document_associated_window_for_object(scope, runtime_ptr, handle, document)
 }

@@ -5,63 +5,41 @@ pub(super) fn try_dispatch_object_store_read_operation<'s>(
     operation: &operation::QueuedTransactionOperation<'s>,
 ) -> bool {
     match &operation.kind {
-        IndexedDbTransactionOperationKindLocals::ObjectStoreGet { query } => {
+        IndexedDbTransactionOperation::ObjectStoreGet { query } => {
             execute_object_store_get_request(
                 scope,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query,
             );
         }
-        IndexedDbTransactionOperationKindLocals::ObjectStoreGetAll {
-            query,
-            count,
-            direction,
-        } => {
-            let direction = operation::collection_direction_from_value(scope, *direction);
+        IndexedDbTransactionOperation::ObjectStoreGetAll(collection) => {
             execute_object_store_get_all_request(
                 scope,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
-                *count,
-                direction,
+                collection,
             );
         }
-        IndexedDbTransactionOperationKindLocals::ObjectStoreGetKey { query } => {
+        IndexedDbTransactionOperation::ObjectStoreGetKey { query } => {
             execute_object_store_get_key_request(
                 scope,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query,
             );
         }
-        IndexedDbTransactionOperationKindLocals::ObjectStoreGetAllKeys {
-            query,
-            count,
-            direction,
-        } => {
-            let direction = operation::collection_direction_from_value(scope, *direction);
-            execute_object_store_get_all_keys_request(
-                scope,
-                operation.request,
-                operation.handle,
-                &operation.store_name,
-                *query,
-                *count,
-                direction,
-            );
-        }
-        IndexedDbTransactionOperationKindLocals::ObjectStoreCount { query } => {
+
+        IndexedDbTransactionOperation::ObjectStoreCount { query } => {
             execute_object_store_count_request(
                 scope,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query.as_ref(),
             );
         }
         _ => return false,

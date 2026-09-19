@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Key, KeyPath};
+use crate::{IndexedDbName, Key, KeyPath};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ObjectStoreOptions {
@@ -17,7 +17,7 @@ pub struct IndexOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexInfo {
-    pub name: String,
+    pub name: IndexedDbName,
     pub key_path: KeyPath,
     pub unique: bool,
     pub multi_entry: bool,
@@ -31,6 +31,20 @@ pub enum TransactionMode {
     VersionChange,
 }
 
+/// Effective storage policy after the renderer resolves the bucket default.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TransactionDurability {
+    #[default]
+    Relaxed,
+    Strict,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TransactionCommitOptions {
+    pub durability: TransactionDurability,
+    pub quota: Option<IndexedDbQuotaCheck>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpenDisposition {
     Existing,
@@ -40,7 +54,7 @@ pub enum OpenDisposition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenOptions {
     pub origin: String,
-    pub name: String,
+    pub name: IndexedDbName,
     pub version: Option<u64>,
 }
 
@@ -53,23 +67,23 @@ pub struct OpenResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseInfo {
-    pub name: String,
+    pub name: IndexedDbName,
     pub version: u64,
-    pub object_store_names: Vec<String>,
+    pub object_store_names: Vec<IndexedDbName>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DatabaseNameAndVersion {
-    pub name: String,
+    pub name: IndexedDbName,
     pub version: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectStoreInfo {
-    pub name: String,
+    pub name: IndexedDbName,
     pub key_path: Option<KeyPath>,
     pub auto_increment: bool,
-    pub index_names: Vec<String>,
+    pub index_names: Vec<IndexedDbName>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

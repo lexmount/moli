@@ -131,9 +131,7 @@ use source_id::StyleSourceKind;
 use source_id::{StyleInvalidationSourceTarget, StyleScopeId};
 pub(crate) use source_lifecycle::OwnedStyleSourceDocumentContext;
 use source_lifecycle::StyleSourceDocumentContext;
-pub(crate) use source_owner::{
-    link_rel_qualifies_as_stylesheet, stylesheet_owner_type_is_supported,
-};
+pub(crate) use source_owner::{link_rel_qualifies_as_stylesheet, stylesheet_owner_can_have_sheet};
 pub(crate) use stylesheet_resources::{StylesheetResourceGeneration, StylesheetResourceSnapshot};
 #[cfg(test)]
 use stylesheet_resources::{
@@ -202,6 +200,33 @@ impl MoliStyleEngine {
 
     pub(crate) fn documents_with_adopted_style_sheets(&self) -> Vec<DomHandle> {
         self.document_worlds.documents_with_adopted_style_sheets()
+    }
+
+    pub(crate) fn document_has_adopted_style_sheet_sources(&self, document: DomHandle) -> bool {
+        self.document_worlds
+            .active_world(document)
+            .is_some_and(|world| {
+                world
+                    .adopted_style_sheet_sources
+                    .borrow()
+                    .document_source_count(document)
+                    != 0
+            })
+    }
+
+    pub(crate) fn shadow_root_has_adopted_style_sheet_sources(
+        &self,
+        host: &DomHost,
+        root: DomHandle,
+    ) -> bool {
+        self.active_owner_document_world(host, root)
+            .is_some_and(|world| {
+                world
+                    .adopted_style_sheet_sources
+                    .borrow()
+                    .shadow_root_source_count(root)
+                    != 0
+            })
     }
 
     pub(in crate::style_engine) fn world_for_document(

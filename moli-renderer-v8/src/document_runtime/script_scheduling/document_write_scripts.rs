@@ -6,7 +6,6 @@ use crate::host::{
 use crate::planning::ScriptSource;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use crate::types::ScriptKind;
-use crate::util::create_script_origin;
 use crate::v8_execution_watchdog::{
     SCRIPT_TURN_WATCHDOG_TIMEOUT, V8ExecutionWatchdog, V8ExecutionWatchdogKind,
     V8ExecutionWatchdogOutcome,
@@ -20,7 +19,9 @@ pub(in crate::document_runtime) enum DocumentWriteCurrentScriptEventBehavior {
 }
 
 fn perform_document_write_microtask_checkpoints(scope: &mut v8::PinScope<'_, '_>) {
-    perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    if crate::script_cleanup::can_perform_script_cleanup_checkpoint(scope) {
+        perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    }
 }
 
 impl DocumentRuntime {
@@ -110,6 +111,7 @@ impl DocumentRuntime {
                 node,
                 &host_script_handle,
                 source,
+                &script,
                 parser_bridge,
                 DocumentWriteCurrentScriptEventBehavior::Skip,
             );
@@ -133,6 +135,7 @@ impl DocumentRuntime {
         node: DomHandle,
         host_script_handle: &str,
         source: String,
+        script: &PreparedScript,
         parser_bridge: Option<ParserConnectedScriptBridge>,
         current_script_event_behavior: DocumentWriteCurrentScriptEventBehavior,
     ) {
@@ -149,31 +152,28 @@ impl DocumentRuntime {
             "parser-created top-level script execution requires the page main-world context",
         );
         let scope = &mut v8::ContextScope::new(scope, default_context);
-        let watchdog = V8ExecutionWatchdog::arm(
-            V8ExecutionWatchdogKind::ScriptTurn,
-            scope.thread_safe_handle(),
-            SCRIPT_TURN_WATCHDOG_TIMEOUT,
-        );
         let run_result = {
             let _parser_script_nesting = self.enter_parser_script_nesting();
-            (|| {
-                let source = v8::String::new(scope, &source)?;
-                let origin = create_script_origin(scope, self.document_url().as_str(), 0);
-                let script = v8::Script::compile(scope, source, Some(&origin))?;
-                crate::script_execution::execute_compiled_script(scope, script)
-            })()
+            // A written script is an independent script execution. Report its
+            // exception to its Window, then continue the caller's write and
+            // parser completion, including load for a fetched classic script.
+            crate::script_vm::execute_source_text_on_current_stack(
+                scope,
+                &source,
+                Some(&script.url),
+                Some(&script.base_url),
+                0,
+                script.fetch_metadata.nonce.as_deref(),
+                true,
+            )
         };
-        let script_timed_out = watchdog.disarm() == V8ExecutionWatchdogOutcome::TimedOut;
         self.clear_current_script_handle();
-        if run_result.is_none() {
-            if script_timed_out {
-                tracing::warn!(
-                    host_script_handle,
-                    timeout = ?SCRIPT_TURN_WATCHDOG_TIMEOUT,
-                    "document.write script execution exceeded its deadline and was terminated"
-                );
-            }
-            return;
+        if let Err(error) = run_result {
+            debug!(
+                host_script_handle,
+                %error,
+                "document.write immediate script execution failed"
+            );
         }
         match current_script_event_behavior {
             DocumentWriteCurrentScriptEventBehavior::Skip => {}
@@ -288,6 +288,7 @@ impl DocumentRuntime {
             node,
             host_script_handle,
             source,
+            &script,
             parser_bridge,
             DocumentWriteCurrentScriptEventBehavior::DispatchImmediately(ScriptEventKind::Load),
         );

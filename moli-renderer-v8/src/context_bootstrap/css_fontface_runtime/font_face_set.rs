@@ -1,4 +1,4 @@
-use super::events::dispatch_font_face_set_event;
+use super::font_face::{font_face_load_failed, start_font_face_load};
 use super::query::{
     font_face_set_matching_faces_array, font_load_query_contains_css_wide_keyword,
     make_rejected_dom_exception_promise,
@@ -6,7 +6,7 @@ use super::query::{
 use super::storage::{
     array_contains_value, font_face_set_faces_array, font_face_set_manual_faces_array,
     initialize_font_face_set_object, is_font_face_value, rebuild_font_face_set_faces,
-    replace_font_face_set_ready_promise, set_font_face_set_slot_value, set_font_face_set_status,
+    set_font_face_set_slot_value,
 };
 use super::*;
 

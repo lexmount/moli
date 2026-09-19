@@ -3,22 +3,28 @@ use super::*;
 pub(super) fn enqueue_cursor_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
-    next_position: Option<usize>,
+    iteration: CursorIteration,
 ) -> Option<()> {
     let (request, transaction) = cursor_request_and_transaction(scope, cursor)?;
-    if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
-        .unwrap_or(false)
-    {
-        let error = dom_exception_value(
-            scope,
-            "The transaction is not active.",
-            "TransactionInactiveError",
-        );
-        scope.throw_exception(error);
-        return None;
-    }
+    cursor_active_transaction(scope, cursor)?;
+    let state = indexed_db_cursor_state(scope, cursor)?;
+    let handle = transaction_handle_from_value(scope, transaction.into())?;
+    let source = cursor_source(scope, cursor)?;
+    let store = indexed_db_index_object_store(scope, source).unwrap_or(source);
+    let store_name = indexed_db_object_store_name(scope, store)?;
+    begin_indexed_db_cursor_iteration(scope, cursor)?;
     queue_transaction_request(scope, transaction, request);
     prepare_cursor_request(scope, request);
+    let (snapshot, next_position) =
+        match scan::select_cursor_result(scope, handle, &store_name, &state, iteration) {
+            Ok(result) => result,
+            Err(error) => {
+                let error = request_error_object(scope, &error);
+                store_request_error(scope, request, error);
+                return Some(());
+            }
+        };
+    set_indexed_db_cursor_pending_snapshot(scope, cursor, snapshot)?;
     set_indexed_db_slot_value(
         scope,
         request,

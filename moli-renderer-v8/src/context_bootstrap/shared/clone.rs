@@ -14,12 +14,32 @@ use crate::{
     webidl,
 };
 
-struct PostMessageTransferList<'s> {
+pub(in crate::context_bootstrap) struct PostMessageTransferList<'s> {
     array_buffers: Vec<v8::Local<'s, v8::ArrayBuffer>>,
     message_ports: Vec<v8::Local<'s, v8::Object>>,
     readable_streams: Vec<v8::Local<'s, v8::Object>>,
     writable_streams: Vec<v8::Local<'s, v8::Object>>,
     transform_streams: Vec<v8::Local<'s, v8::Object>>,
+}
+
+impl<'s> PostMessageTransferList<'s> {
+    pub(in crate::context_bootstrap) fn serialize(
+        self,
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+    ) -> Option<V8StructuredClonePayload> {
+        let mut payload = serialize_for_wire_for_runtime_message(
+            scope,
+            value,
+            &self.array_buffers,
+            &self.message_ports,
+            &self.readable_streams,
+            &self.writable_streams,
+            &self.transform_streams,
+        )?;
+        attach_runtime_message_source(&mut payload, RuntimeMessageSourceSecurity::current(scope));
+        Some(payload)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -122,17 +142,7 @@ pub(crate) fn structured_serialize_value_for_post_message_with_source_port<'s>(
 ) -> Option<V8StructuredClonePayload> {
     let transfers =
         parse_post_message_transfer_list(scope, transfer_arg, interface_name, source_port_id)?;
-    let mut payload = serialize_for_wire_for_runtime_message(
-        scope,
-        value,
-        &transfers.array_buffers,
-        &transfers.message_ports,
-        &transfers.readable_streams,
-        &transfers.writable_streams,
-        &transfers.transform_streams,
-    )?;
-    attach_runtime_message_source(&mut payload, RuntimeMessageSourceSecurity::current(scope));
-    Some(payload)
+    transfers.serialize(scope, value)
 }
 
 pub(crate) fn structured_serialize_value_for_window_post_message<'s>(
@@ -301,8 +311,17 @@ pub(crate) fn structured_clone_value_with_options<'s>(
     value: v8::Local<'s, v8::Value>,
     options: v8::Local<'s, v8::Value>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    let payload = structured_serialize_value_with_options(scope, value, options)?;
+    structured_deserialize_value(scope, &payload)
+}
+
+pub(crate) fn structured_serialize_value_with_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+    options: v8::Local<'s, v8::Value>,
+) -> Option<V8StructuredClonePayload> {
     let transfers = parse_structured_clone_options_transfer_list(scope, options)?;
-    let payload = serialize_for_wire_for_runtime_with_transfers(
+    serialize_for_wire_for_runtime_with_transfers(
         scope,
         value,
         &transfers.array_buffers,
@@ -310,8 +329,7 @@ pub(crate) fn structured_clone_value_with_options<'s>(
         &transfers.readable_streams,
         &transfers.writable_streams,
         &transfers.transform_streams,
-    )?;
-    structured_deserialize_value(scope, &payload)
+    )
 }
 
 pub(crate) fn structured_clone_value_for_storage<'s>(
@@ -322,7 +340,7 @@ pub(crate) fn structured_clone_value_for_storage<'s>(
     structured_deserialize_value(scope, &bytes)
 }
 
-fn parse_post_message_transfer_list<'s>(
+pub(in crate::context_bootstrap) fn parse_post_message_transfer_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transfer_arg: Option<v8::Local<'s, v8::Value>>,
     interface_name: &str,

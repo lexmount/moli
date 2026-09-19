@@ -7,10 +7,20 @@ use moli_webapi_declare::WebApiFunctionTemplate;
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::XMLHttpRequest, enumerable)]
 struct XmlHttpRequestTemplateMethodsDeclaration {
-    #[webapi(method = "open", length = 2, callback = xhr_open_callback)]
+    #[webapi(
+        method = "open",
+        length = 2,
+        callback = xhr_open_callback,
+        receiver = web_api_interfaces::XMLHttpRequest::is_instance
+    )]
     open: (),
 
-    #[webapi(method = "send", length = 0, callback = xhr_send_callback)]
+    #[webapi(
+        method = "send",
+        length = 0,
+        callback = xhr_send_callback,
+        receiver = web_api_interfaces::XMLHttpRequest::is_instance
+    )]
     send: (),
 
     #[webapi(method = "abort", length = 0, callback = xhr_abort_callback)]

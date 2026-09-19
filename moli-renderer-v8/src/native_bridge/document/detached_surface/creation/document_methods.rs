@@ -231,10 +231,7 @@ pub(in crate::native_bridge) fn bridge_detached_create_element_callback<'s>(
     if namespace_uri.is_none()
         && validation != Some("qualified")
         && document_kind == "xml"
-        && detached_document_element_object(scope, document)
-            .and_then(|root| detached_element_namespace_uri(scope, root))
-            .as_deref()
-            == Some(XHTML_NS)
+        && detached_document_content_type_value(scope, document) == "application/xhtml+xml"
     {
         namespace_uri = Some(XHTML_NS.to_owned());
     }

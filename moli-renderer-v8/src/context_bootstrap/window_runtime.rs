@@ -14,7 +14,8 @@ pub(super) use base64::{window_atob_callback, window_btoa_callback};
 pub(super) use dialogs::entered_window_api_base_url;
 pub(super) use dialogs::{window_alert_callback, window_confirm_callback, window_prompt_callback};
 pub(crate) use dialogs::{
-    window_const_false_callback, window_noop_callback, window_open_callback, window_stop_callback,
+    window_blur_callback, window_const_false_callback, window_focus_callback, window_noop_callback,
+    window_open_callback, window_stop_callback,
 };
 pub(crate) use navigator::{
     LegacyStorageQuotaCallbackOutcome, LegacyStorageQuotaCallbackTask,
@@ -68,7 +69,7 @@ struct ChildWindowOwnMethodsDeclaration {
     open: (),
     #[webapi(method, length = 0, callback = window_noop_callback)]
     close: (),
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_blur_callback)]
     blur: (),
     #[webapi(method, length = 0, callback = window_const_false_callback)]
     find: (),

@@ -1,5 +1,5 @@
 use crate::{
-    IndexedDbExternalObject, IndexedDbValue, Key, KeyPath,
+    IndexedDbExternalObject, IndexedDbName, IndexedDbValue, Key, KeyPath,
     state::{DatabaseData, IndexData, ObjectStoreData, OriginState},
 };
 
@@ -16,19 +16,23 @@ pub(crate) fn origin_usage_bytes(state: &OriginState) -> u64 {
     )
 }
 
-pub(crate) fn database_usage_bytes(name: &str, database: &DatabaseData) -> u64 {
-    string_usage_bytes(name)
+pub(crate) fn database_usage_bytes(name: &IndexedDbName, database: &DatabaseData) -> u64 {
+    database_usage_bytes_for_stores(name, database.stores.iter())
+}
+
+pub(crate) fn database_usage_bytes_for_stores<'a>(
+    name: &IndexedDbName,
+    stores: impl Iterator<Item = (&'a IndexedDbName, &'a ObjectStoreData)>,
+) -> u64 {
+    name.usage_bytes()
         .saturating_add(U64_STORAGE_BYTES)
         .saturating_add(sum_usage(
-            database
-                .stores
-                .iter()
-                .map(|(name, store)| object_store_usage_bytes(name, store)),
+            stores.map(|(name, store)| object_store_usage_bytes(name, store)),
         ))
 }
 
-fn object_store_usage_bytes(name: &str, store: &ObjectStoreData) -> u64 {
-    string_usage_bytes(name)
+fn object_store_usage_bytes(name: &IndexedDbName, store: &ObjectStoreData) -> u64 {
+    name.usage_bytes()
         .saturating_add(optional_key_path_usage_bytes(&store.key_path))
         .saturating_add(BOOL_STORAGE_BYTES)
         .saturating_add(U64_STORAGE_BYTES)
@@ -81,8 +85,8 @@ fn indexed_db_value_usage_bytes(value: &IndexedDbValue) -> u64 {
         })))
 }
 
-fn index_usage_bytes(name: &str, index: &IndexData) -> u64 {
-    string_usage_bytes(name)
+fn index_usage_bytes(name: &IndexedDbName, index: &IndexData) -> u64 {
+    name.usage_bytes()
         .saturating_add(key_path_usage_bytes(&index.key_path))
         .saturating_add(BOOL_STORAGE_BYTES)
         .saturating_add(BOOL_STORAGE_BYTES)
@@ -103,8 +107,9 @@ fn key_path_usage_bytes(key_path: &KeyPath) -> u64 {
 
 fn key_usage_bytes(key: &Key) -> u64 {
     match key {
-        Key::String(value) => string_usage_bytes(value),
-        Key::Integer(_) => I64_STORAGE_BYTES,
+        Key::String(value) => (value.len() as u64).saturating_mul(2),
+        Key::Binary(value) => value.len() as u64,
+        Key::Number(_) | Key::Date(_) => I64_STORAGE_BYTES,
         Key::Array(values) => sum_usage(values.iter().map(key_usage_bytes)),
     }
 }

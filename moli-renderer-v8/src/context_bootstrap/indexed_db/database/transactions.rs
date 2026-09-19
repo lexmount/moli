@@ -1,9 +1,12 @@
 use super::*;
 
+mod attributes;
 mod database;
 mod lifecycle;
 mod names;
 mod object_store;
+
+pub(in crate::context_bootstrap::indexed_db) use self::attributes::*;
 
 fn idb_transaction_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -18,10 +21,11 @@ fn idb_transaction_receiver<'s>(
 }
 
 pub(in crate::context_bootstrap::indexed_db) use self::database::{
-    close_indexed_db_database_connection, idb_database_close_callback,
-    idb_database_transaction_callback,
+    close_indexed_db_database_connection, finish_indexed_db_database_close,
+    idb_database_close_callback, idb_database_transaction_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::lifecycle::{
-    idb_transaction_abort_callback, idb_transaction_commit_callback,
+    abort_indexed_db_transaction_after_dispatch, abort_indexed_db_transaction_with_error,
+    finish_transaction_abort, idb_transaction_abort_callback, idb_transaction_commit_callback,
 };
 pub(in crate::context_bootstrap::indexed_db) use self::object_store::idb_transaction_object_store_callback;

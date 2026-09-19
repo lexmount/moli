@@ -4817,8 +4817,9 @@ async fn dedicated_worker_script_load_failure_does_not_dispatch_window_error() {
     globalThis.__lm_worker_script_error_events.push([
       "worker",
       event.type,
-      String(event.message).includes("HTTP request"),
-      String(event.filename).endsWith("/does-not-exist.js")
+      Object.getPrototypeOf(event) === Event.prototype,
+      event.bubbles, event.cancelable, event.composed, event.isTrusted,
+      ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
     ].join(":"));
   };
   return "installed";
@@ -4851,7 +4852,9 @@ async fn dedicated_worker_script_load_failure_does_not_dispatch_window_error() {
         .expect("worker script load failure events should evaluate");
     assert_eq!(
         renderer_json_value(events),
-        Some(serde_json::json!("[\"worker:error:true:true\"]")),
+        Some(serde_json::json!(
+            "[\"worker:error:true:false:false:false:true:false\"]"
+        )),
         "worker script load failure must not bubble to window.onerror"
     );
 
@@ -12128,7 +12131,7 @@ __lmActionWindowObserver.observe(document.getElementById("target"));
     assert_eq!(
         renderer_json_value(state),
         Some(serde_json::json!(
-            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:100","microtask:100","microtask:-100","microtask:100"],"ioLog":[false,true]}"#
+            r#"{"scrollY":100,"wheelLog":["event:100","microtask:100","event:-100","microtask:-100","event:100","microtask:100"],"ioLog":[false,true]}"#
         ))
     );
 

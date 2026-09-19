@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use moli_cookie_jar::{
@@ -24,6 +24,27 @@ enum RequestContext {
     Browser(WebOrigin),
 }
 
+type RedirectCheckCallback = dyn Fn(&Url) -> std::result::Result<(), String> + Send + Sync;
+
+/// An embedder policy checked before following a redirect, including cached
+/// redirects. A rejected target must never reach the network.
+#[derive(Clone)]
+pub struct RequestRedirectCheck(Arc<RedirectCheckCallback>);
+
+impl RequestRedirectCheck {
+    pub fn new(
+        check: impl Fn(&Url) -> std::result::Result<(), String> + Send + Sync + 'static,
+    ) -> Self {
+        Self(Arc::new(check))
+    }
+}
+
+impl std::fmt::Debug for RequestRedirectCheck {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RequestRedirectCheck")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Request {
     pub url: Url,
@@ -39,9 +60,11 @@ pub struct Request {
     browser_navigation_kind: BrowserNavigationRequestKind,
     infer_referrer_from_initiator: bool,
     context: RequestContext,
+    referrer_url: Option<Url>,
     pub use_page_network_policy: bool,
     pub follow_redirects: bool,
     pub request_mode: RequestMode,
+    use_cors_preflight: bool,
     pub redirect_mode: RequestRedirectMode,
     pub credentials_mode: RequestCredentialsMode,
     pub(crate) redirect_chain: Vec<RedirectInfo>,
@@ -51,6 +74,8 @@ pub struct Request {
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
+    upload_observer: Option<crate::UploadObserver>,
+    redirect_check: Option<RequestRedirectCheck>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -395,9 +420,11 @@ impl Request {
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
             context: RequestContext::Http,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
+            use_cors_preflight: false,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
@@ -407,6 +434,8 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            upload_observer: None,
+            redirect_check: None,
         })
     }
 
@@ -426,9 +455,11 @@ impl Request {
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
             context: RequestContext::Http,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Navigate,
+            use_cors_preflight: false,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
@@ -438,6 +469,8 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            upload_observer: None,
+            redirect_check: None,
         }
     }
 
@@ -488,9 +521,11 @@ impl Request {
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_referrer_from_initiator: true,
             context: RequestContext::Http,
+            referrer_url: None,
             use_page_network_policy: false,
             follow_redirects: true,
             request_mode: RequestMode::Cors,
+            use_cors_preflight: false,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
             redirect_chain: Vec::new(),
@@ -500,6 +535,8 @@ impl Request {
             timeout_policy: RequestTimeoutPolicy::default(),
             network_observation_recorder: None,
             browser_identity: None,
+            upload_observer: None,
+            redirect_check: None,
         }
     }
 
@@ -626,6 +663,16 @@ impl Request {
         self.browser_request_metadata
     }
 
+    /// Require a CORS preflight even for a safelisted method and header list.
+    pub fn with_use_cors_preflight(mut self, use_cors_preflight: bool) -> Self {
+        self.use_cors_preflight = use_cors_preflight;
+        self
+    }
+
+    pub fn use_cors_preflight(&self) -> bool {
+        self.use_cors_preflight
+    }
+
     pub fn with_browser_navigation_kind(mut self, kind: BrowserNavigationRequestKind) -> Self {
         self.browser_navigation_kind = kind;
         self
@@ -640,8 +687,66 @@ impl Request {
         self
     }
 
+    /// Sets a validated Fetch referrer without changing the request's origin
+    /// or cookie initiator. Policy is applied when selecting the outgoing header.
+    pub fn with_fetch_referrer(mut self, referrer: &str) -> Result<Self> {
+        self.referrer_url = match referrer {
+            "" | "about:client" => None,
+            _ => Some(Url::parse(referrer).context("invalid Fetch referrer URL")?),
+        };
+        self.infer_referrer_from_initiator = !referrer.is_empty();
+        Ok(self)
+    }
+
+    /// Copies referrer state and policy for a derived request, such as a CORS
+    /// preflight. Other metadata, including integrity, belongs to that request.
+    pub fn with_referrer_from(mut self, source: &Self) -> Self {
+        self.referrer_url = source.referrer_url.clone();
+        self.infer_referrer_from_initiator = source.infer_referrer_from_initiator;
+        let source_metadata = source.subresource_request_metadata();
+        let metadata = self.subresource_request_metadata.get_or_insert_default();
+        metadata.referrer_policy =
+            source_metadata.and_then(|metadata| metadata.referrer_policy.clone());
+        metadata.document_referrer_policy =
+            source_metadata.and_then(|metadata| metadata.document_referrer_policy.clone());
+        self
+    }
+
     pub fn infers_referrer_from_initiator(&self) -> bool {
         self.infer_referrer_from_initiator
+    }
+
+    /// Computes the inferred Referer header without changing the initiator
+    /// used for cookie-site and request-origin decisions.
+    pub fn referrer_header_value(&self, request_url: &Url) -> Option<String> {
+        if !self.infers_referrer_from_initiator() {
+            return None;
+        }
+        let referrer_url = self
+            .referrer_url
+            .as_ref()
+            .or(self.cookie_context.initiator_url.as_ref())?;
+        let (policy, document_policy) = self
+            .subresource_request_metadata()
+            .map(|metadata| {
+                (
+                    metadata.referrer_policy.as_deref(),
+                    metadata.document_referrer_policy.as_deref(),
+                )
+            })
+            .unwrap_or((None, None));
+        crate::referrer_header_value(referrer_url, request_url, policy, document_policy)
+    }
+
+    /// Retains the referrer already selected for this hop. A later, more
+    /// permissive policy cannot restore an omitted referrer or its stripped path.
+    pub fn update_referrer_for_redirect(&mut self, response_url: &Url) {
+        self.referrer_url = self
+            .referrer_header_value(response_url)
+            .and_then(|value| Url::parse(&value).ok());
+        if self.referrer_url.is_none() {
+            self.infer_referrer_from_initiator = false;
+        }
     }
 
     pub fn with_page_network_policy(mut self) -> Self {
@@ -651,6 +756,28 @@ impl Request {
 
     pub fn uses_page_network_policy(&self) -> bool {
         self.use_page_network_policy
+    }
+
+    pub fn with_upload_observer(mut self, observer: crate::UploadObserver) -> Self {
+        self.upload_observer = Some(observer);
+        self
+    }
+
+    pub fn with_redirect_check(mut self, check: RequestRedirectCheck) -> Self {
+        self.redirect_check = Some(check);
+        self
+    }
+
+    /// Browser redirect loops call this when the transport fetches one hop at
+    /// a time. Automatically followed transport requests perform the same check.
+    pub fn check_redirect_target(&self, next_url: &Url) -> std::result::Result<(), String> {
+        self.redirect_check
+            .as_ref()
+            .map_or(Ok(()), |check| (check.0)(next_url))
+    }
+
+    pub fn upload_observer(&self) -> Option<&crate::UploadObserver> {
+        self.upload_observer.as_ref()
     }
 
     pub(crate) fn with_network_observation_recorder(
@@ -750,14 +877,21 @@ impl Request {
         &self.redirect_chain
     }
 
+    /// Updates observations attached to already followed redirects.
+    pub fn redirect_chain_mut(&mut self) -> &mut [RedirectInfo] {
+        &mut self.redirect_chain
+    }
+
     /// Records a followed redirect. The caller controls method and current URL
     /// updates so this also supports transports that retain the original URL.
     pub fn record_redirect(&mut self, redirect: RedirectInfo) {
         self.redirect_chain.push(redirect);
     }
 
-    /// Follows an authorized redirect without rebuilding the Fetch request.
+    /// Checks and follows a redirect without rebuilding the Fetch request.
     pub fn follow_redirect(&mut self, redirect: RedirectInfo) -> Result<()> {
+        self.check_redirect_target(&redirect.to_url)
+            .map_err(anyhow::Error::msg)?;
         self.validate_request_mode_for_url(&redirect.to_url)?;
         self.apply_redirect_status(redirect.status);
         self.url = redirect.to_url.clone();

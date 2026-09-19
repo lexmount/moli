@@ -16,6 +16,156 @@ struct TestDir {
     path: PathBuf,
 }
 
+mod database_names;
+mod durability;
+mod index_rename;
+mod record_revision;
+mod store_rename;
+mod transaction_scheduling;
+
+#[test]
+fn schema_validation_preserves_exception_order_and_does_not_create_invalid_metadata() {
+    let mut manager = IndexedDbManager::new_in_memory();
+    let open = manager
+        .open(OpenOptions {
+            origin: "origin".into(),
+            name: "schema".into(),
+            version: Some(1),
+        })
+        .unwrap();
+    let upgrade = open.upgrade_transaction.unwrap();
+    manager
+        .create_object_store(upgrade, "existing", ObjectStoreOptions::default())
+        .unwrap();
+    let invalid = ObjectStoreOptions {
+        key_path: Some(KeyPath::from("invalid path")),
+        auto_increment: true,
+    };
+    for name in ["existing", "invalid"] {
+        assert!(matches!(
+            manager.create_object_store(upgrade, name, invalid.clone()),
+            Err(IndexedDbError::Syntax(_))
+        ));
+    }
+    let empty = ObjectStoreOptions {
+        key_path: Some(KeyPath::from("")),
+        auto_increment: true,
+    };
+    assert!(matches!(
+        manager.create_object_store(upgrade, "existing", empty.clone()),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    assert!(matches!(
+        manager.create_object_store(upgrade, "invalid", empty),
+        Err(IndexedDbError::InvalidAccess(_))
+    ));
+    assert!(matches!(
+        manager.create_object_store(
+            upgrade,
+            "invalid",
+            ObjectStoreOptions {
+                key_path: Some(KeyPath::Sequence(vec![])),
+                auto_increment: true,
+            }
+        ),
+        Err(IndexedDbError::Syntax(_))
+    ));
+    let valid = IndexOptions {
+        key_path: KeyPath::from("id"),
+        unique: false,
+        multi_entry: false,
+    };
+    manager
+        .create_index(upgrade, "existing", "index", valid)
+        .unwrap();
+    let invalid = IndexOptions {
+        key_path: KeyPath::Sequence(vec!["invalid path".into()]),
+        unique: false,
+        multi_entry: true,
+    };
+    assert!(matches!(
+        manager.create_index(upgrade, "existing", "index", invalid.clone()),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    assert!(matches!(
+        manager.create_index(upgrade, "existing", "invalid", invalid),
+        Err(IndexedDbError::Syntax(_))
+    ));
+    assert!(matches!(
+        manager.create_index(
+            upgrade,
+            "existing",
+            "invalid",
+            IndexOptions {
+                key_path: KeyPath::Sequence(vec!["id".into()]),
+                unique: false,
+                multi_entry: true,
+            }
+        ),
+        Err(IndexedDbError::InvalidAccess(_))
+    ));
+    manager.commit_transaction(upgrade).unwrap();
+    assert_eq!(
+        manager
+            .object_store_info(open.database, "existing")
+            .unwrap()
+            .index_names,
+        [IndexedDbName::from("index")]
+    );
+    assert!(matches!(
+        manager.object_store_info(open.database, "invalid"),
+        Err(IndexedDbError::NotFound(_))
+    ));
+}
+
+#[test]
+fn closing_connection_defers_release_until_commit_or_forced_abort() {
+    for force in [false, true] {
+        let mut manager = IndexedDbManager::new_in_memory();
+        let open = manager
+            .open(OpenOptions {
+                origin: "origin".into(),
+                name: "close".into(),
+                version: Some(1),
+            })
+            .unwrap();
+        let upgrade = open.upgrade_transaction.unwrap();
+        manager
+            .create_object_store(upgrade, "records", ObjectStoreOptions::default())
+            .unwrap();
+        manager.commit_transaction(upgrade).unwrap();
+        let coordinator = manager.connection_notifications();
+        coordinator.register(open.database, "key".into(), std::sync::Arc::new(|| {}));
+        let transaction = manager
+            .begin_transaction(
+                open.database,
+                &["records".into()],
+                TransactionMode::ReadWrite,
+            )
+            .unwrap();
+        manager.close_database(open.database).unwrap();
+        assert!(coordinator.has_connections("key"));
+        assert!(
+            manager
+                .begin_transaction(
+                    open.database,
+                    &["records".into()],
+                    TransactionMode::ReadOnly
+                )
+                .is_err()
+        );
+        assert!(manager.delete_database("origin", "close").is_err());
+        if force {
+            manager.force_close_database(open.database).unwrap();
+            assert!(manager.commit_transaction(transaction).is_err());
+        } else {
+            manager.commit_transaction(transaction).unwrap();
+        }
+        assert!(!coordinator.has_connections("key"));
+        manager.delete_database("origin", "close").unwrap();
+    }
+}
+
 #[test]
 fn cursor_direction_labels_and_flags_follow_spec_tokens() {
     let cases = [
@@ -60,7 +210,7 @@ fn cursor_direction_helpers_reverse_and_deduplicate_by_key() {
     );
     assert_eq!(
         apply_cursor_direction_by_key(entries, CursorDirection::PrevUnique, |entry| &entry.0),
-        vec![(Key::from("b"), 3), (Key::from("a"), 2)]
+        vec![(Key::from("b"), 3), (Key::from("a"), 1)]
     );
 }
 
@@ -120,7 +270,7 @@ fn seed_database_record(manager: &mut IndexedDbManager, origin: &str, name: &str
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: name.to_owned(),
+            name: name.into(),
             version: None,
         })
         .expect("open should succeed");
@@ -135,7 +285,7 @@ fn seed_database_record(manager: &mut IndexedDbManager, origin: &str, name: &str
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -158,7 +308,7 @@ fn open_new_database_creates_upgrade_transaction() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -180,7 +330,7 @@ fn in_memory_manager_does_not_persist_across_reopen() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect("open should succeed");
@@ -207,7 +357,7 @@ fn in_memory_manager_does_not_persist_across_reopen() {
     let reopened = IndexedDbManager::new_in_memory()
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -255,7 +405,7 @@ fn upgrade_transaction_can_create_store_and_persist() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(3),
         })
         .expect("open should succeed");
@@ -284,7 +434,7 @@ fn upgrade_transaction_can_create_store_and_persist() {
         .expect("manager should be recreated")
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -301,7 +451,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect("open should succeed");
@@ -327,7 +477,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     assert_eq!(
         index,
         IndexInfo {
-            name: "by-id".to_owned(),
+            name: "by-id".into(),
             key_path: KeyPath::from("id"),
             unique: true,
             multi_entry: false,
@@ -341,7 +491,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let store_info = manager
         .object_store_info(opened.database, "items")
         .expect("store info should exist");
-    assert_eq!(store_info.index_names, vec!["by-id".to_owned()]);
+    assert_eq!(store_info.index_names, vec![IndexedDbName::from("by-id")]);
 
     let index_info = manager
         .index_info(opened.database, "items", "by-id")
@@ -356,7 +506,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let reopened = reopened_manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -364,7 +514,7 @@ fn upgrade_transaction_can_persist_index_metadata() {
     let store_info = reopened_manager
         .object_store_info(reopened.database, "items")
         .expect("store info should still exist");
-    assert_eq!(store_info.index_names, vec!["by-id".to_owned()]);
+    assert_eq!(store_info.index_names, vec![IndexedDbName::from("by-id")]);
 }
 
 #[test]
@@ -375,7 +525,7 @@ fn index_key_path_may_be_empty_string() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect("open should succeed");
@@ -409,7 +559,7 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -426,7 +576,7 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -444,14 +594,14 @@ fn readwrite_transaction_can_store_and_reload_records() {
     let reopened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
     let tx = manager
         .begin_transaction(
             reopened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("readonly transaction should start");
@@ -489,7 +639,7 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -505,7 +655,7 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let write = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("write transaction should start");
@@ -528,14 +678,14 @@ fn external_blob_file_and_file_system_handle_objects_persist_with_their_record()
     let reopened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("database should reopen");
     let read = manager
         .begin_transaction(
             reopened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("read transaction should start");
@@ -554,7 +704,7 @@ fn write_quota_rejection_rolls_back_working_copy() {
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -571,7 +721,7 @@ fn write_quota_rejection_rolls_back_working_copy() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -588,7 +738,7 @@ fn write_quota_rejection_rolls_back_working_copy() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -627,7 +777,7 @@ fn external_blob_bytes_participate_in_quota_and_rollback() {
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -647,7 +797,7 @@ fn external_blob_bytes_participate_in_quota_and_rollback() {
     let write = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("write transaction should start");
@@ -686,7 +836,7 @@ fn transaction_commit_rechecks_aggregate_quota_without_publishing_working_copy()
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -706,7 +856,7 @@ fn transaction_commit_rechecks_aggregate_quota_without_publishing_working_copy()
     let write = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("write transaction should start");
@@ -733,7 +883,7 @@ fn transaction_commit_rechecks_aggregate_quota_without_publishing_working_copy()
     let read = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("read transaction should start");
@@ -760,7 +910,7 @@ fn origin_usage_tracks_committed_metadata_and_record_bytes() {
     let opened = manager
         .open(OpenOptions {
             origin: origin.to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -784,7 +934,7 @@ fn origin_usage_tracks_committed_metadata_and_record_bytes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -809,7 +959,7 @@ fn origin_usage_tracks_committed_metadata_and_record_bytes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("replace transaction should start");
@@ -1006,7 +1156,7 @@ fn readwrite_transaction_can_list_keys() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1023,7 +1173,7 @@ fn readwrite_transaction_can_list_keys() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1051,7 +1201,7 @@ fn mixed_keys_sort_in_indexeddb_order() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1068,18 +1218,18 @@ fn mixed_keys_sort_in_indexeddb_order() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
     manager
-        .put(tx, "items", Some(Key::Integer(10)), b"ten".to_vec())
+        .put(tx, "items", Some(Key::from(10)), b"ten".to_vec())
         .expect("integer put should succeed");
     manager
         .put(tx, "items", Some(Key::from("alpha")), b"one".to_vec())
         .expect("string put should succeed");
     manager
-        .put(tx, "items", Some(Key::Integer(2)), b"two".to_vec())
+        .put(tx, "items", Some(Key::from(2)), b"two".to_vec())
         .expect("integer put should succeed");
 
     let keys = manager
@@ -1087,7 +1237,7 @@ fn mixed_keys_sort_in_indexeddb_order() {
         .expect("get_all_keys should succeed");
     assert_eq!(
         keys,
-        RequestOutcome::Keys(vec![Key::Integer(2), Key::Integer(10), Key::from("alpha"),])
+        RequestOutcome::Keys(vec![Key::from(2), Key::from(10), Key::from("alpha"),])
     );
 }
 
@@ -1099,7 +1249,7 @@ fn aborted_transaction_does_not_persist_changes() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1116,7 +1266,7 @@ fn aborted_transaction_does_not_persist_changes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1128,7 +1278,7 @@ fn aborted_transaction_does_not_persist_changes() {
     let check = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("readonly transaction should start");
@@ -1146,7 +1296,7 @@ fn delete_database_removes_persisted_state() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1170,7 +1320,7 @@ fn delete_database_removes_persisted_state() {
         .expect("manager should reopen")
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1192,7 +1342,7 @@ fn databases_lists_committed_name_version_snapshot() {
     let beta = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "beta".to_owned(),
+            name: "beta".into(),
             version: Some(2),
         })
         .expect("beta open should succeed");
@@ -1202,7 +1352,7 @@ fn databases_lists_committed_name_version_snapshot() {
     let alpha = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "alpha".to_owned(),
+            name: "alpha".into(),
             version: None,
         })
         .expect("alpha open should succeed");
@@ -1217,11 +1367,11 @@ fn databases_lists_committed_name_version_snapshot() {
         infos,
         vec![
             DatabaseNameAndVersion {
-                name: "alpha".to_owned(),
+                name: "alpha".into(),
                 version: 1,
             },
             DatabaseNameAndVersion {
-                name: "beta".to_owned(),
+                name: "beta".into(),
                 version: 2,
             },
         ]
@@ -1248,7 +1398,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let first = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("first open should succeed");
@@ -1265,7 +1415,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let second = manager
         .open(OpenOptions {
             origin: "https://other.example".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("second open should succeed");
@@ -1287,7 +1437,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let cleared = reopened
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("cleared origin open should succeed");
@@ -1302,7 +1452,7 @@ fn clear_origin_removes_persisted_state_and_keeps_other_origins() {
     let kept = reopened
         .open(OpenOptions {
             origin: "https://other.example".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("other origin open should succeed");
@@ -1317,7 +1467,7 @@ fn readonly_transaction_rejects_writes() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1334,7 +1484,7 @@ fn readonly_transaction_rejects_writes() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadOnly,
         )
         .expect("readonly transaction should start");
@@ -1353,7 +1503,7 @@ fn transaction_scope_is_enforced_per_object_store() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1373,7 +1523,7 @@ fn transaction_scope_is_enforced_per_object_store() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1392,7 +1542,7 @@ fn delete_database_rejects_open_connections() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1420,7 +1570,7 @@ fn aborted_upgrade_transaction_does_not_publish_schema() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(2),
         })
         .expect("open should succeed");
@@ -1441,7 +1591,7 @@ fn aborted_upgrade_transaction_does_not_publish_schema() {
         .expect("manager should reopen")
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("reopen should succeed");
@@ -1463,7 +1613,7 @@ fn upgrade_can_delete_object_store_before_commit() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1486,7 +1636,7 @@ fn upgrade_can_delete_object_store_before_commit() {
     let info = manager
         .database_info(opened.database)
         .expect("database info should be readable");
-    assert_eq!(info.object_store_names, vec!["items".to_owned()]);
+    assert_eq!(info.object_store_names, vec![IndexedDbName::from("items")]);
 
     let error = manager
         .object_store_info(opened.database, "temp")
@@ -1502,7 +1652,7 @@ fn distinct_origins_persist_to_distinct_storage_files() {
     let first = manager
         .open(OpenOptions {
             origin: "https://a:b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("first open should succeed");
@@ -1522,7 +1672,7 @@ fn distinct_origins_persist_to_distinct_storage_files() {
     let second = manager
         .open(OpenOptions {
             origin: "https://a/b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("second open should succeed");
@@ -1543,14 +1693,14 @@ fn distinct_origins_persist_to_distinct_storage_files() {
     let first = reopened
         .open(OpenOptions {
             origin: "https://a:b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("first reopen should succeed");
     let second = reopened
         .open(OpenOptions {
             origin: "https://a/b".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("second reopen should succeed");
@@ -1560,14 +1710,14 @@ fn distinct_origins_persist_to_distinct_storage_files() {
             .database_info(first.database)
             .expect("first info should exist")
             .object_store_names,
-        vec!["alpha".to_owned()]
+        vec![IndexedDbName::from("alpha")]
     );
     assert_eq!(
         reopened
             .database_info(second.database)
             .expect("second info should exist")
             .object_store_names,
-        vec!["beta".to_owned()]
+        vec![IndexedDbName::from("beta")]
     );
 }
 
@@ -1579,7 +1729,7 @@ fn failed_open_does_not_block_later_delete_database() {
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(2),
         })
         .expect("open should succeed");
@@ -1599,7 +1749,7 @@ fn failed_open_does_not_block_later_delete_database() {
     let error = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: Some(1),
         })
         .expect_err("lower version open should fail");
@@ -1611,14 +1761,86 @@ fn failed_open_does_not_block_later_delete_database() {
 }
 
 #[test]
-fn auto_increment_rejects_exhausted_safe_integer_range() {
+fn generated_key_preview_and_failed_quota_write_leave_generator_unchanged() {
+    let dir = TestDir::new();
+    let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+    let opened = manager
+        .open(OpenOptions {
+            origin: "https://example.com".to_owned(),
+            name: "key-preview".into(),
+            version: None,
+        })
+        .unwrap();
+    let tx = opened.upgrade_transaction.unwrap();
+    manager
+        .create_object_store(
+            tx,
+            "items",
+            ObjectStoreOptions {
+                key_path: None,
+                auto_increment: true,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::from(1)
+    );
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::from(1)
+    );
+    assert_eq!(
+        manager
+            .put(tx, "items", Some(Key::from(1)), vec![1])
+            .unwrap(),
+        Key::from(1)
+    );
+    let error = manager
+        .put_with_quota(
+            tx,
+            "items",
+            Some(Key::from(20)),
+            vec![2],
+            IndexedDbQuotaCheck {
+                quota: 0,
+                non_indexed_db_usage: 0,
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(error, IndexedDbError::QuotaExceeded { .. }));
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::from(2)
+    );
+    assert_eq!(
+        manager.put(tx, "items", None, vec![3]).unwrap(),
+        Key::from(2)
+    );
+    manager.commit_transaction(tx).unwrap();
+    let tx = manager
+        .begin_transaction(
+            opened.database,
+            &["items".into()],
+            TransactionMode::ReadWrite,
+        )
+        .unwrap();
+    assert_eq!(
+        manager.next_generated_key(tx, "items").unwrap(),
+        Key::from(3)
+    );
+    manager.abort_transaction(tx).unwrap();
+}
+
+#[test]
+fn auto_increment_rejects_exhausted_generator_range() {
     let dir = TestDir::new();
     let mut manager = IndexedDbManager::new(&dir.path).expect("manager should be created");
 
     let opened = manager
         .open(OpenOptions {
             origin: "https://example.com".to_owned(),
-            name: "app".to_owned(),
+            name: "app".into(),
             version: None,
         })
         .expect("open should succeed");
@@ -1642,7 +1864,7 @@ fn auto_increment_rejects_exhausted_safe_integer_range() {
     let tx = manager
         .begin_transaction(
             opened.database,
-            &[String::from("items")],
+            &["items".into()],
             TransactionMode::ReadWrite,
         )
         .expect("readwrite transaction should start");
@@ -1651,7 +1873,7 @@ fn auto_increment_rejects_exhausted_safe_integer_range() {
             .transactions
             .get_mut(&tx)
             .expect("transaction should exist"),
-        "items",
+        &"items".into(),
     )
     .expect("store should exist");
     store.auto_increment_counter = MAX_AUTO_INCREMENT_KEY;
@@ -1660,4 +1882,143 @@ fn auto_increment_rejects_exhausted_safe_integer_range() {
         .generate_key(tx, "items")
         .expect_err("generate_key should fail once the safe integer range is exhausted");
     assert!(matches!(error, IndexedDbError::Constraint(_)));
+}
+
+#[test]
+fn all_key_types_survive_backend_reopen_and_remain_distinct() {
+    let dir = TestDir::new();
+    let options = OpenOptions {
+        origin: "https://keys.test".into(),
+        name: "keys".into(),
+        version: None,
+    };
+    let mut keys = vec![
+        Key::number(f64::NEG_INFINITY).unwrap(),
+        Key::from(0),
+        Key::number(f64::from_bits(1)).unwrap(),
+        Key::number(1.25).unwrap(),
+        Key::number(f64::MAX).unwrap(),
+        Key::number(f64::INFINITY).unwrap(),
+        Key::Date(0),
+        Key::String(vec![0xd800]),
+        Key::String(vec![0xdc00]),
+        Key::from("\u{fffd}"),
+        Key::Binary(vec![0, 255]),
+        Key::Array(vec![Key::Date(42), Key::Binary(vec![7])]),
+    ];
+    let mut deep = Key::from(1);
+    for _ in 0..100 {
+        deep = Key::Array(vec![deep]);
+    }
+    keys.push(deep);
+    {
+        let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+        let opened = manager.open(options.clone()).unwrap();
+        let tx = opened.upgrade_transaction.unwrap();
+        manager
+            .create_object_store(
+                tx,
+                "items",
+                ObjectStoreOptions {
+                    key_path: None,
+                    auto_increment: false,
+                },
+            )
+            .unwrap();
+        for (index, key) in keys.iter().enumerate() {
+            manager
+                .add(tx, "items", Some(key.clone()), vec![index as u8])
+                .unwrap();
+        }
+        manager.commit_transaction(tx).unwrap();
+        manager.close_database(opened.database).unwrap();
+    }
+    let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+    let opened = manager.open(options).unwrap();
+    let tx = manager
+        .begin_transaction(
+            opened.database,
+            &["items".into()],
+            TransactionMode::ReadOnly,
+        )
+        .unwrap();
+    assert_eq!(
+        manager.get_all_keys(tx, "items").unwrap(),
+        RequestOutcome::Keys(keys.clone())
+    );
+    for (index, key) in keys.iter().enumerate() {
+        assert_eq!(
+            manager.get(tx, "items", key).unwrap(),
+            RequestOutcome::Value(Some(vec![index as u8].into()))
+        );
+    }
+    manager.commit_transaction(tx).unwrap();
+}
+
+#[test]
+fn generator_uses_numeric_floor_and_inclusive_2pow53_boundary() {
+    let dir = TestDir::new();
+    let mut manager = IndexedDbManager::new(&dir.path).unwrap();
+    let opened = manager
+        .open(OpenOptions {
+            origin: "https://keys.test".into(),
+            name: "generator".into(),
+            version: None,
+        })
+        .unwrap();
+    let tx = opened.upgrade_transaction.unwrap();
+    manager
+        .create_object_store(
+            tx,
+            "items",
+            ObjectStoreOptions {
+                key_path: None,
+                auto_increment: true,
+            },
+        )
+        .unwrap();
+    manager
+        .put(tx, "items", Some(Key::Date(1000)), vec![])
+        .unwrap();
+    assert_eq!(
+        manager.put(tx, "items", None, vec![]).unwrap(),
+        Key::from(1)
+    );
+    manager.put(tx, "items", Key::number(3.9), vec![]).unwrap();
+    assert_eq!(
+        manager.put(tx, "items", None, vec![]).unwrap(),
+        Key::from(4)
+    );
+    let last = MAX_AUTO_INCREMENT_KEY as i64;
+    manager
+        .put(tx, "items", Some(Key::from(last - 1)), vec![])
+        .unwrap();
+    assert_eq!(
+        manager.put(tx, "items", None, vec![]).unwrap(),
+        Key::from(last)
+    );
+    assert!(matches!(
+        manager.put(tx, "items", None, vec![]),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    // Exhaustion limits generated keys, not valid explicit numeric keys.
+    manager
+        .put(tx, "items", Key::number(f64::INFINITY), vec![])
+        .unwrap();
+    manager
+        .put(tx, "items", Key::number(f64::NEG_INFINITY), vec![])
+        .unwrap();
+    manager.commit_transaction(tx).unwrap();
+    let tx = manager
+        .begin_transaction(
+            opened.database,
+            &["items".into()],
+            TransactionMode::ReadWrite,
+        )
+        .unwrap();
+    assert!(matches!(
+        manager.next_generated_key(tx, "items"),
+        Err(IndexedDbError::Constraint(_))
+    ));
+    manager.abort_transaction(tx).unwrap();
 }

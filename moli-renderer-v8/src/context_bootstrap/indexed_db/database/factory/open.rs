@@ -5,8 +5,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBFactory.open")]
 struct IdbFactoryOpenArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, with = parse_database_name_arg)]
+    name: IndexedDbName,
     #[webidl(converter = "enforce_range_unsigned_long_long")]
     version: Option<u64>,
 }
@@ -62,42 +62,19 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_open_callback<'s>(
         rv.set(request.into());
         return;
     }
-    let blocked_upgrade = match version {
-        Some(requested_version) => {
-            match with_indexed_db_manager(scope, |manager| manager.database_version(&origin, &name))
-            {
-                Ok(Some(existing_version))
-                    if requested_version > existing_version
-                        && has_open_database_connections_for_key(
-                            scope,
-                            &database_registry_key(&origin, &name),
-                        ) =>
-                {
-                    Some((existing_version, requested_version))
-                }
-                Ok(_) => None,
-                Err(error) => {
-                    let error = request_error_object(scope, &error);
-                    store_request_error(scope, request, error);
-                    rv.set(request.into());
-                    return;
-                }
-            }
-        }
-        None => None,
-    };
-    if let Some((old_version, new_version)) = blocked_upgrade {
-        enqueue_blocked_open_task(
-            scope,
-            request,
-            &origin,
-            &name,
-            version,
-            old_version,
-            new_version,
-        );
-    } else {
-        execute_open_request(scope, request, storage_scope, name, version);
-    }
+    enqueue_blocked_open_task(scope, request, &origin, &name, version);
     rv.set(request.into());
+}
+
+fn parse_database_name_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<IndexedDbName, webidl::WebIdlError> {
+    webidl::convert::<webidl::DomString16>(
+        scope,
+        args.get(index),
+        webidl::Context::argument("IDBFactory.open", (index + 1) as usize),
+    )
+    .map(|name| IndexedDbName::from_utf16(name.0))
 }

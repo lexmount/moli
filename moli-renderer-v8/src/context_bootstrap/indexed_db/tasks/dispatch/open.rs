@@ -1,8 +1,16 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::abort_indexed_db_transaction_after_dispatch;
+use crate::context_bootstrap::indexed_db::{
+    associate_indexed_db_upgrade_open,
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint,
+};
 
 mod abort;
-mod commit;
 mod success;
+pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) use abort::finish_aborted_upgrade_open;
+pub(in crate::context_bootstrap::indexed_db::tasks::dispatch) use success::{
+    enqueue_committed_upgrade_open, flush_open_success_task,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -14,22 +22,23 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         return;
     };
 
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_RESULT_SLOT,
-        "result",
         database.into(),
     );
-    set_indexed_db_request_surface_value(
+    set_indexed_db_slot_value(
         scope,
         request,
         INDEXED_DB_REQUEST_TRANSACTION_SLOT,
-        "transaction",
         transaction.into(),
     );
+    let done = v8str(scope, "done").into();
+    set_indexed_db_slot_value(scope, request, INDEXED_DB_REQUEST_READY_STATE_SLOT, done);
 
-    let _ = dispatch_version_change_event(
+    associate_indexed_db_upgrade_open(scope, transaction, request);
+    let result = dispatch_version_change_event(
         scope,
         request,
         "upgradeneeded",
@@ -37,15 +46,12 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_open_task<'s>(
         Some(new_version),
     );
 
-    if object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_ABORTED_SLOT)
-        .unwrap_or(false)
-    {
-        abort::finish_aborted_upgrade_open(scope, request);
-        return;
+    if result.did_throw {
+        let error = dom_exception_value(scope, "An IndexedDB event listener threw.", "AbortError");
+        abort_indexed_db_transaction_after_dispatch(scope, transaction, error);
     }
 
-    if !commit::commit_upgrade_transaction(scope, request, database, transaction) {
-        return;
-    }
-    success::finish_open_success(scope, request);
+    // Use the same pending-request and microtask lifetime as ordinary transactions.
+    // Request callbacks (including their microtasks) may enqueue more work or abort.
+    schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint(scope, transaction);
 }

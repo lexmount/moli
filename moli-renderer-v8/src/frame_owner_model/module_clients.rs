@@ -10,13 +10,12 @@ use crate::module_runtime::{
 };
 use crate::planning::{PreparedScript, ScriptFetchMetadata};
 
-use super::lifecycle_tasks::DocumentLinkEventOwner;
+use super::lifecycle_tasks::{ChildDocumentModuleScriptLoadDelay, DocumentLinkEventOwner};
 use super::module_graph::{
     FrameDocumentDynamicImportTerminalPreparedAction, FrameDocumentModuleTerminalQueueFollowup,
 };
 use super::records::{
-    DocumentLoadDelayTokenId, FrameDocumentOwner, FrameDocumentTaskOwner, FrameRealmId,
-    FrameRequestId, FrameRequestKind,
+    FrameDocumentOwner, FrameDocumentTaskOwner, FrameRealmId, FrameRequestId, FrameRequestKind,
 };
 
 /// Exact PageVm-local execution target captured when a child module fetch is
@@ -176,7 +175,7 @@ pub(crate) struct FrameDocumentParserRootModuleClient {
     base_url: url::Url,
     fetch_metadata: ScriptFetchMetadata,
     source_is_external: bool,
-    load_delay_token: DocumentLoadDelayTokenId,
+    load_delay_token: ChildDocumentModuleScriptLoadDelay,
 }
 
 impl FrameDocumentParserRootModuleClient {
@@ -187,7 +186,7 @@ impl FrameDocumentParserRootModuleClient {
         base_url: url::Url,
         fetch_metadata: ScriptFetchMetadata,
         source_is_external: bool,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: impl Into<ChildDocumentModuleScriptLoadDelay>,
     ) -> Self {
         Self {
             pending_script_key,
@@ -196,7 +195,7 @@ impl FrameDocumentParserRootModuleClient {
             base_url,
             fetch_metadata,
             source_is_external,
-            load_delay_token,
+            load_delay_token: load_delay_token.into(),
         }
     }
 
@@ -227,7 +226,7 @@ impl FrameDocumentParserRootModuleClient {
         self.source_is_external
     }
 
-    pub(crate) fn load_delay_token(&self) -> DocumentLoadDelayTokenId {
+    pub(crate) fn load_delay_token(&self) -> ChildDocumentModuleScriptLoadDelay {
         self.load_delay_token
     }
 }
@@ -274,7 +273,7 @@ impl FrameDocumentParserModuleRootStartTask {
         pending_script_id: ParserPendingScriptId<FrameDocumentOwner>,
         script_handle: DomHandle,
         script: PreparedScript,
-        load_delay_token: DocumentLoadDelayTokenId,
+        load_delay_token: impl Into<ChildDocumentModuleScriptLoadDelay>,
     ) -> Self {
         assert_eq!(script.kind, crate::types::ScriptKind::Module);
         assert_eq!(pending_script_id.owner(), owner.document_owner());
@@ -289,7 +288,7 @@ impl FrameDocumentParserModuleRootStartTask {
         let kind = match &script.source {
             crate::planning::ScriptSource::External => {
                 FrameDocumentParserModuleRootStartKind::ExternalFetch {
-                    key: ModuleMapKey::java_script(script.url.clone()),
+                    key: ModuleMapKey::from_script_url(script.url.clone()),
                 }
             }
             crate::planning::ScriptSource::Loaded(source)

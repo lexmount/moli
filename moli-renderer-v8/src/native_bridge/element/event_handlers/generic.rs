@@ -1,4 +1,5 @@
 use crate::{
+    context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::EventTargetHandle,
     util::{
         context_host_ptr_from_global_bridge, node_wrapper_from_handle, throw_type_error, v8_string,
@@ -12,8 +13,6 @@ use super::super::super::node::{
 use super::super::forms::form_associated_form_owner;
 use super::super::{element_attribute, queue_text_track_load_if_needed};
 use super::shared::compile_event_attribute_handler;
-
-const EVENT_HANDLER_SLOT_PREFIX: &str = "__moliEventHandler_";
 
 pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onclick",
@@ -77,9 +76,15 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "ontransitionrun",
     "ontransitioncancel",
     "onwheel",
+    "onbeforeinput",
+    "onbeforematch",
     "onbeforetoggle",
     "ontoggle",
+    "oncommand",
+    "oncontextlost",
     "oncontextmenu",
+    "oncontextrestored",
+    "oncuechange",
     "onselect",
     "onselectionchange",
     "onabort",
@@ -105,9 +110,47 @@ pub(crate) const GENERIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onloadeddata",
     "onloadedmetadata",
     "onratechange",
+    "onformdata",
+    "onsecuritypolicyviolation",
+    "onwebkitanimationend",
+    "onwebkitanimationiteration",
+    "onwebkitanimationstart",
+    "onwebkittransitionend",
 ];
 
-const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &["onpointerlockchange", "onpointerlockerror"];
+const ON_FULLSCREEN_CHANGE: &str = "onfullscreenchange";
+const ON_FULLSCREEN_ERROR: &str = "onfullscreenerror";
+const DOCUMENT_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onfreeze",
+    ON_FULLSCREEN_CHANGE,
+    ON_FULLSCREEN_ERROR,
+    "onpointerlockchange",
+    "onpointerlockerror",
+    "onreadystatechange",
+    "onresume",
+];
+pub(in crate::native_bridge::element) const ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES: &[&str] =
+    &[ON_FULLSCREEN_CHANGE, ON_FULLSCREEN_ERROR];
+const ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES: &[&str] = &[
+    "onencrypted",
+    "onwaitingforkey",
+    "onbegin",
+    "onend",
+    "onrepeat",
+];
+
+pub(in crate::native_bridge::element) fn is_element_event_handler_content_attribute_name(
+    name: &str,
+) -> bool {
+    GENERIC_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .chain(WINDOW_EVENT_HANDLER_PROPERTIES)
+        .chain(ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES)
+        .chain(ELEMENT_SPECIFIC_EVENT_HANDLER_PROPERTIES)
+        .copied()
+        .chain(["onmessageerror"])
+        .any(|candidate| candidate == name)
+}
 
 #[derive(Clone, Copy)]
 pub(crate) enum GlobalEventHandlerOwner {
@@ -133,42 +176,66 @@ pub(crate) fn install_global_event_handler_template_bindings<'s>(
         if matches!(owner, GlobalEventHandlerOwner::Document) && *name == "onstorage" {
             continue;
         }
-        let data = v8str(scope, name).into();
-        let (getter, setter) = match owner {
-            GlobalEventHandlerOwner::Document => (
-                v8::FunctionTemplate::builder(document_event_handler_getter_function)
-                    .data(data)
-                    .length(0)
-                    .build(scope),
-                v8::FunctionTemplate::builder(document_event_handler_setter_function)
-                    .data(data)
-                    .length(1)
-                    .build(scope),
-            ),
-            GlobalEventHandlerOwner::Element => (
-                v8::FunctionTemplate::builder(node_event_handler_getter_function)
-                    .data(data)
-                    .length(0)
-                    .build(scope),
-                v8::FunctionTemplate::builder(node_event_handler_setter_function)
-                    .data(data)
-                    .length(1)
-                    .build(scope),
-            ),
-        };
-        if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
-            getter.set_class_name(function_name);
-        }
-        if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
-            setter.set_class_name(function_name);
-        }
-        prototype.set_accessor_property(
-            v8str(scope, name).into(),
-            Some(getter),
-            Some(setter),
-            v8::PropertyAttribute::NONE,
+        install_event_handler_template_binding(scope, prototype, owner, name);
+    }
+}
+
+pub(crate) fn install_node_event_handler_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
+    names: &[&'static str],
+) {
+    for name in names {
+        install_event_handler_template_binding(
+            scope,
+            prototype,
+            GlobalEventHandlerOwner::Element,
+            name,
         );
     }
+}
+
+fn install_event_handler_template_binding<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    prototype: v8::Local<'s, v8::ObjectTemplate>,
+    owner: GlobalEventHandlerOwner,
+    name: &'static str,
+) {
+    let data = v8str(scope, name).into();
+    let (getter, setter) = match owner {
+        GlobalEventHandlerOwner::Document => (
+            v8::FunctionTemplate::builder(document_event_handler_getter_function)
+                .data(data)
+                .length(0)
+                .build(scope),
+            v8::FunctionTemplate::builder(document_event_handler_setter_function)
+                .data(data)
+                .length(1)
+                .build(scope),
+        ),
+        GlobalEventHandlerOwner::Element => (
+            v8::FunctionTemplate::builder(node_event_handler_getter_function)
+                .data(data)
+                .length(0)
+                .build(scope),
+            v8::FunctionTemplate::builder(node_event_handler_setter_function)
+                .data(data)
+                .length(1)
+                .build(scope),
+        ),
+    };
+    if let Some(function_name) = v8_string(scope, &format!("get {name}")) {
+        getter.set_class_name(function_name);
+    }
+    if let Some(function_name) = v8_string(scope, &format!("set {name}")) {
+        setter.set_class_name(function_name);
+    }
+    prototype.set_accessor_property(
+        v8str(scope, name).into(),
+        Some(getter),
+        Some(setter),
+        v8::PropertyAttribute::NONE,
+    );
 }
 
 fn event_handler_property_value_for_target<'s>(
@@ -201,7 +268,7 @@ fn set_event_handler_property_for_target<'s>(
     let Some(event_type) = event_handler_event_type(&handler_name) else {
         return;
     };
-    let handler = v8::Local::<v8::Function>::try_from(value).ok();
+    let handler = v8::Local::<v8::Object>::try_from(value).ok();
     unsafe { &mut *runtime_ptr }
         .set_registered_event_handler_property(scope, target, event_type, handler);
 }
@@ -262,7 +329,47 @@ fn document_event_handler_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(crate) fn node_event_handler_getter_function<'s>(
+pub(crate) fn shadow_root_event_handler_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(event_handler_property_value_for_target(
+        scope,
+        runtime_ptr,
+        EventTargetHandle::Node(handle),
+        args.data(),
+    ));
+}
+
+pub(crate) fn shadow_root_event_handler_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    set_event_handler_property_for_target(
+        scope,
+        runtime_ptr,
+        EventTargetHandle::Node(handle),
+        args.data(),
+        args.get(0),
+    );
+    rv.set_undefined();
+}
+
+fn node_event_handler_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
@@ -292,18 +399,9 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(current);
         return;
     }
-    let slot_name = event_handler_slot_name(&handler_name);
-    let Some(slot_key) = v8_string(scope, &slot_name) else {
-        rv.set_null();
-        return;
-    };
-    if let Some(current) = object.get(scope, slot_key.into())
-        && !current.is_undefined()
+    if !handler_name.starts_with("on")
+        || !is_element_event_handler_content_attribute_name(&handler_name)
     {
-        rv.set(current);
-        return;
-    }
-    if !handler_name.starts_with("on") {
         rv.set_null();
         return;
     }
@@ -311,15 +409,24 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    if source.is_empty() {
-        rv.set(v8::null(scope).into());
-        return;
-    }
-
     let Some(target_context) = node_event_handler_target_context(scope, runtime_ptr, handle) else {
         rv.set(v8::null(scope).into());
         return;
     };
+    if source.is_empty() {
+        if let Some(event_type) = event_handler_event_type(&handler_name) {
+            unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+                scope,
+                EventTargetHandle::Node(handle),
+                event_type,
+                None,
+                target_context,
+            );
+        }
+        rv.set(v8::null(scope).into());
+        return;
+    }
+
     let handler = if target_context == scope.get_current_context() {
         compile_node_event_attribute_handler(
             scope,
@@ -378,6 +485,18 @@ fn compile_node_event_attribute_handler<'s>(
     handler_name: &str,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
+    let event_type = event_handler_event_type(handler_name)?;
+    let target_context = scope.get_current_context();
+    // A parse error reports to author code. Re-entrant getters must see null
+    // without removing the listener's position, and any changes made while
+    // reporting the error must survive this compilation attempt.
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Node(handle),
+        event_type,
+        None,
+        target_context,
+    );
     let event_argument = v8_string(scope, "event")?;
     let global = scope.get_current_context().global(scope);
     let mut context_extensions = Vec::with_capacity(3);
@@ -401,52 +520,26 @@ fn compile_node_event_attribute_handler<'s>(
         source,
         &[event_argument],
         &context_extensions,
-    );
-    if let Some(handler) = handler {
-        if let Some(name) = v8_string(scope, handler_name) {
-            handler.set_name(name);
-        }
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                EventTargetHandle::Node(handle),
-                event_type,
-                Some(handler),
-                target_context,
-            );
-        }
-        Some(handler)
-    } else {
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                EventTargetHandle::Node(handle),
-                event_type,
-                None,
-                target_context,
-            );
-        }
-        None
+    )?;
+    if let Some(name) = v8_string(scope, handler_name) {
+        handler.set_name(name);
     }
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        EventTargetHandle::Node(handle),
+        event_type,
+        Some(handler),
+        target_context,
+    );
+    Some(handler)
 }
 
-pub(crate) fn node_event_handler_setter_function<'s>(
+fn node_event_handler_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some(handler_name) = event_handler_name_from_data(scope, args.data()) else {
-        rv.set_undefined();
-        return;
-    };
-    let slot_name = event_handler_slot_name(&handler_name);
-    let Some(slot_key) = v8_string(scope, &slot_name) else {
         rv.set_undefined();
         return;
     };
@@ -461,14 +554,8 @@ pub(crate) fn node_event_handler_setter_function<'s>(
         handle_invalid_event_handler_receiver(scope, &mut rv, &handler_name);
         return;
     }
-    let stored = if value.is_function() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    let _ = object.set(scope, slot_key.into(), stored);
     if let Some(event_type) = event_handler_event_type(&handler_name) {
-        let handler = v8::Local::<v8::Function>::try_from(value).ok();
+        let handler = v8::Local::<v8::Object>::try_from(value).ok();
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             unsafe { &mut *host_ptr }.set_registered_event_handler_property(
                 scope,
@@ -497,17 +584,14 @@ fn event_handler_name_from_data<'s>(
         .map(|name| name.to_rust_string_lossy(scope))
 }
 
-fn event_handler_slot_name(name: &str) -> String {
-    format!("{EVENT_HANDLER_SLOT_PREFIX}{name}")
-}
-
 fn event_handler_event_type(name: &str) -> Option<&str> {
     name.strip_prefix("on")
         .filter(|event_type| !event_type.is_empty())
+        .map(canonical_event_handler_event_type)
 }
 
 fn legacy_lenient_this_event_handler(name: &str) -> bool {
-    matches!(name, "onmouseenter" | "onmouseleave")
+    matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
 }
 
 fn handle_invalid_event_handler_receiver<'s>(
@@ -522,14 +606,23 @@ fn handle_invalid_event_handler_receiver<'s>(
     }
 }
 
-pub(super) fn invalidate_node_event_attribute_handler(
-    runtime: &mut super::super::super::JsContextHost,
-    handle: crate::document_runtime::DomHandle,
-    name: &str,
-) {
-    let normalized_name = name.to_ascii_lowercase();
-    let Some(event_type) = event_handler_event_type(&normalized_name) else {
-        return;
+pub(crate) fn canonical_event_handler_event_type(event_type: &str) -> &str {
+    match event_type {
+        "webkitanimationend" => "webkitAnimationEnd",
+        "webkitanimationiteration" => "webkitAnimationIteration",
+        "webkitanimationstart" => "webkitAnimationStart",
+        "webkittransitionend" => "webkitTransitionEnd",
+        event_type => event_type,
+    }
+}
+
+pub(crate) fn event_handler_content_attribute_name(event_type: &str) -> String {
+    let event_type = match event_type {
+        "webkitAnimationEnd" => "webkitanimationend",
+        "webkitAnimationIteration" => "webkitanimationiteration",
+        "webkitAnimationStart" => "webkitanimationstart",
+        "webkitTransitionEnd" => "webkittransitionend",
+        event_type => event_type,
     };
-    runtime.clear_event_handler_property(EventTargetHandle::Node(handle), event_type);
+    format!("on{event_type}")
 }

@@ -1925,6 +1925,88 @@ async fn drive_window_message_until(
 }
 
 #[tokio::test]
+async fn local_worker_content_security_policy_preserves_self_and_blocks_cross_origin() {
+    run_page_vm_async_test(async move {
+        for kind in ["dedicated", "shared", "nested"] {
+            let shared = kind == "shared";
+            for blob in [false, true] {
+                for meta in [false, true] {
+                    let (base_url, same_server) = spawn_path_response_http_server(vec![(
+                        "/allowed", "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *", "ok".to_owned(), Duration::ZERO,
+                    )]).await;
+                    let (cross_url, mut cross_request, cross_server) = spawn_header_capture_http_server().await;
+                    let mut page_vm = test_page_vm_with_document_url(Url::parse(&format!("{base_url}/page.html")).unwrap());
+                    if !meta {
+                        page_vm.vm_mut().set_response_content_security_policies(&["connect-src 'self'".to_owned()]);
+                    }
+                    let local_executor = page_vm.local_executor.clone();
+                    let result = local_executor.run(async move {
+                        let source = format!(r#"
+                            const events = [];
+                            addEventListener('securitypolicyviolation', e => events.push([e.effectiveDirective, e.disposition, e.documentURI]));
+                            async function run(send) {{
+                                const allowed = await fetch({same}).then(r => r.text()).catch(e => 'fetch-error:' + e.name);
+                                let blocked = 'allowed';
+                                try {{ await fetch({cross}); }} catch (e) {{ blocked = e.name; }}
+                                setTimeout(() => send({{allowed, blocked, events}}), 50);
+                            }}
+                            {start}
+                        "#,
+                            same = serde_json::to_string(&format!("{base_url}/allowed")).unwrap(),
+                            cross = serde_json::to_string(&format!("{cross_url}/blocked")).unwrap(),
+                            start = if shared { "onconnect = e => run(value => e.ports[0].postMessage(value));" } else { "run(value => postMessage(value));" },
+                        );
+                        let source = if kind == "nested" {
+                            format!(r#"
+                                const source = {source};
+                                const url = {url};
+                                globalThis.child = new Worker(url);
+                                child.onmessage = e => postMessage(e.data);
+                                child.onerror = e => postMessage({{error: e.message}});
+                            "#,
+                                source = serde_json::to_string(&source).unwrap(),
+                                url = if blob { "URL.createObjectURL(new Blob([source], {type: 'text/javascript'}))" } else { "'data:text/javascript,' + encodeURIComponent(source)" },
+                            )
+                        } else { source };
+                        page_vm.vm_mut().eval(&format!(r#"
+                            globalThis.__localWorkerResult = null;
+                            const source = {source};
+                            const url = {url};
+                            {meta}
+                            globalThis.__localWorker = new {constructor}(url);
+                            {port}.onmessage = e => globalThis.__localWorkerResult = e.data;
+                            __localWorker.onerror = e => globalThis.__localWorkerResult = {{error: e.message}};
+                            {start}
+                        "#,
+                            source = serde_json::to_string(&source).unwrap(),
+                            url = if blob { "URL.createObjectURL(new Blob([source], {type: 'text/javascript'}))" } else { "'data:text/javascript,' + encodeURIComponent(source)" },
+                            meta = if meta { "const meta = document.createElement('meta'); meta.httpEquiv = 'Content-Security-Policy'; meta.content = \"connect-src 'self'\"; document.head.append(meta);" } else { "" },
+                            constructor = if shared { "SharedWorker" } else { "Worker" },
+                            port = if shared { "__localWorker.port" } else { "__localWorker" },
+                            start = if shared { "__localWorker.port.start();" } else { "" },
+                        ))?;
+                        let done = "String(globalThis.__localWorkerResult !== null)";
+                        if shared {
+                            drive_shared_worker_until_done(&mut page_vm, done, "local SharedWorker CSP result").await?;
+                        } else {
+                            drive_websocket_until_done(&mut page_vm, done, "local Worker CSP result").await?;
+                        }
+                        let result = page_vm.vm_mut().eval("JSON.stringify(__localWorkerResult)")?;
+                        page_vm.vm_mut().eval(if shared { "__localWorker.port.close()" } else { "__localWorker.terminate()" })?;
+                        anyhow::Ok(result)
+                    }).await;
+                    same_server.abort();
+                    cross_server.abort();
+                    let result: serde_json::Value = serde_json::from_str(&result.expect("local worker CSP test should finish")).unwrap();
+                    assert_eq!(result, serde_json::json!({"allowed": "ok", "blocked": "TypeError", "events": [["connect-src", "enforce", if blob { "blob" } else { "data" }]]}), "kind={kind}, blob={blob}, meta={meta}");
+                    assert!(cross_request.try_recv().is_err(), "CSP must prevent contacting the cross-origin target");
+                }
+            }
+        }
+    }).await;
+}
+
+#[tokio::test]
 async fn worker_post_message_flows_through_page_client_event_source() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
@@ -2914,13 +2996,9 @@ async fn worker_pending_activity_diagnostics_split_loading_and_running_worker_is
 #[tokio::test]
 async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports() {
     run_page_vm_async_test(async move {
-        let (dependency_base_url, dependency_server) = spawn_path_response_http_server(vec![(
-            "/dependency.js",
-            "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *",
-            "export const value = 'unexpected';".to_owned(),
-            Duration::ZERO,
-        )])
-        .await;
+        let (dependency_base_url, mut dependency_request, dependency_server) =
+            spawn_shared_worker_script_capture_http_server("export const value = 'unexpected';")
+                .await;
         let dependency_url = format!("{dependency_base_url}/dependency.js");
         let worker_source = format!(
             r#"
@@ -2962,7 +3040,13 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
                         };
                         worker.onerror = event => {
                             event.preventDefault();
-                            globalThis.__moduleWorkerCspResult = "error:" + event.message;
+                            globalThis.__moduleWorkerCspResult = JSON.stringify([
+                                event.type,
+                                Object.getPrototypeOf(event) === Event.prototype,
+                                event.bubbles, event.cancelable, event.composed, event.isTrusted,
+                                event.defaultPrevented,
+                                ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
+                            ]);
                             globalThis.__moduleWorkerCspDone = true;
                         };
                     })()
@@ -2977,9 +3061,10 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
                 let result = page_vm
                     .vm_mut()
                     .eval("globalThis.__moduleWorkerCspResult")?;
-                assert!(
-                    result.starts_with("error:") && result.contains("Content Security Policy"),
-                    "static module import should be blocked by creator worker-src: {result:?}"
+                assert_eq!(
+                    result,
+                    r#"["error",true,false,false,false,true,false,false]"#,
+                    "blocked static import should fire a bootstrap Event before evaluation"
                 );
                 anyhow::Ok(())
             })
@@ -2988,6 +3073,10 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
         server
             .await
             .expect("external module worker CSP server should finish");
+        assert!(
+            matches!(dependency_request.try_recv(), Err(tokio::sync::oneshot::error::TryRecvError::Empty)),
+            "creator CSP must block the dependency before any HTTP request is sent"
+        );
         dependency_server.abort();
     })
     .await;
@@ -3935,7 +4024,6 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
         )])
         .await;
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
-        let missing_worker_url = format!("{base_url}/does-not-exist.js");
         let mut page_vm = test_page_vm_with_document_url(document_url);
         let local_executor = page_vm.local_executor.clone();
 
@@ -3952,7 +4040,17 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
                         });
                         const worker = new Worker("/does-not-exist.js");
                         worker.onerror = event => {
-                            globalThis.__missingWorkerEvents.push("worker:" + event.message);
+                            event.preventDefault();
+                            globalThis.__missingWorkerEvents.push({
+                                target: "worker",
+                                type: event.type,
+                                constructor: event.constructor.name,
+                                trusted: event.isTrusted,
+                                cancelable: event.cancelable,
+                                defaultPrevented: event.defaultPrevented,
+                                hasErrorDetails: ["message", "filename", "lineno", "colno", "error"]
+                                    .some(name => name in event)
+                            });
                             globalThis.__missingWorkerDone = true;
                         };
                     })()
@@ -3973,9 +4071,7 @@ async fn worker_script_load_failure_does_not_dispatch_window_error() {
                     page_vm
                         .vm_mut()
                         .eval("JSON.stringify(globalThis.__missingWorkerEvents)")?,
-                    format!(
-                        r#"["worker:HTTP request `{missing_worker_url}` returned 404 Not Found"]"#
-                    )
+                    r#"[{"target":"worker","type":"error","constructor":"Event","trusted":true,"cancelable":false,"defaultPrevented":false,"hasErrorDetails":false}]"#
                 );
                 anyhow::Ok(())
             })
@@ -4006,7 +4102,10 @@ async fn shared_worker_rejects_cross_origin_redirected_script() {
                         globalThis.__sharedWorkerRedirectDone = false;
                         const worker = new SharedWorker("/redirect-source.js", "cross-origin-redirect-script");
                         worker.onerror = (event) => {
-                            globalThis.__sharedWorkerRedirectOutcome = "error:" + event.message;
+                            globalThis.__sharedWorkerRedirectOutcome = JSON.stringify([
+                                event.type, event.constructor.name, event.cancelable,
+                                "message" in event, event.isTrusted
+                            ]);
                             globalThis.__sharedWorkerRedirectDone = true;
                         };
                         worker.port.onmessage = (event) => {
@@ -4024,9 +4123,10 @@ async fn shared_worker_rejects_cross_origin_redirected_script() {
                 )
                 .await?;
                 let outcome = page_vm.vm_mut().eval("globalThis.__sharedWorkerRedirectOutcome")?;
-                assert!(
-                    outcome.starts_with("error:"),
-                    "redirected cross-origin script must not execute, got {outcome:?}"
+                assert_eq!(
+                    outcome,
+                    r#"["error","Event",false,false,true]"#,
+                    "redirected cross-origin script must fail with a plain Event"
                 );
                 anyhow::Ok(())
             })
@@ -4464,7 +4564,7 @@ async fn shared_worker_declared_surface_ignores_reflection_and_spoofing() {
                         if (typeof worker.onerror !== "function") {
                             throw new Error("onerror getter should ignore public slot spoofing");
                         }
-                        worker.dispatchEvent({ type: "error" });
+                        worker.dispatchEvent(new Event("error"));
                         const dispatchResult = __sharedWorkerSurfaceCalls.join("|");
                         if (dispatchResult !== "listener:error|handler:error") {
                             throw new Error(`SharedWorker ordered dispatch was spoofed: ${dispatchResult}`);
@@ -4933,7 +5033,7 @@ async fn shared_worker_terminal_error_forgets_page_client_wrapper_tracking() {
                     page_vm
                         .vm_mut()
                         .eval("JSON.stringify(globalThis.__sharedWorkerTerminalErrorRecord)")?,
-                    r#"{"type":"error","cancelable":true,"hasMessage":true}"#
+                    r#"{"type":"error","cancelable":false,"hasMessage":false}"#
                 );
                 wait_for_shared_worker_client_count(
                     &mut page_vm,

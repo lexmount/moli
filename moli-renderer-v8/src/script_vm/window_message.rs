@@ -29,10 +29,8 @@ impl ScriptVm {
     /// Apply one task body only after the Page arbiter has matched the root
     /// PageVm namespace and exact LocalWindow target.
     ///
-    /// The selected Page-task dispatcher owns the callback checkpoint and its
-    /// child/runtime follow-up. Keeping this method body-only prevents the V8
-    /// context helper from creating an intermediate checkpoint before the
-    /// scheduler task has actually completed.
+    /// Each listener performs HTML callback cleanup. The selected Page-task
+    /// dispatcher still owns task-end checkpointing and child/runtime follow-up.
     pub(crate) fn apply_current_window_message_task_body(
         &mut self,
         authorization: crate::runtime::AuthorizedCurrentPageWindowMessage,

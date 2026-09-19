@@ -22,30 +22,36 @@ mod script_mime;
 mod thread;
 mod timer_callback;
 
+pub(crate) type WorkerScriptUpdateResources =
+    std::collections::HashMap<url::Url, Result<WorkerScriptResource, String>>;
+
+pub(crate) use thread::perform_callback_cleanup_checkpoint_if_worker;
+
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
     NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
-    cancel_worker_opfs_task, check_worker_websocket_csp, claim_worker_message_port_event_listener,
-    close_worker_websocket, dispatch_worker_trusted_types_sink_violation_event,
+    cancel_worker_opfs_task, check_and_queue_nested_worker_constructor_csp,
+    check_worker_websocket_csp, close_worker_websocket,
+    dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
     forget_worker_message_port_wrapper, get_worker_state,
-    register_worker_broadcast_channel_wrapper, register_worker_message_port_event_listener,
-    register_worker_message_port_wrapper, register_worker_opfs_iterator_task,
-    register_worker_opfs_move_task, register_worker_opfs_task, register_worker_webcrypto_task,
-    register_worker_websocket, remove_worker_message_port_event_listener,
-    remove_worker_message_port_event_listener_by_id, reserve_nested_worker_context,
+    register_worker_broadcast_channel_wrapper, register_worker_message_port_wrapper,
+    register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
+    register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
     send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
     try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
-    try_worker_xhr_send_callback, worker_allows_trusted_type_policy_name,
-    worker_allows_trusted_types_eval, worker_broadcast_channel_registry,
+    try_worker_xhr_send_callback, worker_allows_eval_code_generation_by_csp,
+    worker_allows_trusted_type_policy_name_by_csp, worker_allows_trusted_types_eval,
+    worker_allows_wasm_code_generation_by_csp, worker_broadcast_channel_registry,
     worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
-    worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
-    worker_message_port_event_listener_snapshots, worker_message_port_registry,
+    worker_broadcast_channel_wrapper, worker_content_security_policy_snapshot,
+    worker_current_script_url, worker_global_is_closed, worker_message_port_registry,
     worker_message_port_wake_sender, worker_message_port_wrapper,
     worker_notification_permission_state, worker_opfs_directory_iterator_registry,
-    worker_opfs_handle_registry, worker_service_worker_control_state, worker_storage_key,
-    worker_storage_partition_identity, worker_termination_requested,
+    worker_opfs_handle_registry, worker_requires_trusted_types_for_script,
+    worker_service_worker_control_state, worker_storage_key, worker_storage_partition_identity,
+    worker_termination_requested, worker_trusted_types_for_script_requirements,
     worker_uses_shared_worker_agent_cluster,
 };
 pub(crate) use handle::WorkerMessage;
@@ -54,8 +60,9 @@ pub(crate) use handle::{
     WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
     WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerPendingSubresourceFetch,
     WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
-    WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
-    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent, worker_secure_context_for_script_url,
+    WorkerScriptResource, WorkerScriptResourceKind, WorkerStoredClassicScript,
+    WorkerToParentMessage, WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+    worker_secure_context_for_script_url,
 };
 pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
 pub(crate) use module_mime::{

@@ -10,10 +10,7 @@ async fn install_child_classic_script_ready_fixture(
   globalThis.__lmChildClassicScriptTaskBoundary = [];
   const frame = document.createElement("iframe");
   frame.id = {frame_id:?};
-  document.body.appendChild(frame);
-  void frame.contentWindow.Function;
-  const script = frame.contentDocument.createElement("script");
-  script.textContent = `
+  frame.srcdoc = `<script>
     parent.__lmChildClassicScriptTaskBoundary.push("script");
     Promise.resolve().then(() => {{
       parent.__lmChildClassicScriptTaskBoundary.push("microtask");
@@ -22,12 +19,18 @@ async fn install_child_classic_script_ready_fixture(
       sibling.srcdoc = "<!doctype html><body>reaction child</body>";
       parent.document.body.appendChild(sibling);
     }});
-  `;
-  frame.contentDocument.body.appendChild(script);
+  <\/script>`;
+  document.body.appendChild(frame);
   return "queued";
 }})()
 "#,
     ))?;
+    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+        page_vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "child parser classic script fixture navigation",
+    )
+    .await;
     run_expected_child_realm_materialization_for_wait(
         page_vm,
         "child classic script task fixture realm",
@@ -65,7 +68,7 @@ async fn selected_child_classic_script_ready_completes_reaction_and_runtime_foll
                     "__lmChildClassicScriptTaskBoundary.join('|')"
                 )?,
             "script|microtask",
-            "selected classic-script completion must own the Promise-reaction checkpoint"
+            "selected classic-script completion must observe reactions completed by script cleanup"
         );
         assert!(
             page_vm.vm().has_pending_child_navigation_commit_for_test(),
@@ -168,13 +171,16 @@ Promise.resolve().then(() => {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn child_classic_script_ready_body_leaves_reactions_for_selected_completion() {
+async fn child_classic_script_cleanup_leaves_runtime_followup_for_selected_completion() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/child-classic-script-body").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_child_classic_script_ready_fixture(&mut page_vm, "classic-script-body").await?;
+        page_vm
+            .vm_mut()
+            .enqueue_test_ready_runtime_script_followup();
 
         let body = page_vm
             .run_page_child_document_script_ready_body_for_test()
@@ -192,8 +198,12 @@ async fn child_classic_script_ready_body_leaves_reactions_for_selected_completio
                 .eval_without_microtask_checkpoint_for_test(
                     "__lmChildClassicScriptTaskBoundary.join('|')"
                 )?,
-            "script",
-            "the classic-script body must leave Promise reactions pending for selected completion"
+            "script|microtask",
+            "classic-script cleanup must run Promise reactions before returning the task body"
+        );
+        assert!(
+            !has_ready_runtime_script_continuation_for_test(&page_vm),
+            "script cleanup must leave runtime follow-up publication to selected task completion"
         );
         Ok::<_, anyhow::Error>(())
     })

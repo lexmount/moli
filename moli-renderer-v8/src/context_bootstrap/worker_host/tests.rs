@@ -56,6 +56,14 @@ fn setup_worker_context() -> (v8::OwnedIsolate, v8::Global<v8::Context>) {
         let ctx_scope = &mut v8::ContextScope::new(scope, context);
         let global = context.global(ctx_scope);
 
+        crate::context_bootstrap::exposed_interfaces::install_worker_exposed_interfaces(
+            ctx_scope,
+            global,
+            crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker,
+            false,
+            vec![crate::context_bootstrap::find_constructor_spec("Event").expect("Event spec")],
+        )
+        .expect("standalone Worker tests need intrinsic event constructors");
         install_dom_exception(ctx_scope, global);
         let form_data_template =
             crate::context_bootstrap::build_named_constructor_template(ctx_scope, "FormData")
@@ -545,7 +553,7 @@ fn constructor_declared_event_target_slots_ignore_reflection_and_spoofing() {
             if (typeof w.onmessage !== "function") {
                 throw new Error("onmessage getter should ignore public slot spoofing");
             }
-            w.dispatchEvent({ type: "message" });
+            w.dispatchEvent(new Event("message"));
             const result = calls.join("|");
             if (result !== "listener:message|handler:message") {
                 throw new Error(`Worker ordered dispatch was spoofed: ${result}`);
@@ -1440,6 +1448,72 @@ async fn constructor_onerror_has_event_fields() {
         }
     }
     panic!("timed out waiting for error event fields");
+}
+
+#[tokio::test]
+async fn constructor_onerror_return_true_does_not_cancel_syntax_error_event() {
+    ensure_v8();
+    let (mut isolate, ctx) = setup_worker_context();
+
+    eval_ok(
+        &mut isolate,
+        &ctx,
+        r#"
+            var errorReturnObservations = null;
+            var w = new Worker("function {");
+            w.onerror = function(e) {
+              errorReturnObservations = [arguments.length, e.defaultPrevented === true];
+              return true;
+            };
+            w.addEventListener("error", function(e) {
+              errorReturnObservations.push(e.defaultPrevented === true);
+            });
+            "#,
+    );
+
+    for _ in 0..50 {
+        sleep(Duration::from_millis(20)).await;
+        let result = eval_ok(
+            &mut isolate,
+            &ctx,
+            "__drainWorkerMessages(w); JSON.stringify(errorReturnObservations)",
+        );
+        if result != "null" {
+            assert_eq!(result, "[1,false,false]");
+            eval_ok(&mut isolate, &ctx, "w.terminate()");
+            return;
+        }
+    }
+    panic!("timed out waiting for worker syntax error event");
+}
+
+#[test]
+fn worker_event_handler_only_boolean_false_cancels_synthetic_event() {
+    ensure_v8();
+    let (mut isolate, ctx) = setup_worker_context();
+
+    let result = eval_ok(
+        &mut isolate,
+        &ctx,
+        r#"
+        (() => {
+          const w = new Worker("");
+          const run = returned => {
+            w.onerror = () => returned;
+            const event = new Event("error", {cancelable: true});
+            return [w.dispatchEvent(event), event.defaultPrevented];
+          };
+          const observations = [run(true), run(false), run(0), run("")];
+          w.terminate();
+          return JSON.stringify(observations);
+        })()
+        "#,
+    );
+
+    assert_eq!(
+        result,
+        "[[true,false],[false,true],[true,false],[true,false]]"
+    );
 }
 
 #[tokio::test]

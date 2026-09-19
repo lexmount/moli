@@ -8,8 +8,8 @@ use moli_webapi_declare::WebApiObject;
     data_properties,
     enumerable
 )]
-struct IndexDescriptorDeclaration<'scope, 'value> {
-    name: &'value str,
+struct IndexDescriptorDeclaration<'scope> {
+    name: v8::Local<'scope, v8::String>,
     key_path: v8::Local<'scope, v8::Value>,
     unique: bool,
     multi_entry: bool,
@@ -22,8 +22,8 @@ struct IndexDescriptorDeclaration<'scope, 'value> {
     data_properties,
     enumerable
 )]
-struct ObjectStoreDescriptorDeclaration<'scope, 'value> {
-    name: &'value str,
+struct ObjectStoreDescriptorDeclaration<'scope> {
+    name: v8::Local<'scope, v8::String>,
     key_path: v8::Local<'scope, v8::Value>,
     auto_increment: bool,
 }
@@ -34,9 +34,14 @@ pub(in crate::context_bootstrap::indexed_db) fn create_index_descriptor_object<'
 ) -> Option<v8::Local<'s, v8::Object>> {
     let key_path = key_path_to_js_value(scope, &info.key_path)?;
     let descriptor = new_null_prototype_object(scope);
-    IndexDescriptorDeclaration::new(&info.name, key_path, info.unique, info.multi_entry)
-        .initialize(scope, descriptor)
-        .ok()?;
+    IndexDescriptorDeclaration::new(
+        idb_name_to_v8(scope, &info.name),
+        key_path,
+        info.unique,
+        info.multi_entry,
+    )
+    .initialize(scope, descriptor)
+    .ok()?;
     Some(descriptor)
 }
 
@@ -50,15 +55,19 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_o
         None => v8::null(scope).into(),
     };
     let descriptor = new_null_prototype_object(scope);
-    ObjectStoreDescriptorDeclaration::new(&info.name, key_path, info.auto_increment)
-        .initialize(scope, descriptor)
-        .ok()?;
+    ObjectStoreDescriptorDeclaration::new(
+        idb_name_to_v8(scope, &info.name),
+        key_path,
+        info.auto_increment,
+    )
+    .initialize(scope, descriptor)
+    .ok()?;
     let index_names = if indexes.is_empty() {
         info.index_names.clone()
     } else {
         indexes.iter().map(|index| index.name.clone()).collect()
     };
-    let index_names_list = new_idb_dom_string_list(scope, &index_names);
+    let index_names_list = new_idb_name_list(scope, &index_names);
     set_indexed_db_internal_object_property(
         scope,
         descriptor,
@@ -68,12 +77,13 @@ pub(in crate::context_bootstrap::indexed_db) fn create_object_store_descriptor_o
     let index_map = new_null_prototype_object(scope);
     for index in indexes {
         let descriptor_value = create_index_descriptor_object(scope, index)?;
-        set_indexed_db_internal_object_property(
+        let name = idb_name_to_v8(scope, &index.name);
+        index_map.define_own_property(
             scope,
-            index_map,
-            &index.name,
+            name.into(),
             descriptor_value.into(),
-        );
+            v8::PropertyAttribute::NONE,
+        )?;
     }
     set_indexed_db_internal_object_property(scope, descriptor, "indexes", index_map.into());
     Some(descriptor)

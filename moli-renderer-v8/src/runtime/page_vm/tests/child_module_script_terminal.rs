@@ -52,6 +52,124 @@ pub(super) async fn queue_real_child_module_terminal(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn child_parser_modules_check_preparation_document_before_execution() {
+    run_page_vm_async_test(async {
+        for fetch_fails in [false, true] {
+            for movement in ["before", "return", "during"] {
+                let source = if movement == "during" {
+                    "parent.__adoptionEvents.push('execute'); parent.document.body.append(parent.__movedModule);"
+                } else {
+                    "parent.__adoptionEvents.push('execute');"
+                };
+                let (base_url, server) = spawn_path_response_http_server(vec![(
+                    "/adopted.mjs",
+                    if fetch_fails { "HTTP/1.1 404 Not Found" } else { "HTTP/1.1 200 OK" },
+                    source.to_owned(), Duration::ZERO,
+                )]).await;
+                let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+                let (mut page_vm, mut resource_source, mut owner_wake_rx) =
+                    page_vm_with_bound_task_sources_and_owner_wake(
+                        &loader, Url::parse(&format!("{base_url}/page"))?,
+                    );
+                queue_real_child_module_terminal(
+                    &mut page_vm, &mut resource_source, &mut owner_wake_rx,
+                    "adopted-child", &format!("{base_url}/adopted.mjs"),
+                ).await?;
+                page_vm.vm_mut().eval(r#"
+                    globalThis.__adoptionEvents = [];
+                    globalThis.__childDocument = document.getElementById('adopted-child').contentDocument;
+                    globalThis.__movedModule = __childDocument.querySelector('script');
+                    __movedModule.onload = () => __adoptionEvents.push('load');
+                    __movedModule.onerror = () => __adoptionEvents.push('error');
+                "#)?;
+                if movement != "during" {
+                    page_vm.vm_mut().eval("document.body.append(__movedModule)")?;
+                    if movement == "return" {
+                        page_vm.vm_mut().eval("__childDocument.body.append(__movedModule)")?;
+                    }
+                }
+                run_expected_child_module_script_terminal_turn(
+                    &mut page_vm, "adopted child module source terminal",
+                ).await;
+                assert!(page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ChildDocumentScriptReady, &loader,
+                ).await?);
+                let expected = if movement == "before" { "" } else if fetch_fails { "error" } else { "execute|load" };
+                assert_eq!(page_vm.vm_mut().eval("__adoptionEvents.join('|')")?, expected,
+                    "fetch_fails={fetch_fails}, movement={movement}");
+                for source in [
+                    ChildFrameSemanticTurnKind::DocumentLifecycle,
+                    ChildFrameSemanticTurnKind::DocumentLifecycle,
+                    ChildFrameSemanticTurnKind::HostLoad,
+                ] {
+                    run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+                        &mut page_vm, source, "lifecycle after adopted module",
+                    ).await;
+                }
+                assert_eq!(page_vm.vm_mut().eval("__childDocument.readyState")?, "complete");
+                server.await?;
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn child_parser_module_roots_compile_binary_wasm_responses() {
+    run_page_vm_async_test(async {
+        for (path, body, expected) in [
+            // A custom section contains arbitrary bytes, including invalid UTF-8.
+            ("/valid.WASM?v=1", vec![0, 97, 115, 109, 1, 0, 0, 0, 0, 2, 0, 255], "load"),
+            ("/invalid.wasm", vec![0], "CompileError:true|load"),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let base_url = format!("http://{}", listener.local_addr()?);
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let request = read_http_request_head(&mut stream).await.unwrap();
+                assert_eq!(request.lines().next().unwrap().split_whitespace().nth(1), Some(path));
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/wasm\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+            });
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, mut resource_source, mut owner_wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(
+                    &loader, Url::parse(&format!("{base_url}/page"))?,
+                );
+            queue_real_child_module_terminal(
+                &mut page_vm, &mut resource_source, &mut owner_wake_rx,
+                "wasm-child", &format!("{base_url}{path}"),
+            ).await?;
+            page_vm.vm_mut().eval(r#"
+                globalThis.__wasmRootEvents = [];
+                const child = document.getElementById('wasm-child').contentWindow;
+                child.addEventListener('error', event => {
+                    __wasmRootEvents.push(event.error.name + ':' +
+                        (event.error.constructor === child.WebAssembly.CompileError));
+                    event.preventDefault();
+                });
+                const script = child.document.querySelector('script');
+                script.addEventListener('error', () => __wasmRootEvents.push('element-error'));
+                script.addEventListener('load', () => __wasmRootEvents.push('load'));
+            "#)?;
+            run_expected_child_module_script_terminal_turn(
+                &mut page_vm, "binary Wasm parser root",
+            ).await;
+            assert!(page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::ChildDocumentScriptReady, &loader,
+            ).await?);
+            assert_eq!(page_vm.vm_mut().eval("__wasmRootEvents.join('|')")?, expected, "{path}");
+            server.await?;
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn real_terminal_captures_realm_and_is_discarded_after_realm_replacement() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(

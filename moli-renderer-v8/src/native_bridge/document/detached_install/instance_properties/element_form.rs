@@ -348,14 +348,18 @@ fn detached_control_submission_value<'s>(
             return crate::native_bridge::element::text_control_value(runtime, handle);
         }
         if element.is_html_textarea() {
-            let value = crate::native_bridge::element::text_control_value(runtime, handle);
+            let mut value = crate::native_bridge::element::text_control_value(runtime, handle);
             if !element.input_value_dirty()
                 && value.is_empty()
                 && let Some(attribute_value) = element.attribute_ns("", "value")
             {
-                return attribute_value.to_owned();
+                value = attribute_value.to_owned();
             }
-            return value;
+            return moli_dom::forms::apply_textarea_wrapping_transformation(
+                value,
+                element.attribute_ns("", "wrap"),
+                element.attribute_ns("", "cols"),
+            );
         }
         if element.is_html_button() {
             return element

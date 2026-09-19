@@ -79,6 +79,15 @@ impl ScriptVm {
                     crate::context_bootstrap::flush_blocked_indexed_db_requests(scope);
                     true
                 }
+                RendererPageIndexedDbTaskKind::VersionChange(handle) => {
+                    crate::context_bootstrap::flush_indexed_db_connection_notification(
+                        scope, handle,
+                    )
+                }
+                RendererPageIndexedDbTaskKind::TransactionsReady => {
+                    crate::context_bootstrap::flush_indexed_db_transaction_starts(scope);
+                    true
+                }
             };
             execution_context
                 .dispatch_scope()
@@ -113,6 +122,8 @@ impl ScriptVm {
                     unsafe { &*host_ptr }.finish_indexed_db_blocked_drain(execution_context);
                     true
                 }
+                RendererPageIndexedDbTaskKind::VersionChange(_)
+                | RendererPageIndexedDbTaskKind::TransactionsReady => false,
             })
         })?;
         Ok(if removed {

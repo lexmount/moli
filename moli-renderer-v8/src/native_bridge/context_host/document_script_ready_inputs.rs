@@ -186,6 +186,12 @@ impl JsContextHost {
             return false;
         }
 
+        let Some(work) = self
+            .child_runtime_script_order
+            .admit_or_retain(realm_id, work)
+        else {
+            return true;
+        };
         let task_id = self.child_document_script_ready_tasks.allocate_task_id();
         let target = RendererPageChildDocumentScriptReadyTarget::new(
             route.child_handle(),
@@ -202,9 +208,9 @@ impl JsContextHost {
             return true;
         }
 
-        if let Some(work) = self.child_document_script_ready_tasks.remove_exact(target) {
-            self.settle_child_document_script_ready_task_without_execution(work);
-        }
+        // A closed Page route cannot accept successors. Retire the whole
+        // Document queue without recursively promoting its ordered scripts.
+        self.retire_child_document_script_ready_tasks_for_owner(owner);
         tracing::debug!(
             ?target,
             "retired child DocumentScriptReady payload after stable route closure"
@@ -226,10 +232,10 @@ impl JsContextHost {
         self.queue_child_document_script_ready_task_for_realm(work, realm_id)
     }
 
-    /// Move every currently-runnable scheduler action into the single stable
-    /// child-frame source. Current owners without a materialized realm retain
-    /// their work in the scheduler store; stale owners are consumed rather
-    /// than blocking later Documents.
+    /// Admit scheduler actions through the runtime in-order list into the
+    /// single stable child-frame source. Current owners without a materialized
+    /// realm retain their work in the scheduler store; stale owners are consumed
+    /// rather than blocking later Documents.
     pub(crate) fn admit_runnable_child_document_script_tasks(&mut self) -> usize {
         let mut admitted = 0;
         loop {
@@ -309,6 +315,17 @@ impl JsContextHost {
         self.child_document_script_ready_tasks.remove_exact(target)
     }
 
+    pub(crate) fn finish_child_runtime_script(
+        &mut self,
+        owner: FrameDocumentTaskOwner,
+        script_handle: crate::document_runtime::DomHandle,
+    ) {
+        if let Some((realm_id, work)) = self.child_runtime_script_order.finish(owner, script_handle)
+        {
+            let _ = self.queue_child_document_script_ready_task_for_realm(work, realm_id);
+        }
+    }
+
     pub(crate) fn discard_pending_child_document_script_ready_task(
         &mut self,
         task_id: RendererPageChildDocumentScriptReadyTaskId,
@@ -324,7 +341,10 @@ impl JsContextHost {
         &mut self,
         owner: FrameDocumentTaskOwner,
     ) -> usize {
-        let retired = self.child_document_script_ready_tasks.remove_owner(owner);
+        // Also drain work waiting for an earlier runtime script. This path is
+        // used for both Document retirement and failed realm materialization.
+        let mut retired = self.child_runtime_script_order.remove_document(owner);
+        retired.extend(self.child_document_script_ready_tasks.remove_owner(owner));
         let retired_count = retired.len();
         for work in retired {
             self.settle_child_document_script_ready_task_without_execution(work);
@@ -418,8 +438,16 @@ impl JsContextHost {
                 ..
             } => FrameDocumentScriptWorkAdmission::QueuedBehindRealm,
         };
-        let work = work.bind_to_realm(realm_id);
-        self.queue_child_document_script_ready_task_for_realm(work.into(), realm_id)
+        let work = FrameDocumentScriptReadyTaskWork::from(work.bind_to_realm(realm_id));
+        let admission = if self
+            .child_runtime_script_order
+            .waiting_for_predecessor(owner, work.route().script_handle())
+        {
+            FrameDocumentScriptWorkAdmission::QueuedBehindScript
+        } else {
+            admission
+        };
+        self.queue_child_document_script_ready_task_for_realm(work, realm_id)
             .then_some(admission)
     }
 
@@ -445,13 +473,14 @@ impl JsContextHost {
         &mut self,
         work: FrameDocumentScriptReadyTaskWork,
     ) {
+        let route = work.route();
+        self.finish_child_runtime_script(route.task_owner(), route.script_handle());
         let FrameDocumentScriptReadyTaskWork::DocumentScriptExecution(work) = work else {
             // Scheduler-owned parser/module state is retired together with its
             // exact Document. It must not be reinserted into another queue.
             return;
         };
         match *work {
-            FrameDocumentRealmBoundScriptWork::DynamicClassic(_) => {}
             FrameDocumentRealmBoundScriptWork::ExternalClassic(work) => {
                 let _ = self.settle_child_async_classic_script_load_delay(
                     work.child_handle,

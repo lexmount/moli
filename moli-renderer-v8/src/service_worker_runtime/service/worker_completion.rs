@@ -1,6 +1,28 @@
 use super::*;
+use crate::service_worker_runtime::script_loading::ServiceWorkerScriptMapSnapshot;
 
 impl ServiceWorkerRuntimeService {
+    pub(in crate::service_worker_runtime) fn script_resource_map_snapshot(
+        &self,
+        owner: &ServiceWorkerRunOwner,
+    ) -> Option<ServiceWorkerScriptMapSnapshot> {
+        let state = self.inner.state.lock();
+        let version = state.versions.get(&owner.version_id())?;
+        if version.run != owner.cloned_run_identity() {
+            return None;
+        }
+        Some(ServiceWorkerScriptMapSnapshot {
+            main_script: version.main_script_resource.clone(),
+            imported_scripts: version
+                .imported_script_resources
+                .values()
+                .map(ServiceWorkerScriptResource::to_worker_script_resource)
+                .collect(),
+            can_import_new_scripts: version.lifecycle_state
+                == ServiceWorkerVersionLifecycleState::Installing,
+        })
+    }
+
     #[cfg(test)]
     pub(super) fn finish_worker_start_completed(
         &self,
@@ -44,7 +66,7 @@ impl ServiceWorkerRuntimeService {
             return;
         };
         let loaded_main_script_resource = script_resource.is_some();
-        let (lifecycle_start, register_completion, pending_events) = {
+        let (lifecycle_start, register_completion, notifications, worker_hosts, pending_events) = {
             let mut state = self.inner.state.lock();
             let (registration_id, lifecycle_state, pending_events, run) = {
                 let Some(version) = state.versions.get_mut(&version_id) else {
@@ -127,18 +149,89 @@ impl ServiceWorkerRuntimeService {
             } else {
                 None
             };
+            let (mut notifications, worker_hosts) = if lifecycle_start.is_some() {
+                let notifications = lifecycle_notifications_for_registration_locked(
+                    &state,
+                    registration_id,
+                    vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
+                );
+                let hosts = state
+                    .versions
+                    .values()
+                    .filter_map(|version| {
+                        if version.registration_id != registration_id {
+                            return None;
+                        }
+                        match &version.running_state {
+                            ServiceWorkerVersionRunningState::Running { host } => {
+                                Some(host.clone())
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                (notifications, hosts)
+            } else {
+                (Vec::new(), Vec::new())
+            };
+            // A first register() creates its JS registration when the completion is
+            // delivered. Queue updatefound for that document after the completion,
+            // even though it cannot have a registration watcher yet.
+            if let Some((callbacks, snapshot)) = &register_completion {
+                for callback in callbacks {
+                    let ServiceWorkerRegisterJob::Page {
+                        document_owner,
+                        completion_tx,
+                        ..
+                    } = callback
+                    else {
+                        continue;
+                    };
+                    if notifications
+                        .iter()
+                        .any(|notification| notification.watcher.document_owner == *document_owner)
+                    {
+                        continue;
+                    }
+                    notifications.push(ServiceWorkerLifecycleNotificationDelivery {
+                        watcher: ServiceWorkerLifecycleWatcher {
+                            scope_url: snapshot.scope_url().clone(),
+                            storage_key: state.registrations[&registration_id].storage_key.clone(),
+                            document_owner: *document_owner,
+                            completion_tx: completion_tx.clone(),
+                        },
+                        registration: snapshot.clone(),
+                        events: vec![ServiceWorkerLifecycleClientEvent::UpdateFound],
+                    });
+                }
+            }
             state.record_target_started(version_id, run);
-            (lifecycle_start, register_completion, pending_events)
+            (
+                lifecycle_start,
+                register_completion,
+                notifications,
+                worker_hosts,
+                pending_events,
+            )
         };
-        if let Some(start) = lifecycle_start
-            && let Some(progress) = Self::lifecycle_start_to_progress(start)
-        {
-            self.run_lifecycle_progress(progress);
-        }
         if let Some((callbacks, snapshot)) = register_completion
             && !callbacks.is_empty()
         {
             ServiceWorkerRegisterJob::send_all(callbacks, Ok(snapshot));
+        }
+        // Script evaluation must succeed before updatefound. Deliver it on each
+        // existing worker loop before install (and before page listeners can send
+        // another event to the active worker).
+        for host in worker_hosts {
+            host.dispatch_registration_update_found();
+        }
+        for notification in notifications {
+            notification.send();
+        }
+        if let Some(start) = lifecycle_start
+            && let Some(progress) = Self::lifecycle_start_to_progress(start)
+        {
+            self.run_lifecycle_progress(progress);
         }
         for event in pending_events {
             match event {
@@ -797,7 +890,7 @@ impl ServiceWorkerRuntimeService {
             }
             version
                 .imported_script_resources
-                .insert(resource.final_url.to_string(), resource);
+                .insert(resource.request_url.to_string(), resource);
             matches!(
                 version.lifecycle_state,
                 ServiceWorkerVersionLifecycleState::Installed
@@ -959,6 +1052,12 @@ fn registration_error_for_update_check_failure(
     failure: ServiceWorkerScriptUpdateCheckFailure,
 ) -> ServiceWorkerRegistrationError {
     match failure.status {
+        ServiceWorkerScriptUpdateCheckFailureStatus::Security => {
+            ServiceWorkerRegistrationError::new(
+                crate::service_worker_runtime::ServiceWorkerRegistrationErrorKind::Security,
+                failure.message,
+            )
+        }
         ServiceWorkerScriptUpdateCheckFailureStatus::ScriptLoadFailed => {
             registration_error_for_script_load_failure(failure.message)
         }
@@ -980,6 +1079,8 @@ fn registration_error_for_script_load_failure(message: String) -> ServiceWorkerR
         );
     }
     if normalized.contains("cross-origin")
+        || normalized.contains("script mime type")
+        || normalized.contains("blocked by x-content-type-options nosniff")
         || normalized.contains("service-worker-allowed")
         || normalized.contains("not under the max scope allowed")
         || normalized.contains("disallowed escape")

@@ -5,8 +5,8 @@ use crate::webidl;
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBFactory.deleteDatabase")]
 struct IdbFactoryDeleteDatabaseArgs {
-    #[webidl(required)]
-    name: String,
+    #[webidl(required, with = parse_database_name_arg)]
+    name: IndexedDbName,
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_callback<'s>(
@@ -51,27 +51,19 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_factory_delete_database_call
         rv.set(request.into());
         return;
     }
-    let registry_key = database_registry_key(&origin, &name);
-    let has_open_connections = has_open_database_connections_for_key(scope, &registry_key);
-    let delete_blocked =
-        match with_indexed_db_manager(scope, |manager| manager.database_version(&origin, &name)) {
-            Ok(version) if has_open_connections => Some(
-                version
-                    .or_else(|| open_database_connection_version_for_key(scope, &registry_key))
-                    .unwrap_or(0),
-            ),
-            Ok(_) => None,
-            Err(error) => {
-                let error = request_error_object(scope, &error);
-                store_request_error(scope, request, error);
-                rv.set(request.into());
-                return;
-            }
-        };
-    if let Some(old_version) = delete_blocked {
-        enqueue_blocked_delete_task(scope, request, &origin, &name, old_version);
-    } else {
-        execute_delete_database_request(scope, request, storage_scope, name);
-    }
+    enqueue_blocked_delete_task(scope, request, &origin, &name);
     rv.set(request.into());
+}
+
+fn parse_database_name_arg<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<IndexedDbName, webidl::WebIdlError> {
+    webidl::convert::<webidl::DomString16>(
+        scope,
+        args.get(index),
+        webidl::Context::argument("IDBFactory.deleteDatabase", (index + 1) as usize),
+    )
+    .map(|name| IndexedDbName::from_utf16(name.0))
 }

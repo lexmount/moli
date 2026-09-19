@@ -21,29 +21,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_bound_callback<'s>
     let Some(parsed) = webidl::parse_args::<IdbKeyRangeBoundArgs<'s>>(scope, &args) else {
         return;
     };
-    let lower = match parse_idb_key(scope, parsed.lower) {
-        Ok(Some(key)) => key,
-        _ => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'bound': lower is not a valid key.",
-                "DataError",
-            );
-            scope.throw_exception(error);
-            return;
-        }
+    let Some(lower) = require_idb_key(scope, parsed.lower) else {
+        return;
     };
-    let upper = match parse_idb_key(scope, parsed.upper) {
-        Ok(Some(key)) => key,
-        _ => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'bound': upper is not a valid key.",
-                "DataError",
-            );
-            scope.throw_exception(error);
-            return;
-        }
+    let Some(upper) = require_idb_key(scope, parsed.upper) else {
+        return;
     };
     if compare_idb_keys(&lower, &upper) > 0 {
         let error = dom_exception_value(

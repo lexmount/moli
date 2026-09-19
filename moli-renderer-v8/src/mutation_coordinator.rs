@@ -6,12 +6,8 @@ mod notifications;
 pub(crate) use notifications::notify_dom_mutation;
 
 use super::{
-    host::{
-        HostDocumentState, HostEventTargetRegistry, HostScriptScheduler,
-        RuntimeScriptStartDecision, ScriptElementLoader, ScriptElementLoaderOptions,
-    },
-    native_bridge::{self, JsContextHost},
-    util::v8str,
+    host::{HostEventTargetRegistry, HostScriptScheduler},
+    native_bridge::JsContextHost,
 };
 
 #[derive(Debug, Default)]
@@ -25,12 +21,11 @@ pub(super) struct MutationCoordinatorApplyResult {
 #[derive(Debug)]
 pub(super) struct RuntimeScriptStartCandidate {
     node: NativeNodeId,
-    host_script_handle: String,
 }
 
 impl RuntimeScriptStartCandidate {
-    pub(super) fn into_parts(self) -> (NativeNodeId, String) {
-        (self.node, self.host_script_handle)
+    pub(super) fn into_node(self) -> NativeNodeId {
+        self.node
     }
 }
 
@@ -55,6 +50,7 @@ pub(crate) struct RuntimeMutationOptions {
     pub(crate) dispatch_atomic_move_callbacks: bool,
     pub(crate) parser_created: bool,
     pub(crate) check_inline_style_csp: bool,
+    pub(crate) defer_document_followups_to_parser_owner: bool,
 }
 
 impl RuntimeMutationOptions {
@@ -66,6 +62,7 @@ impl RuntimeMutationOptions {
             dispatch_atomic_move_callbacks: false,
             parser_created: false,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
         }
     }
 
@@ -77,6 +74,7 @@ impl RuntimeMutationOptions {
             dispatch_atomic_move_callbacks: false,
             parser_created: true,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
         }
     }
 
@@ -112,9 +110,19 @@ impl RuntimeMutationOptions {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ScriptStartRequest {
+pub(super) struct ScriptStartRequest {
     handle: NativeNodeId,
     clears_force_async: bool,
+}
+
+impl ScriptStartRequest {
+    pub(super) fn handle(&self) -> NativeNodeId {
+        self.handle
+    }
+
+    pub(super) fn clears_force_async(&self) -> bool {
+        self.clears_force_async
+    }
 }
 
 #[derive(Debug, Default)]
@@ -164,7 +172,6 @@ impl MutationCoordinator {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         dom_host: &mut DomHost,
-        document: &HostDocumentState,
         _scripts: &mut HostScriptScheduler,
         _events: &mut HostEventTargetRegistry,
         effects: DomMutationEffects,
@@ -233,20 +240,11 @@ impl MutationCoordinator {
         }
         let mutation_record_count = effects.observer_records().records().len();
         let script_planning_started = cpu_profile_enabled.then(Instant::now);
-        let mut script_start_requests = ScriptStartRequests::default();
-        if prepare_connected_scripts {
-            for &root in effects.scripts().connected_roots() {
-                self.collect_connected_scripts_in_subtree(
-                    dom_host,
-                    root,
-                    &mut script_start_requests,
-                );
-            }
-            for trigger in effects.scripts().prepare_triggers() {
-                script_start_requests.queue(trigger.handle(), trigger.clears_script_force_async());
-            }
-        }
-        let script_start_requests = script_start_requests.into_tree_order(dom_host);
+        let script_start_requests = if prepare_connected_scripts {
+            self.plan_connected_script_start_requests(dom_host, &effects)
+        } else {
+            Vec::new()
+        };
         let script_start_request_count = script_start_requests.len();
         let script_planning_us = script_planning_started
             .map(|started| started.elapsed().as_micros())
@@ -257,13 +255,9 @@ impl MutationCoordinator {
             if request.clears_force_async {
                 let _ = dom_host.set_script_force_async(request.handle, false);
             }
-            if let Some(candidate) = self.collect_connected_script_start_candidate(
-                scope,
-                host_ptr,
-                dom_host,
-                request.handle,
-                document,
-            ) {
+            if let Some(candidate) =
+                self.collect_connected_script_start_candidate(dom_host, request.handle)
+            {
                 runtime_script_start_candidates.push(candidate);
             }
         }
@@ -357,132 +351,30 @@ impl MutationCoordinator {
         }
     }
 
-    fn collect_connected_script_start_candidate(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
+    pub(super) fn plan_connected_script_start_requests(
+        &self,
         dom_host: &mut DomHost,
-        node: NativeNodeId,
-        document: &HostDocumentState,
-    ) -> Option<RuntimeScriptStartCandidate> {
-        if !dom_host
-            .node(node)
-            .is_some_and(crate::dom::native::Node::is_script_element)
-        {
-            return None;
+        effects: &DomMutationEffects,
+    ) -> Vec<ScriptStartRequest> {
+        let mut requests = ScriptStartRequests::default();
+        for &root in effects.scripts().connected_roots() {
+            self.collect_connected_scripts_in_subtree(dom_host, root, &mut requests);
         }
-        let owner_document_handle = dom_host.owner_document_handle(node)?;
-        if owner_document_handle != dom_host.document_handle() {
-            self.start_connected_child_document_script(
-                scope,
-                host_ptr,
-                dom_host,
-                node,
-                owner_document_handle,
-                document,
-            );
-            return None;
+        for trigger in effects.scripts().prepare_triggers() {
+            requests.queue(trigger.handle(), trigger.clears_script_force_async());
         }
-        let wrapper = unsafe { &mut *host_ptr }
-            .native_bridge_mut()
-            .wrap_handle(scope, host_ptr, node)?;
-
-        let host_script_handle =
-            native_bridge::object_string_property(scope, wrapper, "__moliHandle").unwrap_or_else(
-                || {
-                    let handle = format!("dynamic-script-native-{}", node.index());
-                    if let Some(value) = v8::String::new(scope, &handle) {
-                        let key = v8str(scope, "__moliHandle");
-                        let _ = wrapper.define_own_property(
-                            scope,
-                            key.into(),
-                            value.into(),
-                            v8::PropertyAttribute::DONT_ENUM,
-                        );
-                    }
-                    handle
-                },
-            );
-        Some(RuntimeScriptStartCandidate {
-            node,
-            host_script_handle,
-        })
+        requests.into_tree_order(dom_host)
     }
 
-    fn start_connected_child_document_script(
+    pub(super) fn collect_connected_script_start_candidate(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        host_ptr: *mut JsContextHost,
-        dom_host: &mut DomHost,
+        dom_host: &DomHost,
         node: NativeNodeId,
-        owner_document_handle: NativeNodeId,
-        document: &HostDocumentState,
-    ) {
-        let (preparation, decision) = ScriptElementLoader::prepare(
-            dom_host,
-            document,
-            node,
-            ScriptElementLoaderOptions::with_scripting_enabled(
-                unsafe { &*host_ptr }.document_scripting_enabled(owner_document_handle),
-            ),
-        )
-        .into_parts();
-        match decision {
-            RuntimeScriptStartDecision::Skip { commit_start, .. } => {
-                if commit_start {
-                    let _ = dom_host.set_script_already_started(node, true);
-                }
-            }
-            RuntimeScriptStartDecision::ExecuteInlineClassic { source } => {
-                if unsafe { &mut *host_ptr }
-                    .queue_child_dynamic_inline_classic_script_for_current_document(
-                        scope,
-                        owner_document_handle,
-                        node,
-                        source,
-                    )
-                {
-                    let _ = dom_host.set_script_already_started(node, true);
-                }
-            }
-            RuntimeScriptStartDecision::Queue {
-                source,
-                kind,
-                mode,
-                source_kind,
-            } => {
-                match unsafe { &mut *host_ptr }
-                    .queue_child_dynamic_external_classic_script_for_current_document(
-                        scope,
-                        owner_document_handle,
-                        node,
-                        &preparation,
-                        &source,
-                        kind,
-                        mode,
-                        source_kind,
-                    ) {
-                    Ok(true) => {}
-                    Ok(false) => tracing::debug!(
-                        node = ?node,
-                        owner_document_handle = ?owner_document_handle,
-                        kind = ?kind,
-                        mode = ?mode,
-                        source_kind = ?source_kind,
-                        "child runtime script has no supported current-document queue"
-                    ),
-                    Err(error) => tracing::warn!(
-                        node = ?node,
-                        owner_document_handle = ?owner_document_handle,
-                        %error,
-                        "failed to prepare child runtime external classic script"
-                    ),
-                }
-            }
-            RuntimeScriptStartDecision::RegisterImportMap { .. }
-            | RuntimeScriptStartDecision::RejectExternalImportMap
-            | RuntimeScriptStartDecision::QueueFailed { .. } => {}
-        }
+    ) -> Option<RuntimeScriptStartCandidate> {
+        dom_host
+            .node(node)
+            .is_some_and(crate::dom::native::Node::is_script_element)
+            .then_some(RuntimeScriptStartCandidate { node })
     }
 }
 

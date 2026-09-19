@@ -118,7 +118,7 @@ fn ondevicechange_setter<'s>(
         return;
     }
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -135,6 +135,6 @@ fn ondevicechange_setter<'s>(
         MEDIA_DEVICES_LISTENERS_SLOT,
         "devicechange",
         MEDIA_DEVICES_ONDEVICECHANGE_SLOT,
-        stored.is_function(),
+        stored.is_object(),
     );
 }

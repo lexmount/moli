@@ -2,17 +2,23 @@ self.onmessage = async function (event) {
   const mode = event.data && event.data.mode;
 
   if (mode === "filelist") {
-    const file = new File(["hello"], "note.txt", { type: "text/plain" });
-    const list = new FileList([file]);
+    let constructError = null;
+    try {
+      new FileList();
+    } catch (error) {
+      constructError = error && error.name;
+    }
     postMessage({
       ctorOwn: Object.prototype.hasOwnProperty.call(self, "FileList"),
       ctorType: typeof FileList,
-      ctorName: list.constructor && list.constructor.name,
-      tag: Object.prototype.toString.call(list),
-      instanceofFileList: list instanceof FileList,
-      length: list.length,
-      firstName: list.item(0) && list.item(0).name,
-      indexName: list[0] && list[0].name,
+      ctorName: FileList.name,
+      constructError: constructError,
+      itemType: typeof FileList.prototype.item,
+      lengthGetterType: typeof Object.getOwnPropertyDescriptor(
+        FileList.prototype,
+        "length",
+      ).get,
+      iterType: typeof FileList.prototype[Symbol.iterator],
     });
     close();
     return;

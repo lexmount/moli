@@ -1,30 +1,26 @@
-use crate::web_api_interfaces;
 use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;
-use super::super::util::{get_private_value, set_private_value, v8_string, v8str};
-use crate::context_bootstrap::{MessagePortEventListenerId, new_dom_exception_value};
-use crate::types::MessagePortId;
-use moli_webapi_declare::WebApiObject;
+use super::super::util::{get_private_value, set_private_value};
+use crate::context_bootstrap::new_dom_exception_value;
 
 mod controller;
 mod event;
 mod signal;
 mod statics;
 
+use crate::context_bootstrap::{abort_signal, abort_signal_events};
 pub(crate) use controller::{
     abort_controller_abort_callback, abort_controller_constructor_callback,
     abort_controller_signal_getter_callback,
 };
-use event::dispatch_abort;
 pub(crate) use signal::{
-    abort_signal_aborted_getter_callback, abort_signal_add_event_listener_callback,
-    abort_signal_dispatch_event_callback, abort_signal_onabort_getter_callback,
-    abort_signal_onabort_setter_callback, abort_signal_reason_getter_callback,
-    abort_signal_remove_event_listener_callback, abort_signal_throw_if_aborted_callback,
+    abort_signal_aborted_getter_callback, abort_signal_reason_getter_callback,
+    abort_signal_throw_if_aborted_callback,
 };
 pub(crate) use statics::{
     abort_signal_any_callback, abort_signal_static_abort_callback, abort_signal_timeout_callback,
+    new_dependent_abort_signal,
 };
 
 const ABORT_SIGNAL_ID_SLOT: &str = "__lmAbortSignalId";
@@ -44,43 +40,11 @@ struct AbortSignalState {
     signal: Option<v8::Global<v8::Object>>,
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
-    onabort: Option<v8::Global<v8::Function>>,
-    listeners: HashMap<String, Vec<AbortListener>>,
-    abort_algorithms: Vec<v8::Global<v8::Function>>,
+    abort_algorithms: Vec<crate::abort_signal_route::AbortAlgorithm>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
-    linked_message_port_listeners: Vec<AbortLinkedMessagePortListener>,
+    // None for a source; Some (including empty) for a dependent signal's ordered roots.
+    source_signals: Option<Vec<u32>>,
     dependent_signals: Vec<u32>,
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct AbortListener {
-    pub(super) callback_id: super::EventCallbackId,
-    pub(super) capture: bool,
-    pub(super) once: bool,
-    pub(super) passive: bool,
-}
-
-pub(super) struct PreparedAbortListener {
-    pub(super) callback: super::PreparedEventCallback,
-    pub(super) passive: bool,
-}
-
-#[derive(Default)]
-pub(super) struct AbortDispatchSnapshot {
-    listeners: Vec<AbortListener>,
-    onabort: Option<v8::Global<v8::Function>>,
-}
-
-impl AbortSignalState {
-    fn take_dispatch_snapshot(&mut self, event_type: &str) -> AbortDispatchSnapshot {
-        let listeners = self.listeners.get(event_type).cloned().unwrap_or_default();
-        let onabort = if event_type == "abort" {
-            self.onabort.clone()
-        } else {
-            None
-        };
-        AbortDispatchSnapshot { listeners, onabort }
-    }
 }
 
 struct AbortLinkedTargetListener {
@@ -88,18 +52,6 @@ struct AbortLinkedTargetListener {
     event_type: String,
     callback_id: super::EventCallbackId,
     capture: bool,
-}
-
-struct AbortLinkedMessagePortListener {
-    port_id: MessagePortId,
-    listener_id: MessagePortEventListenerId,
-}
-
-#[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::AbortSignal)]
-struct AbortSignalObjectDeclaration<'scope> {
-    #[webapi(prototype)]
-    prototype: v8::Local<'scope, v8::Object>,
 }
 
 impl AbortStore {
@@ -149,23 +101,10 @@ impl AbortStore {
             .map(|value| value as u32)
     }
 
-    fn define_hidden_value(
-        scope: &mut v8::PinScope<'_, '_>,
-        object: v8::Local<'_, v8::Object>,
-        key: &str,
-        value: v8::Local<'_, v8::Value>,
-    ) {
-        let Some(key) = v8_string(scope, key) else {
-            return;
-        };
-        let _ =
-            object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
-    }
-
-    fn init_signal(
+    fn init_signal<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        signal: v8::Local<'_, v8::Object>,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
         aborted: bool,
         reason: Option<v8::Local<'_, v8::Value>>,
     ) -> u32 {
@@ -185,14 +124,15 @@ impl AbortStore {
             ABORT_SIGNAL_ID_SLOT,
             v8::Number::new(scope, signal_id as f64).into(),
         );
+        abort_signal_events::initialize(scope, signal);
         signal_id
     }
 
-    fn init_controller(
+    fn init_controller<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         controller: v8::Local<'_, v8::Object>,
-        signal: v8::Local<'_, v8::Object>,
+        signal: v8::Local<'s, v8::Object>,
     ) {
         let signal_id = self.init_signal(scope, signal, false, None);
         let controller_id = self.alloc_controller_id();
@@ -250,108 +190,6 @@ impl AbortStore {
             .map(|reason| v8::Local::new(scope, reason))
     }
 
-    pub(super) fn listener_callback_ids(
-        &self,
-        signal_id: u32,
-        event_type: &str,
-        capture: bool,
-    ) -> Vec<super::EventCallbackId> {
-        self.signal_state(signal_id)
-            .and_then(|state| state.listeners.get(event_type))
-            .into_iter()
-            .flatten()
-            .filter(|listener| listener.capture == capture)
-            .map(|listener| listener.callback_id)
-            .collect()
-    }
-
-    pub(super) fn register_listener(
-        &mut self,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: super::EventCallbackId,
-        capture: bool,
-        once: bool,
-        passive: bool,
-    ) -> bool {
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        state
-            .listeners
-            .entry(event_type.to_owned())
-            .or_default()
-            .push(AbortListener {
-                callback_id,
-                capture,
-                once,
-                passive,
-            });
-        true
-    }
-
-    pub(super) fn unregister_listener_by_id(
-        &mut self,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: super::EventCallbackId,
-        capture: bool,
-    ) -> bool {
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        let mut remove_entry = false;
-        let mut removed = false;
-        if let Some(listeners) = state.listeners.get_mut(event_type) {
-            listeners.retain(|candidate| {
-                let matches = candidate.callback_id == callback_id && candidate.capture == capture;
-                removed |= matches;
-                !matches
-            });
-            remove_entry = listeners.is_empty();
-        }
-        if remove_entry {
-            state.listeners.remove(event_type);
-        }
-        removed
-    }
-
-    pub(super) fn claim_listener_for_dispatch(
-        &mut self,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: super::EventCallbackId,
-    ) -> Option<AbortListener> {
-        let state = self.signal_state_mut(signal_id)?;
-        let listener = state
-            .listeners
-            .get(event_type)?
-            .iter()
-            .find(|listener| listener.callback_id == callback_id)
-            .copied()?;
-        if listener.once {
-            let _ = self.unregister_listener_by_id(
-                signal_id,
-                event_type,
-                callback_id,
-                listener.capture,
-            );
-        }
-        Some(listener)
-    }
-
-    pub(super) fn unregister_signal_event_callbacks(
-        &mut self,
-        callback_ids: &HashSet<super::EventCallbackId>,
-    ) {
-        for state in self.signals.values_mut() {
-            state.listeners.retain(|_, listeners| {
-                listeners.retain(|listener| !callback_ids.contains(&listener.callback_id));
-                !listeners.is_empty()
-            });
-        }
-    }
-
     pub(crate) fn register_abort_algorithm<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -366,7 +204,9 @@ impl AbortStore {
         };
         state
             .abort_algorithms
-            .push(v8::Global::new(scope, algorithm));
+            .push(crate::abort_signal_route::AbortAlgorithm::new(
+                scope, algorithm,
+            ));
         true
     }
 
@@ -383,8 +223,9 @@ impl AbortStore {
             return false;
         };
         state.abort_algorithms.retain(|candidate| {
-            let candidate = v8::Local::new(scope, candidate);
-            !candidate.strict_equals(algorithm.into())
+            candidate
+                .prepare(scope)
+                .is_some_and(|candidate| !candidate.strict_equals(algorithm.into()))
         });
         true
     }
@@ -422,40 +263,6 @@ impl AbortStore {
         }
     }
 
-    pub(super) fn register_message_port_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) -> bool {
-        let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
-            return false;
-        };
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        state
-            .linked_message_port_listeners
-            .push(AbortLinkedMessagePortListener {
-                port_id,
-                listener_id,
-            });
-        true
-    }
-
-    pub(super) fn unregister_message_port_listener(
-        &mut self,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) {
-        for state in self.signals.values_mut() {
-            state
-                .linked_message_port_listeners
-                .retain(|linked| linked.port_id != port_id || linked.listener_id != listener_id);
-        }
-    }
-
     pub(super) fn abort_signal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -466,52 +273,73 @@ impl AbortStore {
         let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
             return;
         };
-        let Some((
-            abort_algorithms,
-            dispatch_snapshot,
-            linked_target_listeners,
-            linked_message_port_listeners,
-            dependent_signals,
-        )) = ({
-            let Some(state) = self.signal_state_mut(signal_id) else {
-                return;
+        let Some(state) = self.signal_state_mut(signal_id) else {
+            return;
+        };
+        if state.aborted {
+            return;
+        }
+        state.aborted = true;
+        state.reason = Some(v8::Global::new(scope, reason));
+        let dependent_signals = state.dependent_signals.clone();
+
+        // Set every reason before running script. A reentrant abort of another
+        // source must not replace a dependent's reason or dispatch it twice.
+        let mut signals_to_abort = vec![(signal_id, signal)];
+        for dependent_signal_id in dependent_signals {
+            let Some(state) = self.signal_state_mut(dependent_signal_id) else {
+                continue;
             };
             if state.aborted {
-                return;
+                continue;
             }
             state.aborted = true;
             state.reason = Some(v8::Global::new(scope, reason));
-            let abort_algorithms = std::mem::take(&mut state.abort_algorithms);
-            let linked_target_listeners = std::mem::take(&mut state.linked_target_listeners);
-            let linked_message_port_listeners =
-                std::mem::take(&mut state.linked_message_port_listeners);
-            let dependent_signals = state.dependent_signals.clone();
-            let dispatch_snapshot = state.take_dispatch_snapshot("abort");
-            Some((
-                abort_algorithms,
-                dispatch_snapshot,
-                linked_target_listeners,
-                linked_message_port_listeners,
-                dependent_signals,
-            ))
-        })
-        else {
-            return;
-        };
-        event::invoke_abort_algorithms(scope, signal, reason, abort_algorithms);
-        for linked in linked_message_port_listeners {
-            host.remove_message_port_event_listener_after_signal_abort(
-                linked.port_id,
-                linked.listener_id,
-            );
+            if let Some(signal) = &state.signal {
+                signals_to_abort.push((dependent_signal_id, v8::Local::new(scope, signal)));
+            }
         }
-        dispatch_abort(
-            scope,
-            host as *mut super::JsContextHost,
-            signal,
-            signal_id,
-            dispatch_snapshot,
-        );
+        // Complete the dependency snapshot even if a source's IteratorClose
+        // throws. Dependents were already marked aborted and cannot be retried.
+        let mut first_error = None;
+        for (signal_id, signal) in signals_to_abort {
+            let error = {
+                v8::tc_scope!(let scope, scope);
+                if self.run_abort_steps(scope, host, signal, signal_id, reason) {
+                    None
+                } else {
+                    let Some(error) = scope.exception() else {
+                        return;
+                    };
+                    scope.reset();
+                    Some(error)
+                }
+            };
+            if first_error.is_none() {
+                first_error = error;
+            }
+        }
+        if let Some(error) = first_error {
+            scope.throw_exception(error);
+        }
+    }
+
+    fn run_abort_steps<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host: &mut super::JsContextHost,
+        signal: v8::Local<'s, v8::Object>,
+        signal_id: u32,
+        reason: v8::Local<'s, v8::Value>,
+    ) -> bool {
+        let Some(state) = self.signal_state_mut(signal_id) else {
+            return true;
+        };
+        let abort_algorithms = std::mem::take(&mut state.abort_algorithms);
+        let linked_target_listeners = std::mem::take(&mut state.linked_target_listeners);
+        if !event::invoke_abort_algorithms(scope, signal, reason, abort_algorithms) {
+            return false;
+        }
         for linked in linked_target_listeners {
             host.remove_registered_event_listener_by_id(
                 linked.target,
@@ -520,24 +348,39 @@ impl AbortStore {
                 linked.capture,
             );
         }
-        for dependent_signal_id in dependent_signals {
-            let Some(dependent_signal) = self.signal_object(scope, dependent_signal_id) else {
-                continue;
-            };
-            host.abort_signal(scope, dependent_signal, reason);
-        }
+        // Dispatch reads the shared listener registry after all abort algorithms.
+        abort_signal_events::dispatch_abort(scope, signal);
+        true
     }
 
-    pub(super) fn link_dependent_signal(
+    fn set_signal_sources(
         &mut self,
-        source_signal_id: u32,
         dependent_signal_id: u32,
+        input_signal_ids: impl IntoIterator<Item = u32>,
     ) {
-        let Some(state) = self.signal_state_mut(source_signal_id) else {
-            return;
-        };
-        if !state.dependent_signals.contains(&dependent_signal_id) {
-            state.dependent_signals.push(dependent_signal_id);
+        let mut sources = Vec::new();
+        let mut seen = HashSet::new();
+        for input_signal_id in input_signal_ids {
+            let Some(state) = self.signal_state(input_signal_id) else {
+                continue;
+            };
+            let roots = state
+                .source_signals
+                .as_deref()
+                .unwrap_or(std::slice::from_ref(&input_signal_id));
+            for &source_signal_id in roots {
+                if seen.insert(source_signal_id) {
+                    sources.push(source_signal_id);
+                }
+            }
+        }
+        for &source_signal_id in &sources {
+            if let Some(state) = self.signal_state_mut(source_signal_id) {
+                state.dependent_signals.push(dependent_signal_id);
+            }
+        }
+        if let Some(state) = self.signal_state_mut(dependent_signal_id) {
+            state.source_signals = Some(sources);
         }
     }
 }
@@ -560,19 +403,13 @@ pub(super) fn timeout_error_value<'s>(
     dom_exception_value(scope, "signal timed out", "TimeoutError")
 }
 
-fn create_signal_with_prototype<'s>(
+pub(crate) fn create_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    prototype_source: v8::Local<'_, v8::Object>,
     host: &mut super::JsContextHost,
     aborted: bool,
     reason: Option<v8::Local<'_, v8::Value>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let prototype = prototype_source
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let signal = AbortSignalObjectDeclaration::new(prototype)
-        .bind(scope)
-        .ok()?;
+    let signal = abort_signal::new_signal(scope)?;
     host.native_bridge_mut()
         .abort
         .init_signal(scope, signal, aborted, reason);

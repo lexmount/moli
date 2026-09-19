@@ -23,6 +23,31 @@ pub struct TimerReadyAllowance {
     pub allowance: Duration,
 }
 
+/// A scheduling-sequence boundary from which an exact timer range can be
+/// recorded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerScheduleSnapshot {
+    next_sequence: u64,
+}
+
+/// A half-open scheduling-sequence range for timers queued during one owner
+/// operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TimerScheduleRange {
+    inclusive_sequence: u64,
+    exclusive_sequence: u64,
+}
+
+impl TimerScheduleRange {
+    pub fn is_empty(self) -> bool {
+        self.inclusive_sequence == self.exclusive_sequence
+    }
+
+    fn contains(self, sequence: u64) -> bool {
+        self.inclusive_sequence <= sequence && sequence < self.exclusive_sequence
+    }
+}
+
 impl TimerReadyAllowance {
     pub const NONE: Self = Self {
         max_delay_ms: 0,
@@ -33,7 +58,7 @@ impl TimerReadyAllowance {
 #[derive(Debug)]
 pub struct ReadyTimer<T> {
     pub id: TimerId,
-    pub delay_ms: u32,
+    pub delay_ms: u64,
     pub payload: T,
 }
 
@@ -42,7 +67,7 @@ struct ScheduledTimer<T> {
     id: TimerId,
     sequence: u64,
     run_at: Instant,
-    delay_ms: u32,
+    delay_ms: u64,
     payload: T,
 }
 
@@ -93,7 +118,9 @@ impl<T> Default for TimerScheduler<T> {
 }
 
 impl<T> TimerScheduler<T> {
-    pub fn schedule_after(&mut self, payload: T, delay_ms: u32, now: Instant) -> TimerId {
+    // Internal timeouts such as AbortSignal.timeout accept 64-bit delays.
+    // HTML timers apply their own argument conversion before scheduling.
+    pub fn schedule_after(&mut self, payload: T, delay_ms: u64, now: Instant) -> TimerId {
         let id = self.allocate_id();
         self.schedule_existing_after(id, payload, delay_ms, now);
         id
@@ -167,12 +194,71 @@ impl<T> TimerScheduler<T> {
         &mut self,
         now: Instant,
         allowance: TimerReadyAllowance,
-        predicate: F,
+        mut predicate: F,
     ) -> Option<ReadyTimer<T>>
     where
         F: FnMut(&T) -> bool,
     {
-        let selected = self.next_ready_matching_timer(now, allowance, predicate)?;
+        self.take_next_ready_matching_scheduled(
+            now,
+            allowance,
+            |timer| predicate(&timer.payload),
+            |_| true,
+        )
+    }
+
+    /// Takes the next ready timer scheduled inside one of `ranges`.
+    ///
+    /// Timers scheduled by a callback that runs while draining the ranges are
+    /// outside those closed ranges and remain pending for a later task turn.
+    pub fn take_next_ready_from_schedule_ranges(
+        &mut self,
+        ranges: &[TimerScheduleRange],
+        now: Instant,
+        allowance: TimerReadyAllowance,
+    ) -> Option<ReadyTimer<T>> {
+        self.take_next_ready_matching_scheduled(
+            now,
+            allowance,
+            |timer| schedule_ranges_contain(ranges, timer.sequence),
+            |timer| schedule_ranges_contain(ranges, timer.sequence),
+        )
+    }
+
+    fn take_next_ready_matching_scheduled<P, B>(
+        &mut self,
+        now: Instant,
+        allowance: TimerReadyAllowance,
+        mut predicate: P,
+        mut blocks_if_not_ready: B,
+    ) -> Option<ReadyTimer<T>>
+    where
+        P: FnMut(&ScheduledTimer<T>) -> bool,
+        B: FnMut(&ScheduledTimer<T>) -> bool,
+    {
+        let mut first_non_ready = None;
+        let mut selected = None;
+        for timer in &self.pending {
+            if !self.active.contains(&timer.id) {
+                continue;
+            }
+            if !timer_ready(timer.run_at, timer.delay_ms, now, allowance) {
+                if blocks_if_not_ready(timer)
+                    && first_non_ready.is_none_or(|current| timer_precedes(timer, current))
+                {
+                    first_non_ready = Some(timer);
+                }
+                continue;
+            }
+            if predicate(timer) && selected.is_none_or(|current| timer_precedes(timer, current)) {
+                selected = Some(timer);
+            }
+        }
+
+        let selected = selected?;
+        if first_non_ready.is_some_and(|barrier| timer_precedes(barrier, selected)) {
+            return None;
+        }
         let selected_id = selected.id;
         let selected_sequence = selected.sequence;
 
@@ -226,7 +312,7 @@ impl<T> TimerScheduler<T> {
         &mut self,
         id: TimerId,
         payload: T,
-        delay_ms: u32,
+        delay_ms: u64,
         now: Instant,
     ) -> bool {
         self.running.remove(&id);
@@ -257,6 +343,32 @@ impl<T> TimerScheduler<T> {
             .map(|timer| timer.run_at)
     }
 
+    pub fn has_ready_from_schedule_ranges(
+        &self,
+        ranges: &[TimerScheduleRange],
+        now: Instant,
+        allowance: TimerReadyAllowance,
+    ) -> bool {
+        self.pending.iter().any(|timer| {
+            self.active.contains(&timer.id)
+                && schedule_ranges_contain(ranges, timer.sequence)
+                && timer_ready(timer.run_at, timer.delay_ms, now, allowance)
+        })
+    }
+
+    pub fn schedule_snapshot(&self) -> TimerScheduleSnapshot {
+        TimerScheduleSnapshot {
+            next_sequence: self.next_sequence,
+        }
+    }
+
+    pub fn schedule_range_since(&self, start: TimerScheduleSnapshot) -> TimerScheduleRange {
+        TimerScheduleRange {
+            inclusive_sequence: start.next_sequence,
+            exclusive_sequence: self.next_sequence,
+        }
+    }
+
     pub fn next_deadline(&self) -> Option<Instant> {
         self.pending
             .iter()
@@ -281,14 +393,14 @@ impl<T> TimerScheduler<T> {
         self.active.len()
     }
 
-    fn schedule_existing_after(&mut self, id: TimerId, payload: T, delay_ms: u32, now: Instant) {
+    fn schedule_existing_after(&mut self, id: TimerId, payload: T, delay_ms: u64, now: Instant) {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.active.insert(id);
         self.pending.push(ScheduledTimer {
             id,
             sequence,
-            run_at: now + Duration::from_millis(u64::from(delay_ms)),
+            run_at: now + Duration::from_millis(delay_ms),
             delay_ms,
             payload,
         });
@@ -340,6 +452,10 @@ impl<T> TimerScheduler<T> {
     }
 }
 
+fn schedule_ranges_contain(ranges: &[TimerScheduleRange], sequence: u64) -> bool {
+    ranges.iter().any(|range| range.contains(sequence))
+}
+
 fn timer_precedes<T>(left: &ScheduledTimer<T>, right: &ScheduledTimer<T>) -> bool {
     match left.run_at.cmp(&right.run_at) {
         Ordering::Less => true,
@@ -350,12 +466,12 @@ fn timer_precedes<T>(left: &ScheduledTimer<T>, right: &ScheduledTimer<T>) -> boo
 
 fn timer_ready(
     run_at: Instant,
-    delay_ms: u32,
+    delay_ms: u64,
     now: Instant,
     allowance: TimerReadyAllowance,
 ) -> bool {
     run_at <= now
-        || (delay_ms <= allowance.max_delay_ms
+        || (delay_ms <= u64::from(allowance.max_delay_ms)
             && run_at.duration_since(now).le(&allowance.allowance))
 }
 
@@ -397,6 +513,37 @@ mod tests {
         assert_eq!(ready.id, slow);
         assert_eq!(ready.payload, "slow");
         scheduler.finish_running(ready.id);
+    }
+
+    #[test]
+    fn long_timeouts_preserve_their_full_deadline() {
+        let now = Instant::now();
+        for delay_ms in [u64::from(u32::MAX) + 1, 9_007_199_254_740_991] {
+            let mut scheduler = TimerScheduler::default();
+            let id = scheduler.schedule_after("long", delay_ms, now);
+            let deadline = now + Duration::from_millis(delay_ms);
+            assert_eq!(scheduler.next_deadline(), Some(deadline));
+            assert!(
+                scheduler
+                    .take_next_ready(
+                        deadline - Duration::from_millis(1),
+                        TimerReadyAllowance::NONE
+                    )
+                    .is_none()
+            );
+            let ready = scheduler
+                .take_next_ready(deadline, TimerReadyAllowance::NONE)
+                .unwrap();
+            assert_eq!(ready.id, id);
+            assert_eq!(ready.delay_ms, delay_ms);
+            assert!(scheduler.reschedule_running_after(id, ready.payload, delay_ms, deadline));
+            assert_eq!(
+                scheduler.next_deadline(),
+                Some(deadline + Duration::from_millis(delay_ms))
+            );
+            assert!(scheduler.cancel(id));
+            assert_eq!(scheduler.pending_count(), 0);
+        }
     }
 
     #[test]
@@ -623,5 +770,80 @@ mod tests {
             assert_eq!(ready.payload, "skipped");
             scheduler.finish_running(ready.id);
         }
+    }
+
+    #[test]
+    fn schedule_ranges_select_only_timers_queued_inside_owner_operations() {
+        let now = Instant::now();
+        let mut scheduler = TimerScheduler::default();
+        let earlier = scheduler.schedule_after("earlier", 0, now);
+        let first_start = scheduler.schedule_snapshot();
+        let first = scheduler.schedule_after("first", 0, now);
+        let first_range = scheduler.schedule_range_since(first_start);
+        let between = scheduler.schedule_after("between", 0, now);
+        let second_start = scheduler.schedule_snapshot();
+        let second = scheduler.schedule_after("second", 0, now);
+        let second_range = scheduler.schedule_range_since(second_start);
+        let later = scheduler.schedule_after("later", 0, now);
+        let ranges = [first_range, second_range];
+
+        assert!(scheduler.has_ready_from_schedule_ranges(&ranges, now, TimerReadyAllowance::NONE));
+        for (expected_id, expected_payload) in [(first, "first"), (second, "second")] {
+            let ready = scheduler
+                .take_next_ready_from_schedule_ranges(&ranges, now, TimerReadyAllowance::NONE)
+                .expect("timer scheduled inside an owner range should be ready");
+            assert_eq!(ready.id, expected_id);
+            assert_eq!(ready.payload, expected_payload);
+            scheduler.finish_running(ready.id);
+        }
+
+        assert!(!scheduler.has_ready_from_schedule_ranges(&ranges, now, TimerReadyAllowance::NONE));
+        assert!(
+            scheduler
+                .take_next_ready_from_schedule_ranges(&ranges, now, TimerReadyAllowance::NONE)
+                .is_none(),
+            "timers outside the owner ranges must remain for later task turns"
+        );
+        for (expected_id, expected_payload) in
+            [(earlier, "earlier"), (between, "between"), (later, "later")]
+        {
+            let ready = scheduler
+                .take_next_ready(now, TimerReadyAllowance::NONE)
+                .expect("timer outside the ranges should remain in the ordinary queue");
+            assert_eq!(ready.id, expected_id);
+            assert_eq!(ready.payload, expected_payload);
+            scheduler.finish_running(ready.id);
+        }
+    }
+
+    #[test]
+    fn interval_rescheduled_after_range_is_not_drained_twice() {
+        let now = Instant::now();
+        let mut scheduler = TimerScheduler::default();
+        let start = scheduler.schedule_snapshot();
+        let interval = scheduler.schedule_after("tick", 0, now);
+        let range = scheduler.schedule_range_since(start);
+
+        let ready = scheduler
+            .take_next_ready_from_schedule_ranges(&[range], now, TimerReadyAllowance::NONE)
+            .expect("initial interval task should belong to the range");
+        assert_eq!(ready.id, interval);
+        assert!(scheduler.reschedule_running_after(ready.id, ready.payload, 1, now));
+
+        assert!(
+            scheduler
+                .take_next_ready_from_schedule_ranges(
+                    &[range],
+                    now + Duration::from_millis(1),
+                    TimerReadyAllowance::NONE,
+                )
+                .is_none(),
+            "an interval's newly scheduled task must not re-enter the closed range"
+        );
+        let ready = scheduler
+            .take_next_ready(now + Duration::from_millis(1), TimerReadyAllowance::NONE)
+            .expect("rescheduled interval should remain in the ordinary queue");
+        assert_eq!(ready.id, interval);
+        scheduler.finish_running(ready.id);
     }
 }

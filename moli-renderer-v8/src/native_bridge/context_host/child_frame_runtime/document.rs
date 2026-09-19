@@ -1,5 +1,6 @@
 use super::super::{JsContextHost, WindowExecutionContextOwner};
 use super::document_slots::sync_child_document_window_slots;
+use crate::context_bootstrap::WINDOW_DOCUMENT_SLOT;
 use crate::document_runtime::DomHandle;
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 use crate::dom::native::Node;
@@ -9,24 +10,9 @@ use crate::native_bridge::{
     node::remove_child_to_current_reaction_queue, throw_dom_exception,
 };
 use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8str};
-use moli_webapi_declare::WebApiObject;
 use url::Url;
 
 pub(crate) const CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT: &str = "__lmChildDocumentContextHandle";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct ChildDocumentStreamMethodsDeclaration<'scope> {
-    handle: v8::Local<'scope, v8::Value>,
-    #[webapi(method, callback = child_document_open_callback, data = self.handle)]
-    open: (),
-    #[webapi(method, callback = child_document_write_callback, data = self.handle)]
-    write: (),
-    #[webapi(method, callback = child_document_writeln_callback, data = self.handle)]
-    writeln: (),
-    #[webapi(method, callback = child_document_close_callback, data = self.handle)]
-    close: (),
-}
 
 impl JsContextHost {
     fn child_browsing_context_has_uncommitted_navigation_seed(&self, handle: DomHandle) -> bool {
@@ -108,7 +94,7 @@ impl JsContextHost {
                 return (None, ready_work);
             };
             self.clear_child_browsing_context_live_foreign_pairings(scope, document_handle);
-            install_child_document_stream_methods(scope, document, handle);
+            initialize_child_document_context(scope, document, handle);
             if let Some(window) = window {
                 sync_child_document_window_slots(
                     scope,
@@ -122,6 +108,7 @@ impl JsContextHost {
                     "document",
                     document.into(),
                 );
+                set_private_value(scope, window, WINDOW_DOCUMENT_SLOT, document.into());
             }
             ready_work.extend(
                 self.sync_child_browsing_context_subtree_into_ready_work(scope, document_handle),
@@ -249,7 +236,7 @@ fn child_document_native_handle_for_runtime<'s>(
         .then_some(handle)
 }
 
-fn install_child_document_stream_methods<'s>(
+fn initialize_child_document_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
     handle: DomHandle,
@@ -272,233 +259,153 @@ fn install_child_document_stream_methods<'s>(
                 .mark_subtree_connected_preserving_owner_document(document_handle);
         }
     }
-    let _ = ChildDocumentStreamMethodsDeclaration::new(handle_value).initialize(scope, document);
 }
 
-fn child_document_handle_from_callback_data(
-    scope: &mut v8::PinScope<'_, '_>,
-    data: v8::Local<'_, v8::Value>,
-) -> Option<DomHandle> {
-    if let Ok(big) = v8::Local::<v8::BigInt>::try_from(data) {
-        let (index, lossless) = big.u64_value();
-        return lossless.then_some(DomHandle::new(index as usize));
-    }
-    data.integer_value(scope)
-        .filter(|index| *index >= 0)
-        .map(|index| DomHandle::new(index as usize))
-}
-
-fn child_document_open_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(handle) = child_document_handle_from_callback_data(scope, args.data()) else {
-        rv.set_undefined();
-        return;
-    };
-    let document = args.this();
-    if args.length() >= 3 {
-        redirect_child_document_open_to_window_open(scope, handle, document, &args, &mut rv);
-        return;
-    }
-    if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-        throw_dynamic_markup_invalid_state(scope);
-        return;
-    }
-    let _ = begin_child_document_stream_replacement(scope, handle, document);
-    rv.set(document.into());
-}
-
-fn child_document_write_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    child_document_write_or_writeln_callback(scope, args, rv, false);
-}
-
-fn child_document_writeln_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    child_document_write_or_writeln_callback(scope, args, rv, true);
-}
-
-fn child_document_write_or_writeln_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-    append_newline: bool,
-) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
-        let Some(handle) = child_document_handle_from_callback_data(scope, args.data()) else {
-            rv.set_undefined();
-            return;
-        };
-        let document = args.this();
-        if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-            throw_dynamic_markup_invalid_state(scope);
-            return;
-        }
-        let mut chunk = String::new();
-        for index in 0..args.length() {
-            let Some(value) = args.get(index).to_string(scope) else {
-                return;
-            };
-            chunk.push_str(&value.to_rust_string_lossy(scope));
-        }
-        if append_newline {
-            chunk.push('\n');
-        }
-        let host = unsafe { &mut *host_ptr };
-        if host.child_document_stream_is_blocked_by_navigation(handle) {
-            rv.set_undefined();
-            return;
-        }
-        let script_context = if host.child_document_parser_is_active(handle) {
-            match unsafe { &mut *host_ptr }
-                .ensure_prebootstrapped_child_default_context(scope, handle)
-            {
-                Ok(context) => context,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        child_handle = handle.index(),
-                        "failed to enter the child LocalWindow context for document.write"
-                    );
-                    rv.set_undefined();
-                    return;
-                }
-            }
-        } else {
-            let Some(context) = begin_child_document_stream_replacement(scope, handle, document)
-            else {
-                rv.set_undefined();
-                return;
-            };
-            context
-        };
-        let Some(document_handle) =
-            child_document_native_handle_for_runtime(scope, host_ptr, document)
-        else {
-            rv.set_undefined();
-            return;
-        };
-        let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
-            scope,
-            script_context,
-            handle,
-            document_handle,
-            Some(chunk),
-            false,
-        );
-        rv.set_undefined();
-    });
-}
-
-fn child_document_close_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
-        let Some(handle) = child_document_handle_from_callback_data(scope, args.data()) else {
-            rv.set_undefined();
-            return;
-        };
-        let document = args.this();
-        if child_document_has_throw_on_dynamic_markup_insertion_counter(scope, document) {
-            throw_dynamic_markup_invalid_state(scope);
-            return;
-        }
-        let Some(document_handle) =
-            child_document_native_handle_for_runtime(scope, host_ptr, document)
-        else {
-            rv.set_undefined();
-            return;
-        };
-        let host = unsafe { &mut *host_ptr };
-        if host.child_document_stream_is_blocked_by_navigation(handle) {
-            rv.set_undefined();
-            return;
-        }
-        let script_context = match unsafe { &mut *host_ptr }
-            .ensure_prebootstrapped_child_default_context(scope, handle)
-        {
-            Ok(context) => context,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    child_handle = handle.index(),
-                    "failed to enter the child LocalWindow context for document.close"
-                );
-                rv.set_undefined();
-                return;
-            }
-        };
-        let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
-            scope,
-            script_context,
-            handle,
-            document_handle,
-            None,
-            true,
-        );
-        rv.set_undefined();
-    });
-}
-
-fn redirect_child_document_open_to_window_open<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    handle: DomHandle,
-    document: v8::Local<'s, v8::Object>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(default_view) = child_document_default_view(scope, document) else {
-        throw_dom_exception(
-            scope,
-            "InvalidAccessError",
-            15,
-            "Document has no associated window.",
-        );
-        return;
-    };
-    let raw_url = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    let target_name = args
-        .get(1)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    if target_name == "_self" {
-        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+impl JsContextHost {
+    pub(in crate::native_bridge) fn write_child_document_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        child_handle: DomHandle,
+        document_handle: DomHandle,
+        chunk: String,
+    ) {
+        debug_assert!(std::ptr::eq(host_ptr, self));
+        crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
             let host = unsafe { &mut *host_ptr };
+            if host.child_document_stream_is_blocked_by_navigation(child_handle) {
+                return;
+            }
+            let has_open_stream = host
+                .frame_owner_store
+                .current_child_document_owner(child_handle)
+                .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner));
+            if host.has_ignore_destructive_writes_counter(document_handle)
+                && !has_open_stream
+                && !host.child_document_is_executing_parser_script(document_handle)
+            {
+                return;
+            }
+            let script_context = if host.child_document_parser_is_active(child_handle) {
+                match host.ensure_prebootstrapped_child_default_context(scope, child_handle) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            child_handle = child_handle.index(),
+                            "failed to enter the child LocalWindow context for document.write"
+                        );
+                        return;
+                    }
+                }
+            } else {
+                let entry_document = host.document_open_entry_document(scope);
+                let Some(context) = host.begin_child_document_stream_replacement(
+                    scope,
+                    host_ptr,
+                    child_handle,
+                    document_handle,
+                    entry_document,
+                ) else {
+                    return;
+                };
+                context
+            };
+            let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
+                scope,
+                script_context,
+                child_handle,
+                document_handle,
+                Some(chunk),
+                false,
+            );
+        });
+    }
+
+    pub(in crate::native_bridge) fn close_child_document_stream(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        child_handle: DomHandle,
+        document_handle: DomHandle,
+    ) {
+        debug_assert!(std::ptr::eq(host_ptr, self));
+        crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            let host = unsafe { &mut *host_ptr };
+            if host.child_document_stream_is_blocked_by_navigation(child_handle) {
+                return;
+            }
+            // Only script-created streams accept EOF from document.close().
+            if !host
+                .frame_owner_store
+                .current_child_document_owner(child_handle)
+                .is_some_and(|owner| host.child_document_parsers.has_open_stream(owner))
+            {
+                return;
+            }
+            let script_context =
+                match host.ensure_prebootstrapped_child_default_context(scope, child_handle) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            child_handle = child_handle.index(),
+                            "failed to enter the child LocalWindow context for document.close"
+                        );
+                        return;
+                    }
+                };
+            let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
+                scope,
+                script_context,
+                child_handle,
+                document_handle,
+                None,
+                true,
+            );
+        });
+    }
+}
+
+impl JsContextHost {
+    pub(in crate::native_bridge) fn redirect_child_document_open_to_window_open<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        document: v8::Local<'s, v8::Object>,
+        args: &v8::FunctionCallbackArguments<'s>,
+        rv: &mut v8::ReturnValue<'_, v8::Value>,
+    ) {
+        let Some(default_view) = child_document_default_view(scope, document) else {
+            throw_dom_exception(
+                scope,
+                "InvalidAccessError",
+                15,
+                "Document has no associated window.",
+            );
+            return;
+        };
+        let raw_url = args
+            .get(0)
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+            .unwrap_or_default();
+        let target_name = args
+            .get(1)
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+            .unwrap_or_default();
+        if target_name == "_self" {
             let target = if raw_url.trim().is_empty() {
                 Url::parse("about:blank").expect("static about:blank should parse")
             } else {
-                host.resolve_child_browsing_context_url(handle, raw_url.trim())
+                self.resolve_child_browsing_context_url(handle, raw_url.trim())
             };
-            let _ = host.navigate_child_browsing_context_to_url(scope, handle, target.as_str());
+            let _ = self.navigate_child_browsing_context_to_url(scope, handle, target.as_str());
         }
-        rv.set(default_view.into());
-        return;
-    }
 
-    rv.set(default_view.into());
+        rv.set(default_view.into());
+    }
 }
 
 fn child_document_default_view<'s>(
@@ -510,53 +417,20 @@ fn child_document_default_view<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
-fn child_document_has_throw_on_dynamic_markup_insertion_counter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-) -> bool {
-    context_host_ptr_from_global_bridge(scope)
-        .and_then(|host_ptr| {
-            let host = unsafe { &*host_ptr };
-            child_document_native_handle_for_runtime(scope, host_ptr, document)
-                .map(|document| host.has_throw_on_dynamic_markup_insertion_counter(document))
-        })
-        .unwrap_or(false)
-}
-
-fn throw_dynamic_markup_invalid_state(scope: &mut v8::PinScope<'_, '_>) {
-    throw_dom_exception(
-        scope,
-        "InvalidStateError",
-        11,
-        "The object is in an invalid state.",
-    );
-}
-
-fn begin_child_document_stream_replacement<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    child_handle: DomHandle,
-    document: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Context>> {
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let document_handle = child_document_native_handle_for_runtime(scope, host_ptr, document)?;
-    unsafe { &mut *host_ptr }.begin_child_document_stream_replacement(
-        scope,
-        host_ptr,
-        child_handle,
-        document_handle,
-    )
-}
-
 impl JsContextHost {
-    fn begin_child_document_stream_replacement<'s>(
+    pub(in crate::native_bridge) fn begin_child_document_stream_replacement<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
+        entry_document: Option<DomHandle>,
     ) -> Option<v8::Local<'s, v8::Context>> {
         debug_assert!(std::ptr::eq(host_ptr, self));
         if self.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+            return None;
+        }
+        if self.has_document_unload_counter(document_handle) {
             return None;
         }
         if self.child_document_stream_is_blocked_by_navigation(child_handle) {
@@ -612,8 +486,24 @@ impl JsContextHost {
         {
             return None;
         }
-        let document_url = self.document_url_for_handle(document_handle);
-        let document_base_url = self.document_base_url_for_handle(document_handle);
+        let previous_url = self.document_url_for_handle(document_handle);
+        let replacement_url = entry_document
+            .filter(|_| self.child_browsing_context_is_live(child_handle))
+            .map(|entry| self.document_open_replacement_url(document_handle, entry));
+        let document_url = replacement_url.as_ref().unwrap_or(&previous_url).clone();
+        let document_base_url = if replacement_url.is_some() {
+            if document_url == previous_url {
+                self.dom_host()
+                    .node(document_handle)?
+                    .as_document()?
+                    .fallback_base_url()
+                    .clone()
+            } else {
+                document_url.clone()
+            }
+        } else {
+            self.document_base_url_for_handle(document_handle)
+        };
         let replacement_plan = self
             .frame_owner_store
             .plan_child_document_open_replacement(
@@ -661,6 +551,9 @@ impl JsContextHost {
                 let _ =
                     remove_child_to_current_reaction_queue(scope, host_ptr, document_handle, child);
             }
+            if replacement_url.is_some() {
+                host.set_dom_document_url_for_handle(document_handle, document_url.clone());
+            }
 
             host.cancel_child_meta_refresh_navigation(child_handle);
             host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
@@ -688,7 +581,7 @@ impl JsContextHost {
                 child_handle,
                 current_owner.document_owner(),
                 document_handle,
-                document_url,
+                document_url.clone(),
             );
             host.note_child_frame_load_started_for_parent(child_handle);
             host.queue_child_frame_document_opened_event(child_handle);
@@ -701,6 +594,14 @@ impl JsContextHost {
                 "opened child document stream through same-LocalWindow owner transaction"
             );
         });
+        if replacement_url.is_some() {
+            let window = script_context.global(scope);
+            crate::context_bootstrap::update_history_for_document_open(
+                scope,
+                window,
+                &document_url,
+            );
+        }
         Some(script_context)
     }
 
@@ -722,6 +623,7 @@ impl JsContextHost {
             host_ptr,
             child_handle,
             document_handle,
+            None,
         ) else {
             return false;
         };

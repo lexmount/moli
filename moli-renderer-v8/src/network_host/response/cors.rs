@@ -83,26 +83,77 @@ pub(crate) fn validate_fetch_response_security_policy(
     policy_context: crate::types::SubresourcePolicyContext,
 ) -> Result<(), String> {
     let request_origin = request_origin.into();
+    validate_fetch_response_headers(
+        &request_origin,
+        head,
+        request_mode,
+        credentials_mode,
+        policy_context,
+    )?;
+    if request_mode == RequestMode::NoCors {
+        validate_opaque_response_blocking(&request_origin, &head.final_url, &head.headers)
+    } else {
+        Ok(())
+    }
+}
+
+/// Header policies precede response delivery; ORB gates the opaque internal
+/// body separately so an unfinished download does not hold up fetch().
+pub(crate) fn validate_fetch_response_headers(
+    request_origin: &WebOrigin,
+    head: &moli_fetch::ResponseHead,
+    request_mode: RequestMode,
+    credentials_mode: RequestCredentialsMode,
+    policy_context: crate::types::SubresourcePolicyContext,
+) -> Result<(), String> {
     head.url_list()
-        .validate_request_mode(request_mode, &request_origin)?;
+        .validate_request_mode(request_mode, request_origin)?;
     if request_mode == RequestMode::SameOrigin {
         return Ok(());
     }
     if request_mode == RequestMode::NoCors {
-        validate_cross_origin_resource_policy(&request_origin, &head.final_url, &head.headers)?;
+        validate_cross_origin_resource_policy(request_origin, &head.final_url, &head.headers)?;
         validate_cross_origin_embedder_and_document_isolation_policy(
-            &request_origin,
+            request_origin,
             &head.final_url,
             &head.headers,
             request_mode,
             credentials_mode,
             policy_context.cross_origin_embedder_policy,
             policy_context.document_isolation_policy,
-        )?;
-        validate_opaque_response_blocking(&request_origin, &head.final_url, &head.headers)
+        )
     } else {
-        validate_cors_response_chain(&request_origin, head, credentials_mode)
+        validate_cors_response_chain(request_origin, head, credentials_mode)
     }
+}
+
+pub(crate) fn fetch_response_needs_orb_body_validation(
+    request_origin: impl Into<WebOrigin>,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    request_mode: RequestMode,
+) -> bool {
+    request_mode == RequestMode::NoCors
+        && matches!(response_url.scheme(), "http" | "https")
+        && !request_origin.into().same_origin_url(response_url)
+        && should_opaque_response_be_blocked_by_orb(response_headers)
+}
+
+pub(crate) fn validated_opaque_response_body<'a>(
+    response_headers: &[(String, String)],
+    body: &'a crate::protocol_types::SubresourceResponseBody,
+) -> Result<std::borrow::Cow<'a, [u8]>, FetchResponseSecurityViolation> {
+    let bytes = body.try_bytes().map_err(|error| {
+        FetchResponseSecurityViolation::Rejected(format!(
+            "fetch: failed to read response body: {error}"
+        ))
+    })?;
+    if should_opaque_response_be_blocked_by_orb_with_body(response_headers, &bytes) {
+        return Err(FetchResponseSecurityViolation::OpaqueResponseBlocked(
+            crate::network_host::ABORTED_ERROR_TEXT.to_owned(),
+        ));
+    }
+    Ok(bytes)
 }
 
 pub(crate) fn validate_fetch_response_security_policy_with_body(
@@ -360,6 +411,7 @@ pub(crate) fn cors_preflight_request_headers(
     request_url: &url::Url,
     method: &str,
     request_headers: &[(String, String)],
+    use_cors_preflight: bool,
 ) -> Option<Vec<(String, String)>> {
     if !cors_tainted {
         return None;
@@ -370,7 +422,7 @@ pub(crate) fn cors_preflight_request_headers(
 
     let unsafe_header_names = moli_fetch::cors_unsafe_request_header_names(request_headers);
     let method_requires_preflight = !moli_fetch::is_cors_safelisted_method(method);
-    if !method_requires_preflight && unsafe_header_names.is_empty() {
+    if !use_cors_preflight && !method_requires_preflight && unsafe_header_names.is_empty() {
         return None;
     }
 
@@ -394,6 +446,7 @@ pub(crate) fn validate_cors_preflight_response(
     request_headers: &[(String, String)],
     response_status: u16,
     response_headers: &[(String, String)],
+    use_cors_preflight: bool,
 ) -> Result<(), String> {
     if !(200..300).contains(&response_status) {
         return Err(format!(
@@ -402,20 +455,30 @@ pub(crate) fn validate_cors_preflight_response(
     }
     validate_cors_response_for_origin(origin, response_headers, credentials_mode)?;
 
+    // Parse both complete lists before checking permissions, including for
+    // safelisted methods and requests without unsafe header names.
+    let mut allow_methods =
+        parse_cors_preflight_allowlist(response_headers, "Access-Control-Allow-Methods")?;
+    let allow_headers =
+        parse_cors_preflight_allowlist(response_headers, "Access-Control-Allow-Headers")?;
+    if allow_methods.is_none() && use_cors_preflight {
+        allow_methods = Some(vec![requested_method.to_owned()]);
+    }
+    let wildcard_allowed = credentials_mode != RequestCredentialsMode::Include;
+
     if !moli_fetch::is_cors_safelisted_method(requested_method) {
-        let Some(allow_methods) =
-            response_header_value(response_headers, "access-control-allow-methods")
-        else {
+        let Some(allow_methods) = allow_methods else {
             return Err(format!(
                 "CORS preflight failed: no Access-Control-Allow-Methods for {requested_method}"
             ));
         };
-        if !comma_separated_tokens(&allow_methods)
+        if !allow_methods
             .iter()
-            .any(|method| method == requested_method)
+            .any(|method| method == requested_method || (wildcard_allowed && method == "*"))
         {
             return Err(format!(
-                "CORS preflight failed: Access-Control-Allow-Methods `{allow_methods}` does not allow {requested_method}"
+                "CORS preflight failed: Access-Control-Allow-Methods `{}` does not allow {requested_method}",
+                allow_methods.join(",")
             ));
         }
     }
@@ -425,22 +488,24 @@ pub(crate) fn validate_cors_preflight_response(
         return Ok(());
     }
 
-    let Some(allow_headers) =
-        response_header_value(response_headers, "access-control-allow-headers")
-    else {
+    let Some(allow_headers) = allow_headers else {
         return Err(format!(
             "CORS preflight failed: no Access-Control-Allow-Headers for {}",
             unsafe_header_names.join(",")
         ));
     };
-    let allowed_header_names = comma_separated_tokens(&allow_headers)
-        .into_iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect::<Vec<_>>();
+    let wildcard_headers = wildcard_allowed && allow_headers.iter().any(|name| name == "*");
     for header_name in unsafe_header_names {
-        if !allowed_header_names.iter().any(|name| name == &header_name) {
+        // Authorization is a CORS non-wildcard request-header name, so it
+        // always needs an explicit, case-insensitive match.
+        if !allow_headers
+            .iter()
+            .any(|name| name.eq_ignore_ascii_case(&header_name))
+            && (!wildcard_headers || header_name == "authorization")
+        {
             return Err(format!(
-                "CORS preflight failed: Access-Control-Allow-Headers `{allow_headers}` does not allow {header_name}"
+                "CORS preflight failed: Access-Control-Allow-Headers `{}` does not allow {header_name}",
+                allow_headers.join(",")
             ));
         }
     }
@@ -501,13 +566,32 @@ pub(crate) fn filter_cors_exposed_response_headers(
         .collect()
 }
 
-fn comma_separated_tokens(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|token| !token.is_empty())
-        .map(str::to_owned)
-        .collect()
+fn parse_cors_preflight_allowlist(
+    headers: &[(String, String)],
+    name: &str,
+) -> Result<Option<Vec<String>>, String> {
+    let values = response_header_values(headers, name);
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let mut tokens = Vec::new();
+    for value in values {
+        for token in value.split(',') {
+            let token = token.trim_matches([' ', '\t']);
+            if token.is_empty() {
+                continue;
+            }
+            // Both method and field-name use HTTP token syntax. Preserve case
+            // because method permissions require an exact match.
+            if http::Method::from_bytes(token.as_bytes()).is_err() {
+                return Err(format!(
+                    "CORS preflight failed: invalid {name} value `{value}`"
+                ));
+            }
+            tokens.push(token.to_owned());
+        }
+    }
+    Ok(Some(tokens))
 }
 
 fn is_forbidden_response_header_name(name: &str) -> bool {
@@ -535,6 +619,7 @@ mod tests {
         moli_fetch::ResponseHead {
             final_url,
             status: 200,
+            status_text: None,
             headers,
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
@@ -551,6 +636,7 @@ mod tests {
             let mut head = moli_fetch::ResponseHead {
                 final_url: url("https://final.test/script.js"),
                 status: 200,
+                status_text: None,
                 headers: vec![("Access-Control-Allow-Origin".to_owned(), "*".to_owned())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
@@ -587,6 +673,199 @@ mod tests {
     }
 
     #[test]
+    fn cors_response_fields_require_a_single_origin_value() {
+        let response_url = url("https://other.test/data");
+        for (origin, matching) in [
+            (
+                WebOrigin::from_url(&url("https://page.test/a")),
+                "https://page.test",
+            ),
+            (WebOrigin::Opaque, "null"),
+        ] {
+            for mode in [
+                RequestCredentialsMode::Omit,
+                RequestCredentialsMode::SameOrigin,
+                RequestCredentialsMode::Include,
+            ] {
+                for (values, allowed) in [
+                    (vec![], false),
+                    (vec![""], false),
+                    (vec![matching], true),
+                    (vec!["*"], mode != RequestCredentialsMode::Include),
+                    (vec!["https://wrong.test"], false),
+                    (vec![matching, matching], false),
+                    (vec![matching, ""], false),
+                    (vec!["", matching], false),
+                    (vec!["*", matching], false),
+                    (vec!["*", ""], false),
+                    (vec!["*, *"], false),
+                ] {
+                    let mut headers = vec![(
+                        "Access-Control-Allow-Credentials".to_owned(),
+                        "true".to_owned(),
+                    )];
+                    headers.extend(values.iter().enumerate().map(|(index, value)| {
+                        (
+                            if index == 0 {
+                                "Access-Control-Allow-Origin"
+                            } else {
+                                "access-control-allow-origin"
+                            }
+                            .to_owned(),
+                            (*value).to_owned(),
+                        )
+                    }));
+                    assert_eq!(
+                        validate_cors_response_chain(
+                            &origin,
+                            &header_response(response_url.clone(), headers.clone()),
+                            mode
+                        )
+                        .is_ok(),
+                        allowed,
+                        "origin={matching}, mode={mode:?}, values={values:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cors_response_fields_check_credentials_only_when_included() {
+        let document_url = url("https://page.test/a");
+        let response_url = url("https://other.test/data");
+        for values in [
+            vec![],
+            vec![""],
+            vec!["true"],
+            vec!["TRUE"],
+            vec!["True"],
+            vec!["false"],
+            vec!["true, true"],
+            vec!["true", "true"],
+            vec!["true", "false"],
+            vec!["true", ""],
+            vec!["", "true"],
+        ] {
+            let mut headers = vec![(
+                "Access-Control-Allow-Origin".to_owned(),
+                "https://page.test".to_owned(),
+            )];
+            headers.extend(values.iter().enumerate().map(|(index, value)| {
+                (
+                    if index == 0 {
+                        "Access-Control-Allow-Credentials"
+                    } else {
+                        "ACCESS-CONTROL-ALLOW-CREDENTIALS"
+                    }
+                    .to_owned(),
+                    (*value).to_owned(),
+                )
+            }));
+            for mode in [
+                RequestCredentialsMode::Omit,
+                RequestCredentialsMode::SameOrigin,
+                RequestCredentialsMode::Include,
+            ] {
+                assert_eq!(
+                    validate_cors_response_chain(
+                        &document_url,
+                        &header_response(response_url.clone(), headers.clone()),
+                        mode
+                    )
+                    .is_ok(),
+                    mode != RequestCredentialsMode::Include || values == ["true"],
+                    "mode={mode:?}, values={values:?}"
+                );
+                assert!(
+                    validate_cors_response_chain(
+                        &document_url,
+                        &header_response(document_url.clone(), headers.clone()),
+                        mode
+                    )
+                    .is_ok(),
+                    "same-origin responses do not require CORS permission"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cors_response_validation_uses_the_redirect_tainted_origin() {
+        let home = url("https://page.test/a");
+        let away = url("https://script.test/b");
+        let elsewhere = url("https://other.test/c");
+        for origin in [WebOrigin::from_url(&home), WebOrigin::Opaque] {
+            for source in [
+                RedirectSource::Network,
+                RedirectSource::ServiceWorker,
+                RedirectSource::Internal,
+            ] {
+                for (urls, tuple_origin) in [
+                    (vec![&home, &away], "https://page.test"),
+                    (vec![&away, &elsewhere], "null"),
+                    (vec![&home, &away, &home], "null"),
+                ] {
+                    let expected_origin = if origin.is_opaque() {
+                        "null"
+                    } else {
+                        tuple_origin
+                    };
+                    let mut head = header_response(
+                        (*urls.last().unwrap()).clone(),
+                        vec![("Access-Control-Allow-Origin".into(), expected_origin.into())],
+                    );
+                    head.redirected = true;
+                    head.redirect_chain = urls
+                        .windows(2)
+                        .map(|pair| moli_fetch::RedirectInfo {
+                            source,
+                            from_url: pair[0].clone(),
+                            to_url: pair[1].clone(),
+                            status: 302,
+                            // The response to each hop is checked before its redirect
+                            // changes the serialized origin for the following request.
+                            headers: if source == RedirectSource::Network {
+                                vec![(
+                                    "Access-Control-Allow-Origin".into(),
+                                    origin.ascii_serialization().into(),
+                                )]
+                            } else {
+                                Vec::new()
+                            },
+                            network_extra_info_available: false,
+                            request_extra_info: None,
+                            response_extra_info: None,
+                            redirect_has_extra_info: false,
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            from_cache: false,
+                            negotiated_http_version: None,
+                        })
+                        .collect();
+                    assert_eq!(head.url_list().serialized_origin(&origin), expected_origin);
+                    assert!(head.url_list().has_cross_origin_url(&origin));
+                    validate_cors_response_chain(
+                        &origin,
+                        &head,
+                        RequestCredentialsMode::SameOrigin,
+                    )
+                    .expect("authorize network hops using their individual request origins");
+                    head.headers.clear();
+                    validate_cors_response_chain(
+                        &origin,
+                        &head,
+                        RequestCredentialsMode::SameOrigin,
+                    )
+                    .expect_err(
+                        "returning to the client origin cannot bypass final CORS validation",
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn cors_preflight_request_headers_detect_unsafe_method_and_headers() {
         let headers = vec![
             ("Accept".to_owned(), "*/*".to_owned()),
@@ -599,8 +878,13 @@ mod tests {
             ("X-Other".to_owned(), "ok".to_owned()),
         ];
 
-        let preflight =
-            cors_preflight_request_headers(true, &url("http://other.test/data"), "PUT", &headers);
+        let preflight = cors_preflight_request_headers(
+            true,
+            &url("http://other.test/data"),
+            "PUT",
+            &headers,
+            false,
+        );
 
         assert_eq!(
             preflight,
@@ -626,8 +910,42 @@ mod tests {
         ];
 
         assert_eq!(
-            cors_preflight_request_headers(true, &url("http://other.test/data"), "POST", &headers,),
+            cors_preflight_request_headers(
+                true,
+                &url("http://other.test/data"),
+                "POST",
+                &headers,
+                false
+            ),
             None
+        );
+    }
+
+    #[test]
+    fn opaque_request_origin_requires_null_cors_opt_in_for_same_url_origin() {
+        let response_url = url("https://example.test/data");
+        let response = header_response(response_url.clone(), Vec::new());
+
+        assert!(
+            validate_cors_response_chain(
+                &WebOrigin::Opaque,
+                &response,
+                RequestCredentialsMode::SameOrigin,
+            )
+            .is_err()
+        );
+
+        let allowed_response = header_response(
+            response_url,
+            vec![("Access-Control-Allow-Origin".to_owned(), "null".to_owned())],
+        );
+        assert!(
+            validate_cors_response_chain(
+                &WebOrigin::Opaque,
+                &allowed_response,
+                RequestCredentialsMode::SameOrigin,
+            )
+            .is_ok()
         );
     }
 
@@ -660,6 +978,7 @@ mod tests {
                 &request_headers,
                 204,
                 &response_headers,
+                false,
             ),
             Ok(())
         );
@@ -684,6 +1003,7 @@ mod tests {
                 &[("Content-Type".to_owned(), "custom/type".to_owned())],
                 200,
                 &response_headers,
+                false,
             )
             .unwrap_or_else(|error| {
                 panic!(
@@ -711,9 +1031,186 @@ mod tests {
             &[("Content-Type".to_owned(), "custom/type".to_owned())],
             200,
             &response_headers,
+            false,
         )
         .expect_err("unsafelisted PUT preflight should require Access-Control-Allow-Methods");
         assert!(error.contains("no Access-Control-Allow-Methods for PUT"));
+    }
+
+    fn preflight_permissions(
+        method: &str,
+        request_headers: &[(&str, &str)],
+        permissions: &[(&str, &str)],
+        credentials_mode: RequestCredentialsMode,
+    ) -> Result<(), String> {
+        let request_headers = request_headers
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+            .collect::<Vec<_>>();
+        let mut response_headers = vec![
+            (
+                "Access-Control-Allow-Origin".to_owned(),
+                "https://origin.test".to_owned(),
+            ),
+            (
+                "Access-Control-Allow-Credentials".to_owned(),
+                "true".to_owned(),
+            ),
+        ];
+        response_headers.extend(
+            permissions
+                .iter()
+                .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
+        );
+        let origin = WebOrigin::from_url(&url("https://origin.test/page"));
+        validate_cors_preflight_response(
+            origin.ascii_serialization(),
+            credentials_mode,
+            method,
+            &request_headers,
+            204,
+            &response_headers,
+            false,
+        )
+    }
+
+    #[test]
+    fn cors_preflight_permissions_combine_fields_without_folding_method_case() {
+        let permissions = [
+            ("Access-Control-Allow-Methods", "POST,,"),
+            ("access-control-allow-methods", "\t patcH, \t"),
+            ("Access-Control-Allow-Headers", "X-First"),
+            ("ACCESS-CONTROL-ALLOW-HEADERS", ",\t X-SECOND,,"),
+        ];
+        for credentials in [
+            RequestCredentialsMode::Omit,
+            RequestCredentialsMode::Include,
+        ] {
+            let headers = [("x-first", "1"), ("x-second", "2")];
+            assert_eq!(
+                preflight_permissions("patcH", &headers, &permissions, credentials),
+                Ok(())
+            );
+            assert!(preflight_permissions("PATCH", &headers, &permissions, credentials).is_err());
+        }
+    }
+
+    #[test]
+    fn cors_preflight_permissions_validate_both_complete_lists_before_safelists() {
+        for field in [
+            "Access-Control-Allow-Methods",
+            "Access-Control-Allow-Headers",
+        ] {
+            for invalid in [
+                "Bad value",
+                "\"GET\"",
+                "GET:POST",
+                "GET;POST",
+                "GET\u{00a0}",
+                "\u{000b}GET",
+                "GET\r\n",
+                "GÉT",
+            ] {
+                let fields = [(field, "GET, X-Test"), (field, invalid)];
+                assert!(
+                    preflight_permissions("GET", &[], &fields, RequestCredentialsMode::Omit)
+                        .is_err(),
+                    "a later malformed {field} must reject even a safelisted request: {invalid:?}"
+                );
+                assert!(
+                    preflight_permissions(
+                        "GET",
+                        &[("X-Test", "1")],
+                        &fields,
+                        RequestCredentialsMode::Omit
+                    )
+                    .is_err(),
+                    "an earlier matching token must not hide a malformed {field}: {invalid:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cors_preflight_permissions_wildcards_respect_credentials_and_authorization() {
+        let wildcards = [
+            ("Access-Control-Allow-Methods", "*"),
+            ("Access-Control-Allow-Headers", "*"),
+        ];
+        for credentials in [
+            RequestCredentialsMode::Omit,
+            RequestCredentialsMode::SameOrigin,
+            RequestCredentialsMode::Include,
+        ] {
+            assert_eq!(
+                preflight_permissions("PUT", &[("X-Test", "1")], &wildcards, credentials).is_ok(),
+                credentials != RequestCredentialsMode::Include
+            );
+            assert_eq!(
+                preflight_permissions("*", &[("*", "1")], &wildcards, credentials),
+                Ok(())
+            );
+            assert!(
+                preflight_permissions(
+                    "POST",
+                    &[("aUtHoRiZaTiOn", "secret")],
+                    &wildcards,
+                    credentials
+                )
+                .is_err()
+            );
+            assert_eq!(
+                preflight_permissions(
+                    "POST",
+                    &[("Authorization", "secret")],
+                    &[
+                        ("Access-Control-Allow-Headers", "*"),
+                        ("Access-Control-Allow-Headers", "AUTHORIZATION"),
+                    ],
+                    credentials
+                ),
+                Ok(())
+            );
+        }
+    }
+
+    #[test]
+    fn cors_preflight_permissions_accept_http_tokens_and_empty_lists() {
+        let token = "!#$%&'*+-.^_`|~0123456789AZaz";
+        assert_eq!(
+            preflight_permissions(
+                token,
+                &[(token, "1")],
+                &[
+                    ("Access-Control-Allow-Methods", token),
+                    ("Access-Control-Allow-Headers", token),
+                ],
+                RequestCredentialsMode::Include
+            ),
+            Ok(())
+        );
+        for empty in ["", " \t ", ",, \t,"] {
+            let fields = [
+                ("Access-Control-Allow-Methods", empty),
+                ("Access-Control-Allow-Headers", empty),
+            ];
+            assert_eq!(
+                preflight_permissions("GET", &[], &fields, RequestCredentialsMode::Omit),
+                Ok(())
+            );
+            assert!(
+                preflight_permissions("PUT", &[], &fields, RequestCredentialsMode::Omit).is_err()
+            );
+            assert!(
+                preflight_permissions(
+                    "GET",
+                    &[("X-Test", "1")],
+                    &fields,
+                    RequestCredentialsMode::Omit
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

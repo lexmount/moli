@@ -49,13 +49,17 @@ async fn install_child_document_lifecycle_fixture(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn child_document_lifecycle_body_leaves_reactions_for_selected_completion() {
+async fn child_document_lifecycle_body_cleans_up_listener_reactions() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/child-document-lifecycle-body").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_child_document_lifecycle_fixture(&mut page_vm, "lifecycle-body").await?;
+        page_vm.vm_mut().eval(r#"
+            Object.defineProperty(document.getElementById("lifecycle-body").contentDocument,
+                "dispatchEvent", {get() { throw new Error("host event used dispatchEvent"); }});
+        "#)?;
 
         let body = page_vm
             .run_page_child_document_lifecycle_body_for_test()
@@ -70,8 +74,8 @@ async fn child_document_lifecycle_body_leaves_reactions_for_selected_completion(
                 .eval_without_microtask_checkpoint_for_test(
                     "__lmChildDocumentLifecycleBoundary.join('|')"
                 )?,
-            "callback:interactive",
-            "the lifecycle body must leave listener reactions pending for selected completion"
+            "callback:interactive|microtask:interactive",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -116,7 +120,7 @@ async fn selected_child_document_lifecycle_completes_each_event_reaction_and_run
                         "__lmChildDocumentLifecycleBoundary.join('|')"
                     )?,
                 expected,
-                "each selected lifecycle task must own its listener-reaction checkpoint"
+                "each lifecycle callback must finish its reactions before the next lifecycle task"
             );
             if index == 0 {
                 assert!(

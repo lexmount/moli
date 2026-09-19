@@ -1,4 +1,27 @@
+use std::borrow::Cow;
+
 use moli_web_mime::request_header_content_type_essence;
+
+// Header strings represent HTTP bytes one-for-one, including obs-text. UTF-8
+// decoding would either replace bytes or combine a valid multibyte sequence.
+pub(crate) fn decode_http_header_bytes(data: &[u8]) -> Cow<'_, str> {
+    if data.is_ascii() {
+        Cow::Borrowed(std::str::from_utf8(data).expect("ASCII is valid UTF-8"))
+    } else {
+        Cow::Owned(data.iter().copied().map(char::from).collect())
+    }
+}
+
+pub(crate) fn parse_http_header_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let (name, value) = line.split_once(':')?;
+    let name = name.trim_matches([' ', '\t']);
+    if name.is_empty() {
+        return None;
+    }
+    // Only HTTP OWS is framing. NBSP and NEL are ordinary header bytes.
+    Some((name.to_owned(), value.trim_matches([' ', '\t']).to_owned()))
+}
 
 pub fn is_forbidden_request_header_name(name: &str) -> bool {
     let name = name.to_ascii_lowercase();
@@ -42,15 +65,34 @@ pub fn is_forbidden_request_header_override_value(name: &str, value: &str) -> bo
     ) {
         return false;
     }
-    value.split(',').any(|method| {
-        matches!(
-            method
-                .trim_matches(is_http_whitespace)
-                .to_ascii_uppercase()
-                .as_str(),
-            "CONNECT" | "TRACE" | "TRACK"
-        )
-    })
+    // Fetch's "get, decode, and split" keeps quoted strings intact, including
+    // their quotes, so commas and method names inside them are ordinary data.
+    let mut quoted = false;
+    let mut escaped = false;
+    value
+        .split(|character| {
+            if escaped {
+                escaped = false;
+                false
+            } else if quoted && character == '\\' {
+                escaped = true;
+                false
+            } else if character == '"' {
+                quoted = !quoted;
+                false
+            } else {
+                character == ',' && !quoted
+            }
+        })
+        .any(|method| {
+            matches!(
+                method
+                    .trim_matches(is_http_whitespace)
+                    .to_ascii_uppercase()
+                    .as_str(),
+                "CONNECT" | "TRACE" | "TRACK"
+            )
+        })
 }
 
 pub fn is_no_cors_safelisted_request_header(name: &str, value: &str) -> bool {
@@ -204,6 +246,39 @@ mod tests {
     }
 
     #[test]
+    fn method_override_filter_respects_quoted_list_members() {
+        for name in [
+            "X-HTTP-Method",
+            "X-HTTP-Method-Override",
+            "X-Method-Override",
+        ] {
+            for value in [
+                r#""GET,TRACE,POST""#,
+                r#""GET\",TRACK,POST""#,
+                r#"prefix"one,CONNECT,two"suffix"#,
+                r#""unterminated,TRACE"#,
+                r#""TRACE""#,
+            ] {
+                assert!(
+                    !is_forbidden_request_header_override_value(name, value),
+                    "{name}: {value}"
+                );
+            }
+            for value in [
+                r#""GET,TRACE", TRACK"#,
+                r#""GET\",TRACE", CONNECT"#,
+                r#""GET\\", CONNECT"#,
+                r#"prefix"CONNECT", TRACE"#,
+            ] {
+                assert!(
+                    is_forbidden_request_header_override_value(name, value),
+                    "{name}: {value}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn no_cors_safelist_keeps_fetch_header_subset() {
         assert!(is_no_cors_safelisted_request_header("accept", "text/html"));
         assert!(!is_no_cors_safelisted_request_header("accept", "\""));
@@ -231,10 +306,18 @@ mod tests {
             "content-type",
             "text/html"
         ));
-        assert!(!is_no_cors_safelisted_request_header(
+        assert!(is_no_cors_safelisted_request_header(
             "content-type",
             "text/plain;charset=UTF-8, text/plain"
         ));
+        for value in [
+            "text/plain, text/plain",
+            "application/json, text/plain",
+            "text/plain, application/json",
+            "text/plain;charset=\"utf8\", extra",
+        ] {
+            assert!(!is_no_cors_safelisted_request_header("content-type", value));
+        }
         assert!(!is_no_cors_safelisted_request_header("range", "bytes=0-1"));
     }
 

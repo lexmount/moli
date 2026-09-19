@@ -47,7 +47,7 @@ async fn install_child_host_load_completion_fixture(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn child_host_load_body_leaves_reactions_for_selected_completion() {
+async fn child_host_load_body_cleans_up_listener_reactions() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -69,8 +69,8 @@ async fn child_host_load_body_leaves_reactions_for_selected_completion() {
                 .eval_without_microtask_checkpoint_for_test(
                     "__lmChildHostLoadTaskBoundary.join('|')"
                 )?,
-            "callback",
-            "the HostLoad body must leave listener reactions pending for selected completion"
+            "callback|microtask",
+            "listener cleanup must drain reactions before the selected task completes"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -115,7 +115,7 @@ document.getElementById("host-load-body-replacement").onload = function () {
                 .eval_without_microtask_checkpoint_for_test(
                     "__lmChildHostLoadTaskBoundary.join('|')"
                 )?,
-            "callback",
+            "callback|microtask",
             "replacement must not erase the fact that the callback body already ran"
         );
         Ok::<_, anyhow::Error>(())
@@ -153,7 +153,7 @@ async fn selected_child_host_load_completes_reactions_and_runtime_followup() {
                     "__lmChildHostLoadTaskBoundary.join('|')"
                 )?,
             "callback|microtask",
-            "selected HostLoad completion must own the listener-reaction checkpoint"
+            "the selected HostLoad task must include listener cleanup"
         );
         assert!(
             has_ready_runtime_script_continuation_for_test(&page_vm),

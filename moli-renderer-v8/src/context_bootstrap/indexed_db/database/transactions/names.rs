@@ -1,44 +1,32 @@
 use crate::webidl;
+use moli_indexeddb::IndexedDbName;
 
-pub(super) fn parse_transaction_store_names<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<Vec<String>, webidl::WebIdlError> {
-    if should_parse_store_names_sequence(scope, value)? {
-        let names = webidl::convert::<webidl::Sequence<webidl::DomString>>(
+pub(super) struct TransactionStoreNames(pub(super) Vec<IndexedDbName>);
+
+impl<'s> webidl::WebIdlConverter<'s> for TransactionStoreNames {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        if let Some(names) = webidl::convert_optional_sequence::<webidl::DomString16>(
             scope,
             value,
-            webidl::Context::argument("IDBDatabase.transaction", 1),
-        )?;
-        return Ok(names.0.into_iter().map(Into::into).collect());
+            context,
+            &webidl::StringOptions::default(),
+        )? {
+            return Ok(Self(
+                names
+                    .0
+                    .into_iter()
+                    .map(|name| IndexedDbName::from_utf16(name.0))
+                    .collect(),
+            ));
+        }
+        webidl::convert::<webidl::DomString16>(scope, value, context)
+            .map(|value| Self(vec![IndexedDbName::from_utf16(value.0)]))
     }
-    webidl::convert::<webidl::DomString>(
-        scope,
-        value,
-        webidl::Context::argument("IDBDatabase.transaction", 1),
-    )
-    .map(|value| vec![value.into()])
-}
-
-fn should_parse_store_names_sequence<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Result<bool, webidl::WebIdlError> {
-    if value.is_string() {
-        return Ok(false);
-    }
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(false);
-    };
-    let iterator_key = v8::Symbol::get_iterator(scope);
-    let Some(iterator) = webidl::symbol_property_result(
-        scope,
-        object,
-        iterator_key,
-        webidl::Context::argument("IDBDatabase.transaction", 1),
-    )?
-    else {
-        return Ok(false);
-    };
-    Ok(!iterator.is_null_or_undefined())
 }

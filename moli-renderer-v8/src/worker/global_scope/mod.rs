@@ -42,7 +42,6 @@ use moli_fetch::{
 };
 use moli_storage_key::MoliStorageKey;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
-use moli_webidl_callback::WebIdlCallbackInterface;
 use moli_websocket::{
     ConnectOptions as WebSocketConnectOptions, ConnectionHandle as WebSocketConnectionHandle,
     Event as WebSocketEvent, spawn_connection, spawn_failed_connection, websocket_cookie_url,
@@ -53,7 +52,7 @@ use url::Url;
 use super::{
     decode_data_url_script_source,
     handle::{
-        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerPendingFetchContinue,
+        WorkerConsoleMessage, WorkerFetchHandlerType, WorkerMessage, WorkerPendingFetchContinue,
         WorkerPendingSubresourceFetch, WorkerPendingXhrContinue, WorkerToParentMessage,
         WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
     },
@@ -67,29 +66,24 @@ use crate::context_bootstrap::{
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
-    FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
+    FetchResponseSecurityViolation, PreparedXhrSendBody, XHR_ABORTED_SLOT,
     XHR_ACTIVE_INTERNAL_ID_SLOT, XHR_ASYNC_SLOT, XHR_METHOD_SLOT, XHR_OPEN_GENERATION_SLOT,
-    XHR_READY_STATE_SLOT, XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT,
-    XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
-    append_default_body_content_type, apply_xhr_failure, apply_xhr_response,
-    apply_xhr_response_body_source, apply_xhr_timeout,
-    browser_request_needs_manual_preflight_redirects,
-    build_fetch_response_object_from_body_source_for_request_mode,
-    build_fetch_response_object_from_stream_for_request_mode,
-    build_fetch_response_object_from_subresource_body_for_request_mode,
-    close_pending_network_body_stream, dispatch_xhr_upload_abort_if_in_progress,
-    dispatch_xhr_upload_complete, enqueue_pending_network_body_chunk,
+    XHR_SEND_FLAG_SLOT, XHR_TIMEOUT_SLOT, XHR_TIMEOUT_START_MS_SLOT, XHR_TIMEOUT_TIMER_SLOT,
+    XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT, append_default_body_content_type, apply_xhr_failure,
+    apply_xhr_response, apply_xhr_response_body_source, apply_xhr_timeout, apply_xhr_upload_event,
+    capture_xhr_upload_listener_flag, close_pending_network_body_stream,
+    convert_xhr_send_body_from_args, dispatch_xhr_loadstart, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, extract_subresource_auth_challenge,
     fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
     fetch_browser_subresource_with_preflight_headers_and_network_metadata,
-    filter_cors_exposed_response_headers, filter_headers_for_guard, has_header,
-    is_cors_policy_failure_message, local_url_response_result, parse_fetch_init,
-    prepare_xhr_send_body_from_args, request_input_snapshot, request_object_credentials_mode,
-    reset_xhr_response_for_request_error, resolve_context_url, set_xhr_state_bool,
-    set_xhr_state_number, throw_synchronous_xhr_failure, validate_fetch_response_security_policy,
+    filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
+    parse_fetch_init, request_headers_guard_for_mode, request_input_snapshot,
+    request_object_credentials_mode, resolve_context_url, set_xhr_state_bool, set_xhr_state_number,
+    throw_synchronous_xhr_failure, validate_fetch_response_headers,
+    validate_fetch_response_security_policy,
     validate_fetch_response_security_policy_with_body_classified, xhr_author_request_headers,
-    xhr_dispatch_progress_event, xhr_ensure_send_allowed, xhr_state_bool_property,
-    xhr_state_number_property, xhr_state_string_property,
+    xhr_ensure_send_allowed, xhr_state_bool_property, xhr_state_number_property,
+    xhr_state_string_property,
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
@@ -150,6 +144,16 @@ pub(super) fn dispatch_worker_csp_violation_event<'s>(
     );
 }
 
+pub(super) fn dispatch_worker_csp_violation_event_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
+) {
+    content_security_policy::dispatch_worker_content_security_policy_violation_event_for_state(
+        scope, state, violation,
+    );
+}
+
 pub(super) const WORKER_GLOBAL_LISTENERS_SLOT: &str = "__moliWorkerGlobalListeners";
 pub(crate) const WORKER_STATE_SLOT: &str = "__workerState";
 const WORKER_GLOBAL_ONMESSAGE_SLOT: &str = "__moliWorkerGlobalOnMessage";
@@ -173,12 +177,17 @@ pub(super) const WORKER_EXCEPTION_LINE_SLOT: &str = "__moliWorkerExceptionLine";
 pub(super) const WORKER_EXCEPTION_COLUMN_SLOT: &str = "__moliWorkerExceptionColumn";
 const SERVICE_WORKER_REGISTRATION_SCOPE_SLOT: &str = "__moliServiceWorkerRegistrationScope";
 const SERVICE_WORKER_REGISTRATION_ID_SLOT: &str = "__moliServiceWorkerRegistrationId";
+const SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT: &str = "__moliServiceWorkerGlobalRegistration";
+const SERVICE_WORKER_REGISTRATION_EVENTS_SLOT: &str = "__moliServiceWorkerRegistrationEvents";
+const SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT: &str =
+    "__moliServiceWorkerRegistrationOnUpdateFound";
 const SERVICE_WORKER_VERSION_ID_SLOT: &str = "__moliServiceWorkerVersionId";
 const SERVICE_WORKER_WORKER_EVENTS_SLOT: &str = "__moliServiceWorkerWorkerEvents";
 const SERVICE_WORKER_NAVIGATION_PRELOAD_MANAGER_SCOPE_SLOT: &str =
     "__moliServiceWorkerNavigationPreloadManagerScope";
 const SERVICE_WORKER_CLIENT_ID_SLOT: &str = "__lmServiceWorkerClientId";
 const WORKER_ORIGINAL_CONSOLE_SLOT: &str = "__moliWorkerOriginalConsole";
+const WORKER_GLOBAL_ORIGIN_SLOT: &str = "__moliWorkerGlobalOrigin";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -205,8 +214,19 @@ struct WorkerGlobalNameDeclaration {
 #[derive(WebApiObject)]
 #[webapi(plain)]
 struct WorkerGlobalOriginDeclaration {
-    #[webapi(data_property, readonly)]
+    #[webapi(slot = WORKER_GLOBAL_ORIGIN_SLOT)]
     origin: String,
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(fragment, prototype = "WorkerGlobalScope", enumerable)]
+struct WorkerGlobalOriginPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = worker_global_origin_getter,
+        setter = worker_global_origin_setter
+    )]
+    origin: (),
 }
 
 #[derive(WebApiObject)]
@@ -214,13 +234,6 @@ struct WorkerGlobalOriginDeclaration {
 struct WorkerGlobalConsoleDeclaration<'scope> {
     #[webapi(data_property)]
     console: v8::Local<'scope, v8::Object>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WorkerGlobalPerformanceDeclaration<'scope> {
-    #[webapi(data_property)]
-    performance: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(Default, WebApiObject)]
@@ -268,15 +281,6 @@ struct WorkerConsoleObjectDeclaration {
     profile: (),
     #[webapi(method, enumerable, callback = console_profile_end_callback)]
     profile_end: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(prototype = "Object", interface = web_api_interfaces::Performance)]
-struct WorkerPerformanceObjectDeclaration {
-    #[webapi(data_property, readonly)]
-    time_origin: f64,
-    #[webapi(method, callback = worker_performance_now_callback, data = self.time_origin)]
-    now: (),
 }
 
 #[derive(Default, WebApiObject)]
@@ -655,6 +659,13 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
     scope: String,
 
     #[webapi(
+        accessor_property = "onupdatefound",
+        getter = service_worker_registration_onupdatefound_getter,
+        setter = service_worker_registration_onupdatefound_setter
+    )]
+    onupdatefound: (),
+
+    #[webapi(
         accessor_property = "installing",
         getter = service_worker_registration_installing_getter
     )]
@@ -674,6 +685,9 @@ struct ServiceWorkerGlobalRegistrationDeclaration<'scope> {
 
     #[webapi(method, callback = service_worker_registration_unregister_callback, length = 0)]
     unregister: (),
+
+    #[webapi(method, callback = service_worker_registration_update_callback, length = 0)]
+    update: (),
 
     #[webapi(
         method = "showNotification",
@@ -985,6 +999,11 @@ pub(super) struct PendingServiceWorkerShowNotification {
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
 }
 
+pub(super) struct PendingServiceWorkerUpdate {
+    pub(super) resolver: v8::Global<v8::PromiseResolver>,
+    pub(super) registration: v8::Global<v8::Object>,
+}
+
 pub(super) struct PendingServiceWorkerGetNotifications {
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
 }
@@ -1091,6 +1110,8 @@ pub(crate) struct WorkerOpfsCompletion {
 pub(super) struct PendingWorkerFetch {
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
     pub(super) document_url: Url,
+    pub(super) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
+    pub(super) redirect_csp_state: crate::network_host::FetchCspRedirectState,
     pub(super) credentials_mode: RequestCredentialsMode,
     pub(super) request_mode: moli_fetch::RequestMode,
     pub(super) redirect_mode: RequestRedirectMode,
@@ -1100,6 +1121,7 @@ pub(super) struct PendingWorkerFetch {
     pub(super) signal_id: Option<u32>,
     pub(super) load: ResourceLoadLease,
     pub(super) request_url: Url,
+    pub(super) blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
     pub(super) request_method: String,
     pub(super) request_headers: Vec<(String, String)>,
     pub(super) request_body: Option<String>,
@@ -1107,9 +1129,13 @@ pub(super) struct PendingWorkerFetch {
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
     pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
     pub(super) streaming_body_source_id: Option<NetworkBodySourceId>,
+    pub(super) streaming_needs_orb_body_validation: bool,
 }
 
 pub(super) enum WorkerFetchEvent {
+    ContentSecurityPolicyViolation(
+        Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    ),
     Completion(Box<WorkerFetchCompletion>),
     StreamingStarted(WorkerFetchStreamingStarted),
     StreamingChunk(WorkerFetchStreamingChunk),
@@ -1117,6 +1143,8 @@ pub(super) enum WorkerFetchEvent {
 }
 
 pub(super) struct WorkerFetchCompletion {
+    response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    skip_fetch_security_validation: bool,
     fetch_id: u32,
     network_request_headers: Option<Vec<(String, String)>>,
     result: Result<WorkerFetchResponse, String>,
@@ -1130,6 +1158,7 @@ pub(super) struct WorkerFetchStreamingStarted {
 }
 
 pub(super) struct WorkerFetchStreamingChunk {
+    fetch_id: u32,
     body_source_id: NetworkBodySourceId,
     bytes: Vec<u8>,
 }
@@ -1207,6 +1236,7 @@ pub(super) struct PendingWorkerXhr {
     pub(super) xhr: v8::Global<v8::Object>,
     pub(super) document_url: Url,
     pub(super) credentials_mode: RequestCredentialsMode,
+    pub(super) use_cors_preflight: bool,
     pub(super) load: ResourceLoadLease,
     pub(super) request_paused: bool,
     pub(super) request_url: Url,
@@ -1231,8 +1261,18 @@ pub(super) struct PendingWorkerCspReport {
 }
 
 pub(super) struct PausedWorkerSubresourceResponse {
+    pub(super) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) head: ResponseHead,
     pub(super) body: SubresourceResponseBody,
+}
+
+pub(super) enum WorkerXhrEvent {
+    Upload {
+        xhr_id: u32,
+        event: moli_fetch::UploadEvent,
+    },
+    Completion(Box<WorkerXhrCompletion>),
 }
 
 pub(super) struct WorkerXhrCompletion {
@@ -1414,12 +1454,6 @@ impl WorkerImportScriptError {
     }
 }
 
-struct PreparedWorkerImportScript {
-    final_url: Url,
-    source: Option<String>,
-    muted_errors: bool,
-}
-
 fn annotate_worker_exception_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     exception: v8::Local<'s, v8::Value>,
@@ -1477,7 +1511,6 @@ fn set_worker_exception_location_if_missing<'s>(
 /// Mutable state accessible from V8 callbacks inside the worker isolate.
 pub(super) struct WorkerMessagePortWrapperEntry {
     wrapper: v8::Global<v8::Object>,
-    listeners: crate::context_bootstrap::WorkerMessagePortEventListenerRegistry,
 }
 
 pub(crate) struct WorkerGlobalState {
@@ -1494,6 +1527,8 @@ pub(crate) struct WorkerGlobalState {
     pub(crate) termination_requested: Arc<AtomicBool>,
     /// Whether `close()` has been called.
     pub(super) closed: bool,
+    /// HTML's per-global guard against recursively reporting an error event.
+    pub(super) in_error_reporting_mode: bool,
     /// Timer id counter.
     pub(super) next_timer_id: u32,
     /// Inside-settings resource authority for every request owned by this
@@ -1504,14 +1539,22 @@ pub(crate) struct WorkerGlobalState {
     pub(super) global_kind: super::thread::WorkerGlobalKind,
     /// Whether this worker was constructed as a classic or module worker.
     pub(super) script_kind: super::thread::WorkerScriptKind,
-    /// Base URL used to resolve relative worker script fetches.
+    /// Worker global's URL and settings base, unchanged by importScripts().
+    /// Imported scripts carry their separate import base in V8 ScriptOrigin.
     pub(super) current_script_url: Option<Url>,
+    /// Responses in this ServiceWorker version's script resource map, keyed by
+    /// requested URL. Dedicated and Shared Workers leave this map empty.
+    pub(super) service_worker_script_resources: HashMap<Url, crate::worker::WorkerScriptResource>,
+    pub(super) service_worker_updated_script_resources: crate::worker::WorkerScriptUpdateResources,
+    pub(super) service_worker_can_import_new_scripts: bool,
     /// Referrer policy parsed from the top-level worker script response.
     pub(super) referrer_policy: Option<String>,
     /// CSP policies from outside settings used for module static imports.
     pub(super) module_static_import_content_security_policies: Vec<String>,
     /// Enforce CSP policies parsed from the top-level worker script response.
     pub(super) content_security_policies: Vec<String>,
+    pub(super) content_security_policy_snapshot:
+        Option<crate::content_security_policy::InheritedContentSecurityPolicy>,
     /// Report-only CSP policies parsed from the top-level worker script response.
     pub(super) content_security_report_only_policies: Vec<String>,
     /// Reporting API endpoints parsed from the top-level worker script response.
@@ -1544,7 +1587,7 @@ pub(crate) struct WorkerGlobalState {
     /// Fetch id counter.
     pub(super) next_fetch_id: u32,
     /// Async XHR completions routed back onto the worker event loop.
-    pub(super) xhr_completion_tx: mpsc::UnboundedSender<WorkerXhrCompletion>,
+    pub(super) xhr_completion_tx: mpsc::UnboundedSender<WorkerXhrEvent>,
     /// In-flight worker XHR requests keyed by internal id.
     pub(super) pending_xhrs: HashMap<u32, PendingWorkerXhr>,
     /// Worker XHR id counter.
@@ -1613,6 +1656,8 @@ pub(crate) struct WorkerGlobalState {
     /// In-flight Service Worker `registration.showNotification()` requests keyed by request id.
     pub(super) pending_service_worker_show_notifications:
         HashMap<u64, PendingServiceWorkerShowNotification>,
+    pub(super) pending_service_worker_updates: HashMap<u64, PendingServiceWorkerUpdate>,
+    pub(super) service_worker_update_request_ids: WorkerServiceWorkerRequestIdAllocator,
     /// In-flight Service Worker `registration.getNotifications()` requests keyed by request id.
     pub(super) pending_service_worker_get_notifications:
         HashMap<u64, PendingServiceWorkerGetNotifications>,
@@ -2477,6 +2522,45 @@ pub(super) fn drain_service_worker_clients_open_window_result(
     }
 }
 
+pub(super) fn drain_service_worker_update_result(
+    scope: &mut v8::PinScope<'_, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    request_id: u64,
+    result: Result<
+        crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot,
+        crate::service_worker_runtime::ServiceWorkerRegistrationError,
+    >,
+) {
+    let Some(pending) = state
+        .borrow_mut()
+        .pending_service_worker_updates
+        .remove(&request_id)
+    else {
+        return;
+    };
+    let resolver = v8::Local::new(scope, &pending.resolver);
+    match result {
+        Ok(_) => {
+            let registration = v8::Local::new(scope, &pending.registration);
+            let _ = resolver.resolve(scope, registration.into());
+        }
+        Err(error) => {
+            let exception = if error.kind.rejects_as_type_error_for_update() {
+                let message = v8_string(scope, &error.message)
+                    .unwrap_or_else(|| v8str(scope, "ServiceWorker update failed"));
+                v8::Exception::type_error(scope, message)
+            } else {
+                crate::context_bootstrap::new_dom_exception_value(
+                    scope,
+                    &error.message,
+                    error.kind.dom_exception_name(),
+                )
+            };
+            let _ = resolver.reject(scope, exception);
+        }
+    }
+}
+
 pub(super) fn drain_service_worker_show_notification_result(
     scope: &mut v8::PinScope<'_, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
@@ -2814,6 +2898,8 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub(crate) module_static_import_content_security_policies: Vec<String>,
+    pub(crate) content_security_policy_snapshot:
+        crate::content_security_policy::InheritedContentSecurityPolicy,
     pub(crate) require_trusted_types_for_script: bool,
     pub(crate) network_policy: super::handle::WorkerNetworkPolicy,
     pub(crate) policy_context: crate::types::SubresourcePolicyContext,
@@ -2847,6 +2933,7 @@ pub(crate) fn reserve_nested_worker_context(
         indexed_db_manager: state.indexed_db_manager.clone(),
         storage_bucket_store: state.storage_bucket_store.clone(),
         module_static_import_content_security_policies: state.content_security_policies.clone(),
+        content_security_policy_snapshot: content_security_policy::worker_policy_snapshot(&state),
         require_trusted_types_for_script:
             crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
                 &state.content_security_policies,
@@ -2865,6 +2952,50 @@ pub(crate) fn reserve_nested_worker_context(
         policy_context: state.policy_context,
         wake_tx: state.worker_wake_tx.clone(),
     })
+}
+
+pub(crate) fn check_and_queue_nested_worker_constructor_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    request_url: &Url,
+) -> Result<(), String> {
+    let state = get_worker_state(scope)
+        .expect("nested Worker construction requires an installed worker global state");
+    let (wake_tx, report_only_violation, enforce_violation) = {
+        let state = state.borrow();
+        let protected_url = state
+            .current_script_url
+            .as_ref()
+            .expect("nested Worker construction requires a current worker script URL");
+        (
+            state.worker_wake_tx.clone(),
+            worker_content_security_policy_report_only_violation(
+                &state,
+                protected_url,
+                request_url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ),
+            worker_content_security_policy_violation(
+                &state,
+                protected_url,
+                request_url,
+                crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConstructor,
+            ),
+        )
+    };
+
+    if let Some(violation) = report_only_violation {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    let Some(violation) = enforce_violation else {
+        return Ok(());
+    };
+    let message = worker_content_security_policy_error_message(&violation, "Worker");
+    let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+        Box::new(violation),
+    ));
+    Err(message)
 }
 
 pub(crate) fn worker_service_worker_control_state(
@@ -2935,12 +3066,16 @@ pub(super) fn dispatch_nested_worker_event(
             lineno,
             colno,
             event_kind,
+            phase,
             ..
         } => {
             let unhandled = crate::context_bootstrap::dispatch_worker_event(scope, worker, message);
+            // Bootstrap failures only fire an Event at the child Worker. Only
+            // uncanceled runtime errors propagate to its owner's global scope.
+            let propagate = unhandled && *phase == super::handle::WorkerErrorPhase::Runtime;
             NestedWorkerDispatchResult {
                 dispatched: true,
-                unhandled_error: unhandled.then(|| NestedWorkerUnhandledError {
+                unhandled_error: propagate.then(|| NestedWorkerUnhandledError {
                     message: error_message.clone(),
                     filename: filename.clone(),
                     lineno: *lineno,
@@ -2965,6 +3100,7 @@ pub(super) fn install_worker_global_scope<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     state: Rc<RefCell<WorkerGlobalState>>,
+    worker_templates: Option<&PreparedWorkerGlobalScopeTemplates>,
 ) -> Result<()> {
     // Store state pointer as an external on the global so callbacks can find it.
     let state_ptr = Rc::into_raw(state.clone()) as *mut c_void;
@@ -2991,19 +3127,8 @@ pub(super) fn install_worker_global_scope<'s>(
     )
     .initialize(scope, global)
     .map_err(|error| anyhow!("failed to initialize worker global bootstrap properties: {error}"))?;
-    install_worker_performance(scope, global)?;
-    install_worker_global_scope_constructors(scope, global, &global_kind)?;
-    let realm_kind = match &global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
-            crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker
-        }
-        super::thread::WorkerGlobalKind::Shared { .. } => {
-            crate::context_bootstrap::exposed_interfaces::RealmKind::SharedWorker
-        }
-        super::thread::WorkerGlobalKind::Service { .. } => {
-            crate::context_bootstrap::exposed_interfaces::RealmKind::ServiceWorker
-        }
-    };
+    install_worker_global_scope_constructors(scope, global, &global_kind, worker_templates)?;
+    let (_, realm_kind) = worker_global_scope_interface(&global_kind);
     crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
         scope,
         global,
@@ -3011,21 +3136,21 @@ pub(super) fn install_worker_global_scope<'s>(
         secure_context,
     )?;
     crate::context_bootstrap::install_trusted_types_runtime_state(scope, global)?;
-    let require_trusted_types_for_script =
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        );
-    if require_trusted_types_for_script {
+    let has_string_code_generation_policy = {
+        let state = state.borrow();
+        !state.content_security_policies.is_empty()
+            || !state.content_security_report_only_policies.is_empty()
+    };
+    if has_string_code_generation_policy {
         scope
             .get_current_context()
             .set_allow_generation_from_strings(false);
-        crate::context_bootstrap::install_trusted_types_eval_runtime_state(scope, global)?;
     }
     crate::context_bootstrap::install_webassembly_runtime_state(scope, global)?;
     if matches!(global_kind, super::thread::WorkerGlobalKind::Service { .. }) {
         install_service_worker_extendable_event_constructors(scope, global)?;
     }
-    crate::context_bootstrap::initialize_worker_fetch_realm_state(scope, global)?;
+    crate::context_bootstrap::initialize_worker_performance_realm_state(scope, global)?;
     let subtle_crypto_available = secure_context;
     crate::context_bootstrap::initialize_worker_crypto_realm_state(
         scope,
@@ -3046,15 +3171,24 @@ pub(super) fn install_worker_global_scope<'s>(
         secure_context,
         &identity,
     )?;
-    crate::context_bootstrap::install_worker_indexed_db_runtime_state(scope, global)?;
+    crate::context_bootstrap::install_worker_indexed_db_runtime_state(scope)?;
     crate::context_bootstrap::install_worker_base64_runtime_state(scope, global)?;
     install_simple_event_target_methods(scope, global, WORKER_GLOBAL_LISTENERS_SLOT, false);
     install_simple_event_target_ordered_handlers(scope, global);
-    if let Some(script_url) = state.borrow().current_script_url.clone() {
-        let origin = moli_url::origin_ascii_serialization(&script_url);
-        WorkerGlobalOriginDeclaration::new(origin)
-            .initialize(scope, global)
-            .map_err(|error| anyhow!("failed to initialize worker global origin: {error}"))?;
+    let script_url = state.borrow().current_script_url.clone();
+    let origin = script_url
+        .as_ref()
+        .map(moli_url::origin_ascii_serialization)
+        .unwrap_or_else(|| "null".to_owned());
+    WorkerGlobalOriginDeclaration::new(origin)
+        .initialize(scope, global)
+        .map_err(|error| anyhow!("failed to initialize worker global origin: {error}"))?;
+    let worker_prototype = global_constructor_prototype(scope, "WorkerGlobalScope")
+        .ok_or_else(|| anyhow!("WorkerGlobalScope prototype missing"))?;
+    WorkerGlobalOriginPrototypeDeclaration::default()
+        .initialize(scope, worker_prototype)
+        .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope origin: {error}"))?;
+    if let Some(script_url) = script_url {
         crate::context_bootstrap::install_worker_location_runtime_state(
             scope,
             global,
@@ -3112,6 +3246,45 @@ pub(super) fn install_worker_global_scope<'s>(
     Ok(())
 }
 
+fn worker_global_origin_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let origin = get_private_value(scope, global, WORKER_GLOBAL_ORIGIN_SLOT)
+        .unwrap_or_else(|| v8str(scope, "null").into());
+    rv.set(origin);
+}
+
+fn worker_global_origin_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let global = scope.get_current_context().global(scope);
+    if !args.this().strict_equals(global.into()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    // [Replaceable] creates an own data property without converting the value
+    // or changing the origin returned by the original getter.
+    match global.define_own_property(
+        scope,
+        v8str(scope, "origin").into(),
+        args.get(0),
+        v8::PropertyAttribute::NONE,
+    ) {
+        Some(true) => {}
+        Some(false) => throw_type_error(scope, "Cannot redefine WorkerGlobalScope.origin"),
+        None => {}
+    }
+}
+
 fn set_worker_global_name_prop<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
@@ -3134,6 +3307,12 @@ fn install_service_worker_global_runtime<'s>(
 ) -> Result<()> {
     let registration =
         build_service_worker_global_registration(scope, registration_id, version_id, scope_url)?;
+    set_private_value(
+        scope,
+        global,
+        SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT,
+        registration.into(),
+    );
     let clients = ServiceWorkerClientsDeclaration::default()
         .bind(scope)
         .map_err(|error| anyhow!("failed to build service worker clients: {error}"))?;
@@ -3172,10 +3351,12 @@ fn build_service_worker_global_registration<'s>(
         build_service_worker_global_navigation_preload_manager(scope, scope_url)?;
     let registration = ServiceWorkerGlobalRegistrationDeclaration {
         scope: scope_url.as_str().to_owned(),
+        onupdatefound: (),
         installing: (),
         waiting: (),
         active: (),
         unregister: (),
+        update: (),
         show_notification: (),
         get_notifications: (),
         sync: sync_manager,
@@ -3185,6 +3366,13 @@ fn build_service_worker_global_registration<'s>(
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to build service worker registration: {error:?}"))?;
+    install_simple_event_target_methods(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
+        false,
+    );
+    install_simple_event_target_ordered_handlers(scope, registration);
     let scope_value = v8_string(scope, scope_url.as_str())
         .ok_or_else(|| anyhow!("failed to allocate service worker registration scope"))?;
     set_private_value(
@@ -3208,6 +3396,77 @@ fn build_service_worker_global_registration<'s>(
         version_id_value.into(),
     );
     Ok(registration)
+}
+
+fn service_worker_registration_onupdatefound_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set(
+        get_private_value(
+            scope,
+            args.this(),
+            SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
+        )
+        .unwrap_or_else(|| v8::null(scope).into()),
+    );
+}
+
+fn service_worker_registration_onupdatefound_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let value = args.get(0);
+    let active = value.is_object();
+    let value = if active {
+        value
+    } else {
+        v8::null(scope).into()
+    };
+    set_private_value(
+        scope,
+        args.this(),
+        SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
+        value,
+    );
+    simple_object_event_set_ordered_handler(
+        scope,
+        args.this(),
+        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
+        "updatefound",
+        SERVICE_WORKER_REGISTRATION_ONUPDATEFOUND_SLOT,
+        active,
+    );
+}
+
+pub(super) fn dispatch_service_worker_registration_update_found<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) {
+    let global = scope.get_current_context().global(scope);
+    let Some(registration) =
+        get_private_value(scope, global, SERVICE_WORKER_GLOBAL_REGISTRATION_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Ok(prototype) =
+        crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Event")
+    else {
+        return;
+    };
+    let event = v8::Object::new(scope);
+    let _ = event.set_prototype(scope, prototype.into());
+    crate::context_bootstrap::initialize_event_object(scope, event, "updatefound", false, false);
+    crate::context_bootstrap::mark_event_trusted(scope, event);
+    crate::context_bootstrap::dispatch_simple_event_target_event(
+        scope,
+        registration,
+        SERVICE_WORKER_REGISTRATION_EVENTS_SLOT,
+        "updatefound",
+        event,
+    );
 }
 
 fn build_service_worker_global_navigation_preload_manager<'s>(
@@ -3317,6 +3576,98 @@ pub(super) fn build_service_worker_global_service_worker<'s>(
     );
     install_simple_event_target_methods(scope, worker, SERVICE_WORKER_WORKER_EVENTS_SLOT, false);
     Ok(worker)
+}
+
+fn service_worker_registration_update_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        return;
+    };
+    rv.set(resolver.get_promise(scope).into());
+    let registration_id =
+        get_private_value(scope, args.this(), SERVICE_WORKER_REGISTRATION_ID_SLOT)
+            .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+            .map(|value| value.u64_value())
+            .filter(|(_, lossless)| *lossless)
+            .map(|(value, _)| {
+                crate::service_worker_runtime::ServiceWorkerRegistrationId::from_u64_for_binding(
+                    value,
+                )
+            });
+    let Some(registration_id) = registration_id else {
+        let _ = resolver.reject(
+            scope,
+            v8::Exception::type_error(
+                scope,
+                v8str(
+                    scope,
+                    "Illegal invocation of ServiceWorkerRegistration.update",
+                ),
+            ),
+        );
+        return;
+    };
+    let Some(state) = get_worker_state(scope) else {
+        return;
+    };
+    let Some(runtime) = worker_service_worker_runtime(scope) else {
+        let error = crate::context_bootstrap::new_dom_exception_value(
+            scope,
+            "The registration runtime is unavailable.",
+            "InvalidStateError",
+        );
+        let _ = resolver.reject(scope, error);
+        return;
+    };
+    let request = {
+        let mut state = state.borrow_mut();
+        let caller_version_id = match state.global_kind {
+            super::thread::WorkerGlobalKind::Service { version_id, .. } => Some(version_id),
+            _ => None,
+        };
+        let Some(document_url) = state.current_script_url.clone() else {
+            return;
+        };
+        let request_id = state.service_worker_update_request_ids.allocate();
+        state.pending_service_worker_updates.insert(
+            request_id,
+            PendingServiceWorkerUpdate {
+                resolver: v8::Global::new(scope, resolver),
+                registration: v8::Global::new(scope, args.this()),
+            },
+        );
+        crate::service_worker_runtime::ServiceWorkerRegistrationUpdate {
+            registration_id,
+            caller_version_id,
+            storage_key: state.storage_key.serialized_storage_key(),
+            document_url,
+            request_client: state.loader.request_client().clone(),
+            network_policy: super::handle::WorkerNetworkPolicy {
+                secure_context: state.secure_context,
+                permission_overrides: state.permission_overrides.clone(),
+                extra_http_headers: state.extra_http_headers.clone(),
+                network_offline: state.network_offline,
+                blocked_url_patterns: state.blocked_url_patterns.clone(),
+                network_partition_key: state.network_partition_key.clone(),
+                fetch_subresource_interception_enabled: state
+                    .fetch_subresource_interception_enabled,
+                fetch_subresource_interception_resource_type: state
+                    .fetch_subresource_interception_resource_type,
+            },
+            worker_context_runtime: state.worker_context_runtime.clone(),
+            broadcast_channel_top_level_site: Some(state.storage_key.top_level_site().to_owned()),
+            indexed_db_manager: state.indexed_db_manager.clone(),
+            storage_bucket_store: state.storage_bucket_store.clone(),
+            completion: crate::service_worker_runtime::ServiceWorkerRegisterJob::Worker {
+                request_id,
+                completion_tx: state.worker_wake_tx.clone(),
+            },
+        }
+    };
+    runtime.start_registration_update(request);
 }
 
 fn service_worker_registration_unregister_callback<'s>(
@@ -4992,14 +5343,13 @@ fn set_worker_global_event_handler<'s>(
     value: v8::Local<'s, v8::Value>,
     slot_name: &'static str,
     event_type: Option<&str>,
-    store_non_callable_objects: bool,
 ) {
-    let stored = if value.is_function() || (store_non_callable_objects && value.is_object()) {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
     };
-    let active = stored.is_function();
+    let active = stored.is_object();
     set_private_value(scope, global, slot_name, stored);
     if let Some(event_type) = event_type {
         simple_object_event_set_ordered_handler(
@@ -5036,7 +5386,6 @@ fn worker_global_onmessage_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONMESSAGE_SLOT,
         Some("message"),
-        true,
     );
 }
 
@@ -5063,7 +5412,6 @@ fn worker_global_onmessageerror_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONMESSAGEERROR_SLOT,
         Some("messageerror"),
-        true,
     );
 }
 
@@ -5090,7 +5438,6 @@ fn worker_global_oninstall_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONINSTALL_SLOT,
         Some("install"),
-        true,
     );
 }
 
@@ -5117,7 +5464,6 @@ fn worker_global_onactivate_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONACTIVATE_SLOT,
         Some("activate"),
-        true,
     );
 }
 
@@ -5144,7 +5490,6 @@ fn worker_global_onfetch_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONFETCH_SLOT,
         Some("fetch"),
-        true,
     );
 }
 
@@ -5171,7 +5516,6 @@ fn worker_global_onpush_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONPUSH_SLOT,
         Some("push"),
-        true,
     );
 }
 
@@ -5198,7 +5542,6 @@ fn worker_global_onsync_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONSYNC_SLOT,
         Some("sync"),
-        true,
     );
 }
 
@@ -5225,7 +5568,6 @@ fn worker_global_onperiodicsync_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONPERIODICSYNC_SLOT,
         Some("periodicsync"),
-        true,
     );
 }
 
@@ -5252,7 +5594,6 @@ fn worker_global_onnotificationclick_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONNOTIFICATIONCLICK_SLOT,
         Some("notificationclick"),
-        true,
     );
 }
 
@@ -5279,7 +5620,6 @@ fn worker_global_onnotificationclose_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONNOTIFICATIONCLOSE_SLOT,
         Some("notificationclose"),
-        true,
     );
 }
 
@@ -5305,8 +5645,7 @@ fn worker_global_onerror_setter<'s>(
         args.this(),
         args.get(0),
         WORKER_GLOBAL_ONERROR_SLOT,
-        None,
-        true,
+        Some("error"),
     );
 }
 
@@ -5333,7 +5672,6 @@ fn worker_global_onconnect_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONCONNECT_SLOT,
         Some("connect"),
-        false,
     );
 }
 
@@ -5360,7 +5698,6 @@ fn worker_global_onoffline_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONOFFLINE_SLOT,
         Some("offline"),
-        true,
     );
 }
 
@@ -5387,7 +5724,6 @@ fn worker_global_ononline_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONONLINE_SLOT,
         Some("online"),
-        true,
     );
 }
 
@@ -5414,7 +5750,6 @@ fn worker_global_onunhandledrejection_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONUNHANDLEDREJECTION_SLOT,
         Some("unhandledrejection"),
-        false,
     );
 }
 
@@ -5441,7 +5776,6 @@ fn worker_global_onrejectionhandled_setter<'s>(
         args.get(0),
         WORKER_GLOBAL_ONREJECTIONHANDLED_SLOT,
         Some("rejectionhandled"),
-        false,
     );
 }
 
@@ -5473,104 +5807,144 @@ fn worker_create_image_bitmap_callback<'s>(
     rv.set(promise.into());
 }
 
+pub(super) struct PreparedWorkerGlobalScopeTemplates {
+    event_target: v8::Global<v8::FunctionTemplate>,
+    worker: v8::Global<v8::FunctionTemplate>,
+    specific_worker: v8::Global<v8::FunctionTemplate>,
+}
+
+impl PreparedWorkerGlobalScopeTemplates {
+    pub(super) fn global_template<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+    ) -> v8::Local<'s, v8::ObjectTemplate> {
+        v8::Local::new(scope, &self.specific_worker).instance_template(scope)
+    }
+}
+
+fn worker_global_scope_interface(
+    global_kind: &super::thread::WorkerGlobalKind,
+) -> (
+    &'static str,
+    crate::context_bootstrap::exposed_interfaces::RealmKind,
+) {
+    use crate::context_bootstrap::exposed_interfaces::RealmKind;
+    match global_kind {
+        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+            ("DedicatedWorkerGlobalScope", RealmKind::DedicatedWorker)
+        }
+        super::thread::WorkerGlobalKind::Shared { .. } => {
+            ("SharedWorkerGlobalScope", RealmKind::SharedWorker)
+        }
+        super::thread::WorkerGlobalKind::Service { .. } => {
+            ("ServiceWorkerGlobalScope", RealmKind::ServiceWorker)
+        }
+    }
+}
+
+pub(super) fn prepare_worker_global_scope_templates<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    global_kind: &super::thread::WorkerGlobalKind,
+) -> Result<PreparedWorkerGlobalScopeTemplates> {
+    let (interface, realm_kind) = worker_global_scope_interface(global_kind);
+    let event_target =
+        crate::context_bootstrap::prepare_worker_event_target_template(scope, realm_kind)?;
+    // Every object in a [Global] object's prototype chain has an immutable
+    // prototype. Install the inherited templates before creating the context.
+    event_target.prototype_template(scope).set_immutable_proto();
+
+    let worker = worker_global_scope_template(scope, "WorkerGlobalScope");
+    worker.inherit(event_target);
+    let specific_worker = worker_global_scope_template(scope, interface);
+    specific_worker.inherit(worker);
+    specific_worker
+        .instance_template(scope)
+        .set_immutable_proto();
+
+    Ok(PreparedWorkerGlobalScopeTemplates {
+        event_target: v8::Global::new(scope, event_target),
+        worker: v8::Global::new(scope, worker),
+        specific_worker: v8::Global::new(scope, specific_worker),
+    })
+}
+
+fn worker_global_scope_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    name: &'static str,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let template =
+        v8::FunctionTemplate::builder(worker_global_scope_constructor_callback).build(scope);
+    template.set_class_name(v8str(scope, name));
+    template.prototype_template(scope).set_immutable_proto();
+    template
+}
+
 fn install_worker_global_scope_constructors<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     global_kind: &super::thread::WorkerGlobalKind,
+    worker_templates: Option<&PreparedWorkerGlobalScopeTemplates>,
 ) -> Result<()> {
-    let interface = match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => "DedicatedWorkerGlobalScope",
-        super::thread::WorkerGlobalKind::Shared { .. } => "SharedWorkerGlobalScope",
-        super::thread::WorkerGlobalKind::Service { .. } => "ServiceWorkerGlobalScope",
-    };
+    let (interface, _) = worker_global_scope_interface(global_kind);
     web_api_interfaces::initialize(scope, global, interface)?;
-    let worker_ctor = worker_scope_constructor(scope, "WorkerGlobalScope")?;
+    let templates = worker_templates.ok_or_else(|| {
+        anyhow!("worker global scope templates were not prepared before context creation")
+    })?;
+    let event_target_template = v8::Local::new(scope, &templates.event_target);
+    let event_target_ctor = event_target_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to instantiate worker EventTarget constructor"))?;
+    let worker_template = v8::Local::new(scope, &templates.worker);
+    let worker_ctor = worker_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to instantiate WorkerGlobalScope constructor"))?;
+    worker_ctor
+        .set_prototype(scope, event_target_ctor.into())
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to inherit worker EventTarget constructor"))?;
     let worker_proto = constructor_prototype(scope, worker_ctor, "WorkerGlobalScope")?;
     set_worker_to_string_tag(scope, worker_proto, "WorkerGlobalScope");
     WorkerGlobalScopeConstructorGlobalDeclaration::new(worker_ctor)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize WorkerGlobalScope global: {error}"))?;
+
+    let specific_template = v8::Local::new(scope, &templates.specific_worker);
+    let specific_ctor = specific_template
+        .get_function(scope)
+        .ok_or_else(|| anyhow!("failed to instantiate {interface} constructor"))?;
+    specific_ctor
+        .set_prototype(scope, worker_ctor.into())
+        .unwrap_or(false)
+        .then_some(())
+        .ok_or_else(|| anyhow!("failed to inherit {interface} constructor"))?;
+    let specific_proto = constructor_prototype(scope, specific_ctor, interface)?;
+    set_worker_to_string_tag(scope, specific_proto, interface);
     match global_kind {
         super::thread::WorkerGlobalKind::Dedicated { .. } => {
-            install_dedicated_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
+            DedicatedWorkerGlobalMethodsDeclaration::default().initialize(scope, specific_proto)?;
+            DedicatedWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
         }
         super::thread::WorkerGlobalKind::Shared { .. } => {
-            install_shared_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
+            SharedWorkerGlobalMethodsDeclaration::default().initialize(scope, specific_proto)?;
+            SharedWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
         }
         super::thread::WorkerGlobalKind::Service { .. } => {
-            install_service_worker_global_constructor(scope, global, worker_ctor, worker_proto)?
+            ServiceWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
+            ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
         }
     }
-    Ok(())
-}
-
-fn install_dedicated_worker_global_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    worker_ctor: v8::Local<'s, v8::Function>,
-    worker_proto: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let dedicated_ctor = worker_scope_constructor(scope, "DedicatedWorkerGlobalScope")?;
-    let dedicated_proto =
-        constructor_prototype(scope, dedicated_ctor, "DedicatedWorkerGlobalScope")?;
-    let _ = dedicated_proto.set_prototype(scope, worker_proto.into());
-    let _ = dedicated_ctor.set_prototype(scope, worker_ctor.into());
-    set_worker_to_string_tag(scope, dedicated_proto, "DedicatedWorkerGlobalScope");
-    DedicatedWorkerGlobalMethodsDeclaration::default()
-        .initialize(scope, dedicated_proto)
-        .map_err(|error| {
-            anyhow!("failed to initialize DedicatedWorkerGlobalScope methods: {error}")
-        })?;
-    DedicatedWorkerGlobalScopeConstructorGlobalDeclaration::new(dedicated_ctor)
-        .initialize(scope, global)
-        .map_err(|error| {
-            anyhow!("failed to initialize DedicatedWorkerGlobalScope global: {error}")
-        })?;
-    let _ = global.set_prototype(scope, dedicated_proto.into());
-    Ok(())
-}
-
-fn install_shared_worker_global_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    worker_ctor: v8::Local<'s, v8::Function>,
-    worker_proto: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let shared_ctor = worker_scope_constructor(scope, "SharedWorkerGlobalScope")?;
-    let shared_proto = constructor_prototype(scope, shared_ctor, "SharedWorkerGlobalScope")?;
-    let _ = shared_proto.set_prototype(scope, worker_proto.into());
-    let _ = shared_ctor.set_prototype(scope, worker_ctor.into());
-    set_worker_to_string_tag(scope, shared_proto, "SharedWorkerGlobalScope");
-    SharedWorkerGlobalMethodsDeclaration::default()
-        .initialize(scope, shared_proto)
-        .map_err(|error| {
-            anyhow!("failed to initialize SharedWorkerGlobalScope methods: {error}")
-        })?;
-    SharedWorkerGlobalScopeConstructorGlobalDeclaration::new(shared_ctor)
-        .initialize(scope, global)
-        .map_err(|error| anyhow!("failed to initialize SharedWorkerGlobalScope global: {error}"))?;
-    let _ = global.set_prototype(scope, shared_proto.into());
-    Ok(())
-}
-
-fn install_service_worker_global_constructor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-    worker_ctor: v8::Local<'s, v8::Function>,
-    worker_proto: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let service_ctor = worker_scope_constructor(scope, "ServiceWorkerGlobalScope")?;
-    let service_proto = constructor_prototype(scope, service_ctor, "ServiceWorkerGlobalScope")?;
-    let _ = service_proto.set_prototype(scope, worker_proto.into());
-    let _ = service_ctor.set_prototype(scope, worker_ctor.into());
-    set_worker_to_string_tag(scope, service_proto, "ServiceWorkerGlobalScope");
-    ServiceWorkerGlobalScopeConstructorGlobalDeclaration::new(service_ctor)
-        .initialize(scope, global)
-        .map_err(|error| {
-            anyhow!("failed to initialize ServiceWorkerGlobalScope global: {error}")
-        })?;
-    ensure_worker_interface_constructor(scope, "NavigationPreloadManager")?;
-    let _ = global.set_prototype(scope, service_proto.into());
+    if !global
+        .get_prototype(scope)
+        .is_some_and(|prototype| prototype.strict_equals(specific_proto.into()))
+    {
+        return Err(anyhow!(
+            "worker global template did not install {interface}.prototype"
+        ));
+    }
     Ok(())
 }
 
@@ -6182,18 +6556,38 @@ pub(crate) fn worker_storage_partition_identity(
     )
 }
 
+impl WorkerGlobalState {
+    pub(in crate::worker) fn content_security_policy_snapshot_for_inheritance(
+        &self,
+    ) -> crate::content_security_policy::InheritedContentSecurityPolicy {
+        content_security_policy::worker_policy_snapshot(self)
+    }
+}
+
+pub(crate) fn worker_content_security_policy_snapshot(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::content_security_policy::InheritedContentSecurityPolicy> {
+    Some(content_security_policy::worker_policy_snapshot(
+        &get_worker_state(scope)?.borrow(),
+    ))
+}
+
 pub(crate) fn worker_current_script_url(scope: &mut v8::PinScope<'_, '_>) -> Option<Url> {
     get_worker_state(scope)?.borrow().current_script_url.clone()
 }
 
-pub(crate) fn worker_allows_trusted_type_policy_name(
+pub(crate) fn worker_allows_trusted_type_policy_name_by_csp(
     scope: &mut v8::PinScope<'_, '_>,
     name: &str,
+    is_duplicate: bool,
 ) -> Option<bool> {
+    let state = get_worker_state(scope)?;
     Some(
-        crate::content_security_policy::content_security_policy_allows_trusted_type_policy_name(
-            &get_worker_state(scope)?.borrow().content_security_policies,
+        content_security_policy::allows_worker_trusted_type_policy_name_for_state(
+            scope,
+            &state,
             name,
+            is_duplicate,
         ),
     )
 }
@@ -6202,6 +6596,105 @@ pub(crate) fn worker_allows_trusted_types_eval(scope: &mut v8::PinScope<'_, '_>)
     Some(
         crate::content_security_policy::content_security_policy_allows_trusted_types_eval(
             &get_worker_state(scope)?.borrow().content_security_policies,
+        ),
+    )
+}
+
+pub(crate) fn worker_allows_eval_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    allow_trusted_types_eval: bool,
+    source: Option<&str>,
+) -> Option<bool> {
+    use crate::content_security_policy::ContentSecurityPolicyNonUrlKind;
+    let kind = if allow_trusted_types_eval {
+        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
+    } else {
+        ContentSecurityPolicyNonUrlKind::Eval
+    };
+    worker_allows_compilation_by_csp(scope, kind, source)
+}
+
+pub(crate) fn worker_allows_wasm_code_generation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    worker_allows_compilation_by_csp(
+        scope,
+        crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval,
+        None,
+    )
+}
+
+fn worker_allows_compilation_by_csp(
+    scope: &mut v8::PinScope<'_, '_>,
+    kind: crate::content_security_policy::ContentSecurityPolicyNonUrlKind,
+    source: Option<&str>,
+) -> Option<bool> {
+    let state = get_worker_state(scope)?;
+    let (wake_tx, mut report_only_violations, mut enforce_violations) = {
+        let state = state.borrow();
+        let Some(protected_url) = state.current_script_url.as_ref() else {
+            return Some(true);
+        };
+        (
+            state.worker_wake_tx.clone(),
+            worker_compilation_content_security_policy_violations(
+                &state,
+                protected_url,
+                kind,
+                source,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Report,
+            ),
+            worker_compilation_content_security_policy_violations(
+                &state,
+                protected_url,
+                kind,
+                source,
+                crate::content_security_policy::ContentSecurityPolicyDisposition::Enforce,
+            ),
+        )
+    };
+    if kind != crate::content_security_policy::ContentSecurityPolicyNonUrlKind::WasmEval
+        && (!report_only_violations.is_empty() || !enforce_violations.is_empty())
+        && let Some((source_file, line_number, column_number)) =
+            crate::content_security_policy::current_script_violation_location(scope)
+    {
+        for violation in [&mut report_only_violations, &mut enforce_violations]
+            .into_iter()
+            .flatten()
+        {
+            violation.source_file.clone_from(&source_file);
+            violation.line_number = line_number;
+            violation.column_number = column_number;
+        }
+    }
+    let allowed = enforce_violations.is_empty();
+    for violation in report_only_violations.into_iter().chain(enforce_violations) {
+        let _ = wake_tx.send(WorkerMessage::DispatchContentSecurityPolicyViolation(
+            Box::new(violation),
+        ));
+    }
+    Some(allowed)
+}
+
+pub(crate) fn worker_requires_trusted_types_for_script(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<bool> {
+    Some(worker_trusted_types_for_script_requirements(scope)?.is_enforced())
+}
+
+pub(crate) fn worker_trusted_types_for_script_requirements(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<crate::content_security_policy::TrustedTypesForScriptRequirements> {
+    let state = get_worker_state(scope)?;
+    let state = state.borrow();
+    Some(
+        crate::content_security_policy::TrustedTypesForScriptRequirements::new(
+            crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+                &state.content_security_policies,
+            ),
+            crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
+                &state.content_security_report_only_policies,
+            ),
         ),
     )
 }
@@ -6249,28 +6742,12 @@ pub(crate) fn register_worker_message_port_wrapper(
     let Some(state) = get_worker_state(scope) else {
         return;
     };
-    let (abort, retired_listener_ids) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let retired_listener_ids = state
-            .message_port_wrappers
-            .insert(
-                port_id,
-                WorkerMessagePortWrapperEntry {
-                    wrapper: v8::Global::new(scope, port),
-                    listeners:
-                        crate::context_bootstrap::WorkerMessagePortEventListenerRegistry::default(),
-                },
-            )
-            .map(|mut previous| previous.listeners.take_listener_ids())
-            .unwrap_or_default();
-        (abort, retired_listener_ids)
-    };
-    for listener_id in retired_listener_ids {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
-    }
+    state.borrow_mut().message_port_wrappers.insert(
+        port_id,
+        WorkerMessagePortWrapperEntry {
+            wrapper: v8::Global::new(scope, port),
+        },
+    );
 }
 
 pub(crate) fn register_shared_worker_connection_port(
@@ -6290,23 +6767,8 @@ pub(crate) fn forget_worker_message_port_wrapper(
     scope: &mut v8::PinScope<'_, '_>,
     port_id: MessagePortId,
 ) {
-    let Some(state) = get_worker_state(scope) else {
-        return;
-    };
-    let (abort, retired_listener_ids) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let retired_listener_ids = state
-            .message_port_wrappers
-            .remove(&port_id)
-            .map(|mut entry| entry.listeners.take_listener_ids())
-            .unwrap_or_default();
-        (abort, retired_listener_ids)
-    };
-    for listener_id in retired_listener_ids {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
+    if let Some(state) = get_worker_state(scope) {
+        state.borrow_mut().message_port_wrappers.remove(&port_id);
     }
 }
 
@@ -6320,127 +6782,6 @@ pub(crate) fn worker_message_port_wrapper<'s>(
         .message_port_wrappers
         .get(&port_id)
         .map(|entry| v8::Local::new(scope, &entry.wrapper))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn register_worker_message_port_event_listener(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    event_type: String,
-    order: f64,
-    callback: WebIdlCallbackInterface,
-    options: crate::webidl::EventListenerOptions,
-) -> Option<crate::context_bootstrap::MessagePortEventListenerId> {
-    let state = get_worker_state(scope)?;
-    let mut state = state.borrow_mut();
-    let entry = state.message_port_wrappers.get_mut(&port_id)?;
-    entry.listeners.register(
-        scope,
-        event_type,
-        order,
-        callback,
-        options.capture,
-        options.once,
-        options.passive.unwrap_or(false),
-    )
-}
-
-pub(crate) fn remove_worker_message_port_event_listener(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    event_type: &str,
-    callback: &WebIdlCallbackInterface,
-    capture: bool,
-) -> bool {
-    let Some(state) = get_worker_state(scope) else {
-        return false;
-    };
-    let (abort, listener_id) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let listener_id = state
-            .message_port_wrappers
-            .get_mut(&port_id)
-            .and_then(|entry| {
-                entry
-                    .listeners
-                    .remove_matching(scope, event_type, callback, capture)
-            });
-        (abort, listener_id)
-    };
-    let Some(listener_id) = listener_id else {
-        return false;
-    };
-    abort
-        .borrow_mut()
-        .unregister_message_port_listener(port_id, listener_id);
-    true
-}
-
-pub(crate) fn remove_worker_message_port_event_listener_by_id(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-) -> bool {
-    let Some(state) = get_worker_state(scope) else {
-        return false;
-    };
-    let (abort, removed) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let removed = state
-            .message_port_wrappers
-            .get_mut(&port_id)
-            .is_some_and(|entry| entry.listeners.remove_listener_id(listener_id));
-        (abort, removed)
-    };
-    if removed {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
-    }
-    removed
-}
-
-pub(crate) fn worker_message_port_event_listener_snapshots(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    event_type: &str,
-) -> Vec<crate::context_bootstrap::MessagePortEventListenerSnapshot> {
-    let Some(state) = get_worker_state(scope) else {
-        return Vec::new();
-    };
-    state
-        .borrow()
-        .message_port_wrappers
-        .get(&port_id)
-        .map(|entry| entry.listeners.snapshots(event_type))
-        .unwrap_or_default()
-}
-
-pub(crate) fn claim_worker_message_port_event_listener(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-) -> Option<crate::context_bootstrap::PreparedMessagePortEventListener> {
-    let state = get_worker_state(scope)?;
-    let (abort, claimed) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let claimed = state
-            .message_port_wrappers
-            .get_mut(&port_id)?
-            .listeners
-            .claim(scope, listener_id);
-        (abort, claimed)
-    };
-    let (prepared, removed_once) = claimed?;
-    if removed_once {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
-    }
-    Some(prepared)
 }
 
 pub(crate) fn register_worker_broadcast_channel_wrapper(
@@ -6623,18 +6964,13 @@ fn worker_import_scripts_callback<'s>(
         throw_type_error(scope, "Module scripts don't support importScripts().");
         return;
     }
-    let require_trusted_types_for_script =
-        crate::content_security_policy::content_security_policy_requires_trusted_types_for_script(
-            &state.borrow().content_security_policies,
-        );
+    let requirements = worker_trusted_types_for_script_requirements(scope).unwrap_or_default();
     let mut prepared = Vec::with_capacity(args.length() as usize);
     for i in 0..args.length() {
         let Some(specifier) = crate::context_bootstrap::trusted_script_url_string_or_throw(
             scope,
             args.get(i),
-            crate::content_security_policy::TrustedTypesForScriptRequirements::enforced_only(
-                require_trusted_types_for_script,
-            ),
+            requirements,
             "WorkerGlobalScope importScripts",
             "importScripts",
         ) else {
@@ -6647,43 +6983,31 @@ fn worker_import_scripts_callback<'s>(
                 return;
             }
         };
-        let source = if matches!(resolved_url.scheme(), "data" | "blob") {
-            match materialize_worker_import_source(scope, &state, &resolved_url) {
-                Ok(import_source) => Some(import_source.source),
-                Err(error) => {
-                    error.throw(scope);
-                    return;
-                }
-            }
+        // Parsing a blob URL captures its entry before any imported script
+        // can revoke it. Fetch validation still runs in execution order.
+        let blob_entry = if resolved_url.scheme() == "blob" {
+            let mut blob_url = resolved_url.clone();
+            blob_url.set_fragment(None);
+            crate::blob::object_url_body_and_type(blob_url.as_str())
         } else {
             None
         };
-        prepared.push(PreparedWorkerImportScript {
-            final_url: resolved_url,
-            source,
-            muted_errors: false,
-        });
+        prepared.push((resolved_url, blob_entry));
     }
-    for mut script in prepared {
-        if script.source.is_none() {
-            let import_source =
-                match materialize_worker_import_source(scope, &state, &script.final_url) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        error.throw(scope);
-                        return;
-                    }
-                };
-            script.final_url = import_source.final_url;
-            script.source = Some(import_source.source);
-            script.muted_errors = import_source.muted_errors;
-        }
-        let source = script.source.as_deref().unwrap_or_default();
+    for (request_url, blob_entry) in prepared {
+        let script = match materialize_worker_import_source(scope, &state, &request_url, blob_entry)
+        {
+            Ok(result) => result,
+            Err(error) => {
+                error.throw(scope);
+                return;
+            }
+        };
         if let Err(error) = evaluate_worker_script(
             scope,
-            state.clone(),
+            &request_url,
             &script.final_url,
-            source,
+            &script.source,
             script.muted_errors,
         ) {
             error.throw(scope);
@@ -6727,36 +7051,6 @@ fn install_console<'s>(
     WorkerGlobalConsoleDeclaration::new(console)
         .initialize(scope, global)
         .map_err(|error| anyhow!("failed to initialize worker console: {error}"))
-}
-
-fn install_worker_performance<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    let time_origin = monotonic_unix_epoch_millis();
-    let performance = WorkerPerformanceObjectDeclaration::new(time_origin)
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to create worker performance: {error}"))?;
-    WorkerGlobalPerformanceDeclaration::new(performance)
-        .initialize(scope, global)
-        .map_err(|error| anyhow!("failed to initialize worker performance: {error}"))
-}
-
-fn worker_performance_now_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let time_origin = args.data().number_value(scope).unwrap_or(0.0);
-    rv.set(
-        v8::Number::new(
-            scope,
-            moli_time::coarsened_dom_time_millis(
-                (monotonic_unix_epoch_millis() - time_origin).max(0.0),
-            ),
-        )
-        .into(),
-    );
 }
 
 fn unix_epoch_millis() -> f64 {
@@ -6876,23 +7170,6 @@ fn call_original_worker_console_method<'s>(
 }
 
 // ─── timers (minimal stubs) ─────────────────────────────────────────────────
-
-fn create_script_origin<'s>(scope: &mut v8::PinScope<'s, '_>, url: &str) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, url).expect("worker script origin");
-    v8::ScriptOrigin::new(
-        scope,
-        name.into(),
-        0,
-        0,
-        false,
-        -1,
-        None,
-        false,
-        false,
-        false,
-        None,
-    )
-}
 
 fn set_prop(
     scope: &mut v8::PinScope<'_, '_>,

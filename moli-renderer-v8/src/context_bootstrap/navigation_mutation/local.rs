@@ -30,6 +30,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let state = v8::null(scope).into();
             let next_entry = create_navigation_entry(
                 scope,
+                owner,
                 resolved.as_str(),
                 None,
                 None,
@@ -44,7 +45,10 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let _ = next_entries.set_index(scope, next_index, next_entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_at_least_visible_entries(scope, history, next_entries);
+            // Cross-document pushes do not enter the joint session history
+            // until the new Document commits. Keep the pending child's local
+            // projection current without advancing the traversable yet.
+            set_history_length_from_visible_entries(scope, history, next_entries);
             set_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, next_entry);
             dispatch_navigation_currententrychange(scope, navigation, previous_entry, Some("push"));
@@ -57,6 +61,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
             let entry = create_navigation_entry(
                 scope,
+                owner,
                 resolved.as_str(),
                 None,
                 None,

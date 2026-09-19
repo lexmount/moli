@@ -3,6 +3,11 @@ use crate::worker::handle::WorkerParentErrorEventKind;
 use crate::worker::{WorkerErrorPhase, WorkerScriptResourceKind};
 use moli_crypto::sha256_hex;
 
+mod json_parse;
+mod response_mime;
+mod runtime_errors;
+mod source_phase;
+
 const WORKER_WASM_IMPORT_PM: &[u8] = &[
     0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x60, 0x01, 0x7f, 0x00, 0x60,
     0x00, 0x00, 0x02, 0x19, 0x01, 0x12, 0x2e, 0x2f, 0x77, 0x6f, 0x72, 0x6b, 0x65, 0x72, 0x2d, 0x68,
@@ -154,32 +159,42 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
-                events.push({
-                    type: event.type,
-                    effectiveDirective: event.effectiveDirective,
-                    violatedDirective: event.violatedDirective,
-                    blockedURI: event.blockedURI,
-                    documentURI: event.documentURI,
-                    originalPolicy: event.originalPolicy,
-                    disposition: event.disposition,
-                    instance: event instanceof SecurityPolicyViolationEvent
-                });
-            });
+            let name;
+            addEventListener("securitypolicyviolation", event => events.push(event));
             try {
                 importScripts("data:text/javascript,globalThis.__ran=true");
                 postMessage("unexpected");
             } catch (error) {
-                postMessage({
-                    events,
-                    name: error && error.name,
-                    ran: globalThis.__ran === true,
-                });
+                name = error.name;
             }
-            close();
+            const eventsAtReturn = events.length;
+            let eventsAtMicrotask;
+            queueMicrotask(() => eventsAtMicrotask = events.length);
+            addEventListener("securitypolicyviolation", event => {
+                postMessage({
+                    event: {
+                        type: event.type,
+                        effectiveDirective: event.effectiveDirective,
+                        violatedDirective: event.violatedDirective,
+                        blockedURI: event.blockedURI,
+                        documentURI: event.documentURI,
+                        originalPolicy: event.originalPolicy,
+                        disposition: event.disposition,
+                        instance: event instanceof SecurityPolicyViolationEvent,
+                        sourceFile: event.sourceFile,
+                        lineNumber: event.lineNumber,
+                        columnNumber: event.columnNumber,
+                    },
+                    name,
+                    ran: globalThis.__ran === true,
+                    eventsAtReturn,
+                    eventsAtMicrotask,
+                });
+                close();
+            });
             "#
             .into(),
-            "https://app.test/worker/main.js".into(),
+            "https://app.test/worker/main.js?secret=1".into(),
         )
         .with_content_security_policies(vec!["script-src 'none'".to_owned()]),
     );
@@ -190,7 +205,105 @@ async fn worker_importscripts_obeys_response_csp_script_src() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"event":{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"data","documentURI":"https://app.test/worker/main.js?secret=1","originalPolicy":"script-src 'none'","disposition":"enforce","instance":true,"sourceFile":"https://app.test/worker/main.js","lineNumber":6,"columnNumber":17},"name":"NetworkError","ran":false,"eventsAtReturn":0,"eventsAtMicrotask":0}"#
+    );
+}
+
+#[tokio::test]
+async fn worker_importscripts_csp_uses_script_src_elem_and_its_fallbacks() {
+    ensure_v8();
+    for (policies, blocked) in [
+        (vec!["script-src 'none'; script-src-elem data:"], false),
+        (vec!["script-src data:; script-src-elem 'none'"], true),
+        (vec!["default-src 'none'; script-src data:"], false),
+        (vec!["default-src data:; script-src 'none'"], true),
+        (vec!["default-src data:"], false),
+        (vec!["default-src 'none'"], true),
+        (vec!["worker-src 'none'"], false),
+        (vec!["script-src-elem data:", "script-src 'none'"], true),
+    ] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                r#"
+                let name;
+                try {
+                    importScripts("data:text/javascript,globalThis.__ran=true");
+                } catch (error) {
+                    name = error.name;
+                }
+                if (name === undefined) {
+                    postMessage({ran: globalThis.__ran === true});
+                    close();
+                } else {
+                    addEventListener("securitypolicyviolation", event => {
+                        postMessage({
+                            ran: globalThis.__ran === true,
+                            name,
+                            directive: event.effectiveDirective,
+                            disposition: event.disposition,
+                        });
+                        close();
+                    });
+                }
+                "#
+                .into(),
+                "https://app.test/worker/main.js".into(),
+            )
+            .with_content_security_policies(policies.iter().map(|p| (*p).to_owned()).collect()),
+        );
+        let msg = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(
+            expect_post_json(msg),
+            if blocked {
+                r#"{"ran":false,"name":"NetworkError","directive":"script-src-elem","disposition":"enforce"}"#
+            } else {
+                r#"{"ran":true}"#
+            },
+            "{policies:?}",
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_importscripts_csp_reports_the_imported_callsite() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            let name;
+            try {
+                importScripts("data:text/javascript," + encodeURIComponent(
+                    "\n  importScripts('https://blocked.test/script.js');"
+                ));
+            } catch (error) {
+                name = error.name;
+            }
+            addEventListener("securitypolicyviolation", event => {
+                postMessage({
+                    name,
+                    blockedURI: event.blockedURI,
+                    sourceFile: event.sourceFile,
+                    lineNumber: event.lineNumber,
+                    columnNumber: event.columnNumber,
+                });
+                close();
+            });
+            "#
+            .into(),
+            "https://app.test/worker/main.js".into(),
+        )
+        .with_content_security_policies(vec!["script-src data:".into()]),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"name":"NetworkError","blockedURI":"https://blocked.test/script.js","sourceFile":"data","lineNumber":2,"columnNumber":3}"#
     );
 }
 
@@ -206,27 +319,27 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
                 writable: false,
                 configurable: true
             });
-            const events = [];
-            addEventListener("securitypolicyviolation", event => {
-                events.push({
-                    type: event.type,
-                    blockedURI: event.blockedURI,
-                    effectiveDirective: event.effectiveDirective,
-                    disposition: event.disposition,
-                    instance: event instanceof SecurityPolicyViolationEvent
-                });
-            });
+            let name;
             try {
                 importScripts("data:text/javascript,globalThis.__ran=true");
                 postMessage("unexpected");
             } catch (error) {
+                name = error.name;
+            }
+            addEventListener("securitypolicyviolation", event => {
                 postMessage({
-                    events,
-                    name: error && error.name,
+                    event: {
+                        type: event.type,
+                        blockedURI: event.blockedURI,
+                        effectiveDirective: event.effectiveDirective,
+                        disposition: event.disposition,
+                        instance: event instanceof SecurityPolicyViolationEvent
+                    },
+                    name,
                     ran: globalThis.__ran === true,
                 });
-            }
-            close();
+                close();
+            });
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -240,7 +353,7 @@ async fn worker_csp_violation_event_survives_mutated_event_globals() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","blockedURI":"data","effectiveDirective":"script-src","disposition":"enforce","instance":true}],"name":"NetworkError","ran":false}"#
+        r#"{"event":{"type":"securitypolicyviolation","blockedURI":"data","effectiveDirective":"script-src-elem","disposition":"enforce","instance":true},"name":"NetworkError","ran":false}"#
     );
 }
 
@@ -257,24 +370,27 @@ async fn shared_worker_importscripts_csp_block_dispatches_securitypolicyviolatio
         WorkerSpawnOptions::new(
             r#"
             onconnect = () => {
-                let matched = false;
+                let name;
+                try {
+                    importScripts("data:text/javascript,globalThis.__ran=true");
+                } catch (error) {
+                    name = error.name;
+                }
+                let microtaskRan = false;
+                queueMicrotask(() => microtaskRan = true);
                 addEventListener("securitypolicyviolation", event => {
-                    matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                    const matched = event.type === "securitypolicyviolation" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "data" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'none'" &&
                         event.disposition === "enforce" &&
                         event instanceof SecurityPolicyViolationEvent;
-                });
-                try {
-                    importScripts("data:text/javascript,globalThis.__ran=true");
-                } catch (_) {
-                    if (matched && globalThis.__ran !== true) {
+                    if (matched && name === "NetworkError" && microtaskRan && globalThis.__ran !== true) {
                         close();
                     }
-                }
+                });
             };
             "#
             .into(),
@@ -309,24 +425,29 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         WorkerSpawnOptions::new(
             r#"
             const events = [];
-            addEventListener("securitypolicyviolation", event => {
-                events.push({
-                    type: event.type,
-                    effectiveDirective: event.effectiveDirective,
-                    violatedDirective: event.violatedDirective,
-                    blockedURI: event.blockedURI,
-                    documentURI: event.documentURI,
-                    originalPolicy: event.originalPolicy,
-                    disposition: event.disposition,
-                    instance: event instanceof SecurityPolicyViolationEvent
-                });
-            });
+            addEventListener("securitypolicyviolation", event => events.push(event));
             importScripts("data:text/javascript,globalThis.__ran=true");
-            postMessage({
-                events,
-                ran: globalThis.__ran === true,
+            const eventsAtReturn = events.length;
+            let eventsAtMicrotask;
+            queueMicrotask(() => eventsAtMicrotask = events.length);
+            addEventListener("securitypolicyviolation", event => {
+                postMessage({
+                    event: {
+                        type: event.type,
+                        effectiveDirective: event.effectiveDirective,
+                        violatedDirective: event.violatedDirective,
+                        blockedURI: event.blockedURI,
+                        documentURI: event.documentURI,
+                        originalPolicy: event.originalPolicy,
+                        disposition: event.disposition,
+                        instance: event instanceof SecurityPolicyViolationEvent
+                    },
+                    ran: globalThis.__ran === true,
+                    eventsAtReturn,
+                    eventsAtMicrotask,
+                });
+                close();
             });
-            close();
             "#
             .into(),
             "https://app.test/worker/main.js".into(),
@@ -340,7 +461,7 @@ async fn worker_importscripts_report_only_csp_dispatches_without_blocking() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"events":[{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"report","instance":true}],"ran":true}"#
+        r#"{"event":{"type":"securitypolicyviolation","effectiveDirective":"script-src-elem","violatedDirective":"script-src-elem","blockedURI":"data","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'none'","disposition":"report","instance":true},"ran":true,"eventsAtReturn":0,"eventsAtMicrotask":0}"#
     );
 }
 
@@ -357,21 +478,22 @@ async fn shared_worker_importscripts_report_only_csp_dispatches_without_blocking
         WorkerSpawnOptions::new(
             r#"
             onconnect = () => {
-                let matched = false;
+                importScripts("data:text/javascript,globalThis.__ran=true");
+                let microtaskRan = false;
+                queueMicrotask(() => microtaskRan = true);
                 addEventListener("securitypolicyviolation", event => {
-                    matched = event.type === "securitypolicyviolation" &&
-                        event.effectiveDirective === "script-src" &&
-                        event.violatedDirective === "script-src" &&
+                    const matched = event.type === "securitypolicyviolation" &&
+                        event.effectiveDirective === "script-src-elem" &&
+                        event.violatedDirective === "script-src-elem" &&
                         event.blockedURI === "data" &&
                         event.documentURI === "https://app.test/shared-worker.js" &&
                         event.originalPolicy === "script-src 'none'" &&
                         event.disposition === "report" &&
                         event instanceof SecurityPolicyViolationEvent;
+                    if (matched && microtaskRan && globalThis.__ran === true) {
+                        close();
+                    }
                 });
-                importScripts("data:text/javascript,globalThis.__ran=true");
-                if (matched && globalThis.__ran === true) {
-                    close();
-                }
             };
             "#
             .into(),
@@ -801,6 +923,174 @@ async fn worker_trusted_types_policy_callbacks_follow_webidl_contract() {
 }
 
 #[tokio::test]
+async fn worker_csp_string_compilation_keywords_preserve_source_token_boundaries() {
+    ensure_v8();
+    for keyword in ["unsafe-eval", "wasm-unsafe-eval"] {
+        for (prefix, suffix, valid) in [
+            ("", "", true),
+            ("\t\n", " \r\u{000c}", true),
+            ("\u{000b}", "", false),
+            ("", "\u{000b}", false),
+        ] {
+            let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+            let source = format!(
+                "postMessage(({}).slice(0, 2)); close();",
+                include_str!("../../../../tests/fixtures/csp-eval-source-tokens.js"),
+            );
+            let options =
+                WorkerSpawnOptions::new(source, "https://app.test/worker/main.js".to_owned())
+                    .with_content_security_policies(vec![policy.clone()]);
+            let mut handle = spawn_test_worker_with_options(options);
+            let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+            let expected = serde_json::json!([
+                if valid && keyword == "unsafe-eval" {
+                    "allowed"
+                } else {
+                    "EvalError"
+                },
+                if valid && keyword == "unsafe-eval" {
+                    "allowed"
+                } else {
+                    "EvalError"
+                },
+            ]);
+            assert_eq!(
+                expect_post_json(message),
+                expected.to_string(),
+                "{policy:?}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_string_timer_csp_blocks_and_reports_without_blocking_functions() {
+    ensure_v8();
+    for (policy, report_only, blocked, reports) in [
+        ("script-src 'self' 'report-sample'", false, true, true),
+        ("default-src 'self' 'report-sample'", false, true, true),
+        ("script-src 'self' 'report-sample'", true, false, true),
+        ("script-src 'unsafe-eval'", false, false, false),
+    ] {
+        let source = r#"
+            globalThis.ran = [];
+            const events = [];
+            const first = setTimeout("globalThis.ran.push('timeout')", 10);
+            globalThis.interval = setInterval("globalThis.ran.push('interval'); clearInterval(globalThis.interval)", 10);
+            addEventListener('securitypolicyviolation', e => events.push({
+                directive: e.effectiveDirective, blocked: e.blockedURI,
+                disposition: e.disposition, policy: e.originalPolicy,
+                source: e.sourceFile, line: e.lineNumber, sample: e.sample,
+            }));
+            const synchronousEvents = events.length;
+            setTimeout((value) => ran.push(value), 10, 'function');
+            setTimeout(() => {
+                postMessage({zeroIds: [first === 0, interval === 0], ran: ran.sort(), synchronousEvents, events});
+                close();
+            }, 80);
+        "#;
+        let options = WorkerSpawnOptions::new(
+            source.to_owned(),
+            "https://app.test/worker/main.js".to_owned(),
+        );
+        let options = if report_only {
+            options.with_content_security_report_only_policies(vec![policy.to_owned()])
+        } else {
+            options.with_content_security_policies(vec![policy.to_owned()])
+        };
+        let mut handle = spawn_test_worker_with_options(options);
+        let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+        let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+        assert_eq!(value["zeroIds"], serde_json::json!([blocked, blocked]));
+        assert_eq!(
+            value["ran"],
+            if blocked {
+                serde_json::json!(["function"])
+            } else {
+                serde_json::json!(["function", "interval", "timeout"])
+            }
+        );
+        assert_eq!(value["synchronousEvents"], 0);
+        let events = value["events"].as_array().unwrap();
+        assert_eq!(events.len(), if reports { 2 } else { 0 });
+        for (event, (line, sample)) in events.iter().zip([
+            (4, "globalThis.ran.push('timeout')"),
+            (5, "globalThis.ran.push('interval'); clearIn"),
+        ]) {
+            assert_eq!(
+                event,
+                &serde_json::json!({
+                    "directive": "script-src", "blocked": "eval",
+                    "disposition": if report_only { "report" } else { "enforce" },
+                    "policy": policy, "source": "https://app.test/worker/main.js", "line": line, "sample": sample,
+                })
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn worker_string_timer_csp_converts_arguments_before_policy_and_preserves_exceptions() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(r#"
+            const order = [];
+            const events = [];
+            const marker = {};
+            const errors = [];
+            for (const method of ['setTimeout', 'setInterval']) {
+                try {
+                    self[method]({toString() { order.push('handler'); throw marker; }}, {valueOf() { order.push('unexpected'); return 0; }});
+                } catch (e) { errors.push(e === marker); }
+                try {
+                    self[method]({toString() { order.push('handler'); return "postMessage('unexpected')"; }}, {valueOf() { order.push('delay'); throw marker; }});
+                } catch (e) { errors.push(e === marker); }
+            }
+            addEventListener('securitypolicyviolation', e => events.push(e.blockedURI));
+            setTimeout(() => { postMessage({order, errors, events}); close(); }, 50);
+        "#.to_owned(), "https://app.test/worker/main.js".to_owned())
+            .with_content_security_policies(vec!["script-src 'none'; require-trusted-types-for 'script'".to_owned()]),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "order": ["handler", "handler", "delay", "handler", "handler", "delay"],
+            "errors": [true, true, true, true], "events": [],
+        })
+    );
+}
+
+#[tokio::test]
+async fn worker_string_timer_csp_preserves_trusted_types_relaxation_and_default_policy_order() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(r#"
+            globalThis.ran = [];
+            const order = [];
+            trustedTypes.createPolicy('default', {createScript(value, type, sink) { order.push(sink); return value; }});
+            const explicit = trustedTypes.createPolicy('explicit', {createScript: value => value});
+            const first = setTimeout({toString() { order.push('handler'); return "ran.push('default')"; }}, {valueOf() { order.push('delay'); return 10; }});
+            const trusted = explicit.createScript("ran.push('trusted')");
+            trusted.toString = () => { throw new Error('must not coerce TrustedScript'); };
+            const second = setTimeout(trusted, 10);
+            setTimeout(() => { postMessage({positiveIds: [first > 0, second > 0], ran, order}); close(); }, 50);
+        "#.to_owned(), "https://app.test/worker/main.js".to_owned())
+            .with_content_security_policies(vec!["script-src 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned()]),
+    );
+    let message = timeout(TIMEOUT, handle.recv()).await.unwrap().unwrap();
+    let value: serde_json::Value = serde_json::from_str(&expect_post_json(message)).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "positiveIds": [true, true], "ran": ["default", "trusted"],
+            "order": ["handler", "delay", "WorkerGlobalScope setTimeout"],
+        })
+    );
+}
+
+#[tokio::test]
 async fn worker_trusted_types_timers_and_eval_use_script_sink() {
     ensure_v8();
     let mut handle = spawn_test_worker_with_options(
@@ -880,6 +1170,134 @@ async fn worker_trusted_script_eval_is_unwrapped_with_trusted_types_eval_keyword
         .expect("timed out")
         .expect("channel closed");
     assert_eq!(expect_post_json(msg), r#"{"trusted":7,"string":9}"#);
+}
+
+#[tokio::test]
+async fn worker_trusted_types_eval_keyword_requires_enforced_trusted_types() {
+    ensure_v8();
+    for report_only_policies in [
+        Vec::new(),
+        vec!["require-trusted-types-for 'script'".to_owned()],
+    ] {
+        let mut handle = spawn_test_worker_with_options(
+            WorkerSpawnOptions::new(
+                r#"
+                let evalRan = false;
+                let errorName = null;
+                trustedTypes.createPolicy("default", { createScript: value => value });
+                addEventListener("securitypolicyviolation", event => {
+                    postMessage({
+                        evalRan,
+                        errorName,
+                        event: {
+                            type: event.type,
+                            effectiveDirective: event.effectiveDirective,
+                            violatedDirective: event.violatedDirective,
+                            blockedURI: event.blockedURI,
+                            documentURI: event.documentURI,
+                            originalPolicy: event.originalPolicy,
+                            disposition: event.disposition,
+                            instance: event instanceof SecurityPolicyViolationEvent,
+                        },
+                    });
+                    close();
+                });
+                try {
+                    eval("evalRan = true");
+                    errorName = "allowed";
+                } catch (error) {
+                    errorName = `${error.name}:${error instanceof EvalError}`;
+                }
+                postMessage({ phase: "evaluated", evalRan, errorName });
+                "#
+                .to_owned(),
+                "https://app.test/worker/main.js".to_owned(),
+            )
+            .with_content_security_policies(vec![
+                "script-src 'self' 'trusted-types-eval'".to_owned(),
+            ])
+            .with_content_security_report_only_policies(report_only_policies),
+        );
+
+        let evaluated = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        assert_eq!(
+            expect_post_json(evaluated),
+            r#"{"phase":"evaluated","evalRan":false,"errorName":"EvalError:true"}"#
+        );
+        let violation = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out waiting for violation")
+            .expect("channel closed");
+        assert_eq!(
+            expect_post_json(violation),
+            r#"{"evalRan":false,"errorName":"EvalError:true","event":{"type":"securitypolicyviolation","effectiveDirective":"script-src","violatedDirective":"script-src","blockedURI":"eval","documentURI":"https://app.test/worker/main.js","originalPolicy":"script-src 'self' 'trusted-types-eval'","disposition":"enforce","instance":true}}"#
+        );
+    }
+}
+
+#[tokio::test]
+async fn worker_trusted_types_eval_keyword_allows_eval_when_trusted_types_are_enforced() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            let violations = 0;
+            addEventListener("securitypolicyviolation", () => violations++);
+            const value = eval("40 + 2");
+            setTimeout(() => {
+                postMessage({ value, violations });
+                close();
+            });
+            "#
+            .to_owned(),
+            "https://app.test/worker/main.js".to_owned(),
+        )
+        .with_content_security_policies(vec![
+            "script-src 'self' 'trusted-types-eval'; require-trusted-types-for 'script'".to_owned(),
+        ]),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), r#"{"value":42,"violations":0}"#);
+}
+
+#[tokio::test]
+async fn worker_trusted_script_code_like_brand_drives_function_constructor() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const policy = trustedTypes.createPolicy("function-brand", {
+                createScript: value => value
+            });
+            const source = ["a", "b", "return a + b;"];
+            const trusted = source.map(value => policy.createScript(value));
+            let mixedBlocked = false;
+            try {
+                new Function(trusted[0], "b", trusted[2]);
+            } catch (error) {
+                mixedBlocked = error instanceof EvalError;
+            }
+            const constructed = new Function(...trusted);
+            postMessage({ mixedBlocked, value: constructed(20, 22) });
+            "#
+            .to_owned(),
+            "https://app.test/worker/main.js".to_owned(),
+        )
+        .with_content_security_policies(vec!["require-trusted-types-for 'script'".to_owned()]),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), r#"{"mixedBlocked":true,"value":42}"#);
 }
 
 #[tokio::test]
@@ -2486,24 +2904,24 @@ async fn service_worker_module_rejects_async_dependencies_before_execution() {
 async fn service_worker_module_checks_only_wasm_evaluation_dependencies() {
     ensure_v8();
     for source_only in [false, true] {
-        let (base_url, server) = spawn_path_response_http_server(vec![
-            (
-                "/worker/worker.wasm",
-                "HTTP/1.1 200 OK",
-                "application/wasm",
-                worker_wasm_import_pm_body(),
-                Duration::ZERO,
-            ),
-            (
+        let mut responses = vec![(
+            "/worker/worker.wasm",
+            "HTTP/1.1 200 OK",
+            "application/wasm",
+            worker_wasm_import_pm_body(),
+            Duration::ZERO,
+        )];
+        if !source_only {
+            responses.push((
                 "/worker/worker-helper.js",
                 "HTTP/1.1 200 OK",
                 "text/javascript",
                 "console.log('unexpected helper execution'); export function pm() {} await 0;"
                     .into(),
                 Duration::ZERO,
-            ),
-        ])
-        .await;
+            ));
+        }
+        let (base_url, server) = spawn_path_response_http_server(responses).await;
         let source = if source_only {
             "import source wasm from './worker.wasm'; console.log(wasm instanceof WebAssembly.Module);"
         } else {
@@ -4999,7 +5417,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
             "/throw.js",
             "HTTP/1.1 200 OK",
             "application/javascript",
-            "globalThis.__crossOriginLoaded = true;".to_owned(),
+            "globalThis.__crossOriginLoaded = true; throw new Error('private message');".to_owned(),
             Duration::ZERO,
         ),
     ])
@@ -5045,7 +5463,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"[{"name":"NetworkError","domException":true,"loaded":false},{"name":"NetworkError","domException":true,"loaded":false}]"#
+        r#"[{"name":"NetworkError","domException":true,"loaded":false},{"name":"NetworkError","domException":true,"loaded":true}]"#
     );
     script_server
         .await
@@ -5053,7 +5471,7 @@ async fn worker_importscripts_cross_origin_failures_throw_network_error() {
 }
 
 #[tokio::test]
-async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_error() {
+async fn worker_importscripts_redirect_to_cross_origin_script_executes() {
     ensure_v8();
     let (cross_origin_base_url, script_server) = spawn_path_response_http_server(vec![(
         "/throw.js",
@@ -5079,7 +5497,7 @@ async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_er
         try {
             importScripts("./redirect-throw.js");
             postMessage({
-                name: "unexpected",
+                name: "ok",
                 domException: false,
                 loaded: globalThis.__redirectedCrossOriginLoaded === true,
             });
@@ -5103,7 +5521,7 @@ async fn worker_importscripts_redirect_to_cross_origin_failure_throws_network_er
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"name":"NetworkError","domException":true,"loaded":false}"#
+        r#"{"name":"ok","domException":false,"loaded":true}"#
     );
     redirect_server
         .await

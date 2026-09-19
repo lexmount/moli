@@ -60,14 +60,19 @@ fn create_native_detached_document_handle_with_url(
     scope: &mut v8::PinScope<'_, '_>,
     kind: &str,
     url: Url,
+    scripting_enabled: bool,
 ) -> Option<DomHandle> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *runtime_ptr };
-    Some(if kind == "html" {
-        runtime.create_detached_html_document_with_url(url)
+    let handle = if kind == "html" {
+        runtime.create_detached_html_document_with_url_and_scripting(url, scripting_enabled)
     } else {
         runtime.create_detached_xml_document_with_url(url)
-    })
+    };
+    let _ = runtime
+        .dom_host_mut()
+        .set_document_scripting_enabled_for_handle(handle, scripting_enabled);
+    Some(handle)
 }
 
 fn detached_document_url(parsed: &DomHost) -> Url {
@@ -93,7 +98,9 @@ fn set_detached_document_url_state<'s>(
 fn new_detached_document_shell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &str,
+    content_type: &str,
     url: Url,
+    scripting_enabled: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let to_string_tag = if kind == "html" {
         Some("HTMLDocument")
@@ -116,12 +123,86 @@ fn new_detached_document_shell<'s>(
     );
     set_detached_document_url_state(scope, state, &url)?;
     define_detached_state(scope, document, state);
-    if let Some(handle) = create_native_detached_document_handle_with_url(scope, kind, url) {
+    if let Some(handle) =
+        create_native_detached_document_handle_with_url(scope, kind, url, scripting_enabled)
+    {
         define_detached_native_handle(scope, document, handle);
     }
+    set_detached_document_content_type(scope, document, content_type)?;
     install_detached_document_instance_properties(scope, document, kind);
     let _ = ensure_detached_document_implementation(scope, document);
     Some(document)
+}
+
+fn set_detached_document_parse_metadata<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: v8::Local<'s, v8::Object>,
+    quirks_mode: selectors::matching::QuirksMode,
+    character_set: &str,
+    allow_declarative_shadow_roots: bool,
+) -> Option<()> {
+    let compat_mode = if quirks_mode == selectors::matching::QuirksMode::Quirks {
+        "BackCompat"
+    } else {
+        "CSS1Compat"
+    };
+    let state = detached_state_object(scope, document)?;
+    state.set(
+        scope,
+        v8str(scope, "compatMode").into(),
+        v8_string(scope, compat_mode)?.into(),
+    )?;
+    state.set(
+        scope,
+        v8str(scope, "characterSet").into(),
+        v8_string(scope, character_set)?.into(),
+    )?;
+    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, document)?;
+    let dom_host = unsafe { &mut *runtime_ptr }.dom_host_mut();
+    dom_host.set_document_quirks_mode_for_handle(handle, quirks_mode);
+    dom_host.set_document_character_set_for_handle(handle, character_set);
+    dom_host.set_document_allow_declarative_shadow_roots_for_handle(
+        handle,
+        allow_declarative_shadow_roots,
+    );
+    Some(())
+}
+
+pub(in crate::native_bridge::document) fn build_detached_document_clone_shell<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    source: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let handle = detached_native_handle_for_runtime(scope, runtime_ptr, source)?;
+    let runtime = unsafe { &*runtime_ptr };
+    let document = runtime.dom_host().node(handle)?.as_document()?;
+    let kind = detached_state_string(scope, source, "documentKind").unwrap_or_else(|| {
+        if document.is_html_document() {
+            "html"
+        } else {
+            "xml"
+        }
+        .to_owned()
+    });
+    let url = document.url().clone();
+    let content_type = document.content_type().to_owned();
+    let quirks_mode = document.quirks_mode();
+    let character_set = document.character_set().to_owned();
+    let allow_declarative_shadow_roots = document.allow_declarative_shadow_roots();
+
+    // Start with an empty, inert Document. Only the metadata required by the
+    // DOM cloning algorithm is inherited, before any cloned children are added.
+    let cloned = new_detached_document_shell(scope, &kind, &content_type, url, false)?;
+    set_detached_document_parse_metadata(
+        scope,
+        cloned,
+        quirks_mode,
+        &character_set,
+        allow_declarative_shadow_roots,
+    )?;
+    inherit_detached_document_origin(scope, cloned, source);
+    Some(cloned)
 }
 
 fn import_detached_document_children_from_host<'s>(
@@ -200,23 +281,19 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     character_set: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = detached_document_url(&parsed);
-    let document = new_detached_document_shell(scope, kind, url)?;
-    if let Some(state) = detached_state_object(scope, document) {
-        if let Some(content_type) = content_type {
-            let _ = state.set(
-                scope,
-                v8str(scope, "contentType").into(),
-                v8_string(scope, content_type)?.into(),
-            );
-        }
-        if let Some(character_set) = character_set {
-            let _ = state.set(
-                scope,
-                v8str(scope, "characterSet").into(),
-                v8_string(scope, character_set)?.into(),
-            );
-        }
-    }
+    let quirks_mode = parsed.dom().document()?.quirks_mode();
+    let scripting_enabled = parsed.dom().document()?.scripting_enabled();
+    let content_type = content_type.unwrap_or(parsed.dom().document()?.content_type());
+    let character_set = character_set.unwrap_or(parsed.dom().document()?.character_set());
+    let allow_declarative_shadow_roots = parsed.dom().document()?.allow_declarative_shadow_roots();
+    let document = new_detached_document_shell(scope, kind, content_type, url, scripting_enabled)?;
+    set_detached_document_parse_metadata(
+        scope,
+        document,
+        quirks_mode,
+        character_set,
+        allow_declarative_shadow_roots,
+    )?;
     import_detached_document_children_from_host(scope, document, &parsed)?;
     Some(document)
 }
@@ -309,7 +386,9 @@ pub(in crate::native_bridge::document) fn build_detached_html_document_object<'s
     let document = new_detached_document_shell(
         scope,
         "html",
+        "text/html",
         Url::parse("about:blank").expect("static about:blank parses"),
+        false,
     )?;
     populate_native_html_document_shell(scope, document, title)?;
     Some(document)
@@ -325,22 +404,18 @@ pub(in crate::native_bridge::document) fn build_detached_document_object<'s>(
     if kind == "html" {
         return build_detached_html_document_object(scope, None);
     }
+    let content_type = match namespace_uri.as_deref() {
+        Some(XHTML_NS) => "application/xhtml+xml",
+        Some(SVG_NS) => "image/svg+xml",
+        _ => "application/xml",
+    };
     let document = new_detached_document_shell(
         scope,
         kind,
+        content_type,
         Url::parse("about:blank").expect("static about:blank parses"),
+        false,
     )?;
-    if kind == "xml"
-        && let Some(namespace_uri) = namespace_uri.as_deref()
-        && let Some(state) = detached_state_object(scope, document)
-    {
-        let _ = state.set(
-            scope,
-            v8str(scope, "creationNamespace").into(),
-            v8_string(scope, namespace_uri)?.into(),
-        );
-    }
-
     if let Some(doctype) = doctype {
         let doctype = if detached_is_node(scope, doctype) {
             doctype

@@ -4,31 +4,32 @@ use super::super::node::{
     remove_child_in_reaction_scope,
 };
 use super::{
-    JsContextHost, detached_document_content_type_value, detached_native_handle_for_runtime,
+    JsContextHost, detached_document_content_type_value, document_has_browsing_context,
     is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
-    contenteditable_editing_host, dispatch_text_control_event, is_text_control,
+    contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
+    form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
-    replace_text_control_selection, text_control_value,
+    replace_text_control_selection, run_document_copy_command, text_control_value,
 };
 use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     custom_elements,
-    document_runtime::DomHandle,
+    document_runtime::{DomHandle, EventTargetHandle},
+    dom::native::{DocumentReadyState, NativeDom, NodeData},
+    parser::HtmlParser,
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
         utf16_previous_scalar_boundary, utf16_replace_units_range_lossy,
-        utf16_scalar_boundary_at_or_after, utf16_units, v8str,
+        utf16_scalar_boundary_at_or_after, utf16_units, v8_string, v8str,
     },
     webidl,
 };
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "Document.write")]
-struct DocumentWriteArgs {
-    #[webidl(variadic)]
-    text: Vec<String>,
+struct DocumentWriteInput {
+    text: String,
+    is_trusted: bool,
 }
 
 pub(in crate::native_bridge) fn node_document_write_callback<'s>(
@@ -62,9 +63,50 @@ fn node_document_write_or_writeln_callback<'s>(
         rv.set_undefined();
         return;
     }
-    let Some(parsed) = webidl::parse_args::<DocumentWriteArgs>(scope, &args) else {
-        return;
+    let api_prefix = if append_newline {
+        "Document.writeln"
+    } else {
+        "Document.write"
     };
+    let input = match document_write_input(scope, &args, api_prefix) {
+        Ok(input) => input,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let sink = if append_newline {
+        "Document writeln"
+    } else {
+        "Document write"
+    };
+    let api_name = if append_newline { "writeln" } else { "write" };
+    let mut html = input.text;
+    if !input.is_trusted {
+        let Some(value) = v8_string(scope, &html) else {
+            return;
+        };
+        let context = crate::native_bridge::node_relevant_context(scope, args.this())
+            .unwrap_or_else(|| scope.get_current_context());
+        let global = context.global(scope);
+        let requirements = unsafe { &*runtime_ptr }
+            .trusted_types_for_script_requirements_for_global(scope, global);
+        let Some(compliant) = crate::context_bootstrap::trusted_type_string_or_throw(
+            scope,
+            value.into(),
+            crate::context_bootstrap::TrustedTypeKind::Html,
+            requirements,
+            sink,
+            api_name,
+            Some(global),
+        ) else {
+            return;
+        };
+        html = compliant;
+    }
+    if append_newline {
+        html.push('\n');
+    }
     if !is_html_document(unsafe { &*runtime_ptr }, handle) {
         throw_dom_exception(
             scope,
@@ -83,12 +125,38 @@ fn node_document_write_or_writeln_callback<'s>(
         );
         return;
     }
-    if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
-        let mut html = parsed.text.concat();
-        if append_newline {
-            html.push('\n');
+    if let Some(child_handle) =
+        unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
+    {
+        unsafe { &mut *runtime_ptr }.write_child_document_stream(
+            scope,
+            runtime_ptr,
+            child_handle,
+            handle,
+            html,
+        );
+        rv.set_undefined();
+        return;
+    }
+    if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
+        let stream_was_open = unsafe { &*runtime_ptr }.has_windowless_document_parser(handle);
+        if !stream_was_open && unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+            rv.set_undefined();
+            return;
         }
-        append_detached_html_document_body_html(scope, runtime_ptr, handle, &html);
+        if !stream_was_open {
+            unsafe { &mut *runtime_ptr }.prepare_windowless_document_replacement(
+                scope,
+                runtime_ptr,
+                handle,
+            );
+        }
+        let _ = unsafe { &mut *runtime_ptr }.write_windowless_document(
+            scope,
+            runtime_ptr,
+            handle,
+            &html,
+        );
         rv.set_undefined();
         return;
     }
@@ -96,22 +164,44 @@ fn node_document_write_or_writeln_callback<'s>(
     let implicit_replacement_session = !runtime.has_active_parser_write_insertion_point()
         && !runtime.host_document().replace_on_close();
     if implicit_replacement_session
-        && current_script_ignores_document_write_without_parser_insertion_point(runtime)
+        && (runtime.has_document_unload_counter(handle)
+            || runtime.has_ignore_destructive_writes_counter(handle)
+            || current_script_ignores_document_write_without_parser_insertion_point(runtime))
     {
         rv.set_undefined();
         return;
     }
     if implicit_replacement_session {
+        let entry_document = runtime.document_open_entry_document(scope);
         clear_window_event_handlers(scope);
-        runtime.prepare_root_document_replacement(scope, runtime_ptr, handle);
+        runtime.prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
     }
-    for chunk in parsed.text {
-        let _ = runtime.write_html(scope, runtime_ptr, handle, &chunk);
-    }
-    if append_newline {
-        let _ = runtime.write_html(scope, runtime_ptr, handle, "\n");
-    }
+    let _ = runtime.write_html(scope, runtime_ptr, handle, &html);
     rv.set_undefined();
+}
+
+fn document_write_input<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    api_prefix: &'static str,
+) -> Result<DocumentWriteInput, webidl::WebIdlError> {
+    let mut text = String::new();
+    let mut is_trusted = true;
+    for index in 0..args.length() {
+        let value = args.get(index);
+        if let Some(value) = crate::context_bootstrap::trusted_html_value_string(scope, value) {
+            text.push_str(&value);
+            continue;
+        }
+        is_trusted = false;
+        let value = webidl::convert::<webidl::DomString>(
+            scope,
+            value,
+            webidl::Context::argument(api_prefix, (index + 1) as usize),
+        )?;
+        text.push_str(&value.0);
+    }
+    Ok(DocumentWriteInput { text, is_trusted })
 }
 
 fn current_script_ignores_document_write_without_parser_insertion_point(
@@ -178,15 +268,38 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             );
             return;
         }
-        if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
-            set_detached_html_document_body_html(scope, runtime_ptr, handle, "");
+        if unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+            rv.set(args.this().into());
+            return;
+        }
+        if let Some(child_handle) =
+            unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
+        {
+            let entry_document = unsafe { &*runtime_ptr }.document_open_entry_document(scope);
+            let _ = unsafe { &mut *runtime_ptr }.begin_child_document_stream_replacement(
+                scope,
+                runtime_ptr,
+                child_handle,
+                handle,
+                entry_document,
+            );
+            rv.set(args.this().into());
+            return;
+        }
+        if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
+            unsafe { &mut *runtime_ptr }.prepare_windowless_document_replacement(
+                scope,
+                runtime_ptr,
+                handle,
+            );
             rv.set(args.this().into());
             return;
         }
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
+            let entry_document = runtime.document_open_entry_document(scope);
             clear_window_event_handlers(scope);
-            runtime.prepare_root_document_replacement(scope, runtime_ptr, handle);
+            runtime.prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
         }
     }
     rv.set(args.this().into());
@@ -201,11 +314,67 @@ fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
 }
 
 impl JsContextHost {
+    pub(in crate::native_bridge) fn document_open_entry_document(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> Option<DomHandle> {
+        if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
+            return self.lightweight_popup_document_handle(popup_id);
+        }
+        // Borrowed methods execute in their callee realm. HTML instead uses
+        // the Window that entered this script or microtask.
+        let context = scope.get_entered_or_microtask_context();
+        let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+        if !std::ptr::eq(host_ptr, self) {
+            return None;
+        }
+        let window = context.global(scope);
+        if let Some(document) = crate::util::get_private_value(
+            scope,
+            window,
+            crate::context_bootstrap::WINDOW_DOCUMENT_SLOT,
+        )
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        {
+            let (document_host, handle) =
+                node_runtime_and_handle_from_object_or_detached(scope, document).ok()?;
+            return std::ptr::eq(document_host, self).then_some(handle);
+        }
+        Some(self.document_handle())
+    }
+
+    pub(in crate::native_bridge) fn document_open_replacement_url(
+        &self,
+        document: DomHandle,
+        entry_document: DomHandle,
+    ) -> url::Url {
+        let mut url = self.document_url_for_handle(entry_document);
+        if document != entry_document {
+            url.set_fragment(None);
+        }
+        url
+    }
+
+    fn prepare_windowless_document_replacement(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        document: DomHandle,
+    ) {
+        self.clear_event_callbacks_for_document_replacement(document, false);
+        custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+            let runtime = unsafe { &mut *host_ptr };
+            runtime.remove_all_children_for_document_replacement(scope, host_ptr, document);
+            let _ = runtime.start_windowless_document_parser(document);
+        });
+    }
+
     fn prepare_root_document_replacement(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
+        entry_document: Option<DomHandle>,
     ) {
         self.dispatch_document_open_descendant_frame_unload_lifecycle(scope, document_handle);
         self.clear_event_callbacks_for_document_replacement(document_handle, true);
@@ -216,7 +385,30 @@ impl JsContextHost {
                 document_handle,
             );
         });
+        let replacement_url =
+            entry_document.map(|entry| self.document_open_replacement_url(document_handle, entry));
+        let url_changed = replacement_url
+            .as_ref()
+            .is_some_and(|url| url != self.document_url());
+        if let Some(url) = replacement_url.as_ref() {
+            self.set_document_url(url.clone());
+        }
         self.open_root_document(scope);
+        if let Some(url) = replacement_url
+            && let Some(window) =
+                super::document_associated_window_for_handle(scope, host_ptr, document_handle)
+        {
+            // Entry-change listeners can synchronously change the URL again.
+            // Publish this change first so their later handoffs remain last.
+            if url_changed {
+                self.record_same_document_navigation(
+                    &url,
+                    "historyApi",
+                    moli_page_types::SameDocumentHistoryUpdate::Replace,
+                );
+            }
+            crate::context_bootstrap::update_history_for_document_open(scope, window, &url);
+        }
     }
 
     /// Replaces the active root document through the native document stream.
@@ -232,18 +424,32 @@ impl JsContextHost {
     ) {
         let document_handle = self.document_handle();
         clear_window_event_handlers(scope);
-        self.prepare_root_document_replacement(scope, host_ptr, document_handle);
+        self.prepare_root_document_replacement(scope, host_ptr, document_handle, None);
         let _ = self.write_html(scope, host_ptr, document_handle, html);
         self.close_document(scope, host_ptr);
     }
 }
 
-fn redirect_document_open_to_window_open(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
+fn redirect_document_open_to_window_open<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
     let document = args.this();
+    if let Ok((runtime_ptr, document_handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, document)
+        && let Some(child_handle) = unsafe { &*runtime_ptr }
+            .child_browsing_context_host_for_document_handle(document_handle)
+    {
+        unsafe { &mut *runtime_ptr }.redirect_child_document_open_to_window_open(
+            scope,
+            child_handle,
+            document,
+            args,
+            rv,
+        );
+        return;
+    }
     let Some(default_view_value) = document.get(scope, v8str(scope, "defaultView").into()) else {
         return;
     };
@@ -297,13 +503,77 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
             );
             return;
         }
-        if detached_native_handle_for_runtime(scope, runtime_ptr, args.this()).is_some() {
+        if let Some(child_handle) =
+            unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(handle)
+        {
+            unsafe { &mut *runtime_ptr }.close_child_document_stream(
+                scope,
+                runtime_ptr,
+                child_handle,
+                handle,
+            );
+            rv.set_undefined();
+            return;
+        }
+        if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
+            close_windowless_document(scope, runtime_ptr, handle, args.this());
             rv.set_undefined();
             return;
         }
         unsafe { &mut *runtime_ptr }.close_document(scope, runtime_ptr);
     }
     rv.set_undefined();
+}
+
+fn close_windowless_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    document: v8::Local<'s, v8::Object>,
+) {
+    // Borrowing close() from another realm does not change the realm of the
+    // Document's lifecycle events.
+    let context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(token) =
+        unsafe { &mut *runtime_ptr }.finish_windowless_document_parser(scope, runtime_ptr, handle)
+    else {
+        return;
+    };
+    for (ready_state, event_type) in [
+        (Some(DocumentReadyState::Interactive), "readystatechange"),
+        (None, "DOMContentLoaded"),
+        (Some(DocumentReadyState::Complete), "readystatechange"),
+    ] {
+        // A lifecycle listener can open a replacement stream on the same
+        // Document. The old parser must not complete that replacement.
+        if !unsafe { &*runtime_ptr }.windowless_document_parser_is_current(handle, &token) {
+            return;
+        }
+        if let Some(state) = ready_state {
+            unsafe { &mut *runtime_ptr }
+                .dom_host_mut()
+                .set_document_ready_state_for_handle(handle, state);
+        }
+        if let Ok(event) = crate::host::create_host_event(
+            scope,
+            event_type,
+            document.into(),
+            document.into(),
+            event_type == "DOMContentLoaded",
+            false,
+        ) {
+            let _ = unsafe { &mut *runtime_ptr }.dispatch_public_event_best_effort(
+                scope,
+                runtime_ptr,
+                EventTargetHandle::Node(handle),
+                event,
+                "windowless document lifecycle event",
+            );
+        }
+    }
+    unsafe { &mut *runtime_ptr }.release_finished_windowless_document_parser(handle, &token);
 }
 
 fn detached_html_document_body_handle(
@@ -327,6 +597,9 @@ pub(in crate::native_bridge) fn set_detached_html_document_body_html(
         let Some(body) = detached_html_document_body_handle(runtime, document_handle) else {
             return false;
         };
+        if html.is_empty() && runtime.dom_host().child_handles(body).next().is_none() {
+            return true;
+        }
         runtime.set_inner_html(scope, runtime_ptr, body, html)
     })
 }
@@ -362,36 +635,15 @@ fn normalized_editing_command<'s>(
         .unwrap_or_default()
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, strum::EnumString, strum::IntoStaticStr)]
+#[strum(serialize_all = "lowercase")]
 enum EditingCommand {
     Copy,
     Delete,
     ForwardDelete,
+    InsertHtml,
     InsertText,
     SelectAll,
-}
-
-impl EditingCommand {
-    fn parse(command: &str) -> Option<Self> {
-        match command {
-            "copy" => Some(Self::Copy),
-            "delete" => Some(Self::Delete),
-            "forwarddelete" => Some(Self::ForwardDelete),
-            "inserttext" => Some(Self::InsertText),
-            "selectall" => Some(Self::SelectAll),
-            _ => None,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            Self::Copy => "copy",
-            Self::Delete => "delete",
-            Self::ForwardDelete => "forwarddelete",
-            Self::InsertText => "inserttext",
-            Self::SelectAll => "selectall",
-        }
-    }
 }
 
 fn editing_command_document<'s>(
@@ -439,10 +691,26 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
     ) else {
         return;
     };
-    let Some(command) = EditingCommand::parse(&command) else {
+    let Ok(command) = command.parse::<EditingCommand>() else {
         rv.set(v8::Boolean::new(scope, false).into());
         return;
     };
+    if !unsafe { &mut *runtime_ptr }.begin_document_editing_command(document_handle) {
+        rv.set(v8::Boolean::new(scope, false).into());
+        return;
+    }
+    execute_document_editing_command(scope, runtime_ptr, document_handle, &args, command, &mut rv);
+    unsafe { &mut *runtime_ptr }.end_document_editing_command(document_handle);
+}
+
+fn execute_document_editing_command<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document_handle: DomHandle,
+    args: &v8::FunctionCallbackArguments<'s>,
+    command: EditingCommand,
+    rv: &mut v8::ReturnValue<'s, v8::Value>,
+) {
     match command {
         EditingCommand::SelectAll => {
             let selected =
@@ -451,26 +719,30 @@ pub(in crate::native_bridge) fn node_document_exec_command_callback<'s>(
             return;
         }
         EditingCommand::Copy => {
-            let active = current_protocol_user_gesture_activation(scope);
-            rv.set(v8::Boolean::new(scope, active).into());
+            let copied = run_document_copy_command(scope, runtime_ptr, document_handle, false);
+            rv.set(v8::Boolean::new(scope, copied).into());
             return;
         }
         EditingCommand::InsertText => {
-            let replacement = if args.length() > 2 {
-                let Some(value) = args.get(2).to_string(scope) else {
-                    return;
-                };
-                value.to_rust_string_lossy(scope)
-            } else {
-                String::new()
+            let Some(value) = editing_command_value(scope, args) else {
+                return;
             };
-            let inserted = exec_command_insert_text(scope, runtime_ptr, &replacement);
+            let inserted = exec_command_insert_text(scope, runtime_ptr, &value);
+            rv.set(v8::Boolean::new(scope, inserted).into());
+            return;
+        }
+        EditingCommand::InsertHtml => {
+            let Some(value) = editing_command_insert_html_value(scope, runtime_ptr, args) else {
+                return;
+            };
+            let inserted = exec_command_insert_html(scope, runtime_ptr, &value);
             rv.set(v8::Boolean::new(scope, inserted).into());
             return;
         }
         EditingCommand::Delete | EditingCommand::ForwardDelete => {}
     }
-    let removed = exec_command_delete_selection(scope, runtime_ptr, args.this(), command.name());
+    let command_name: &'static str = command.into();
+    let removed = exec_command_delete_selection(scope, runtime_ptr, args.this(), command_name);
     rv.set(v8::Boolean::new(scope, removed).into());
 }
 
@@ -497,7 +769,7 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let command = normalized_editing_command(scope, &args);
-    let Some((_runtime_ptr, _document_handle)) = editing_command_document(
+    let Some((runtime_ptr, document_handle)) = editing_command_document(
         scope,
         &args,
         &mut rv,
@@ -505,7 +777,14 @@ pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'
     ) else {
         return;
     };
-    rv.set(v8::Boolean::new(scope, EditingCommand::parse(&command).is_some()).into());
+    let supported = match command.parse::<EditingCommand>() {
+        Ok(EditingCommand::Copy) => {
+            document_copy_command_supported(unsafe { &*runtime_ptr }, document_handle)
+        }
+        Ok(_) => true,
+        Err(_) => false,
+    };
+    rv.set(v8::Boolean::new(scope, supported).into());
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>(
@@ -523,21 +802,22 @@ pub(in crate::native_bridge) fn node_document_query_command_enabled_callback<'s>
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let enabled = match EditingCommand::parse(&command) {
-        Some(
-            EditingCommand::Delete | EditingCommand::ForwardDelete | EditingCommand::InsertText,
-        ) => {
+    let enabled = match command.parse::<EditingCommand>() {
+        Ok(EditingCommand::Delete | EditingCommand::ForwardDelete | EditingCommand::InsertText) => {
             runtime.document_design_mode_enabled(document_handle)
                 || runtime.active_element_handle().is_some_and(|active| {
                     is_text_control(runtime, active)
                         || contenteditable_editing_host(runtime, active).is_some()
                 })
         }
-        Some(EditingCommand::SelectAll) => {
+        Ok(EditingCommand::InsertHtml) => exec_command_insert_html_target(runtime).is_some(),
+        Ok(EditingCommand::SelectAll) => {
             exec_command_select_all_target(runtime, document_handle).is_some()
         }
-        Some(EditingCommand::Copy) => current_protocol_user_gesture_activation(scope),
-        None => false,
+        Ok(EditingCommand::Copy) => {
+            run_document_copy_command(scope, runtime_ptr, document_handle, true)
+        }
+        Err(_) => false,
     };
     rv.set(v8::Boolean::new(scope, enabled).into());
 }
@@ -666,9 +946,101 @@ fn current_modal_dialog(runtime: &JsContextHost, document: DomHandle) -> Option<
         })
 }
 
-fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    crate::util::context_host_ptr_from_global_bridge(scope)
-        .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
+fn editing_command_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<String> {
+    if args.length() < 3 {
+        return Some(String::new());
+    }
+    args.get(2)
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn editing_command_insert_html_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<String> {
+    if args.length() < 3 || args.get(2).is_undefined() {
+        return Some(String::new());
+    }
+    let requirements = unsafe { &*runtime_ptr }.trusted_types_for_script_requirements(scope);
+    crate::context_bootstrap::trusted_html_string_or_throw(
+        scope,
+        args.get(2),
+        requirements,
+        "Document execCommand",
+        "execCommand",
+    )
+}
+
+fn exec_command_insert_html(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    value: &str,
+) -> bool {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(target) = exec_command_insert_html_target(runtime) else {
+        return false;
+    };
+    let insertion_text = input_text_from_html_fragment(runtime, value);
+    replace_text_control_selection(scope, runtime_ptr, target, &insertion_text)
+}
+
+fn exec_command_insert_html_target(runtime: &JsContextHost) -> Option<DomHandle> {
+    let handle = runtime.active_element_handle()?;
+    let element = runtime.dom_host().node(handle)?.as_element()?;
+    let accepts_plain_text = element.is_html_textarea()
+        || (element.is_html_input() && element.input_type().supports_text_length_validation());
+    if !accepts_plain_text
+        || element.has_attribute("readonly")
+        || form_control_is_effectively_disabled(runtime, handle)
+    {
+        return None;
+    }
+    Some(handle)
+}
+
+fn input_text_from_html_fragment(runtime: &JsContextHost, value: &str) -> String {
+    let document_handle = runtime.dom_host().document_handle();
+    let parsed =
+        HtmlParser::with_scripting_enabled(runtime.document_scripting_enabled(document_handle))
+            .parse_fragment_without_declarative_shadow_roots(
+                runtime.host_document().url().clone(),
+                "http://www.w3.org/1999/xhtml",
+                "body",
+                value.to_owned(),
+            );
+    let root = parsed
+        .body_node_id()
+        .unwrap_or_else(|| parsed.document_node_id());
+    let mut text = String::new();
+    for child in parsed.child_ids(root) {
+        append_input_fragment_text(&parsed, child, &mut text);
+    }
+    text
+}
+
+fn append_input_fragment_text(dom: &NativeDom, handle: DomHandle, text: &mut String) {
+    let Some(node) = dom.node(handle) else {
+        return;
+    };
+    if node.is_html_element_named("br") {
+        text.push('\n');
+        return;
+    }
+    match node.data() {
+        NodeData::Text(value) => text.push_str(value.data()),
+        NodeData::CDataSection(value) => text.push_str(value.data()),
+        NodeData::Document(_) | NodeData::Element(_) | NodeData::DocumentFragment(_) => {
+            for child in dom.child_ids(handle) {
+                append_input_fragment_text(dom, child, text);
+            }
+        }
+        NodeData::DocumentType(_) | NodeData::Comment(_) | NodeData::ProcessingInstruction(_) => {}
+    }
 }
 
 fn exec_command_delete_selection<'s>(

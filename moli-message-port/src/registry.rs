@@ -134,6 +134,22 @@ where
         })
     }
 
+    /// Capture the destination before an embedding runs author code.
+    pub fn message_port_peer_id(&self, port_id: MessagePortId) -> Option<MessagePortId> {
+        self.ports.lock().get(&port_id)?.peer_id
+    }
+
+    /// Enqueue to a previously captured destination, even if its source has
+    /// since been disentangled. Port ids survive transfer to another owner.
+    pub fn enqueue_message_to_endpoint(&self, port_id: MessagePortId, payload: P) -> bool {
+        let mut ports = self.ports.lock();
+        let Some(state) = ports.get_mut(&port_id) else {
+            return false;
+        };
+        state.pending_messages.push_back(payload);
+        true
+    }
+
     /// Enqueue a message to the peer endpoint and return the target peer id.
     pub fn enqueue_message_to_message_port(
         &self,

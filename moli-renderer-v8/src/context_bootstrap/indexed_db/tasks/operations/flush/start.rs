@@ -21,27 +21,21 @@ pub(in crate::context_bootstrap::indexed_db) fn flush_transaction_start_task<'s>
         .unwrap_or(false)
         || object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_FINISHED_SLOT)
             .unwrap_or(false)
-        || !readwrite_transaction_can_start(scope, transaction)
     {
         return;
     }
-    let Some(database) = object_property_as_object(scope, transaction, "db") else {
+    let Some(request) = indexed_db_transaction_start_request(scope, transaction) else {
         return;
     };
-    let Some(handle) = database_handle_from_value(scope, database.into()) else {
+    if !request.is_ready() {
         return;
-    };
-    let store_names = object_property_as_object(scope, transaction, "objectStoreNames")
-        .map(|names| dom_string_list_values(scope, names))
-        .unwrap_or_default();
-    match with_indexed_db_manager(scope, |manager| {
-        manager.begin_transaction(handle, &store_names, TransactionMode::ReadWrite)
-    }) {
+    }
+    match with_indexed_db_manager(scope, |manager| manager.start_queued_transaction(&request)) {
         Ok(transaction_handle) => {
-            success::start_readwrite_transaction(scope, transaction, transaction_handle);
+            success::start_regular_transaction(scope, transaction, transaction_handle);
         }
         Err(error) => {
-            fail::fail_readwrite_transaction_start(scope, transaction, &error);
+            fail::fail_regular_transaction_start(scope, transaction, &error);
         }
     }
 }

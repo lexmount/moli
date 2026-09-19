@@ -88,11 +88,47 @@ pub(crate) fn filter_headers_for_guard(
     entries: &[(String, String)],
     guard: HeadersGuard,
 ) -> Vec<(String, String)> {
-    entries
+    let mut filtered = Vec::with_capacity(entries.len());
+    for (name, value) in entries {
+        if header_append_allowed_by_guard(guard, name, value, &filtered) {
+            filtered.push((name.clone(), value.clone()));
+        }
+    }
+    filtered
+}
+
+pub(in crate::network_host::headers) fn header_append_allowed_by_guard(
+    guard: HeadersGuard,
+    name: &str,
+    value: &str,
+    entries: &[(String, String)],
+) -> bool {
+    if guard != HeadersGuard::RequestNoCors {
+        return header_allowed_by_guard(guard, name, value);
+    }
+    // Filling Headers runs append for each entry. The no-cors check applies
+    // to the resulting combined value, including separators and empty values;
+    // a rejected append must leave previously accepted entries intact.
+    let mut combined = None::<String>;
+    for (_, existing) in entries
         .iter()
-        .filter(|(name, value)| header_allowed_by_guard(guard, name, value))
-        .cloned()
-        .collect()
+        .filter(|(field, _)| field.eq_ignore_ascii_case(name))
+    {
+        if let Some(combined) = &mut combined {
+            combined.push_str(", ");
+            combined.push_str(existing);
+        } else {
+            combined = Some(existing.clone());
+        }
+    }
+    match combined {
+        Some(mut combined) => {
+            combined.push_str(", ");
+            combined.push_str(value);
+            header_allowed_by_guard(guard, name, &combined)
+        }
+        None => header_allowed_by_guard(guard, name, value),
+    }
 }
 
 pub(in crate::network_host) fn set_headers_entries(
@@ -108,22 +144,26 @@ pub(in crate::network_host) fn set_headers_entries(
 }
 
 pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]) -> String {
-    let entries = normalized_headers_entries(entries);
+    // Keep each field in the header list. Refilling a Request after changing
+    // its guard must append these fields individually, in their original order.
+    let entries = normalized_header_list(entries);
     serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_owned())
 }
 
-pub(in crate::network_host::headers) fn normalized_headers_entries(
-    entries: &[(String, String)],
-) -> Vec<(String, String)> {
+fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)> {
+    entries
+        .iter()
+        .filter_map(|(name, value)| {
+            let name = normalized_header_name(name)?;
+            let value = normalize_header_value(value);
+            is_valid_header_value(&value).then_some((name, value))
+        })
+        .collect()
+}
+
+pub(crate) fn normalized_headers_entries(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
-    for (name, value) in entries {
-        let Some(lower) = normalized_header_name(name) else {
-            continue;
-        };
-        let value = normalize_header_value(value);
-        if !is_valid_header_value(&value) {
-            continue;
-        }
+    for (lower, value) in normalized_header_list(entries) {
         if lower == "set-cookie" {
             normalized.push((lower, value));
             continue;
@@ -198,19 +238,22 @@ fn is_http_whitespace(ch: char) -> bool {
     matches!(ch, '\t' | '\n' | '\r' | ' ')
 }
 
+/// The sorted, combined view used by public iteration and header consumers.
 pub(crate) fn headers_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
 ) -> Vec<(String, String)> {
-    headers_entries_if_present(scope, obj).unwrap_or_default()
+    normalized_headers_entries(&headers_list(scope, obj))
 }
 
-pub(in crate::network_host) fn headers_entries_if_present<'s>(
+/// The internal header list, before the public sort-and-combine projection.
+pub(in crate::network_host) fn headers_list<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     obj: v8::Local<'s, v8::Object>,
-) -> Option<Vec<(String, String)>> {
+) -> Vec<(String, String)> {
     private_string_value(scope, obj, HEADERS_ENTRIES_SLOT)
         .and_then(|json| serde_json::from_str::<Vec<(String, String)>>(&json).ok())
+        .unwrap_or_default()
 }
 
 fn private_string_value<'s>(

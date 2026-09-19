@@ -483,11 +483,11 @@ pub(in crate::context_bootstrap) fn selection_remove_all_ranges_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !selection_has_range(scope, args.this()) {
-        return;
-    }
+    let had_range = selection_has_range(scope, args.this());
     selection_clear(scope, args.this());
-    selection_dispatch_change(scope);
+    if had_range {
+        selection_dispatch_change(scope);
+    }
 }
 
 pub(in crate::context_bootstrap) fn selection_contains_node_callback<'s>(

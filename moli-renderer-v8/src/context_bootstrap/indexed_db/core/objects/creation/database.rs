@@ -1,30 +1,20 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    DATABASE_NAME_SLOT, DATABASE_VERSION_SLOT, initialize_indexed_db_event_target,
+};
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::IDBDatabase,
-    require_prototype,
-    scope_lifetime = 'scope,
-    data_properties,
-    enumerable
-)]
-struct IdbDatabaseObjectDeclaration<'scope, 'value> {
+#[webapi(interface = web_api_interfaces::IDBDatabase, require_prototype)]
+struct IdbDatabaseObjectDeclaration<'scope> {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
-    name: &'value str,
+    #[webapi(slot = DATABASE_NAME_SLOT)]
+    name: v8::Local<'scope, v8::String>,
+    #[webapi(slot = DATABASE_VERSION_SLOT)]
     version: f64,
-    object_store_names: v8::Local<'scope, v8::Object>,
-    #[webapi(init = "null")]
-    onabort: (),
-    #[webapi(init = "null")]
-    onclose: (),
-    #[webapi(init = "null")]
-    onerror: (),
-    #[webapi(init = "null")]
-    onversionchange: (),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
@@ -36,11 +26,10 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     let storage_key = storage_scope.storage_key().to_owned();
     let database_key = database_registry_key(&storage_key, &info.name);
-    let object_store_names = new_idb_dom_string_list(scope, &info.object_store_names);
-    let database =
-        IdbDatabaseObjectDeclaration::new(&info.name, info.version as f64, object_store_names)
-            .bind(scope)
-            .ok()?;
+    let name = idb_name_to_v8(scope, &info.name);
+    let database = IdbDatabaseObjectDeclaration::new(name, info.version as f64)
+        .bind(scope)
+        .ok()?;
     register_indexed_db_wrapper_with_owner(
         scope,
         database,
@@ -55,7 +44,8 @@ pub(in crate::context_bootstrap::indexed_db) fn create_database_object<'s>(
         database_key.clone(),
         storage_scope,
     );
-    let _ = refresh_database_surface(scope, database);
-    register_open_database_connection(scope, owner, handle, database_key, info.version, database);
+    let _ = refresh_database_metadata(scope, database, info);
+    initialize_indexed_db_event_target(scope, database, None);
+    register_open_database_connection(scope, owner, handle, database_key, database);
     Some(database)
 }

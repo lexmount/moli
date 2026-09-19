@@ -1,31 +1,55 @@
 use crate::web_api_interfaces;
+use html5ever::tree_builder::QuirksMode;
 use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime};
 use moli_webapi_declare::WebApiFunctionTemplate;
 use url::Url;
 
 use crate::{
-    dom::native::{DomHost, NativeDom, NativeNodeId},
+    document_runtime::DomHandle,
+    dom::native::{DomHost, NativeDom},
     parser::{HtmlParser, XmlParser},
     webidl,
 };
 
 use super::{
-    native_bridge::document::{
-        build_detached_document_object_from_dom_host,
-        build_detached_document_object_from_dom_host_with_content_type,
+    native_bridge::{
+        OwnerDispatchScope,
+        document::{
+            build_detached_document_object_from_dom_host,
+            build_detached_document_object_from_dom_host_with_content_type,
+        },
     },
-    util::{context_host_ptr_from_global_bridge, get_private_object, throw_type_error},
+    util::{
+        apply_webidl_constructor_prototype_fallback, context_host_ptr_from_global_bridge,
+        get_private_object, get_private_value, set_private_value, throw_type_error,
+    },
 };
 
 pub(crate) const DOM_PARSER_FOREIGN_NODE_SLOT: &str = "__moliDomParserForeignNode";
-const HTML_NAMESPACE: &str = "http://www.w3.org/1999/xhtml";
-const PARSER_ERROR_STYLE: &str = "display: block; white-space: pre; border: 2px solid #c77; padding: 0 1em 0 1em; margin: 1em; background-color: #fdd; color: black";
-const PARSER_ERROR_DETAIL_STYLE: &str = "font-family:monospace;font-size:12px";
+const DOM_PARSER_DOCUMENT_HANDLE_SLOT: &str = "__moliDomParserDocumentHandle";
+const XML_PARSER_ERROR_NAMESPACE: &str = "http://www.mozilla.org/newlayout/xml/parsererror.xml";
+
+#[derive(Clone, Copy)]
+pub(super) enum XmlParseErrorBehavior {
+    ParserErrorDocument,
+    ReturnNone,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DetachedDocumentKind {
+    Document,
     Html,
     Xml,
+}
+
+impl DetachedDocumentKind {
+    fn bridge_kind(self) -> &'static str {
+        match self {
+            Self::Document => "plain",
+            Self::Html => "html",
+            Self::Xml => "xml",
+        }
+    }
 }
 
 #[derive(Clone, Copy, webidl::WebIdlEnum)]
@@ -98,16 +122,31 @@ struct DomParserPrototypeMethodsDeclaration {
     parse_from_string: (),
 }
 
-pub(super) fn dom_parser_constructor_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: v8::FunctionCallbackArguments<'_>,
+pub(super) fn dom_parser_constructor_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if !args.is_construct_call() {
         throw_type_error(scope, "DOMParser constructor must be called with new");
         return;
     }
-    rv.set(args.this().into());
+    let parser = args.this();
+    apply_webidl_constructor_prototype_fallback(scope, parser, args.new_target(), "DOMParser");
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        throw_type_error(scope, "DOMParser constructor has no associated Document");
+        return;
+    };
+    let runtime = unsafe { &*host_ptr };
+    let document_handle = dom_parser_constructor_document_handle(scope, runtime);
+    let handle_value = v8::BigInt::new_from_u64(scope, document_handle.index() as u64);
+    set_private_value(
+        scope,
+        parser,
+        DOM_PARSER_DOCUMENT_HANDLE_SLOT,
+        handle_value.into(),
+    );
+    rv.set(parser.into());
 }
 
 pub(super) fn dom_parser_parse_from_string_callback<'s>(
@@ -115,6 +154,13 @@ pub(super) fn dom_parser_parse_from_string_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(document_handle) = dom_parser_document_handle(scope, args.this()) else {
+        throw_type_error(
+            scope,
+            "Failed to execute 'parseFromString' on 'DOMParser': Illegal invocation.",
+        );
+        return;
+    };
     let Some(parsed) = webidl::parse_args::<DomParserParseFromStringArgs>(scope, &args) else {
         return;
     };
@@ -139,12 +185,51 @@ pub(super) fn dom_parser_parse_from_string_callback<'s>(
             source
         }
     };
-    let Some(obj) = parse_detached_document_from_string(scope, &source, parsed.mime.as_mime())
-    else {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        rv.set(v8::null(scope).into());
+        return;
+    };
+    let document_url = unsafe { &*host_ptr }.document_url_for_handle(document_handle);
+    let Some(obj) = parse_detached_document_from_string_with_url(
+        scope,
+        document_url,
+        &source,
+        parsed.mime.as_mime(),
+    ) else {
         rv.set(v8::null(scope).into());
         return;
     };
     rv.set(obj.into());
+}
+
+fn dom_parser_constructor_document_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime: &super::native_bridge::JsContextHost,
+) -> DomHandle {
+    let context = scope.get_current_context();
+    let Some(identity) = runtime.window_execution_context_identity_for_v8_context(scope, context)
+    else {
+        return runtime.document_handle();
+    };
+    match identity.dispatch_scope() {
+        OwnerDispatchScope::Top => runtime.document_handle(),
+        OwnerDispatchScope::Child(handle) => runtime
+            .child_browsing_context_document_handle(handle)
+            .unwrap_or_else(|| runtime.document_handle()),
+        OwnerDispatchScope::LightweightPopup(popup_id) => runtime
+            .lightweight_popup_document_handle(popup_id)
+            .unwrap_or_else(|| runtime.document_handle()),
+    }
+}
+
+fn dom_parser_document_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    parser: v8::Local<'s, v8::Object>,
+) -> Option<DomHandle> {
+    let value = get_private_value(scope, parser, DOM_PARSER_DOCUMENT_HANDLE_SLOT)?;
+    let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
+    let (index, lossless) = value.u64_value();
+    lossless.then(|| DomHandle::new(index as usize))
 }
 
 pub(crate) fn install_dom_parser_template_bindings<'s>(
@@ -161,8 +246,9 @@ pub(crate) fn install_dom_parser_template_bindings<'s>(
     );
 }
 
-pub(super) fn parse_detached_document_from_string<'s>(
+fn parse_detached_document_from_string_with_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
+    document_url: Url,
     source: &str,
     mime: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
@@ -172,27 +258,42 @@ pub(super) fn parse_detached_document_from_string<'s>(
         return None;
     }
 
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let runtime = unsafe { &*host_ptr };
     if is_html {
-        return parse_detached_html_document_from_source(
-            scope,
-            runtime.document_url().clone(),
-            source,
-        );
+        return parse_detached_html_document_from_source(scope, document_url, source);
     }
 
+    parse_detached_xml_document_from_source(
+        scope,
+        document_url,
+        source,
+        mime,
+        XmlParseErrorBehavior::ParserErrorDocument,
+    )
+}
+
+pub(super) fn parse_detached_xml_document_from_source<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: Url,
+    source: &str,
+    mime: &str,
+    error_behavior: XmlParseErrorBehavior,
+) -> Option<v8::Local<'s, v8::Object>> {
     let parser = XmlParser;
-    let parsed = parser.parse(runtime.document_url().clone(), source.to_owned());
+    let parsed = parser.parse(document_url, source.to_owned());
     let parsed = if parsed.parse_errors().is_empty() && native_document_has_element_child(&parsed) {
         parsed
     } else {
-        materialize_xml_parser_error_document(parsed)
+        match error_behavior {
+            XmlParseErrorBehavior::ParserErrorDocument => {
+                materialize_xml_parser_error_document(parsed)
+            }
+            XmlParseErrorBehavior::ReturnNone => return None,
+        }
     };
     build_detached_document_with_content_type(
         scope,
         parsed,
-        DetachedDocumentKind::Xml,
+        DetachedDocumentKind::Document,
         false,
         Some(mime),
     )
@@ -206,102 +307,21 @@ fn materialize_xml_parser_error_document(parsed: NativeDom) -> NativeDom {
         .unwrap_or_else(|| "XML document has no document element".to_owned());
     let mut host = DomHost::from_dom(parsed);
     let document = host.document_handle();
-    let document_element = host
-        .child_handles(document)
-        .find(|handle| host.node(*handle).is_some_and(|node| node.is_element()));
-
-    let parser_error = create_dom_parser_error_element(&mut host, document, &error_detail);
-    if let Some(document_element) = document_element {
-        let first_child = host
-            .node(document_element)
-            .and_then(|node| node.first_child());
-        let _ = host.insert_before(document_element, parser_error, first_child);
-        return host.snapshot_document();
-    }
-
+    // DOMParser's XML error document contains only the error root, even if
+    // the underlying parser recovered a partial tree, doctype or prologue.
     for child in host.child_handles(document).collect::<Vec<_>>() {
         let _ = host.remove_child(document, child);
     }
-    let html = host.create_parser_element_without_attributes_for_document(
-        document,
-        "html".to_owned(),
-        HTML_NAMESPACE.to_owned(),
-        None,
-    );
-    let body = host.create_parser_element_without_attributes_for_document(
-        document,
-        "body".to_owned(),
-        HTML_NAMESPACE.to_owned(),
-        None,
-    );
-    let _ = host.append_child(document, html);
-    let _ = host.append_child(html, body);
-    let _ = host.append_child(body, parser_error);
-    host.snapshot_document()
-}
-
-fn create_dom_parser_error_element(
-    host: &mut DomHost,
-    document: NativeNodeId,
-    error_detail: &str,
-) -> NativeNodeId {
     let parser_error = host.create_parser_element_without_attributes_for_document(
         document,
         "parsererror".to_owned(),
-        HTML_NAMESPACE.to_owned(),
+        XML_PARSER_ERROR_NAMESPACE.to_owned(),
         None,
     );
-    let _ = host.set_attribute(parser_error, "style", PARSER_ERROR_STYLE);
-
-    let heading = create_dom_parser_error_child(host, document, "h3", None);
-    append_dom_parser_error_text(
-        host,
-        document,
-        heading,
-        "This page contains the following errors:",
-    );
-    let detail =
-        create_dom_parser_error_child(host, document, "div", Some(PARSER_ERROR_DETAIL_STYLE));
-    append_dom_parser_error_text(host, document, detail, error_detail);
-    let footer = create_dom_parser_error_child(host, document, "h3", None);
-    append_dom_parser_error_text(
-        host,
-        document,
-        footer,
-        "Below is a rendering of the page up to the first error.",
-    );
-    let _ = host.append_child(parser_error, heading);
+    let detail = host.create_text_node_for_document(document, &error_detail);
     let _ = host.append_child(parser_error, detail);
-    let _ = host.append_child(parser_error, footer);
-    parser_error
-}
-
-fn create_dom_parser_error_child(
-    host: &mut DomHost,
-    document: NativeNodeId,
-    local_name: &str,
-    style: Option<&str>,
-) -> NativeNodeId {
-    let element = host.create_parser_element_without_attributes_for_document(
-        document,
-        local_name.to_owned(),
-        HTML_NAMESPACE.to_owned(),
-        None,
-    );
-    if let Some(style) = style {
-        let _ = host.set_attribute(element, "style", style);
-    }
-    element
-}
-
-fn append_dom_parser_error_text(
-    host: &mut DomHost,
-    document: NativeNodeId,
-    parent: NativeNodeId,
-    text: &str,
-) {
-    let text = host.create_text_node_for_document(document, text);
-    let _ = host.append_child(parent, text);
+    let _ = host.append_child(document, parser_error);
+    host.snapshot_document()
 }
 
 /// Builds a detached HTML document wrapper from raw markup and an explicit document URL.
@@ -321,9 +341,25 @@ pub(crate) fn parse_detached_html_document_from_source<'s>(
     document_url: Url,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    parse_detached_html_document_from_source_with_encoding(scope, document_url, source, None)
+}
+
+pub(crate) fn parse_detached_html_document_from_source_with_encoding<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document_url: Url,
+    source: &str,
+    character_set: Option<&str>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let parsed = HtmlParser::with_scripting_enabled(false)
         .parse_without_declarative_shadow_roots(document_url, source.to_owned());
-    build_detached_document(scope, parsed, DetachedDocumentKind::Html, false)
+    build_detached_document_from_dom_host_with_content_type(
+        scope,
+        DomHost::from_dom(parsed),
+        DetachedDocumentKind::Html,
+        false,
+        Some("text/html"),
+        character_set,
+    )
 }
 
 pub(crate) fn parse_detached_html_document_from_source_with_declarative_shadow_roots<'s>(
@@ -388,30 +424,38 @@ fn parse_browsing_context_document_snapshot(
             DetachedDocumentKind::Xml,
         );
     }
+    if content_type.is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain")) {
+        let mut document =
+            html_parser.parse_dom_host(document_url, plain_text_document_parser_input(source));
+        // Text documents are HTML Documents whose mode is explicitly no-quirks,
+        // despite having no doctype that would select that mode through parsing.
+        document.set_html_quirks_mode_for_parser(QuirksMode::NoQuirks);
+        return (document, DetachedDocumentKind::Html);
+    }
     (
         html_parser.parse_dom_host(document_url, source.to_owned()),
         DetachedDocumentKind::Html,
     )
 }
 
+pub(crate) fn plain_text_document_parser_input(source: &str) -> String {
+    let mut input = String::with_capacity(source.len().saturating_add(64));
+    input.push_str("<html><head></head><body><pre>");
+    for character in source.chars() {
+        match character {
+            '&' => input.push_str("&amp;"),
+            '<' => input.push_str("&lt;"),
+            '\0' => input.push('\u{fffd}'),
+            _ => input.push(character),
+        }
+    }
+    input.push_str("</pre></body></html>");
+    input
+}
+
 fn child_document_url_is_xml_like(url: &Url) -> bool {
     let path = url.path().to_ascii_lowercase();
     path.ends_with(".xml") || path.ends_with(".xhtml") || path.ends_with(".svg")
-}
-
-fn build_detached_document<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    parsed: NativeDom,
-    kind: DetachedDocumentKind,
-    expose_declarative_shadow_roots: bool,
-) -> Option<v8::Local<'s, v8::Object>> {
-    build_detached_document_with_content_type(
-        scope,
-        parsed,
-        kind,
-        expose_declarative_shadow_roots,
-        None,
-    )
 }
 
 fn build_detached_document_with_content_type<'s>(
@@ -422,13 +466,9 @@ fn build_detached_document_with_content_type<'s>(
     content_type: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = expose_declarative_shadow_roots;
-    let kind = match kind {
-        DetachedDocumentKind::Html => "html",
-        DetachedDocumentKind::Xml => "xml",
-    };
     build_detached_document_object_from_dom_host_with_content_type(
         scope,
-        kind,
+        kind.bridge_kind(),
         DomHost::from_dom(parsed),
         content_type,
         None,
@@ -442,11 +482,7 @@ fn build_detached_document_from_dom_host<'s>(
     expose_declarative_shadow_roots: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = expose_declarative_shadow_roots;
-    let kind = match kind {
-        DetachedDocumentKind::Html => "html",
-        DetachedDocumentKind::Xml => "xml",
-    };
-    build_detached_document_object_from_dom_host(scope, kind, parsed)
+    build_detached_document_object_from_dom_host(scope, kind.bridge_kind(), parsed)
 }
 
 fn build_detached_document_from_dom_host_with_content_type<'s>(
@@ -458,13 +494,9 @@ fn build_detached_document_from_dom_host_with_content_type<'s>(
     character_set: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let _ = expose_declarative_shadow_roots;
-    let kind = match kind {
-        DetachedDocumentKind::Html => "html",
-        DetachedDocumentKind::Xml => "xml",
-    };
     build_detached_document_object_from_dom_host_with_content_type(
         scope,
-        kind,
+        kind.bridge_kind(),
         parsed,
         content_type,
         character_set,
@@ -510,6 +542,38 @@ mod tests {
                 .is_some()
         })
         .expect("document element")
+    }
+
+    #[test]
+    fn xml_parser_error_document_discards_the_tree_and_preserves_error_text() {
+        let mut parsed = XmlParser.parse(
+            Url::parse("https://example.test/source.xml").unwrap(),
+            "<!DOCTYPE root><!--before--><?before data?><root><child/></root><?after data?>"
+                .to_owned(),
+        );
+        assert!(parsed.parse_errors().is_empty());
+        let detail = "Unexpected <script> & </parsererror> near \"quoted\" text";
+        parsed.push_parse_error(detail.to_owned());
+        let error_document = materialize_xml_parser_error_document(parsed);
+        let root = first_document_element(&error_document);
+        assert_eq!(
+            error_document
+                .child_ids(error_document.document_node_id())
+                .collect::<Vec<_>>(),
+            vec![root]
+        );
+        let element = error_document.node(root).unwrap().as_element().unwrap();
+        assert_eq!(element.local_name(), "parsererror");
+        assert_eq!(element.namespace(), XML_PARSER_ERROR_NAMESPACE);
+        assert_eq!(error_document.text_content(root).as_deref(), Some(detail));
+        let children = error_document.child_ids(root).collect::<Vec<_>>();
+        assert_eq!(children.len(), 1);
+        assert!(error_document.node(children[0]).unwrap().is_text());
+        assert!(
+            error_document
+                .serialize_document()
+                .contains("Unexpected &lt;script&gt; &amp; &lt;/parsererror&gt;")
+        );
     }
 
     #[test]
@@ -572,5 +636,43 @@ mod tests {
 
         let disabled = parse(HtmlParser::SCRIPTING_DISABLED);
         assert!(disabled.element_handle_by_id("fallback").is_some());
+    }
+
+    #[test]
+    fn child_plain_text_document_uses_pre_and_no_quirks_mode() {
+        let (document, kind) = parse_browsing_context_document_snapshot(
+            Url::parse("https://example.test/sample.txt").expect("test URL"),
+            "alpha<&amp;\r\nbeta\rgamma\0",
+            Some("text/plain"),
+            HtmlParser::SCRIPTING_ENABLED,
+        );
+        let document_handle = document.document_handle();
+        let document_children = document.child_handles(document_handle).collect::<Vec<_>>();
+
+        assert_eq!(kind, DetachedDocumentKind::Html);
+        assert_eq!(document_children.len(), 1);
+        assert!(document_children.iter().all(|child| {
+            document
+                .node(*child)
+                .is_none_or(|node| node.as_document_type().is_none())
+        }));
+        assert_eq!(
+            document.document_quirks_mode_for_handle(document_handle),
+            Some(selectors::matching::QuirksMode::NoQuirks)
+        );
+
+        let html = document_children[0];
+        let html_children = document.child_handles(html).collect::<Vec<_>>();
+        assert_eq!(html_children.len(), 2);
+        assert!(document.is_html_element_named(html_children[0], "head"));
+        assert!(document.is_html_element_named(html_children[1], "body"));
+
+        let body_children = document.child_handles(html_children[1]).collect::<Vec<_>>();
+        assert_eq!(body_children.len(), 1);
+        assert!(document.is_html_element_named(body_children[0], "pre"));
+        assert_eq!(
+            document.text_content(body_children[0]).as_deref(),
+            Some("alpha<&amp;\nbeta\ngamma\u{fffd}")
+        );
     }
 }

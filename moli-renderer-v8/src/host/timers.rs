@@ -11,9 +11,9 @@ use crate::{
     native_bridge::{
         CALLBACK_ERROR_WINDOW_HANDLE_SLOT, OwnerDispatchScope, ResourceTimingBufferId,
         RuntimeObservableContextToken, WindowExecutionContextBinding,
-        WindowExecutionContextIdentity, WindowExecutionContextOwner, active_child_window_handle,
-        active_lightweight_popup_id, current_runtime_observable_context_token,
-        lightweight_popup_id_from_window,
+        WindowExecutionContextIdentity, WindowExecutionContextOwner, WindowOperationReceiver,
+        active_child_window_handle, active_lightweight_popup_id,
+        current_runtime_observable_context_token, lightweight_popup_id_from_window,
     },
     page_task_queue::RendererPageTimerSelection,
     script_provenance::CompiledStringProvenance,
@@ -22,7 +22,9 @@ use crate::{
         get_private_value, script_nonce_from_host_defined_options,
     },
 };
-use moli_time::{TimerId, TimerReadyAllowance, TimerScheduler};
+use moli_time::{
+    TimerId, TimerReadyAllowance, TimerScheduleRange, TimerScheduleSnapshot, TimerScheduler,
+};
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
@@ -266,7 +268,7 @@ impl HostTimeoutScheduler {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
-        delay_ms: u32,
+        delay_ms: u64,
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
@@ -324,7 +326,7 @@ impl HostTimeoutScheduler {
                     is_interval: false,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -477,7 +479,7 @@ impl HostTimeoutScheduler {
                     is_interval,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -529,7 +531,7 @@ impl HostTimeoutScheduler {
                     is_interval: false,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -581,7 +583,7 @@ impl HostTimeoutScheduler {
                     is_interval: true,
                     extra_args,
                 },
-                delay_ms,
+                u64::from(delay_ms),
                 Instant::now(),
             )
             .get()
@@ -747,10 +749,41 @@ impl HostTimeoutScheduler {
         self.run_timer(scope, timer)
     }
 
+    pub(crate) fn run_next_from_schedule_ranges(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        ranges: &[TimerScheduleRange],
+    ) -> HostTimeoutRunResult {
+        let Some(timer) = self.scheduler.take_next_ready_from_schedule_ranges(
+            ranges,
+            Instant::now(),
+            min_delay_ready_allowance(),
+        ) else {
+            return HostTimeoutRunResult::Idle;
+        };
+        self.run_timer(scope, timer)
+    }
+
     #[cfg(test)]
     pub(crate) fn has_ready_timer(&self) -> bool {
         self.scheduler
             .has_ready_timer(Instant::now(), min_delay_ready_allowance())
+    }
+
+    pub(crate) fn has_ready_from_schedule_ranges(&self, ranges: &[TimerScheduleRange]) -> bool {
+        self.scheduler.has_ready_from_schedule_ranges(
+            ranges,
+            Instant::now(),
+            min_delay_ready_allowance(),
+        )
+    }
+
+    pub(crate) fn schedule_snapshot(&self) -> TimerScheduleSnapshot {
+        self.scheduler.schedule_snapshot()
+    }
+
+    pub(crate) fn schedule_range_since(&self, start: TimerScheduleSnapshot) -> TimerScheduleRange {
+        self.scheduler.schedule_range_since(start)
     }
 
     pub(crate) fn next_ready_timer_deadline(
@@ -940,8 +973,25 @@ fn scheduled_timer_owner_for_target<'s>(
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
     let execution_context_owner = host.current_window_execution_context_owner(dispatch_scope)?;
-    let binding =
-        host.clone_window_execution_context_binding(scope, execution_context_owner, dispatch_scope);
+    let binding = match (owner, dispatch_scope, receiver) {
+        (HostTimerOwner::Window, OwnerDispatchScope::Child(_), Some(receiver))
+            if crate::web_api_interfaces::Window::is_instance(scope, receiver) =>
+        {
+            // A retained Window can share an iframe handle with a new browsing
+            // context after removal/reinsertion. Scheduling and cancellation
+            // must use that receiver's exact realm, never the replacement.
+            Some(
+                WindowOperationReceiver::capture_and_authorize(scope, receiver, host)
+                    .ok()?
+                    .resolve_live_binding(host)?,
+            )
+        }
+        _ => host.clone_window_execution_context_binding(
+            scope,
+            execution_context_owner,
+            dispatch_scope,
+        ),
+    };
 
     // Lightweight popups share the renderer isolate and install their context
     // lazily. Capture the popup object's exact creation context before queueing.
@@ -1236,6 +1286,7 @@ fn run_window_timer_source(
     let mut scope = try_catch.init();
     let Some(source_value) = v8_string(&scope, &source.source) else {
         return Err(Box::new(V8ExceptionReport {
+            muted_errors: false,
             summary: "failed to allocate timer source string".to_owned(),
             source: Some(source.provenance.source_url().to_string()),
             line: None,

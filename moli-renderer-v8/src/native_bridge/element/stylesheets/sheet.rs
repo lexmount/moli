@@ -133,7 +133,7 @@ pub(crate) fn style_sheet_for_element<'s>(
     let is_css_link = element.is_html_element("link")
         && link_rel_qualifies_as_stylesheet(element.attribute("rel"), element.attribute("title"));
     if (!is_style && !is_css_link)
-        || !crate::style_engine::stylesheet_owner_type_is_supported(element)
+        || !crate::style_engine::stylesheet_owner_can_have_sheet(element)
         || (is_css_link
             && runtime
                 .dom_host()

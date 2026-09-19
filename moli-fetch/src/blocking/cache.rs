@@ -154,11 +154,23 @@ pub(crate) fn next_followed_redirect_url_from_parts(
             .validate_cors_response_for_url(final_url, headers)
             .map_err(anyhow::Error::msg)?;
     }
-    let next_url = next_redirect_url_from_parts(final_url, status, headers, redirect_count)?;
+    // A browser may follow redirects itself, preserving the full URL list for
+    // CORS and Fetch Metadata while asking this transport for only one hop.
+    // Only automatically followed transport requests consume this layer's limit.
+    let transport_redirect_count = if request.follow_redirects {
+        redirect_count
+    } else {
+        0
+    };
+    let next_url =
+        next_redirect_url_from_parts(final_url, status, headers, transport_redirect_count)?;
     if request.follow_redirects
         && let Some(next_url) = next_url.as_ref()
     {
         ensure_http_network_transport_url(next_url)?;
+        request
+            .check_redirect_target(next_url)
+            .map_err(anyhow::Error::msg)?;
         request.validate_request_mode_for_url(next_url)?;
     }
     Ok(next_url)
@@ -205,6 +217,60 @@ mod tests {
         let manual = next_followed_redirect_url_from_parts(&request, &current, 302, &headers, 0)?
             .expect("manual redirect URL should remain observable");
         assert_eq!(manual.as_str(), "file:///moli-policy-must-not-open");
+        Ok(())
+    }
+
+    #[test]
+    fn browser_followed_hops_preserve_cors_without_reapplying_transport_redirect_limit()
+    -> Result<()> {
+        let origin_url = Url::parse("https://origin.test/page")?;
+        let current = Url::parse("https://other.test/redirect")?;
+        let request = Request::new_browser(
+            "GET",
+            current.clone(),
+            None,
+            Vec::new(),
+            moli_url::WebOrigin::from_url(&origin_url),
+        )
+        .with_follow_redirects(false);
+        let headers = vec![
+            ("location".to_owned(), "/next".to_owned()),
+            (
+                "access-control-allow-origin".to_owned(),
+                "https://origin.test".to_owned(),
+            ),
+            (
+                "access-control-allow-credentials".to_owned(),
+                "true".to_owned(),
+            ),
+        ];
+        let next = next_followed_redirect_url_from_parts(
+            &request,
+            &current,
+            302,
+            &headers,
+            super::super::MAX_REDIRECTS,
+        )?;
+        assert_eq!(next, Some(current.join("/next")?));
+        let automatic = request.clone().with_follow_redirects(true);
+        let error = next_followed_redirect_url_from_parts(
+            &automatic,
+            &current,
+            302,
+            &headers,
+            super::super::MAX_REDIRECTS,
+        )
+        .expect_err("automatically followed transport requests retain their redirect limit");
+        assert!(error.to_string().contains("redirect limit exceeded"));
+        let denied = next_followed_redirect_url_from_parts(
+            &request,
+            &current,
+            302,
+            &headers[..1],
+            super::super::MAX_REDIRECTS,
+        )
+        .expect_err("a manually followed browser hop still requires CORS permission");
+        assert!(denied.to_string().contains("CORS"));
         Ok(())
     }
 

@@ -1,83 +1,74 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    enqueue_blocked_recheck_task, enqueue_version_change_task,
+    indexed_db_connection_notification_wake, indexed_db_connection_request_wake,
+    indexed_db_has_external_task_source, indexed_db_shared_manager,
+    indexed_db_typed_task_execution_owner, set_indexed_db_blocked_notifications_pending,
+    set_indexed_db_version_change_batch,
+};
 
 pub(in crate::context_bootstrap::indexed_db) fn database_registry_key(
     origin: &str,
-    name: &str,
+    name: &IndexedDbName,
 ) -> String {
-    format!("{origin}\u{0}{name}")
+    // Connection notifications carry opaque strings. Encode code units rather
+    // than formatting a DOMString lossily; four hex digits per unit also keep
+    // names containing NUL distinct from the storage-key separator.
+    use std::fmt::Write;
+    let mut key = format!("{origin}\u{0}");
+    for unit in name.as_utf16() {
+        write!(key, "{unit:04x}").expect("database registry key");
+    }
+    key
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn has_open_database_connections_for_key(
     scope: &mut v8::PinScope<'_, '_>,
     key: &str,
 ) -> bool {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        return !unsafe { &*host_ptr }
-            .indexed_db_open_connection_snapshots(scope, key)
-            .is_empty();
-    }
-    !local_open_database_connections_for_key(scope, key).is_empty()
+    indexed_db_shared_manager(scope).is_ok_and(|manager| {
+        manager
+            .lock()
+            .connection_notifications()
+            .has_connections(key)
+    })
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn open_database_connection_version_for_key(
-    scope: &mut v8::PinScope<'_, '_>,
-    key: &str,
-) -> Option<u64> {
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        return unsafe { &*host_ptr }.indexed_db_open_connection_version(key);
-    }
-    local_open_database_connections_for_key(scope, key)
-        .into_iter()
-        .filter_map(|database| object_number_property(scope, database, "version"))
-        .map(|version| version as u64)
-        .max()
-}
-
-pub(in crate::context_bootstrap::indexed_db) fn dispatch_version_change_to_open_connections(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(in crate::context_bootstrap::indexed_db) fn enqueue_version_change_to_open_connections<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     key: &str,
     old_version: u64,
     new_version: Option<u64>,
+    blocked_task: v8::Local<'s, v8::Object>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        for database in local_open_database_connections_for_key(scope, key) {
-            let _ = dispatch_version_change_event(
-                scope,
-                database,
-                "versionchange",
-                old_version,
-                new_version,
-            );
-        }
+    set_indexed_db_blocked_notifications_pending(scope, blocked_task, true);
+    if indexed_db_has_external_task_source(scope) {
+        let owner = indexed_db_typed_task_execution_owner(scope, blocked_task)
+            .expect("notification request owner");
+        let wake = indexed_db_connection_request_wake(scope, owner);
+        let manager = indexed_db_shared_manager(scope).expect("connection notification manager");
+        let coordinator = manager.lock().connection_notifications();
+        let batch = coordinator.begin_version_change(key, old_version, new_version, wake);
+        set_indexed_db_version_change_batch(scope, blocked_task, batch);
         return;
-    };
-
-    // Connections share backend coordination but retain the V8 realm that
-    // created each IDBDatabase wrapper. Snapshot roots before invoking script
-    // so close()/navigation can mutate the coordinator during dispatch.
-    let connections = unsafe { &*host_ptr }.indexed_db_open_connection_snapshots(scope, key);
-    for connection in connections {
-        if !unsafe { &*host_ptr }
-            .window_execution_context_identity_is_current(connection.execution_context)
-        {
-            continue;
-        }
-        let context = v8::Local::new(scope, &connection.context);
-        let target_scope = &mut v8::ContextScope::new(scope, context);
-        if crate::native_bridge::current_runtime_observable_context_token(target_scope)
-            != Some(connection.execution_context.realm_token())
-        {
-            continue;
-        }
-        let database = v8::Local::new(target_scope, &connection.database);
-        let _ = dispatch_version_change_event(
-            target_scope,
+    }
+    // Bare isolates have no external task transport. Retain their local
+    // microtask fallback; Window and worker event loops use the shared batch.
+    let mut notifications = Vec::new();
+    for database in local_open_database_connections_for_key(scope, key) {
+        notifications.extend(enqueue_version_change_task(
+            scope,
             database,
-            "versionchange",
             old_version,
             new_version,
-        );
+        ));
     }
+    crate::context_bootstrap::microtask_checkpoint::enqueue_indexed_db_version_change_completion(
+        scope,
+        blocked_task,
+        notifications,
+    );
+    enqueue_blocked_recheck_task(scope, blocked_task);
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connection(
@@ -85,9 +76,15 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
     owner: IndexedDbExecutionOwner,
     handle: DatabaseHandle,
     database_key: String,
-    version: u64,
     database: v8::Local<'_, v8::Object>,
 ) {
+    let wake = indexed_db_connection_notification_wake(scope, owner, handle);
+    if let Ok(manager) = indexed_db_shared_manager(scope) {
+        manager
+            .lock()
+            .connection_notifications()
+            .register(handle, database_key.clone(), wake);
+    }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let execution_context = owner.execution_context().unwrap_or_else(|| {
             panic!(
@@ -99,7 +96,6 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
             execution_context,
             handle,
             database_key,
-            version,
             database,
         );
         return;
@@ -109,6 +105,30 @@ pub(in crate::context_bootstrap::indexed_db) fn register_open_database_connectio
         IndexedDbRuntimeArray::OpenDatabases,
         database,
     );
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn database_connection_for_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    handle: DatabaseHandle,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        return unsafe { &*host_ptr }.indexed_db_open_connection_for_handle(scope, handle);
+    }
+    let registry = indexed_db_runtime_array(scope, IndexedDbRuntimeArray::OpenDatabases)?;
+    for index in 0..registry.length() {
+        let database = registry
+            .get_index(scope, index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+        if let Some(database) = database
+            && crate::context_bootstrap::indexed_db::database_handle_from_value(
+                scope,
+                database.into(),
+            ) == Some(handle)
+        {
+            return Some(database);
+        }
+    }
+    None
 }
 
 /// Removes a connection and schedules blocked-request rechecks in every page

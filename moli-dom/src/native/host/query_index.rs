@@ -519,6 +519,69 @@ mod tests {
     }
 
     #[test]
+    fn class_name_collections_follow_document_mode_and_adoption() {
+        use selectors::matching::QuirksMode;
+
+        let mut host = test_host();
+        let document = host.document_handle();
+        let other = host.create_detached_html_document();
+        let root = host.create_element("section");
+        let lower = host.create_element("span");
+        let upper = host.create_element("span");
+        assert!(host.append_child(document, root));
+        assert!(host.append_child(root, lower));
+        assert!(host.append_child(root, upper));
+        host.set_attribute(root, "class", "a");
+        host.set_attribute(lower, "class", "a");
+        host.set_attribute(upper, "class", "A");
+
+        for (mode, expected) in [
+            (QuirksMode::Quirks, vec![lower, upper]),
+            (QuirksMode::LimitedQuirks, vec![upper]),
+            (QuirksMode::NoQuirks, vec![upper]),
+            (QuirksMode::Quirks, vec![lower, upper]),
+        ] {
+            assert!(host.set_document_quirks_mode_for_handle(document, mode));
+            for _ in 0..2 {
+                assert_eq!(
+                    host.resolve_live_collection(root, "className", Some("A"), false),
+                    Some(expected.clone())
+                );
+            }
+        }
+        assert_eq!(
+            host.elements_by_class_name(document, "A", false),
+            vec![root, lower, upper]
+        );
+
+        assert!(host.remove_child(document, root));
+        assert_eq!(
+            host.resolve_live_collection(root, "className", Some("A"), false),
+            Some(vec![lower, upper])
+        );
+        assert_eq!(host.adopt_node(other, root), Some(root));
+        assert_eq!(host.owner_document_handle(lower), Some(other));
+        assert_eq!(
+            host.resolve_live_collection(root, "className", Some("A"), false),
+            Some(vec![upper])
+        );
+        assert!(host.elements_by_class_name(document, "A", false).is_empty());
+        assert!(host.elements_by_class_name(other, "A", false).is_empty());
+        assert!(host.append_child(other, root));
+        assert_eq!(host.elements_by_class_name(other, "A", false), vec![upper]);
+        assert!(host.remove_child(other, root));
+        assert_eq!(
+            host.resolve_live_collection(root, "className", Some("A"), false),
+            Some(vec![upper])
+        );
+        assert_eq!(host.adopt_node(document, root), Some(root));
+        assert_eq!(
+            host.resolve_live_collection(root, "className", Some("A"), false),
+            Some(vec![lower, upper])
+        );
+    }
+
+    #[test]
     fn cached_tag_name_collection_reuses_query_until_mutation() {
         let mut host = test_host();
         let document = host.document_handle();

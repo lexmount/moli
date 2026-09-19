@@ -150,7 +150,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["fetch", "headers", "request", "response", "exceptions"]
-notes = "Manual regression port for pending V8 exception propagation through Headers iterable initialization, Request(input) headers snapshotting, and Response.json(init) headers processing."
+notes = "Manual regression port for pending V8 exception propagation through Headers initialization and explicit Request/Response init headers, plus Request copies that ignore an overridden public headers getter."
 
 [[test]]
 id = "response-basic"
@@ -1358,7 +1358,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["location"]
-notes = "Manual compat port for the stable HTTP subset of location.protocol assignment: assigning the current protocol with or without a trailing colon, assigning the same protocol with different casing, and assigning an invalid scheme leave URL and session history unchanged. Cross-scheme http/https navigation remains follow-up until the WPT fixture server exposes an HTTPS origin."
+notes = "Manual compat coverage for location.protocol failure boundaries: syntactically invalid schemes throw SyntaxError, while valid scheme-state overrides that do not produce an HTTP(S) URL leave the current URL and session history unchanged. Same-scheme and HTTP-to-HTTPS navigation are covered by renderer tests and upstream WPT."
 
 [[test]]
 id = "location-assign-fragment-history-basic"
@@ -11463,7 +11463,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["worker"]
-notes = "Manual smoke port for dedicated worker importScripts rejecting direct cross-origin URLs and same-origin redirects that land on cross-origin targets with NetworkError. Same-origin importScripts injection and blob-url importScripts are covered separately."
+notes = "Manual smoke port for dedicated worker importScripts executing direct and redirected cross-origin scripts, retaining their side effects while replacing their thrown exceptions with NetworkError. Same-origin importScripts injection and blob-url importScripts are covered separately."
 
 [[test]]
 id = "worker-importscripts-blob-basic"

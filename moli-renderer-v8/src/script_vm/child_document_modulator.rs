@@ -83,6 +83,19 @@ impl ScriptVm {
                     .context_id_for_local_window_id(retired_owner.local_window_id)
             {
                 self.destroy_child_default_context(execution_context_id);
+            } else if execution_context_retired {
+                let pending_context = self
+                    .prebootstrapped_child_default_contexts
+                    .borrow()
+                    .values()
+                    .find(|context| context.local_window_id == retired_owner.local_window_id)
+                    .map(|context| context.context.clone());
+                if let Some(context) = pending_context {
+                    // A synchronously exposed realm can retire before its
+                    // FrameRealm is registered. Preserve reachable wrappers
+                    // before retiring the execution-context binding below.
+                    self.clear_context_wrapper_cache_for_context_ptr(&context, false);
+                }
             }
             let retired_timer_count = if execution_context_retired {
                 self.document_runtime
@@ -567,7 +580,7 @@ impl ScriptVm {
         parent_key: ModuleMapKey,
         requests: Vec<ModuleRequestRecord>,
         effective_fetch_metadata: ModuleFetchMetadata,
-        load_delay_token: crate::frame_owner_model::DocumentLoadDelayTokenId,
+        load_delay_token: crate::frame_owner_model::ChildDocumentModuleScriptLoadDelay,
     ) -> ModuleTreeId {
         self.child_document_modulator_store
             .record_compiled_parser_root(

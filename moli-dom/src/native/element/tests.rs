@@ -155,6 +155,56 @@ fn template_contents_uses_and_releases_rare_data() {
 }
 
 #[test]
+fn element_reference_state_is_owned_by_the_content_attribute() {
+    let mut element = Element::new_html("div");
+    assert!(element.set_attribute(
+        "aria-controls".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    element.set_explicit_element_references("aria-controls", vec![NativeNodeId::new(7)]);
+
+    assert!(!element.set_attribute(
+        "aria-controls".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert_eq!(element.explicit_element_references("aria-controls"), None);
+
+    element.set_explicit_element_references("aria-controls", vec![NativeNodeId::new(8)]);
+    assert!(element.set_attribute_ns(
+        "aria-controls".to_owned(),
+        "urn:example".to_owned(),
+        Some("x".to_owned()),
+        "foreign".to_owned(),
+    ));
+    assert_eq!(
+        element.explicit_element_references("aria-controls"),
+        Some([NativeNodeId::new(8)].as_slice())
+    );
+
+    assert!(element.remove_attribute("aria-controls"));
+    assert_eq!(element.explicit_element_references("aria-controls"), None);
+
+    assert!(element.set_attribute(
+        "popovertarget".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    element.set_explicit_element_references("popovertarget", vec![NativeNodeId::new(9)]);
+    assert!(!element.set_attribute(
+        "popovertarget".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert_eq!(element.explicit_element_references("popovertarget"), None);
+}
+
+#[test]
 fn html_element_interface_name_covers_replay_tags() {
     assert_eq!(html_element_interface_name("meta"), "HTMLMetaElement");
     assert_eq!(html_element_interface_name("span"), "HTMLSpanElement");
@@ -181,9 +231,69 @@ fn html_element_interface_name_covers_replay_tags() {
 fn svg_element_interface_name_specializes_standard_elements() {
     assert_eq!(svg_element_interface_name("a"), "SVGAElement");
     assert_eq!(svg_element_interface_name("circle"), "SVGCircleElement");
+    assert_eq!(svg_element_interface_name("clipPath"), "SVGClipPathElement");
     assert_eq!(svg_element_interface_name("defs"), "SVGDefsElement");
     assert_eq!(svg_element_interface_name("desc"), "SVGDescElement");
     assert_eq!(svg_element_interface_name("ellipse"), "SVGEllipseElement");
+    assert_eq!(svg_element_interface_name("feBlend"), "SVGFEBlendElement");
+    assert_eq!(
+        svg_element_interface_name("feColorMatrix"),
+        "SVGFEColorMatrixElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feComposite"),
+        "SVGFECompositeElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feConvolveMatrix"),
+        "SVGFEConvolveMatrixElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDiffuseLighting"),
+        "SVGFEDiffuseLightingElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDisplacementMap"),
+        "SVGFEDisplacementMapElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDistantLight"),
+        "SVGFEDistantLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feDropShadow"),
+        "SVGFEDropShadowElement"
+    );
+    assert_eq!(svg_element_interface_name("feFuncA"), "SVGFEFuncAElement");
+    assert_eq!(svg_element_interface_name("feFuncB"), "SVGFEFuncBElement");
+    assert_eq!(svg_element_interface_name("feFuncG"), "SVGFEFuncGElement");
+    assert_eq!(svg_element_interface_name("feFuncR"), "SVGFEFuncRElement");
+    assert_eq!(
+        svg_element_interface_name("feGaussianBlur"),
+        "SVGFEGaussianBlurElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feMorphology"),
+        "SVGFEMorphologyElement"
+    );
+    assert_eq!(svg_element_interface_name("feOffset"), "SVGFEOffsetElement");
+    assert_eq!(
+        svg_element_interface_name("fePointLight"),
+        "SVGFEPointLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feSpecularLighting"),
+        "SVGFESpecularLightingElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feSpotLight"),
+        "SVGFESpotLightElement"
+    );
+    assert_eq!(
+        svg_element_interface_name("feTurbulence"),
+        "SVGFETurbulenceElement"
+    );
+    assert_eq!(svg_element_interface_name("filter"), "SVGFilterElement");
     assert_eq!(
         svg_element_interface_name("foreignObject"),
         "SVGForeignObjectElement"
@@ -196,6 +306,8 @@ fn svg_element_interface_name_specializes_standard_elements() {
         "SVGLinearGradientElement"
     );
     assert_eq!(svg_element_interface_name("metadata"), "SVGMetadataElement");
+    assert_eq!(svg_element_interface_name("marker"), "SVGMarkerElement");
+    assert_eq!(svg_element_interface_name("mask"), "SVGMaskElement");
     assert_eq!(svg_element_interface_name("path"), "SVGPathElement");
     assert_eq!(svg_element_interface_name("pattern"), "SVGPatternElement");
     assert_eq!(svg_element_interface_name("polygon"), "SVGPolygonElement");
@@ -206,12 +318,15 @@ fn svg_element_interface_name_specializes_standard_elements() {
     );
     assert_eq!(svg_element_interface_name("rect"), "SVGRectElement");
     assert_eq!(svg_element_interface_name("script"), "SVGScriptElement");
+    assert_eq!(svg_element_interface_name("stop"), "SVGStopElement");
     assert_eq!(svg_element_interface_name("svg"), "SVGSVGElement");
     assert_eq!(svg_element_interface_name("symbol"), "SVGSymbolElement");
     assert_eq!(svg_element_interface_name("text"), "SVGTextElement");
+    assert_eq!(svg_element_interface_name("textPath"), "SVGTextPathElement");
     assert_eq!(svg_element_interface_name("title"), "SVGTitleElement");
     assert_eq!(svg_element_interface_name("tspan"), "SVGTSpanElement");
     assert_eq!(svg_element_interface_name("use"), "SVGUseElement");
+    assert_eq!(svg_element_interface_name("view"), "SVGViewElement");
     assert_eq!(svg_element_interface_name("style"), "SVGStyleElement");
     assert_eq!(svg_element_interface_name("custom"), "SVGElement");
 }
@@ -302,6 +417,127 @@ fn set_attribute_preserves_existing_prefix_on_update() {
     assert_eq!(attribute.prefix(), Some("lm"));
     assert_eq!(attribute.name(), "lm:kind");
     assert_eq!(attribute.value(), "after");
+}
+
+#[test]
+fn input_type_change_sanitizes_without_dirtying_default_value() {
+    let mut input = Element::new_html("input");
+    assert_eq!(input.input_value(), "");
+    assert!(!input.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "color".to_owned()));
+    assert_eq!(input.input_value(), "#000000");
+    assert!(!input.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "text".to_owned()));
+    assert_eq!(input.input_value(), "");
+    assert!(!input.input_value_dirty());
+
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "color".to_owned()));
+    assert!(input.set_input_value("#ffffff"));
+    assert!(input.input_value_dirty());
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "text".to_owned()));
+    assert_eq!(input.input_value(), "#ffffff");
+    assert!(input.input_value_dirty());
+}
+
+#[test]
+fn range_input_value_uses_live_min_max_and_step_attributes() {
+    let attribute = |name: &str, value: &str| {
+        Attribute::new(name.to_owned(), String::new(), None, value.to_owned())
+    };
+    let mut input = Element::new(
+        "input".to_owned(),
+        "http://www.w3.org/1999/xhtml".to_owned(),
+        None,
+        vec![
+            attribute("type", "range"),
+            attribute("min", "0"),
+            attribute("max", "100"),
+            attribute("step", "20"),
+            attribute("value", "40"),
+        ],
+    );
+
+    assert_eq!(input.input_value(), "40");
+    assert!(input.set_input_value(""));
+    assert_eq!(input.input_value(), "60");
+    assert!(input.input_value_dirty());
+
+    assert!(input.set_input_value("80"));
+    assert!(input.set_attribute("max".to_owned(), String::new(), None, "50".to_owned()));
+    assert_eq!(input.input_value(), "40");
+    assert!(input.input_value_dirty());
+
+    let defaulted = Element::new(
+        "input".to_owned(),
+        "http://www.w3.org/1999/xhtml".to_owned(),
+        None,
+        vec![
+            attribute("type", "range"),
+            attribute("min", "2"),
+            attribute("max", "6"),
+        ],
+    );
+    assert_eq!(defaulted.input_value(), "4");
+    assert!(!defaulted.input_value_dirty());
+}
+
+#[test]
+fn email_multiple_attribute_resanitizes_dirty_value() {
+    let mut input = Element::new_html("input");
+    assert!(input.set_attribute("type".to_owned(), String::new(), None, "email".to_owned()));
+    assert!(input.set_input_value("  first@example.com  , second@example.test  "));
+    assert_eq!(
+        input.input_value(),
+        "first@example.com  , second@example.test"
+    );
+    assert!(input.input_value_dirty());
+
+    assert!(input.set_attribute("multiple".to_owned(), String::new(), None, String::new()));
+    assert_eq!(input.input_value(), "first@example.com,second@example.test");
+    assert!(input.input_value_dirty());
+}
+
+#[test]
+fn heading_reflections_parse_range_and_modal_state() {
+    let mut heading = Element::new_html("h1");
+    assert_eq!(heading.heading_offset(), 0);
+    assert!(!heading.heading_reset());
+
+    for (raw, expected) in [
+        ("3", 3),
+        (" +7tail", 7),
+        ("20", 8),
+        ("429496729600", 8),
+        ("-0", 0),
+        ("-3", 0),
+        ("invalid", 0),
+        ("\u{000b}7", 0),
+    ] {
+        assert!(heading.set_attribute(
+            "headingoffset".to_owned(),
+            String::new(),
+            None,
+            raw.to_owned(),
+        ));
+        assert_eq!(heading.heading_offset(), expected, "{raw:?}");
+    }
+
+    assert!(heading.set_attribute(
+        "headingreset".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert!(heading.heading_reset());
+
+    let mut dialog = Element::new_html("dialog");
+    assert!(!dialog.heading_reset());
+    assert!(dialog.set_dialog_modal(true));
+    assert!(dialog.heading_reset());
+    assert!(dialog.set_dialog_modal(false));
+    assert!(!dialog.heading_reset());
 }
 
 #[test]

@@ -17,23 +17,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_lower_bound_callba
     let Some(parsed) = webidl::parse_args::<IdbKeyRangeLowerBoundArgs<'s>>(scope, &args) else {
         return;
     };
-    let lower = match parse_idb_key(scope, parsed.lower) {
-        Ok(Some(key)) => key,
-        _ => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'lowerBound': lower is not a valid key.",
-                "DataError",
-            );
-            scope.throw_exception(error);
-            return;
-        }
+    let Some(lower) = require_idb_key(scope, parsed.lower) else {
+        return;
     };
     let range = IdbKeyRangeQuery {
         lower: Some(lower),
         upper: None,
         lower_open: parsed.open,
-        upper_open: false,
+        upper_open: true,
     };
     if let Some(object) = create_key_range_object(scope, &range) {
         rv.set(object.into());

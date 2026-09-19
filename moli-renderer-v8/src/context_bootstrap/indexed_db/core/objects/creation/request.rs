@@ -1,44 +1,18 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::initialize_indexed_db_event_target;
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
-#[derive(WebApiObject)]
+#[derive(Default, WebApiObject)]
 #[webapi(prototype = "Object", interface = web_api_interfaces::IDBRequest)]
-struct IdbRequestObjectDeclaration<'scope> {
+struct IdbRequestObjectDeclaration {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
-
-    #[webapi(data_property, enumerable)]
-    source: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, enumerable)]
-    transaction: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property, enumerable, init = "undefined")]
-    result: (),
-
-    #[webapi(data_property, enumerable, init = "null")]
-    error: (),
-
-    #[webapi(data_property, enumerable)]
-    ready_state: &'static str,
-
-    #[webapi(data_property, enumerable, init = "null")]
-    onsuccess: (),
-
-    #[webapi(data_property, enumerable, init = "null")]
-    onerror: (),
 }
 
 #[derive(Default, WebApiObject)]
 #[webapi(prototype = "Object", interface = web_api_interfaces::IDBOpenDBRequest)]
-struct IdbOpenRequestHandlersDeclaration {
-    #[webapi(data_property, enumerable, init = "null")]
-    onupgradeneeded: (),
-
-    #[webapi(data_property, enumerable, init = "null")]
-    onblocked: (),
-}
+struct IdbOpenRequestObjectDeclaration {}
 
 pub(in crate::context_bootstrap::indexed_db) fn create_request_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -132,11 +106,9 @@ fn create_request_object_in_current_context<'s>(
     let transaction_value = transaction
         .map(Into::into)
         .unwrap_or_else(|| v8::null(scope).into());
-    let request = IdbRequestObjectDeclaration::new(source, transaction_value, "pending")
-        .bind(scope)
-        .ok()?;
+    let request = IdbRequestObjectDeclaration::default().bind(scope).ok()?;
     if is_open {
-        IdbOpenRequestHandlersDeclaration::default()
+        IdbOpenRequestObjectDeclaration::default()
             .initialize(scope, request)
             .ok()?;
     }
@@ -153,5 +125,6 @@ fn create_request_object_in_current_context<'s>(
     };
     register_indexed_db_wrapper_with_owner(scope, request, kind, owner, storage_scope);
     register_indexed_db_request_lifecycle(scope, request, source, transaction_value, false);
+    initialize_indexed_db_event_target(scope, request, if is_open { None } else { transaction });
     Some(request)
 }

@@ -88,6 +88,7 @@ pub(in crate::native_bridge) fn submit_form_with_submit_event(
     let form_can_dispatch_submit_event = {
         let runtime = unsafe { &*runtime_ptr };
         form_is_connected_or_in_detached_document(runtime, form_handle)
+            && !runtime.is_constructing_form_data_for(form_handle)
     };
     if !form_can_dispatch_submit_event {
         return false;
@@ -127,6 +128,25 @@ fn submit_form_with_submit_event_inner(
     submitter_handle: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let blocked_by_unclosed_form_control = {
+        let runtime = unsafe { &*runtime_ptr };
+        form_control_elements(runtime, form_handle)
+            .into_iter()
+            .any(|handle| {
+                runtime
+                    .dom_host()
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(Element::blocks_form_submission)
+            })
+    };
+    if blocked_by_unclosed_form_control {
+        if let Some(event) = construct_simple_event(scope, "error", false, false, false) {
+            let _ = dispatch_public_event(scope, runtime_ptr, form_handle, event);
+        }
+        return false;
+    }
+
     let skips_constraint_validation = {
         let runtime = unsafe { &*runtime_ptr };
         form_submission_skips_constraint_validation(runtime, form_handle, submitter_handle)
@@ -400,6 +420,11 @@ pub(in crate::native_bridge) fn reset_form_default_action(
                 did_change |= runtime
                     .dom_host_mut()
                     .set_select_explicit_none_state(handle, false);
+                did_change |= runtime.sync_selectedcontents_for_select_in_reaction_scope(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                );
             }
             FormResetPlan::Output { handle, value } => {
                 did_change |= runtime.dom_host_mut().set_text_content(handle, &value);
@@ -435,6 +460,15 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     submitter: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let form_can_submit = {
+        let runtime = unsafe { &*runtime_ptr };
+        form_is_connected_or_in_detached_document(runtime, form_handle)
+            && !runtime.is_constructing_form_data_for(form_handle)
+    };
+    if !form_can_submit {
+        return false;
+    }
+
     let method = {
         let runtime = unsafe { &*runtime_ptr };
         resolve_form_submission_method(runtime, form_handle, submitter)
@@ -463,6 +497,9 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     else {
         return false;
     };
+    if !form_is_connected_or_in_detached_document(unsafe { &*runtime_ptr }, form_handle) {
+        return false;
+    }
 
     let special_target = target_name
         .as_deref()
@@ -510,23 +547,32 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                     content_type,
                     form_data_entries,
                 } => {
+                    let Some(target_handle) = target_handle else {
+                        return false;
+                    };
+                    let history = crate::context_bootstrap::FormNavigationHistory::capture(
+                        scope,
+                        unsafe { &mut *runtime_ptr },
+                        source_document,
+                        Some(target_handle),
+                        &resolved_url,
+                        None,
+                    );
                     if !dispatch_named_iframe_form_navigation_event(
                         scope,
                         runtime_ptr,
-                        target_name,
+                        target_handle,
                         form_handle,
                         submitter,
-                        source_document,
                         resolved_url.as_str(),
                         &form_data_entries,
+                        history.mutation.navigation_type(),
                     ) {
                         return true;
                     }
                     let navigated = queue_deferred_named_iframe_target_request(
-                        scope,
                         runtime_ptr,
-                        target_name,
-                        source_document,
+                        target_handle,
                         ChildBrowsingContextNavigationRequest {
                             url: resolved_url,
                             method: "POST".to_owned(),
@@ -536,6 +582,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
                                 content_type.to_owned(),
                             )],
                         },
+                        history,
                     );
                     if let Some(target_handle) = navigated {
                         unsafe { &mut *runtime_ptr }.mark_pending_form_submission_child_navigation(
@@ -653,28 +700,14 @@ enum FormSubmissionMethod {
 fn dispatch_named_iframe_form_navigation_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    target_name: &str,
+    target_iframe: DomHandle,
     form_handle: DomHandle,
     submitter: Option<DomHandle>,
-    source_document: Option<DomHandle>,
     resolved_url: &str,
     form_data_entries: &[(String, v8::Global<v8::Value>)],
+    navigation_type: &str,
 ) -> bool {
     let runtime = unsafe { &mut *runtime_ptr };
-    let target_iframe = source_document
-        .and_then(|document| {
-            runtime.child_browsing_context_handle_by_name_for_navigation_from_document(
-                scope,
-                target_name,
-                document,
-            )
-        })
-        .or_else(|| {
-            runtime.child_browsing_context_handle_by_name_for_navigation(scope, target_name)
-        });
-    let Some(target_iframe) = target_iframe else {
-        return true;
-    };
     let Some(window) = runtime.existing_child_browsing_context_window_wrapper(scope, target_iframe)
     else {
         return true;
@@ -684,10 +717,11 @@ fn dispatch_named_iframe_form_navigation_event(
     };
     let source_handle = submitter.unwrap_or(form_handle);
     let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-    crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_form_data(
+    crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
         scope,
         window,
         resolved_url,
+        navigation_type,
         source_element,
         false,
         None,
@@ -711,11 +745,22 @@ fn submit_post_form_to_top_level_browsing_context(
     };
     let source_handle = submitter.unwrap_or(form_handle);
     let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-    let navigation_type = if user_initiated { "push" } else { "replace" };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let source_document = runtime.dom_host().owner_document_handle(form_handle);
+    // Keep an input-initiated POST on its existing explicit push path.
+    // Ambient activation does not turn form.submit() into an input submission.
+    let history = crate::context_bootstrap::FormNavigationHistory::capture(
+        scope,
+        runtime,
+        source_document,
+        None,
+        &resolved_url,
+        user_initiated.then_some(moli_page_types::NavigationHistoryMutation::Push),
+    );
     if !crate::context_bootstrap::dispatch_top_level_form_navigation_event(
         scope,
         resolved_url.as_str(),
-        navigation_type,
+        history.mutation.navigation_type(),
         source_element,
         user_initiated,
         form_data,
@@ -727,7 +772,7 @@ fn submit_post_form_to_top_level_browsing_context(
         "POST".to_owned(),
         Some(body),
         vec![("Content-Type".to_owned(), content_type)],
-        None,
+        history.entry_seed,
         moli_fetch::BrowserNavigationRequestKind::Navigate,
     );
     true
@@ -757,6 +802,14 @@ fn submit_post_form_to_child_self_browsing_context(
     }) else {
         return false;
     };
+    let history = crate::context_bootstrap::FormNavigationHistory::capture(
+        scope,
+        unsafe { &mut *runtime_ptr },
+        Some(source_document),
+        Some(child_handle),
+        &resolved_url,
+        None,
+    );
     if let Some(window) = unsafe { &mut *runtime_ptr }
         .existing_child_browsing_context_window_wrapper(scope, child_handle)
     {
@@ -765,10 +818,11 @@ fn submit_post_form_to_child_self_browsing_context(
         };
         let source_handle = submitter.unwrap_or(form_handle);
         let source_element = wrap_handle_object(scope, runtime_ptr, source_handle);
-        if !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_form_data(
+        if !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
             scope,
             window,
             resolved_url.as_str(),
+            history.mutation.navigation_type(),
             source_element,
             false,
             None,
@@ -777,8 +831,7 @@ fn submit_post_form_to_child_self_browsing_context(
             return true;
         }
     }
-    unsafe { &mut *runtime_ptr }.navigate_child_browsing_context_with_request(
-        scope,
+    unsafe { &mut *runtime_ptr }.queue_deferred_child_form_navigation_request(
         child_handle,
         ChildBrowsingContextNavigationRequest {
             url: resolved_url,
@@ -786,6 +839,8 @@ fn submit_post_form_to_child_self_browsing_context(
             body: Some(body),
             request_headers: vec![("Content-Type".to_owned(), content_type)],
         },
+        history.entry_seed,
+        history.mutation,
     )
 }
 

@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function worker_url(source) {
   return "data:text/javascript," + encodeURIComponent(source);
@@ -17,7 +18,7 @@ function next_message(worker) {
   });
 }
 
-async function assert_worker_error(source, expectedFragments, description) {
+async function assert_worker_error(source, description) {
   const previousOnerror = window.onerror;
   let messageSeen = false;
   const worker = new Worker(worker_url(source), { type: "module" });
@@ -37,11 +38,7 @@ async function assert_worker_error(source, expectedFragments, description) {
       };
     });
 
-    assert_equals(event.type, "error", description + " should dispatch an error event");
-    const lowerMessage = String(event.message).toLowerCase();
-    assert_true(expectedFragments.every(function (fragment) {
-      return lowerMessage.indexOf(fragment.toLowerCase()) !== -1;
-    }), description + " should expose the expected error reason");
+    assert_worker_bootstrap_error(event, worker);
     assert_false(messageSeen, description + " should stop module evaluation");
   } finally {
     window.onerror = previousOnerror;
@@ -107,7 +104,6 @@ promise_test(async function () {
       "import config from " + JSON.stringify(jsonUrl) + ";",
       "postMessage(config);",
     ].join("\n"),
-    ["json"],
     "HTTP JSON MIME without type=json",
   );
 
@@ -116,7 +112,6 @@ promise_test(async function () {
       "import value from " + JSON.stringify(javascriptJsonPathUrl) + " with { type: 'json' };",
       "postMessage(value);",
     ].join("\n"),
-    ["json"],
     "HTTP JavaScript MIME with type=json",
   );
 
@@ -125,7 +120,6 @@ promise_test(async function () {
       "import value from " + JSON.stringify(plainJsonUrl) + " with { type: 'json' };",
       "postMessage(value);",
     ].join("\n"),
-    ["json"],
     "HTTP text/plain JSON-like body with type=json",
   );
 }, "Dedicated module workers reject HTTP JSON import-attribute mismatches by Content-Type");

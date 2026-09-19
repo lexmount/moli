@@ -13,15 +13,13 @@ use crate::callback_invocation::{CallbackInvocationOutcome, CallbackInvoker};
 use crate::context_bootstrap::{
     EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
     SimpleObjectEventListenerSnapshot, dispatch_message_port_events_for_port_collecting_errors,
-    dispatch_service_worker_controller_change, ensure_message_port_wrapper_for_id,
-    event_internal_bool_flag, mark_event_trusted, runtime_message_allowed_for_current_target,
-    set_event_internal_flag, simple_object_event_listeners_snapshot,
-    simple_object_event_remove_listener_value_for_type,
-    structured_deserialize_value_for_message_event,
+    dispatch_service_worker_controller_change, dispatch_simple_event_target_event,
+    ensure_message_port_wrapper_for_id, event_internal_bool_flag, mark_event_trusted,
+    runtime_message_allowed_for_current_target, set_event_internal_flag,
+    simple_object_event_listeners_snapshot, structured_deserialize_value_for_message_event,
 };
 use crate::exception_reporting::{
-    CallbackExceptionLogLevel, V8ExceptionReport, invoke_callback_with_report,
-    log_unhandled_promise_rejection,
+    CallbackExceptionLogLevel, V8ExceptionReport, log_unhandled_promise_rejection,
 };
 use crate::network_host::{
     MaterializedResponseBody, MaterializedResponseHead,
@@ -29,9 +27,8 @@ use crate::network_host::{
     close_pending_network_body_stream, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, materialize_response_object_body,
     materialize_response_object_body_with_chunk_callback,
-    materialize_response_object_head_for_service_worker_respond_with,
-    materialized_body_bytes_from_value, new_network_body_source_id,
-    set_request_destination_for_service_worker_fetch_event,
+    materialize_response_object_internal_head, materialized_body_bytes_from_value,
+    new_network_body_source_id, set_request_destination_for_service_worker_fetch_event,
     set_request_mode_for_service_worker_fetch_event,
     set_request_reload_navigation_for_service_worker_fetch_event,
 };
@@ -124,21 +121,6 @@ struct WorkerPromiseRejectionEventInitDeclaration<'scope> {
     promise: v8::Local<'scope, v8::Promise>,
     #[webapi(data_property, enumerable)]
     reason: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::ErrorEvent, prototype = "Object")]
-struct WorkerErrorEventFallbackDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    message: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    filename: v8::Local<'scope, v8::String>,
-    #[webapi(data_property, enumerable)]
-    lineno: u32,
-    #[webapi(data_property, enumerable)]
-    colno: u32,
-    #[webapi(data_property, enumerable)]
-    error: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -469,9 +451,26 @@ fn pending_worker_promise_rejection_matches<'s>(
 pub(super) fn perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(
     scope: &mut v8::PinScope<'_, '_>,
 ) {
+    let Some(_checkpoint_scope) = crate::script_cleanup::MicrotaskCheckpointScope::enter(scope)
+    else {
+        return;
+    };
     scope.perform_microtask_checkpoint();
     queue_pending_worker_promise_rejection_task(scope);
     crate::context_bootstrap::run_end_of_microtask_checkpoint_tasks(scope);
+}
+
+pub(crate) fn perform_callback_cleanup_checkpoint_if_worker(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> bool {
+    if scope
+        .get_slot::<WorkerPromiseRejectDispatchSlot>()
+        .is_none()
+    {
+        return false;
+    }
+    perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+    true
 }
 
 fn queue_pending_worker_promise_rejection_task(scope: &mut v8::PinScope<'_, '_>) {
@@ -509,6 +508,9 @@ fn flush_pending_worker_promise_rejections(scope: &mut v8::PinScope<'_, '_>) {
 
     for rejection in pending {
         let promise = v8::Local::new(scope, &rejection.promise);
+        if promise.has_handler() {
+            continue;
+        }
         let reason = rejection
             .reason
             .as_ref()
@@ -565,6 +567,15 @@ unsafe extern "C" fn worker_promise_reject_callback(message: v8::PromiseRejectMe
 
     match message.get_event() {
         v8::PromiseRejectEvent::PromiseRejectWithNoHandler => {
+            if scope
+                .get_current_host_defined_options()
+                .is_some_and(|options| {
+                    crate::util::script_muted_errors_from_host_defined_options(scope, options)
+                        == Some(true)
+                })
+            {
+                return;
+            }
             let promise = message.get_promise();
             let mut pending = pending_unhandled_rejections.borrow_mut();
             if pending.iter().any(|rejection| {
@@ -685,6 +696,8 @@ fn clear_event_dispatch_fields(scope: &mut v8::PinScope<'_, '_>, event: v8::Loca
         EVENT_DISPATCHING_SLOT,
         v8::Boolean::new(scope, false).into(),
     );
+    set_event_internal_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT, false);
+    set_event_internal_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, false);
 }
 
 fn worker_event_prevent_default_callback(
@@ -754,40 +767,31 @@ fn new_worker_error_event<'s>(
     default_url: &str,
     exception: Option<v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    let filename = report.source.as_deref().unwrap_or(default_url);
-    let line = report.line.unwrap_or(0);
-    let col = report.column.unwrap_or(0);
-    if let Some(error_ctor) = global
-        .get(scope, v8str(scope, "ErrorEvent").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let init = WorkerErrorEventInitDeclaration::new(
-            v8::String::new(scope, &report.summary).unwrap(),
-            v8::String::new(scope, filename).unwrap(),
-            line as u32,
-            col as u32,
-            exception.unwrap_or_else(|| v8::undefined(scope).into()),
-        )
-        .bind(scope)
-        .expect("worker ErrorEvent init declaration should bind");
-        if let Some(event) = error_ctor.new_instance(
+    let constructor =
+        crate::context_bootstrap::exposed_interfaces::ensure_intrinsic_interface_constructor(
             scope,
-            &[v8::String::new(scope, "error").unwrap().into(), init.into()],
-        ) {
-            return event;
-        }
-    }
-
-    let event = new_worker_event_object(scope, "error");
-    let _ = WorkerErrorEventFallbackDeclaration::new(
+            "ErrorEvent",
+        )
+        .expect("worker ErrorEvent intrinsic should be available");
+    let error = exception.unwrap_or_else(|| v8::null(scope).into());
+    let init = WorkerErrorEventInitDeclaration::new(
         v8::String::new(scope, &report.summary).unwrap(),
-        v8::String::new(scope, filename).unwrap(),
-        line as u32,
-        col as u32,
-        exception.unwrap_or_else(|| v8::undefined(scope).into()),
+        v8::String::new(scope, report.source.as_deref().unwrap_or(default_url)).unwrap(),
+        report.line.unwrap_or(0) as u32,
+        report.column.unwrap_or(0) as u32,
+        error,
     )
-    .initialize(scope, event);
+    .bind(scope)
+    .expect("worker ErrorEvent init declaration should bind");
+    assert_eq!(
+        init.set_prototype(scope, v8::null(scope).into()),
+        Some(true)
+    );
+    let event_type = v8::String::new(scope, "error").unwrap();
+    let event = constructor
+        .new_instance(scope, &[event_type.into(), init.into()])
+        .expect("worker ErrorEvent should construct from native init values");
+    mark_event_trusted(scope, event);
     event
 }
 
@@ -849,6 +853,7 @@ fn dispatch_worker_promise_rejection_event<'s>(
             listener,
             global,
             event,
+            event_type,
             "WorkerGlobalScope promise rejection listener",
         ) {
             let (report, exception) = *error;
@@ -861,16 +866,6 @@ fn dispatch_worker_promise_rejection_event<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -987,8 +982,17 @@ fn invoke_worker_listener<'s>(
     listener: &SimpleObjectEventListenerSnapshot<'s>,
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
+    event_type: &str,
     callback_name: &str,
 ) -> Result<(), WorkerExceptionError> {
+    if event_stop_immediate_propagation(scope, event) {
+        return Ok(());
+    }
+    let Some(listener) =
+        listener.prepare_for_invocation(scope, target, WORKER_GLOBAL_LISTENERS_SLOT, event_type)
+    else {
+        return Ok(());
+    };
     let arguments = [event.into()];
     let invocation = listener.invocation(target.into(), &arguments, Some(event));
     match CallbackInvoker::invoke(
@@ -1010,101 +1014,34 @@ fn invoke_worker_listener<'s>(
     }
 }
 
+struct WorkerErrorReportingScope(Rc<RefCell<super::WorkerGlobalState>>);
+
+impl Drop for WorkerErrorReportingScope {
+    fn drop(&mut self) {
+        self.0.borrow_mut().in_error_reporting_mode = false;
+    }
+}
+
 pub(super) fn dispatch_worker_error_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     global: v8::Local<'s, v8::Object>,
     report: &V8ExceptionReport,
     exception: Option<v8::Local<'s, v8::Value>>,
-    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
+    let _reporting_scope = if let Some(state) = get_worker_state(scope) {
+        if state.borrow().in_error_reporting_mode {
+            // A nested exception remains unhandled and propagates to the
+            // parent, without recursively firing another local error event.
+            return false;
+        }
+        state.borrow_mut().in_error_reporting_mode = true;
+        Some(WorkerErrorReportingScope(state))
+    } else {
+        None
+    };
     let event = new_worker_error_event(scope, report, script_url, exception);
-    set_event_dispatch_fields(scope, global, event);
-
-    let message = v8::String::new(scope, &report.summary).unwrap();
-    let filename = v8::String::new(scope, report.source.as_deref().unwrap_or(script_url)).unwrap();
-    let lineno = v8::Integer::new_from_unsigned(scope, report.line.unwrap_or(0) as u32);
-    let colno = v8::Integer::new_from_unsigned(scope, report.column.unwrap_or(0) as u32);
-    let error_value = exception.unwrap_or_else(|| v8::undefined(scope).into());
-
-    if let Some(handler) = global
-        .get(scope, v8str(scope, "onerror").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        match invoke_callback_with_report(
-            scope,
-            "callback",
-            "worker global onerror threw",
-            crate::exception_reporting::CallbackExceptionLogLevel::Error,
-            "WorkerGlobalScope.onerror",
-            handler,
-            global.into(),
-            &[
-                message.into(),
-                filename.into(),
-                lineno.into(),
-                colno.into(),
-                error_value,
-            ],
-        ) {
-            Ok(returned) => {
-                if v8::Local::new(scope, &returned).is_true() {
-                    let _ = event.set(
-                        scope,
-                        v8str(scope, "defaultPrevented").into(),
-                        v8::Boolean::new(scope, true).into(),
-                    );
-                }
-            }
-            Err(nested_report) => {
-                report_exception_to_parent(
-                    &nested_report,
-                    script_url,
-                    WorkerParentErrorEventKind::ErrorEvent,
-                    parent_tx,
-                );
-            }
-        }
-    }
-
-    let listeners = simple_object_event_listeners_snapshot(
-        scope,
-        global,
-        WORKER_GLOBAL_LISTENERS_SLOT,
-        "error",
-    );
-    for listener in &listeners {
-        if let Err(nested_report) = invoke_worker_listener(
-            scope,
-            listener,
-            global,
-            event,
-            "WorkerGlobalScope error listener",
-        ) {
-            let (nested_report, nested_exception) = *nested_report;
-            let _ = nested_exception;
-            report_exception_to_parent(
-                &nested_report,
-                script_url,
-                WorkerParentErrorEventKind::ErrorEvent,
-                parent_tx,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "error",
-                listener.original,
-                listener.capture,
-            );
-        }
-    }
-
-    let handled = event_bool_property(scope, event, "defaultPrevented");
-    clear_event_dispatch_fields(scope, event);
-    handled
+    !dispatch_simple_event_target_event(scope, global, WORKER_GLOBAL_LISTENERS_SLOT, "error", event)
 }
 
 pub(super) fn dispatch_service_worker_lifecycle_event(
@@ -1323,6 +1260,7 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
             listener,
             global,
             event_object,
+            event_type,
             "ServiceWorkerGlobalScope lifecycle listener",
         ) {
             let (report, exception) = *error;
@@ -1335,16 +1273,6 @@ fn dispatch_service_worker_lifecycle_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1449,6 +1377,7 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "fetch",
             "ServiceWorkerGlobalScope fetch listener",
         ) {
             let (report, exception) = *error;
@@ -1461,16 +1390,6 @@ fn dispatch_service_worker_fetch_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "fetch",
-                listener.original,
-                listener.capture,
             );
         }
         if event_stop_immediate_propagation(scope, event_object) {
@@ -1540,6 +1459,7 @@ fn dispatch_service_worker_message_event_in_context<'s>(
             listener,
             global,
             event_object,
+            event_type,
             "ServiceWorkerGlobalScope message listener",
         ) {
             let (report, exception) = *error;
@@ -1552,16 +1472,6 @@ fn dispatch_service_worker_message_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1627,6 +1537,7 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
             listener,
             global,
             event_object,
+            event_type,
             "ServiceWorkerGlobalScope notification listener",
         ) {
             let (report, exception) = *error;
@@ -1639,16 +1550,6 @@ fn dispatch_service_worker_notification_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1702,6 +1603,7 @@ fn dispatch_service_worker_push_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "push",
             "ServiceWorkerGlobalScope push listener",
         ) {
             let (report, exception) = *error;
@@ -1714,16 +1616,6 @@ fn dispatch_service_worker_push_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "push",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1781,6 +1673,7 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "sync",
             "ServiceWorkerGlobalScope sync listener",
         ) {
             let (report, exception) = *error;
@@ -1793,16 +1686,6 @@ fn dispatch_service_worker_sync_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "sync",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -1864,6 +1747,7 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
             listener,
             global,
             event_object,
+            "periodicsync",
             "ServiceWorkerGlobalScope periodicsync listener",
         ) {
             let (report, exception) = *error;
@@ -1876,16 +1760,6 @@ fn dispatch_service_worker_periodic_sync_event_in_context<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "periodicsync",
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -3180,7 +3054,7 @@ fn service_worker_respond_with_settled<'s>(
         return;
     };
     let result = if fulfilled {
-        match materialize_response_object_head_for_service_worker_respond_with(
+        match materialize_response_object_internal_head(
             scope,
             args.get(0),
             "FetchEvent.respondWith",
@@ -3196,6 +3070,8 @@ fn service_worker_respond_with_settled<'s>(
                     );
                     return;
                 }
+                let body_is_null =
+                    crate::network_host::body_stream_object(scope, response).is_none();
                 let body_source_id = new_network_body_source_id();
                 let (body, stream_cancel_handle) =
                     build_service_worker_respond_with_stream_chunk_callback(
@@ -3223,7 +3099,7 @@ fn service_worker_respond_with_settled<'s>(
                     });
                 match body {
                     MaterializedResponseBody::Ready(body) => ServiceWorkerFetchResult::Response(
-                        service_worker_fetch_response_from_materialized(head, body),
+                        service_worker_fetch_response_from_materialized(head, body, body_is_null),
                     ),
                     MaterializedResponseBody::Pending(promise) => {
                         let stream_body = stream_cancel_handle.is_some();
@@ -3357,9 +3233,12 @@ fn service_worker_respond_with_lifetime_settled_for_event(
 fn service_worker_fetch_response_from_materialized(
     head: MaterializedResponseHead,
     body: Vec<u8>,
+    body_is_null: bool,
 ) -> ServiceWorkerFetchResponse {
     let response = head.with_body(body);
     ServiceWorkerFetchResponse {
+        body_is_null,
+        cors_exposed_header_names: response.cors_exposed_header_names,
         final_url: response.final_url,
         response_type: response.response_type,
         redirected: response.redirected,
@@ -3374,6 +3253,8 @@ fn service_worker_fetch_response_head_from_materialized(
     head: &MaterializedResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        cors_exposed_header_names: head.cors_exposed_header_names.clone(),
+        status_text: head.status_text.clone(),
         final_url: head.final_url.clone(),
         response_type: head.response_type.clone(),
         redirected: head.redirected,
@@ -3565,6 +3446,7 @@ fn start_service_worker_navigation_preload_response_in_context(
     };
 
     let head = moli_fetch::ResponseHead {
+        status_text: Some(started.response_head.status_text.clone()),
         final_url: started
             .response_head
             .final_url
@@ -3582,7 +3464,12 @@ fn start_service_worker_navigation_preload_response_in_context(
     let response_object = build_navigation_preload_response_object_from_stream_for_request_mode(
         scope,
         &started.request_url,
-        started.request_mode,
+        crate::network_host::FetchResponseRequest {
+            method: &started.request_method,
+            mode: started.request_mode,
+            // Navigation preload always fetches with manual redirects.
+            redirect_mode: moli_fetch::RequestRedirectMode::Manual,
+        },
         head,
         started.body_source_id,
     );
@@ -3867,7 +3754,7 @@ fn service_worker_respond_with_body_settled_for_event(
                 pending.pending_respond_with_stream_body_source_id = None;
                 pending.pending_respond_with_stream_cancel_handle = None;
                 ServiceWorkerFetchResult::Response(service_worker_fetch_response_from_materialized(
-                    head, body,
+                    head, body, false,
                 ))
             }
             Err(error) => {
@@ -4100,6 +3987,10 @@ fn maybe_send_service_worker_lifecycle_completion(
             return;
         }
         let completion = pending.completion.clone();
+        if completion.kind == ServiceWorkerLifecycleEventKind::Install {
+            state.service_worker_can_import_new_scripts = false;
+            state.service_worker_updated_script_resources.clear();
+        }
         state
             .pending_service_worker_lifecycle_events
             .remove(&event_id);
@@ -4341,9 +4232,27 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) -> bool {
-    apply_worker_exception_location_overrides(scope, &mut report, exception);
-    let handled =
-        dispatch_worker_error_event(scope, global, &report, exception, parent_tx, script_url);
+    // Initial module evaluation failures can arrive after V8 has unwound
+    // the script or rejection job. Keep their error listeners in one checkpoint.
+    let owns_error_checkpoint = matches!(parent_phase, WorkerErrorPhase::Bootstrap)
+        || matches!(source, WorkerErrorSource::InitialScriptEvaluation);
+    let execution_scope =
+        owns_error_checkpoint.then(|| crate::script_cleanup::ScriptExecutionScope::enter(scope));
+    let exception = if report.muted_errors {
+        report.summary = "Script error.".to_owned();
+        report.source = Some(String::new());
+        report.line = Some(0);
+        report.column = Some(0);
+        report.source_line = None;
+        report.stack = None;
+        report.callback_context = None;
+        report.exception = None;
+        Some(v8::null(scope).into())
+    } else {
+        apply_worker_exception_location_overrides(scope, &mut report, exception);
+        exception
+    };
+    let handled = dispatch_worker_error_event(scope, global, &report, exception, script_url);
     if !handled {
         report_exception_to_parent_with_phase_and_source(
             &report,
@@ -4353,6 +4262,10 @@ pub(super) fn dispatch_worker_exception_with_phase_and_source<'s>(
             source,
             parent_tx,
         );
+    }
+    drop(execution_scope);
+    if owns_error_checkpoint {
+        crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     }
     handled
 }
@@ -4381,6 +4294,7 @@ fn dispatch_worker_global_message_event<'s>(
             listener,
             global,
             event,
+            event_type,
             "WorkerGlobalScope message listener",
         ) {
             let (report, exception) = *error;
@@ -4393,16 +4307,6 @@ fn dispatch_worker_global_message_event<'s>(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                event_type,
-                listener.original,
-                listener.capture,
             );
         }
     }
@@ -4498,6 +4402,7 @@ pub(super) fn dispatch_shared_worker_connect_event(
             listener,
             global,
             event,
+            "connect",
             "SharedWorkerGlobalScope connect listener",
         ) {
             let (report, exception) = *error;
@@ -4510,16 +4415,6 @@ pub(super) fn dispatch_shared_worker_connect_event(
                 WorkerParentErrorEventKind::ErrorEvent,
                 parent_tx,
                 script_url,
-            );
-        }
-        if listener.once {
-            simple_object_event_remove_listener_value_for_type(
-                scope,
-                global,
-                WORKER_GLOBAL_LISTENERS_SLOT,
-                "connect",
-                listener.original,
-                listener.capture,
             );
         }
     }

@@ -488,6 +488,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) use_cors_preflight: bool,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -498,6 +499,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            use_cors_preflight: false,
         }
     }
 }
@@ -520,6 +522,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: false,
+        use_cors_preflight: request.use_cors_preflight(),
     }
 }
 
@@ -625,12 +628,14 @@ pub(crate) struct ServiceWorkerFetchEvent {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ServiceWorkerFetchResponse {
+    pub(crate) cors_exposed_header_names: Option<Vec<String>>,
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, String)>,
+    pub(crate) body_is_null: bool,
     pub(crate) body: Vec<u8>,
 }
 
@@ -661,6 +666,7 @@ pub(crate) struct ServiceWorkerNavigationPreloadResponseStarted {
     pub(crate) event_id: ServiceWorkerEventId,
     pub(crate) owner: ServiceWorkerRunOwner,
     pub(crate) request_url: Url,
+    pub(crate) request_method: String,
     pub(crate) request_mode: moli_fetch::RequestMode,
     pub(crate) body_source_id: NetworkBodySourceId,
     pub(crate) response_head: MaterializedServiceWorkerFetchResponseHead,
@@ -690,10 +696,12 @@ pub(crate) struct ServiceWorkerNavigationPreloadFailure {
 
 #[derive(Clone, Debug)]
 pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
+    pub(crate) cors_exposed_header_names: Option<Vec<String>>,
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
+    pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, String)>,
 }
 
@@ -708,6 +716,7 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 pub(crate) struct ServiceWorkerDirectFetchResponse {
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(crate) from_network_fallback: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -720,6 +729,7 @@ pub(crate) struct ServiceWorkerFetchCompletion {
 pub(crate) struct ServiceWorkerFetchDispatch {
     pub(crate) internal_id: u64,
     pub(crate) request: ServiceWorkerFetchRequest,
+    pub(crate) redirect_check: Option<moli_fetch::RequestRedirectCheck>,
     pub(crate) cors_preflight_request_headers: Vec<(String, String)>,
     pub(crate) request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
     pub(crate) network_context: AsyncSubresourceNetworkContext,

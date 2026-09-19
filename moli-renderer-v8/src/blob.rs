@@ -1,7 +1,8 @@
-use crate::web_api_interfaces;
+use crate::context_bootstrap::media_source::{MediaSourceObject, media_source_object};
+use crate::{native_bridge, web_api_interfaces};
 use moli_file_api::{
-    BlobId, BlobLineEndings, BlobStore, blob_slice_relative_index, clamp_blob_long_long,
-    normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,
+    BlobId, BlobLineEndings, BlobStore, ObjectUrlData, ObjectUrlTarget, blob_slice_relative_index,
+    clamp_blob_long_long, normalize_blob_line_endings_with_native_ending, normalize_blob_mime_type,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::sync::{Arc, OnceLock};
@@ -15,6 +16,7 @@ use super::{
 
 const BLOB_ID_SLOT: &str = "__lmBlobId";
 const BLOB_PROTOTYPE_SLOT: &str = "__lmBlobPrototype";
+const BLOB_REALM_PROTOTYPE_SLOT: &str = "__lmBlobRealmPrototype";
 
 fn native_blob_line_ending() -> &'static str {
     if moli_browser_profile::DEFAULT_WINDOW_SURFACE_PROFILE
@@ -49,8 +51,13 @@ struct ObjectUrlAccessKey {
     storage_key: moli_storage_key::MoliStorageKey,
 }
 
-type RendererBlobStore =
-    BlobStore<ResourceOwnerId, RendererStoragePartitionIdentity, ObjectUrlAccessKey>;
+type RendererBlobStore = BlobStore<
+    ResourceOwnerId,
+    RendererStoragePartitionIdentity,
+    ObjectUrlAccessKey,
+    crate::content_security_policy::ContentSecurityPolicySource,
+    Arc<MediaSourceObject>,
+>;
 
 static BLOB_STORE: OnceLock<RendererBlobStore> = OnceLock::new();
 
@@ -119,6 +126,10 @@ fn blob_size_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let size = blob_bytes_from_object(scope, args.this())
         .map(|bytes| bytes.len() as f64)
         .unwrap_or(0.0);
@@ -130,6 +141,10 @@ fn blob_type_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let mime_type = blob_mime_type_from_object(scope, args.this()).unwrap_or_default();
     if let Some(value) = v8_string(scope, &mime_type) {
         rv.set(value.into());
@@ -143,6 +158,10 @@ pub(super) fn blob_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        set_rejected_type_error_promise(scope, &mut rv, "Illegal invocation");
+        return;
+    }
     let text = blob_bytes_from_object(scope, args.this())
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .unwrap_or_default();
@@ -158,6 +177,10 @@ pub(super) fn blob_array_buffer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        set_rejected_type_error_promise(scope, &mut rv, "Illegal invocation");
+        return;
+    }
     let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
     let value = array_buffer_from_bytes(scope, bytes)
         .map(|buffer| buffer.into())
@@ -170,6 +193,10 @@ pub(super) fn blob_bytes_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        set_rejected_type_error_promise(scope, &mut rv, "Illegal invocation");
+        return;
+    }
     let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
     let value = new_uint8_array_from_bytes(scope, bytes)
         .map(|array| array.into())
@@ -182,6 +209,10 @@ pub(super) fn blob_stream_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let Some(bytes) = blob_bytes_from_object(scope, args.this()) else {
         rv.set(v8::undefined(scope).into());
         return;
@@ -205,6 +236,10 @@ pub(super) fn blob_slice_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !is_blob_object(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let bytes = blob_bytes_from_object(scope, args.this()).unwrap_or_default();
     let size = bytes.len();
     let start = clamped_long_long_arg(scope, &args, 0).unwrap_or(0);
@@ -225,7 +260,11 @@ pub(super) fn blob_slice_callback<'s>(
         .map(ToOwned::to_owned)
         .unwrap_or_default();
 
-    if let Some(blob) = build_blob_object(scope, sliced, mime_type) {
+    let prototype = blob_realm_prototype_from_object(scope, args.this())
+        .or_else(|| current_realm_blob_prototype(scope));
+    if let Some(blob) = prototype
+        .and_then(|prototype| build_blob_object_with_prototype(scope, sliced, mime_type, prototype))
+    {
         rv.set(blob.into());
     } else {
         rv.set(v8::undefined(scope).into());
@@ -244,6 +283,9 @@ pub(super) fn init_blob_object<'s>(
     BlobInstanceDeclaration::new(v8::BigInt::new_from_u64(scope, blob_id))
         .initialize(scope, object)
         .expect("Blob instance declaration should initialize");
+    if let Some(prototype) = current_realm_blob_prototype(scope) {
+        set_private_value(scope, object, BLOB_REALM_PROTOTYPE_SLOT, prototype.into());
+    }
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
     blob_id
 }
@@ -253,14 +295,39 @@ pub(super) fn build_blob_object<'s>(
     bytes: Vec<u8>,
     mime_type: String,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let prototype = current_realm_blob_prototype(scope)?;
+    build_blob_object_with_prototype(scope, bytes, mime_type, prototype)
+}
+
+fn current_realm_blob_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let global = scope.get_current_context().global(scope);
-    let prototype = get_private_value(scope, global, BLOB_PROTOTYPE_SLOT).or_else(|| {
-        let prototype =
-            crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob").ok()?;
-        finalize_blob_realm_bindings(scope, prototype);
-        Some(prototype.into())
-    });
-    let prototype = prototype?;
+    get_private_value(scope, global, BLOB_PROTOTYPE_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .or_else(|| {
+            let prototype =
+                crate::context_bootstrap::ensure_intrinsic_interface_prototype(scope, "Blob")
+                    .ok()?;
+            finalize_blob_realm_bindings(scope, prototype);
+            Some(prototype)
+        })
+}
+
+fn blob_realm_prototype_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_value(scope, object, BLOB_REALM_PROTOTYPE_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+fn build_blob_object_with_prototype<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    bytes: Vec<u8>,
+    mime_type: String,
+    prototype: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
     let owner_id = current_resource_owner_id(scope);
     let partition_id = current_blob_storage_partition_identity(scope);
     let blob_id = blob_store().create_blob(owner_id, partition_id, bytes, mime_type);
@@ -271,12 +338,13 @@ pub(super) fn build_blob_object<'s>(
             release_blob_wrapper_ref(blob_id);
             None
         })?;
-    let _ = object.set_prototype(scope, prototype);
+    let _ = object.set_prototype(scope, prototype.into());
+    set_private_value(scope, object, BLOB_REALM_PROTOTYPE_SLOT, prototype.into());
     track_blob_ref_lifetime(scope, object, move || release_blob_wrapper_ref(blob_id));
     Some(object)
 }
 
-fn blob_id_from_object<'s>(
+pub(crate) fn blob_id_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<BlobId> {
@@ -338,19 +406,49 @@ pub(super) fn create_object_url_for_object<'s>(
     object: v8::Local<'s, v8::Object>,
     storage_key: moli_storage_key::MoliStorageKey,
 ) -> Option<String> {
-    let blob_id = blob_id_from_object(scope, object)?;
+    let target = if is_blob_object(scope, object) {
+        ObjectUrlTarget::Blob(blob_id_from_object(scope, object)?)
+    } else {
+        ObjectUrlTarget::MediaSource(media_source_object(scope, object)?)
+    };
     let partition = current_blob_storage_partition_identity(scope)?;
     let owner_id = current_resource_owner_id(scope);
     let origin = storage_key.origin().to_owned();
-    blob_store().create_object_url_with_access_key(
+    let lifetime_id = native_bridge::current_runtime_observable_context_token(scope)
+        .map(native_bridge::RuntimeObservableContextToken::as_u64);
+    let policy_source = if let Some(host_ptr) =
+        crate::util::context_host_ptr_from_global_bridge(scope)
+    {
+        let global = scope.get_current_context().global(scope);
+        // SAFETY: the Window callback keeps its host alive for this call.
+        unsafe { &*host_ptr }.local_worker_content_security_policy_source_for_global(scope, global)
+    } else {
+        crate::worker::worker_content_security_policy_snapshot(scope)
+            .map(|policy| Arc::new(parking_lot::RwLock::new(policy)))
+    };
+    blob_store().create_object_url_with_target(
         owner_id,
-        blob_id,
+        lifetime_id,
+        target,
         &origin,
         Some(ObjectUrlAccessKey {
             partition,
             storage_key,
         }),
+        policy_source,
     )
+}
+
+pub(crate) type RendererObjectUrlData = ObjectUrlData<Arc<MediaSourceObject>>;
+
+pub(crate) fn object_url_data(url: &str) -> Option<RendererObjectUrlData> {
+    blob_store().object_url_data(url)
+}
+
+pub(crate) fn object_url_content_security_policy(
+    url: &str,
+) -> Option<crate::content_security_policy::InheritedContentSecurityPolicy> {
+    Some(blob_store().object_url_metadata(url)?.read().clone())
 }
 
 pub(super) fn revoke_object_url(
@@ -372,10 +470,6 @@ pub(super) fn revoke_object_url(
 
 pub(super) fn object_url_body_and_type(url: &str) -> Option<(String, String)> {
     blob_store().object_url_body_and_type(url)
-}
-
-pub(super) fn object_url_bytes_and_type(url: &str) -> Option<(Vec<u8>, String)> {
-    blob_store().object_url_bytes_and_type(url)
 }
 
 pub(super) fn collect_blob_bytes_and_type<'s>(
@@ -481,6 +575,13 @@ fn blob_mime_type(blob_id: BlobId) -> Option<String> {
 
 pub(crate) fn cleanup_owner_resources(owner_id: ResourceOwnerId) {
     blob_store().cleanup_owner_resources(owner_id);
+}
+
+pub(crate) fn cleanup_object_urls_for_context(
+    owner_id: ResourceOwnerId,
+    context_token: native_bridge::RuntimeObservableContextToken,
+) -> usize {
+    blob_store().cleanup_object_url_lifetime(owner_id, context_token.as_u64())
 }
 
 fn release_blob_wrapper_ref(blob_id: BlobId) {
@@ -925,5 +1026,21 @@ fn set_resolved_promise(
     };
     let promise = resolver.get_promise(scope);
     let _ = resolver.resolve(scope, value);
+    rv.set(promise.into());
+}
+
+fn set_rejected_type_error_promise(
+    scope: &mut v8::PinScope<'_, '_>,
+    rv: &mut v8::ReturnValue<'_, v8::Value>,
+    message: &str,
+) {
+    let Some(resolver) = v8::PromiseResolver::new(scope) else {
+        rv.set(v8::undefined(scope).into());
+        return;
+    };
+    let promise = resolver.get_promise(scope);
+    let message = v8_string(scope, message).unwrap_or_else(|| v8::String::empty(scope));
+    let reason = v8::Exception::type_error(scope, message);
+    let _ = resolver.reject(scope, reason);
     rv.set(promise.into());
 }

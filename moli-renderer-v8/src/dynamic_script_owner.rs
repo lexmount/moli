@@ -24,8 +24,7 @@ use super::{
         prepared_script_with_loaded_source,
     },
     types::{
-        ScriptErrorConstructorKind, ScriptKind, ScriptMode, ScriptSourceKind,
-        SharedNavigationResponseResult,
+        ScriptErrorValue, ScriptKind, ScriptMode, ScriptSourceKind, SharedNavigationResponseResult,
     },
 };
 use crate::frame_owner_model::MainDocumentScriptLoadDelayLease;
@@ -165,7 +164,7 @@ struct DynamicScriptFailure {
     kind: DynamicScriptFailureKind,
     module_failure_policy: Option<ModuleFailurePolicy>,
     source_network_result: Option<SharedNavigationResponseResult>,
-    error_constructor: Option<ScriptErrorConstructorKind>,
+    error_value: Option<ScriptErrorValue>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,7 +186,7 @@ impl DynamicScriptFailure {
             kind,
             module_failure_policy,
             source_network_result: None,
-            error_constructor: None,
+            error_value: None,
         }
     }
 
@@ -199,11 +198,8 @@ impl DynamicScriptFailure {
         self
     }
 
-    fn with_error_constructor(
-        mut self,
-        error_constructor: Option<ScriptErrorConstructorKind>,
-    ) -> Self {
-        self.error_constructor = error_constructor;
+    fn with_error_value(mut self, error_value: Option<ScriptErrorValue>) -> Self {
+        self.error_value = error_value;
         self
     }
 
@@ -330,12 +326,13 @@ pub(super) enum DynamicScriptRunnable {
     },
     DispatchError {
         id: DynamicScriptOwnerId,
+        ready_order: u64,
         script: PreparedScript,
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
         source_network_result: Option<SharedNavigationResponseResult>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     },
 }
 
@@ -354,7 +351,7 @@ pub(super) struct DynamicScriptFailureTerminal {
     pub(super) kind: DynamicScriptFailureKind,
     pub(super) module_failure_policy: Option<ModuleFailurePolicy>,
     pub(super) source_network_result: Option<SharedNavigationResponseResult>,
-    pub(super) error_constructor: Option<ScriptErrorConstructorKind>,
+    pub(super) error_value: Option<ScriptErrorValue>,
 }
 
 #[derive(Debug)]
@@ -582,7 +579,8 @@ impl DynamicScriptOwner {
             kind,
             module_failure_policy,
             source_network_result,
-            error_constructor,
+            error_value,
+            ..
         }) = self.followup_work.pop_front()
         else {
             unreachable!("owned error terminal changed after an immutable front check")
@@ -594,7 +592,7 @@ impl DynamicScriptOwner {
             kind,
             module_failure_policy,
             source_network_result,
-            error_constructor,
+            error_value,
         })
     }
 
@@ -642,33 +640,33 @@ impl DynamicScriptOwner {
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
-        self.note_script_failed_with_kind_and_error_constructor(
+        self.note_script_failed_with_kind_and_error_value(
             id,
             script,
             message,
             kind,
             module_failure_policy,
-            error_constructor,
+            error_value,
         );
     }
 
-    pub(super) fn note_script_failed_with_kind_and_error_constructor(
+    pub(super) fn note_script_failed_with_kind_and_error_value(
         &mut self,
         id: DynamicScriptOwnerId,
         script: &PreparedScript,
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
         assert!(
             script.host_script_handle.is_some(),
             "runtime dynamic script should carry host handle before failure dispatch planning"
         );
         let failure = DynamicScriptFailure::with_kind(message, kind, module_failure_policy)
-            .with_error_constructor(error_constructor);
+            .with_error_value(error_value);
         if failure.is_deferrable_module() {
             self.note_script_failed_in_queue_or_enqueue(id, script.clone(), failure);
             self.refresh_followup_work();
@@ -1189,13 +1187,13 @@ impl DynamicScriptOwner {
         &mut self,
         reaction_id: u64,
         reason: String,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) -> Option<ModuleScriptEvaluationUpdate> {
         let update = self.mark_module_script_evaluation_reaction(
             reaction_id,
             ModuleScriptEvaluationReactionState::Rejected {
                 reason,
-                error_constructor,
+                error_value,
             },
         );
         if update.is_some() {
@@ -1279,21 +1277,21 @@ impl DynamicScriptOwner {
         message: String,
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
         source_network_result: Option<SharedNavigationResponseResult>,
     ) {
-        self.requeue_failed_script_front_with_error_constructor(
+        self.requeue_failed_script_front_with_error_value(
             id,
             script,
             message,
             kind,
             module_failure_policy,
             source_network_result,
-            error_constructor,
+            error_value,
         );
     }
 
-    pub(super) fn requeue_failed_script_front_with_error_constructor(
+    pub(super) fn requeue_failed_script_front_with_error_value(
         &mut self,
         id: DynamicScriptOwnerId,
         script: PreparedScript,
@@ -1301,11 +1299,11 @@ impl DynamicScriptOwner {
         kind: DynamicScriptFailureKind,
         module_failure_policy: Option<ModuleFailurePolicy>,
         source_network_result: Option<SharedNavigationResponseResult>,
-        error_constructor: Option<ScriptErrorConstructorKind>,
+        error_value: Option<ScriptErrorValue>,
     ) {
         let failure = DynamicScriptFailure::with_kind(message, kind, module_failure_policy)
             .with_source_network_result(source_network_result)
-            .with_error_constructor(error_constructor);
+            .with_error_value(error_value);
         self.requeue_script_failure_front(id, script, failure);
     }
 
@@ -1667,7 +1665,15 @@ impl DynamicScriptOwner {
                 self.script_lanes.importmap_in_order.push_back(entry)
             }
             super::types::ScriptMode::ModuleInOrder => {
-                self.script_lanes.module_in_order.push_back(entry)
+                // A claimed graph can fail before it suspends. Restore its
+                // insertion position instead of appending behind later modules.
+                let index = self
+                    .script_lanes
+                    .module_in_order
+                    .iter()
+                    .position(|later| later.script.position > entry.script.position)
+                    .unwrap_or(self.script_lanes.module_in_order.len());
+                self.script_lanes.module_in_order.insert(index, entry);
             }
             super::types::ScriptMode::Async => self.script_lanes.async_scripts.push_back(entry),
             super::types::ScriptMode::Normal
@@ -1947,21 +1953,27 @@ impl DynamicScriptOwner {
             }
             DynamicScriptRunnable::DispatchError {
                 id,
+                ready_order,
                 script,
                 message,
                 kind,
                 module_failure_policy,
                 source_network_result,
-                error_constructor,
+                error_value,
             } => {
                 let failure = DynamicScriptFailure::with_kind(message, kind, module_failure_policy)
                     .with_source_network_result(source_network_result)
-                    .with_error_constructor(error_constructor);
-                if failure.is_deferrable_module() {
-                    self.enqueue_script_failure_with_id(id, script, failure);
-                    return;
-                }
-                self.requeue_script_failure_front(id, script, failure);
+                    .with_error_value(error_value);
+                // Repeated eligibility checks must not make an already-ready
+                // failure newer than another terminal in the same fanout.
+                self.push_entry_front(DynamicScriptEntry {
+                    id,
+                    script,
+                    ready_state: DynamicScriptReadyState::Failed {
+                        failure,
+                        order: ready_order,
+                    },
+                });
             }
         }
     }
@@ -2112,6 +2124,7 @@ impl DynamicScriptOwner {
                     entry.script.clone(),
                     source,
                     completion.outcome.source_bytes.clone(),
+                    completion.outcome.muted_errors,
                 );
                 entry.ready_state = DynamicScriptReadyState::Ready {
                     order,
@@ -2157,15 +2170,16 @@ impl DynamicScriptOwner {
                     evaluation,
                 })
             }
-            DynamicScriptReadyState::Failed { failure, .. } => {
+            DynamicScriptReadyState::Failed { failure, order } => {
                 Some(DynamicScriptRunnable::DispatchError {
                     id: entry.id,
+                    ready_order: order,
                     script: entry.script,
                     message: failure.message,
                     kind: failure.kind,
                     module_failure_policy: failure.module_failure_policy,
                     source_network_result: failure.source_network_result,
-                    error_constructor: failure.error_constructor,
+                    error_value: failure.error_value,
                 })
             }
             DynamicScriptReadyState::Loading
@@ -2290,6 +2304,7 @@ mod tests {
                 source_result: Ok(source.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }
@@ -2301,6 +2316,7 @@ mod tests {
                 source_result: Err(error.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }
@@ -2560,7 +2576,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_suspended_module_script_graph_does_not_block_later_in_order_module() {
+    fn failed_suspended_module_script_graph_reports_error_before_later_in_order_module() {
         let mut owner = DynamicScriptOwner::default();
         owner.enqueue_batch(DynamicScriptBatch {
             in_order: VecDeque::new(),
@@ -2608,6 +2624,11 @@ mod tests {
             }),
             "failed graph owner entry must not leave a stale suspended graph entry behind"
         );
+        let Some(DynamicScriptRunnable::DispatchError { id, .. }) = owner.next_runnable_script()
+        else {
+            panic!("the first module must report its error in insertion order");
+        };
+        assert_eq!(id, first_id);
         let Some(DynamicScriptRunnable::Execute {
             id: second_id,
             script,
@@ -3077,7 +3098,7 @@ mod tests {
     }
 
     #[test]
-    fn module_source_load_failure_yields_later_module_without_message_pattern() {
+    fn module_source_load_failure_preserves_order_without_message_pattern() {
         let mut owner = DynamicScriptOwner::default();
         owner.script_lanes.module_in_order.push_back(loading_entry(
             0,
@@ -3102,25 +3123,37 @@ mod tests {
             "top-level source load failure should not look like a pending graph"
         );
 
-        let later = owner
-            .next_runnable_script()
-            .expect("later module should run before top-level module load error");
-        let DynamicScriptRunnable::Execute { script: later, .. } = later else {
-            panic!("later module should execute before source load failure");
-        };
-        assert_eq!(later.position, 1);
-
         let failure = owner
             .next_runnable_script()
-            .expect("source load failure should remain queued");
+            .expect("source load failure should keep its original insertion position");
         let DynamicScriptRunnable::DispatchError {
-            script, message, ..
+            id,
+            script,
+            message,
+            kind,
+            module_failure_policy,
+            ..
         } = failure
         else {
-            panic!("source load failure should dispatch after later module");
+            panic!("source load failure should dispatch before the later module");
         };
+        assert_eq!(id, owner_id(0));
         assert_eq!(script.position, 0);
         assert_eq!(message, "opaque source load failure");
+        assert_eq!(kind, DynamicScriptFailureKind::ModuleFetch);
+        assert_eq!(
+            module_failure_policy,
+            Some(ModuleFailurePolicy::TopLevelLoadFailure)
+        );
+
+        let later = owner
+            .next_runnable_script()
+            .expect("later module should run after the top-level module load error");
+        let DynamicScriptRunnable::Execute { script: later, .. } = later else {
+            panic!("later module should execute after the source load failure");
+        };
+        assert_eq!(later.position, 1);
+        assert!(owner.is_idle());
     }
 
     #[tokio::test]
@@ -3433,12 +3466,12 @@ mod tests {
         let action_ids = [first_id, second_id];
         let first_terminal = owner
             .take_runnable_failure_terminal_for_action(&action_ids)
-            .expect("second failure should now be the lane head");
+            .expect("the earlier ready failure should now be the lane head");
         let second_terminal = owner
             .take_runnable_failure_terminal_for_action(&action_ids)
-            .expect("first failure should follow in the same action");
-        assert_eq!(first_terminal.id, second_id);
-        assert_eq!(second_terminal.id, first_id);
+            .expect("the later ready failure should follow in the same action");
+        assert_eq!(first_terminal.id, first_id);
+        assert_eq!(second_terminal.id, second_id);
         assert!(
             owner
                 .take_runnable_failure_terminal_for_action(&action_ids)
@@ -3479,7 +3512,7 @@ mod tests {
             "opaque typed module graph failure".to_owned(),
             DynamicScriptFailureKind::ModuleResolve,
             Some(ModuleFailurePolicy::GraphFailure),
-            Some(ScriptErrorConstructorKind::SyntaxError),
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into()),
         );
 
         let second = owner
@@ -3496,7 +3529,7 @@ mod tests {
         let DynamicScriptRunnable::DispatchError {
             id: failure_id,
             message,
-            error_constructor,
+            error_value,
             ..
         } = failure
         else {
@@ -3505,8 +3538,8 @@ mod tests {
         assert_eq!(failure_id, first_id);
         assert_eq!(message, "opaque typed module graph failure");
         assert_eq!(
-            error_constructor,
-            Some(ScriptErrorConstructorKind::SyntaxError),
+            error_value,
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into()),
             "deferred dynamic module failures must retain their original error constructor"
         );
     }
@@ -3644,6 +3677,111 @@ mod tests {
     }
 
     #[test]
+    fn ready_module_failures_do_not_wait_for_later_module_fetches() {
+        for mode in [ScriptMode::ModuleInOrder, ScriptMode::Async] {
+            for kind in [
+                DynamicScriptFailureKind::ModuleFetch,
+                DynamicScriptFailureKind::ModuleResolve,
+                DynamicScriptFailureKind::ModuleInstantiate,
+            ] {
+                let mut owner = DynamicScriptOwner::default();
+                let first = prepared_module_script(0, mode);
+                let mut batch = DynamicScriptBatch::default();
+                match mode {
+                    ScriptMode::ModuleInOrder => batch.module_in_order.push_back(first),
+                    ScriptMode::Async => batch.async_scripts.push_back(first),
+                    _ => unreachable!(),
+                }
+                owner.enqueue_batch(batch);
+                let Some(DynamicScriptRunnable::Execute { id, script, .. }) =
+                    owner.next_runnable_script()
+                else {
+                    panic!("first module should start");
+                };
+                // The later module remains unresolved while the first fails.
+                owner.enqueue_loading_script_for_test(prepared_module_script(1, mode));
+                let later_id = owner.next_id - 1;
+                owner.note_script_failed_with_kind(
+                    id,
+                    &script,
+                    "opaque graph failure".to_owned(),
+                    kind,
+                    Some(ModuleFailurePolicy::GraphFailure),
+                    Some(crate::types::ScriptErrorConstructorKind::TypeError.into()),
+                );
+                let Some(DynamicScriptRunnable::DispatchError {
+                    id: failed_id,
+                    kind: actual_kind,
+                    error_value,
+                    ..
+                }) = owner.next_runnable_script()
+                else {
+                    panic!(
+                        "{mode:?} {kind:?} must report failure while the later fetch is pending"
+                    );
+                };
+                assert_eq!(failed_id, id);
+                assert_eq!(actual_kind, kind);
+                assert_eq!(
+                    error_value,
+                    Some(crate::types::ScriptErrorConstructorKind::TypeError.into())
+                );
+                assert!(owner.next_runnable_script().is_none());
+                assert_eq!(owner.in_flight_loads, 1);
+                owner.apply_owner_event(DynamicScriptOwnerEvent::Completion(load_completion_ok(
+                    later_id, "later",
+                )));
+                let Some(DynamicScriptRunnable::Execute { script: later, .. }) =
+                    owner.next_runnable_script()
+                else {
+                    panic!("the later module should execute when its fetch completes");
+                };
+                assert_eq!(later.position, 1);
+                assert!(owner.is_idle());
+            }
+        }
+    }
+
+    #[test]
+    fn failed_ordered_module_retains_priority_over_later_classic_and_module() {
+        let mut owner = DynamicScriptOwner::default();
+        owner.enqueue_batch(DynamicScriptBatch {
+            in_order: VecDeque::from([prepared_script(1, ScriptMode::InOrder)]),
+            module_in_order: VecDeque::from([
+                prepared_module_script(0, ScriptMode::ModuleInOrder),
+                prepared_module_script(2, ScriptMode::ModuleInOrder),
+            ]),
+            ..DynamicScriptBatch::default()
+        });
+        let Some(DynamicScriptRunnable::Execute { id, script, .. }) = owner.next_runnable_script()
+        else {
+            panic!("the first module should start before later ordered scripts");
+        };
+        owner.note_script_failed_with_kind(
+            id,
+            &script,
+            "module fetch failed".to_owned(),
+            DynamicScriptFailureKind::ModuleFetch,
+            Some(ModuleFailurePolicy::ModuleTreeLoadFailure),
+            None,
+        );
+        let Some(DynamicScriptRunnable::DispatchError { id: failed_id, .. }) =
+            owner.next_runnable_script()
+        else {
+            panic!("a failed module must retain the earliest shared ordered slot");
+        };
+        assert_eq!(failed_id, id);
+        for position in [1, 2] {
+            let Some(DynamicScriptRunnable::Execute { script, .. }) = owner.next_runnable_script()
+            else {
+                panic!("later ordered scripts should run after the error");
+            };
+            assert_eq!(script.position, position);
+        }
+        assert!(owner.is_idle());
+    }
+
+    #[test]
     fn module_load_failure_kind_maps_graph_stages_without_message_text() {
         let script = prepared_module_script(0, ScriptMode::Async);
 
@@ -3691,7 +3829,7 @@ mod tests {
     }
 
     #[test]
-    fn in_order_module_resolve_failure_yields_later_module_before_error() {
+    fn in_order_module_resolve_failure_preserves_its_insertion_position() {
         let mut owner = DynamicScriptOwner::default();
         owner.enqueue_batch(DynamicScriptBatch {
             in_order: VecDeque::new(),
@@ -3723,17 +3861,9 @@ mod tests {
         );
         owner.note_script_failed_with_kind(first_id, &first, message, kind, None, None);
 
-        let second = owner
-            .next_runnable_script()
-            .expect("later in-order module should run before link failure report");
-        let DynamicScriptRunnable::Execute { script: second, .. } = second else {
-            panic!("second work item should execute later in-order module");
-        };
-        assert_eq!(second.position, 1);
-
         let failure = owner
             .next_runnable_script()
-            .expect("deferred link failure should surface after later in-order module");
+            .expect("the link failure should retain its original insertion position");
         let DynamicScriptRunnable::DispatchError {
             id: failure_id,
             script,
@@ -3741,7 +3871,7 @@ mod tests {
             ..
         } = failure
         else {
-            panic!("third work item should dispatch module link failure");
+            panic!("the next work item should dispatch the first module failure");
         };
         assert_eq!(failure_id, first_id);
         assert_eq!(script.position, 0);
@@ -3749,6 +3879,13 @@ mod tests {
             message.starts_with("ModuleLinkFailed:"),
             "unexpected failure message: {message}"
         );
+        let second = owner
+            .next_runnable_script()
+            .expect("later in-order module should run after the error terminal");
+        let DynamicScriptRunnable::Execute { script: second, .. } = second else {
+            panic!("the next work item should execute the later in-order module");
+        };
+        assert_eq!(second.position, 1);
     }
 
     #[test]
@@ -3812,7 +3949,7 @@ mod tests {
     }
 
     #[test]
-    fn owner_terminal_failure_preserves_error_constructor() {
+    fn owner_terminal_failure_preserves_error_value() {
         let mut owner = DynamicScriptOwner::default();
         owner.enqueue_batch(DynamicScriptBatch {
             async_scripts: VecDeque::from([prepared_script(0, ScriptMode::Async)]),
@@ -3825,26 +3962,24 @@ mod tests {
             panic!("expected executable dynamic script");
         };
 
-        owner.note_script_failed_with_kind_and_error_constructor(
+        owner.note_script_failed_with_kind_and_error_value(
             id,
             &script,
             "typed failure".to_owned(),
             DynamicScriptFailureKind::Immediate,
             None,
-            Some(ScriptErrorConstructorKind::SyntaxError),
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into()),
         );
 
-        let DynamicScriptRunnable::DispatchError {
-            error_constructor, ..
-        } = owner
+        let DynamicScriptRunnable::DispatchError { error_value, .. } = owner
             .next_runnable_script()
             .expect("typed failure should become owner terminal work")
         else {
             panic!("expected dynamic script error dispatch");
         };
         assert_eq!(
-            error_constructor,
-            Some(ScriptErrorConstructorKind::SyntaxError)
+            error_value,
+            Some(crate::types::ScriptErrorConstructorKind::SyntaxError.into())
         );
     }
 

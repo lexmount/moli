@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function worker_url(source) {
   return "data:text/javascript," + encodeURIComponent(source);
@@ -14,7 +15,7 @@ function wait(ms) {
   });
 }
 
-async function assert_json_module_failure(source, expectedFragments, description) {
+async function assert_json_module_failure(source, description) {
   const previousOnerror = window.onerror;
   let messageSeen = false;
   const worker = new Worker(worker_url(source), { type: "module" });
@@ -39,11 +40,7 @@ async function assert_json_module_failure(source, expectedFragments, description
       }),
     ]);
 
-    assert_equals(event.type, "error", "JSON module attribute failure should dispatch an error event");
-    const lowerMessage = String(event.message).toLowerCase();
-    assert_true(expectedFragments.every(function (fragment) {
-      return lowerMessage.indexOf(fragment.toLowerCase()) !== -1;
-    }), description + " should expose the JSON import-attributes reason; got: " + event.message);
+    assert_worker_bootstrap_error(event, worker);
     assert_false(messageSeen, "module evaluation should not continue after JSON import-attributes failure");
   } finally {
     window.onerror = previousOnerror;
@@ -61,7 +58,6 @@ promise_test(async function () {
       "import config from " + JSON.stringify(jsonUrl) + ";",
       "postMessage(config);",
     ].join("\n"),
-    ["syntax"],
     "static JSON import without type",
   );
 
@@ -70,7 +66,6 @@ promise_test(async function () {
       "import value from " + JSON.stringify(jsUrl) + " with { type: 'json' };",
       "postMessage(value);",
     ].join("\n"),
-    ["syntax"],
     "static non-JSON import with JSON type",
   );
 
@@ -79,7 +74,6 @@ promise_test(async function () {
       "import config from " + JSON.stringify(invalidJsonUrl) + " with { type: 'json' };",
       "postMessage(config);",
     ].join("\n"),
-    ["syntax"],
     "static invalid JSON import",
   );
 

@@ -17,13 +17,10 @@ function assert_throws_name(name, callback, description) {
 }
 
 idl_test([`
-interface MediaQueryList {
+interface MediaQueryList : EventTarget {
   readonly attribute CSSOMString media;
   readonly attribute boolean matches;
   attribute EventHandler onchange;
-  undefined addEventListener(DOMString type, any callback, optional any options);
-  undefined removeEventListener(DOMString type, any callback, optional any options);
-  boolean dispatchEvent(Event event);
   undefined addListener(any callback);
   undefined removeListener(any callback);
 };
@@ -49,6 +46,12 @@ test(function () {
   media.onchange = event => calls.push(["handler", event.type, event.target === media]);
 
   assert_true(media instanceof MediaQueryList);
+  assert_true(media instanceof EventTarget);
+  assert_equals(Object.getPrototypeOf(MediaQueryList.prototype), EventTarget.prototype);
+  for (const method of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+    assert_false(Object.prototype.hasOwnProperty.call(MediaQueryList.prototype, method));
+    assert_equals(media[method], EventTarget.prototype[method]);
+  }
   assert_equals(Object.prototype.toString.call(media), "[object MediaQueryList]");
   assert_false(Object.prototype.hasOwnProperty.call(media, "media"));
   assert_false(Object.prototype.hasOwnProperty.call(media, "matches"));

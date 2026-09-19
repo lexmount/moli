@@ -17,22 +17,13 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_key_range_upper_bound_callba
     let Some(parsed) = webidl::parse_args::<IdbKeyRangeUpperBoundArgs<'s>>(scope, &args) else {
         return;
     };
-    let upper = match parse_idb_key(scope, parsed.upper) {
-        Ok(Some(key)) => key,
-        _ => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'upperBound': upper is not a valid key.",
-                "DataError",
-            );
-            scope.throw_exception(error);
-            return;
-        }
+    let Some(upper) = require_idb_key(scope, parsed.upper) else {
+        return;
     };
     let range = IdbKeyRangeQuery {
         lower: None,
         upper: Some(upper),
-        lower_open: false,
+        lower_open: true,
         upper_open: parsed.open,
     };
     if let Some(object) = create_key_range_object(scope, &range) {

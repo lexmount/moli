@@ -1,11 +1,12 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::IndexedDbCursorSnapshot;
 
 pub(in crate::context_bootstrap::indexed_db) fn submit_cursor_open_operation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    store_name: &str,
+    store_name: &IndexedDbName,
     operation: IndexedDbCursorOpenOperation,
 ) {
     let Some(handle) = transaction_handle_from_value(scope, transaction.into()) else {
@@ -15,7 +16,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_cursor_open_operation<'s>
             source,
             request,
             store_name,
-            IndexedDbTransactionOperationInput::OpenCursor(operation),
+            IndexedDbTransactionOperation::OpenCursor(operation),
         );
         return;
     };
@@ -27,9 +28,21 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_cursor_open_operation<'s
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
-    store_name: &str,
+    store_name: &IndexedDbName,
     operation: &IndexedDbCursorOpenOperation,
 ) {
+    let snapshot = capture_cursor_snapshot(scope, handle, store_name, operation);
+    settle_cursor_open_request(scope, source, request, snapshot, operation);
+}
+
+pub(in crate::context_bootstrap::indexed_db) fn capture_cursor_snapshot(
+    scope: &mut v8::PinScope<'_, '_>,
+    handle: TransactionHandle,
+    store_name: &IndexedDbName,
+    operation: &IndexedDbCursorOpenOperation,
+) -> std::result::Result<IndexedDbCursorSnapshot, IndexedDbError> {
+    let record_revision =
+        with_indexed_db_manager(scope, |manager| manager.transaction_record_revision(handle))?;
     let entries = match &operation.source {
         IndexedDbCursorSource::ObjectStore => object_store_cursor_snapshot(
             scope,
@@ -48,29 +61,27 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_cursor_open_operation<'s
             operation.direction,
             operation.key_only,
         ),
-    };
-    settle_cursor_open_request(scope, source, request, entries, operation);
+    }?;
+    Ok(IndexedDbCursorSnapshot {
+        entries,
+        record_revision,
+    })
 }
 
 fn settle_cursor_open_request<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source: v8::Local<'s, v8::Object>,
     request: v8::Local<'s, v8::Object>,
-    entries: std::result::Result<Vec<CursorSnapshotEntry>, IndexedDbError>,
+    snapshot: std::result::Result<IndexedDbCursorSnapshot, IndexedDbError>,
     operation: &IndexedDbCursorOpenOperation,
 ) {
-    match entries {
-        Ok(entries) if entries.is_empty() => {
+    match snapshot {
+        Ok(snapshot) if snapshot.entries.is_empty() => {
             store_request_success(scope, request, v8::null(scope).into());
         }
-        Ok(entries) => {
+        Ok(snapshot) => {
             let result = materialize_cursor_result_in_request_realm(
-                scope,
-                source,
-                request,
-                &entries,
-                operation.direction,
-                operation.key_only,
+                scope, source, request, snapshot, operation,
             )
             .map_or_else(|| v8::null(scope).into(), Into::into);
             store_request_success(scope, request, result);

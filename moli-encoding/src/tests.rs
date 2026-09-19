@@ -5,6 +5,138 @@ use encoding_rs::Encoding;
 use super::*;
 use moli_charset_parser::HTML_META_CHARSET_PRESCAN_LIMIT;
 
+#[test]
+fn xhr_response_decoder_preserves_encoding_across_every_chunk_boundary() {
+    use XhrResponseTextKind::{Html, Text, Xml};
+    let xml = b"<?xml version='1.0' encoding='windows-1252'?><x>\xff</x>";
+    let xml_utf16 = "<?xml version='1.0' encoding='UTF-16'?><x>é</x>";
+    let cases = [
+        (
+            Text,
+            None,
+            b"\xef\xbb\xbf\xe6\xa9\x9f".to_vec(),
+            "機",
+            "UTF-8",
+        ),
+        (
+            Text,
+            Some(encoding_rs::WINDOWS_1252),
+            b"\xef\xbb\xbf\xe6\xa9\x9f".to_vec(),
+            "機",
+            "UTF-8",
+        ),
+        (
+            Text,
+            None,
+            b"\xef\xbb\xbf\xef\xbb\xbf".to_vec(),
+            "\u{feff}",
+            "UTF-8",
+        ),
+        (Text, None, b"\xff\xfeA\0\xe9\0".to_vec(), "Aé", "UTF-16LE"),
+        (
+            Text,
+            Some(encoding_rs::UTF_8),
+            b"\xfe\xff\0A\0\xe9".to_vec(),
+            "Aé",
+            "UTF-16BE",
+        ),
+        (
+            Text,
+            Some(encoding_rs::UTF_16LE),
+            b"\xe9\0".to_vec(),
+            "é",
+            "UTF-16LE",
+        ),
+        (
+            Text,
+            Some(encoding_rs::SHIFT_JIS),
+            b"\x83e\x83X\x83g".to_vec(),
+            "テスト",
+            "Shift_JIS",
+        ),
+        (Text, None, b"a\xc2".to_vec(), "a\u{fffd}", "UTF-8"),
+        (
+            Xml,
+            None,
+            xml.to_vec(),
+            "<?xml version='1.0' encoding='windows-1252'?><x>ÿ</x>",
+            "windows-1252",
+        ),
+        (
+            Xml,
+            Some(encoding_rs::UTF_8),
+            xml.to_vec(),
+            "<?xml version='1.0' encoding='windows-1252'?><x>\u{fffd}</x>",
+            "UTF-8",
+        ),
+        (
+            Text,
+            None,
+            xml.to_vec(),
+            "<?xml version='1.0' encoding='windows-1252'?><x>\u{fffd}</x>",
+            "UTF-8",
+        ),
+        (
+            Xml,
+            None,
+            xml_utf16
+                .encode_utf16()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+            xml_utf16,
+            "UTF-16LE",
+        ),
+        (
+            Html,
+            None,
+            b"<meta charset=windows-1252><x>\xff</x>".to_vec(),
+            "<meta charset=windows-1252><x>ÿ</x>",
+            "windows-1252",
+        ),
+        (
+            Html,
+            Some(encoding_rs::UTF_8),
+            b"<meta charset=windows-1252><x>\xff</x>".to_vec(),
+            "<meta charset=windows-1252><x>\u{fffd}</x>",
+            "UTF-8",
+        ),
+        (
+            Html,
+            None,
+            b"<x>\xe6\xa9\x9f</x>".to_vec(),
+            "<x>機</x>",
+            "UTF-8",
+        ),
+    ];
+    for (kind, transport, bytes, expected, encoding) in cases {
+        for boundary in 0..=bytes.len() {
+            let mut decoder = XhrResponseDecoder::new(kind, transport);
+            let mut text = decoder.push(&bytes[..boundary]);
+            text.push_str(&decoder.push(&bytes[boundary..]));
+            text.push_str(&decoder.finish());
+            assert_eq!(text, expected, "boundary={boundary}, bytes={bytes:?}");
+            assert_eq!(decoder.encoding_name(), encoding);
+        }
+    }
+}
+
+#[test]
+fn xhr_response_decoder_defers_partial_boms_and_flushes_incomplete_sequences() {
+    let mut decoder = XhrResponseDecoder::new(XhrResponseTextKind::Text, None);
+    assert_eq!(decoder.push(b"\xef"), "");
+    assert_eq!(decoder.push(b"\xbb"), "");
+    assert_eq!(decoder.push(b"\xbf"), "");
+    assert_eq!(decoder.push(b"a\xc2"), "a");
+    assert_eq!(decoder.finish(), "\u{fffd}");
+
+    let mut decoder = XhrResponseDecoder::new(XhrResponseTextKind::Text, None);
+    assert_eq!(decoder.push(b"\xff"), "");
+    assert_eq!(decoder.push(b"\xfeA"), "");
+    assert_eq!(decoder.push(b"\0\xe9"), "A");
+    assert_eq!(decoder.push(b"\0"), "é");
+    assert_eq!(decoder.finish(), "");
+}
+
 fn gbk_bytes(input: &str) -> Vec<u8> {
     encoding_rs::GBK.encode(input).0.into_owned()
 }

@@ -17,9 +17,10 @@ fn take_next_image_load_event_task_for_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn image_event_body_leaves_reactions_and_runtime_scripts_for_selected_completion() {
+async fn image_event_body_cleans_up_callbacks_and_decode_reactions() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/image-body-boundary").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
@@ -55,15 +56,15 @@ image.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABA
         );
         assert_eq!(
             page_vm.vm_mut().eval("__imageTaskBoundary.join('|')")?,
-            "callback",
-            "the image body must leave listener and image.decode() reactions pending"
+            "callback|microtask|runtime-script|decode",
+            "listener cleanup must drain reactions before the selected task completes"
         );
 
         page_vm.finish_selected_page_callback_task(&loader).await?;
         assert_eq!(
             page_vm.vm_mut().eval("__imageTaskBoundary.join('|')")?,
             "callback|microtask|runtime-script|decode",
-            "selected image completion must own decode/listener reactions and runtime-script follow-up"
+            "selected task completion must not repeat callback reactions or their inline scripts"
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -187,7 +188,7 @@ image.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABA
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn image_event_discards_a_document_open_task_before_applying_the_replacement_tail() {
+async fn image_update_discards_a_retired_document_request_before_queuing_its_terminal_task() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -232,28 +233,8 @@ currentImage.src = "/current-without-network.png";
             "image event dispatch must not acquire a PageTimer descriptor"
         );
 
-        let stale_task = take_next_image_load_event_task_for_test(&mut page_vm)
-            .expect("retired image task should settle as one explicit turn");
-        let stale = page_vm.apply_selected_page_image_load_event_turn(stale_task)?;
-        let stale_action = stale.action;
-        assert_eq!(
-            stale_action.target_effect,
-            PageImageLoadEventTargetEffect::DiscardedStaleOwner {
-                current_owner: None,
-                stale_payload_effect: PageImageLoadEventStalePayloadEffect::NoSettledExactPayload,
-            }
-        );
-
-        assert_eq!(
-            page_vm
-                .vm_mut()
-                .eval("__documentExactImageEvents.join('|')")?,
-            ""
-        );
-
         let current = take_next_image_load_event_task_for_test(&mut page_vm)
-            .expect("replacement image task should survive stale-head settlement");
-        assert_ne!(stale_action.owner.target(), current.owner().target());
+            .expect("replacement image task should survive retired request cancellation");
         page_vm
             .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
                 crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(current),
@@ -268,7 +249,7 @@ currentImage.src = "/current-without-network.png";
         );
         assert!(
             take_next_image_load_event_task_for_test(&mut page_vm).is_none(),
-            "both exact-Document tasks must consume exactly two turns"
+            "the retired request must be cancelled before it manufactures a terminal task"
         );
         Ok::<_, anyhow::Error>(())
     })

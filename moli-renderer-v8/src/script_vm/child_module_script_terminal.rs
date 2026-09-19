@@ -55,12 +55,24 @@ impl<'vm> ChildModuleScriptTerminalOwner<'vm> {
     ) -> FrameDocumentModuleScriptTerminalFollowup {
         self.vm
             .ensure_child_document_modulator_for_graph_start(task_owner.document_owner(), realm_id);
+        let source = if !client.source_is_external()
+            && let Some(text) = source.text_source()
+        {
+            self.vm
+                .inline_module_script_source_with_origin(client.script(), text.to_owned())
+        } else {
+            source
+        };
         let source_url = if client.source_is_external() {
             client.script().url.clone()
         } else {
             crate::module_runtime::next_inline_module_url(self.vm, client.base_url())
         };
-        let request_key = ModuleMapKey::java_script(source_url.clone());
+        let request_key = if client.source_is_external() {
+            ModuleMapKey::from_script_url(source_url.clone())
+        } else {
+            ModuleMapKey::java_script(source_url.clone())
+        };
         self.handle_parser_root_terminal_result(
             task_owner,
             realm_id,

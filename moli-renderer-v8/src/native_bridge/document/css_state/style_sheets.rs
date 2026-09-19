@@ -27,7 +27,7 @@ pub(super) fn sync_document_style_sheets<'s>(
         let Some(element) = node.as_element() else {
             continue;
         };
-        if !crate::style_engine::stylesheet_owner_type_is_supported(element) {
+        if !crate::style_engine::stylesheet_owner_can_have_sheet(element) {
             continue;
         }
         let wrapper = if document_is_connected {

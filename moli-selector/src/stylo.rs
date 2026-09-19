@@ -1,9 +1,17 @@
-use selectors::{Element as SelectorsElement, matching::MatchingContext};
+use std::collections::HashMap;
+
+use selectors::{
+    Element as SelectorsElement,
+    matching::MatchingContext,
+    parser::{Component, RelativeSelector},
+    visitor::SelectorVisitor,
+};
 use style::{
     dom::TDocument,
     dom_apis::{
         MayUseInvalidation, QueryAll, QueryFirst, element_closest, element_matches, query_selector,
     },
+    selector_parser::{NonTSPseudoClass, SelectorImpl},
     shared_lock::SharedRwLock,
 };
 
@@ -12,9 +20,58 @@ use crate::{
     selector::SelectorError,
 };
 
+/// Returns heading elements below `root` in flat-tree order.
+///
+/// Renderer state invalidation uses the same traversal as `:heading()` so a
+/// `headingoffset` or `headingreset` mutation cannot leave computed styles on
+/// shadow/slotted descendants stale.
+pub fn stylo_flat_tree_heading_descendants(host: &DomHost, root: NodeId) -> Vec<NodeId> {
+    query::flat_tree_heading_descendants(host, root)
+}
+
+/// Reports whether a DOM API selector contains `:valid` or `:invalid`,
+/// including escaped names and pseudos nested inside functional selectors.
+pub fn dom_api_selector_uses_validity_pseudo(host: &DomHost, selector: &str) -> bool {
+    let Ok(ParsedDomApiSelectorList::Parsed(selectors)) =
+        parse_dom_api_selector_list(host, selector)
+    else {
+        return false;
+    };
+    let mut visitor = ValidityPseudoVisitor { found: false };
+    for selector in selectors.slice() {
+        if !selector.visit(&mut visitor) {
+            break;
+        }
+    }
+    visitor.found
+}
+
+struct ValidityPseudoVisitor {
+    found: bool,
+}
+
+impl SelectorVisitor for ValidityPseudoVisitor {
+    type Impl = SelectorImpl;
+
+    fn visit_simple_selector(&mut self, component: &Component<Self::Impl>) -> bool {
+        self.found = matches!(
+            component,
+            Component::NonTSPseudoClass(NonTSPseudoClass::Valid | NonTSPseudoClass::Invalid)
+        );
+        !self.found
+    }
+
+    fn visit_relative_selector_list(&mut self, selectors: &[RelativeSelector<Self::Impl>]) -> bool {
+        selectors
+            .iter()
+            .all(|selector| selector.selector.visit(self))
+    }
+}
+
 mod atoms;
 mod invalidation;
 mod presentation;
+mod presentational_hints;
 mod query;
 mod selector_parse;
 mod style_traversal;
@@ -76,8 +133,8 @@ pub use invalidation::{
     stylo_stylesheet_source_scope_fallback_roots,
 };
 pub use presentation::is_svg_presentation_attribute_name;
-pub(crate) use query::html_directionality;
 use query::{QueryDocument, QueryElement, QueryNode};
+pub(crate) use query::{html_auto_directionality_invalidation_root, html_directionality};
 #[cfg(test)]
 pub(crate) use selector_parse::validate_supports_selector_list;
 pub(crate) use selector_parse::{
@@ -86,7 +143,7 @@ pub(crate) use selector_parse::{
     normalize_scope_style_rule_selector_list_with_namespaces, parse_dom_api_selector_list,
     parse_dom_api_selector_list_for_url, validate_style_rule_selector_list,
     validate_style_rule_selector_list_with_namespaces,
-    validate_supports_selector_condition_argument,
+    validate_supports_selector_condition_argument, validate_supports_selector_list_with_namespaces,
 };
 pub use style_traversal::{
     StyloDocument, StyloDomHostBinding, StyloDomStyleAdapter, StyloElement, StyloElementDataStore,
@@ -126,6 +183,7 @@ impl StyloDomApiAdapter {
         &'a self,
         host: &'a DomHost,
         atom_cache: &'a QueryAtomCache,
+        validity_states: Option<&'a HashMap<NodeId, bool>>,
     ) -> QueryDocument<'a> {
         QueryDocument::new(
             host,
@@ -133,6 +191,7 @@ impl StyloDomApiAdapter {
             &self.shared_lock,
             None,
             atom_cache,
+            validity_states,
         )
     }
 
@@ -141,15 +200,25 @@ impl StyloDomApiAdapter {
         host: &'a DomHost,
         handle: NodeId,
         atom_cache: &'a QueryAtomCache,
+        validity_states: Option<&'a HashMap<NodeId, bool>>,
     ) -> Option<QueryNode<'a>> {
-        host.node(handle)
-            .map(|_| QueryNode::new(host, handle, &self.shared_lock, None, atom_cache))
+        host.node(handle).map(|_| {
+            QueryNode::new(
+                host,
+                handle,
+                &self.shared_lock,
+                None,
+                atom_cache,
+                validity_states,
+            )
+        })
     }
 
     pub(super) fn query_selector_all(
         &self,
         host: &DomHost,
         selector: &str,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<Vec<NodeId>, SelectorError> {
         let atom_cache = QueryAtomCache::default();
         let selector_list = match parse_dom_api_selector_list(host, selector)? {
@@ -159,7 +228,7 @@ impl StyloDomApiAdapter {
         let mut results =
             <QueryAll as style::dom_apis::SelectorQuery<QueryElement<'_>>>::Output::default();
         query_selector::<QueryElement<'_>, QueryAll>(
-            self.document(host, &atom_cache).as_node(),
+            self.document(host, &atom_cache, validity_states).as_node(),
             &selector_list,
             &mut results,
             MayUseInvalidation::No,
@@ -172,6 +241,7 @@ impl StyloDomApiAdapter {
         host: &DomHost,
         root: NodeId,
         selector: &str,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<Vec<NodeId>, SelectorError> {
         if host.node(root).is_none() {
             return Ok(Vec::new());
@@ -181,7 +251,7 @@ impl StyloDomApiAdapter {
             ParsedDomApiSelectorList::EmptyKnownPseudoElement => return Ok(Vec::new()),
             ParsedDomApiSelectorList::Parsed(selector_list) => selector_list,
         };
-        let Some(root) = self.node(host, root, &atom_cache) else {
+        let Some(root) = self.node(host, root, &atom_cache, validity_states) else {
             return Ok(Vec::new());
         };
         let mut results =
@@ -199,6 +269,7 @@ impl StyloDomApiAdapter {
         &self,
         host: &DomHost,
         selector: &str,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<Option<NodeId>, SelectorError> {
         let atom_cache = QueryAtomCache::default();
         let selector_list = match parse_dom_api_selector_list(host, selector)? {
@@ -208,7 +279,7 @@ impl StyloDomApiAdapter {
         let mut result =
             <QueryFirst as style::dom_apis::SelectorQuery<QueryElement<'_>>>::Output::default();
         query_selector::<QueryElement<'_>, QueryFirst>(
-            self.document(host, &atom_cache).as_node(),
+            self.document(host, &atom_cache, validity_states).as_node(),
             &selector_list,
             &mut result,
             MayUseInvalidation::No,
@@ -221,6 +292,7 @@ impl StyloDomApiAdapter {
         host: &DomHost,
         root: NodeId,
         selector: &str,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<Option<NodeId>, SelectorError> {
         if host.node(root).is_none() {
             return Ok(None);
@@ -230,7 +302,7 @@ impl StyloDomApiAdapter {
             ParsedDomApiSelectorList::EmptyKnownPseudoElement => return Ok(None),
             ParsedDomApiSelectorList::Parsed(selector_list) => selector_list,
         };
-        let Some(root) = self.node(host, root, &atom_cache) else {
+        let Some(root) = self.node(host, root, &atom_cache, validity_states) else {
             return Ok(None);
         };
         let mut result =
@@ -249,6 +321,7 @@ impl StyloDomApiAdapter {
         host: &DomHost,
         handle: NodeId,
         selector: &str,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<bool, SelectorError> {
         let atom_cache = QueryAtomCache::default();
         let selector_list = match parse_dom_api_selector_list(host, selector)? {
@@ -256,7 +329,7 @@ impl StyloDomApiAdapter {
             ParsedDomApiSelectorList::Parsed(selector_list) => selector_list,
         };
         let Some(element) = self
-            .node(host, handle, &atom_cache)
+            .node(host, handle, &atom_cache, validity_states)
             .and_then(QueryNode::as_element)
         else {
             return Ok(false);
@@ -274,6 +347,7 @@ impl StyloDomApiAdapter {
         handle: NodeId,
         selector: &str,
         scope_root: NodeId,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<bool, SelectorError> {
         let selector_list = match parse_dom_api_selector_list(host, selector)? {
             ParsedDomApiSelectorList::EmptyKnownPseudoElement => return Ok(false),
@@ -281,13 +355,13 @@ impl StyloDomApiAdapter {
         };
         let atom_cache = QueryAtomCache::default();
         let Some(element) = self
-            .node(host, handle, &atom_cache)
+            .node(host, handle, &atom_cache, validity_states)
             .and_then(QueryNode::as_element)
         else {
             return Ok(false);
         };
         let Some(scope_element) = self
-            .node(host, scope_root, &atom_cache)
+            .node(host, scope_root, &atom_cache, validity_states)
             .and_then(QueryNode::as_element)
         else {
             return Ok(false);
@@ -315,6 +389,7 @@ impl StyloDomApiAdapter {
         host: &DomHost,
         handle: NodeId,
         selector: &str,
+        validity_states: Option<&HashMap<NodeId, bool>>,
     ) -> Result<Option<NodeId>, SelectorError> {
         let atom_cache = QueryAtomCache::default();
         let selector_list = match parse_dom_api_selector_list(host, selector)? {
@@ -322,7 +397,7 @@ impl StyloDomApiAdapter {
             ParsedDomApiSelectorList::Parsed(selector_list) => selector_list,
         };
         let Some(element) = self
-            .node(host, handle, &atom_cache)
+            .node(host, handle, &atom_cache, validity_states)
             .and_then(QueryNode::as_element)
         else {
             return Ok(None);

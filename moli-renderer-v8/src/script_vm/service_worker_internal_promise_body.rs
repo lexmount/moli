@@ -44,13 +44,20 @@ impl ScriptVm {
 
         let context = pending.context;
         let resolver = pending.resolver;
+        let scope_url = pending.scope_url;
+        let update_registration = pending.update_registration;
         let context_ptr: *const v8::Global<v8::Context> = &context;
         self.with_context_scope_by_ptr(context_ptr, move |scope, _host_ptr| {
             let resolver = v8::Local::new(scope, &resolver);
+            let update_registration = update_registration
+                .as_ref()
+                .map(|value| v8::Local::new(scope, value));
             crate::context_bootstrap::settle_service_worker_register_completion(
                 scope,
                 resolver,
+                update_registration,
                 owner.dispatch_scope(),
+                &scope_url,
                 completion.result,
             );
             Ok(())

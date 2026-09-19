@@ -457,14 +457,25 @@ fn isolated_child_dom_wrappers_use_isolated_intrinsic_prototypes() {
         (() => {
           const element = document.getElementById("shared-node");
           const created = document.createElement("span");
-          const traversed = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT).nextNode();
-          const correct = Object.getPrototypeOf(document) === HTMLDocument.prototype &&
-              Object.getPrototypeOf(element) === HTMLDivElement.prototype &&
-              Object.getPrototypeOf(created) === HTMLSpanElement.prototype &&
-              Object.getPrototypeOf(traversed) === HTMLHtmlElement.prototype;
+          const walker = document.createTreeWalker(document, NodeFilter.SHOW_ELEMENT);
+          const iterator = document.createNodeIterator(document, NodeFilter.SHOW_ELEMENT);
+          const checks = {
+            document: Object.getPrototypeOf(document) === HTMLDocument.prototype,
+            element: Object.getPrototypeOf(element) === HTMLDivElement.prototype,
+            created: Object.getPrototypeOf(created) === HTMLSpanElement.prototype,
+            walker: Object.getPrototypeOf(walker) === TreeWalker.prototype,
+            traversed: Object.getPrototypeOf(walker.nextNode()) === HTMLHtmlElement.prototype,
+            iterator: Object.getPrototypeOf(iterator) === NodeIterator.prototype,
+            iterated: Object.getPrototypeOf(iterator.nextNode()) === HTMLHtmlElement.prototype,
+            attribute: Object.getPrototypeOf(document.createAttribute("test")) === Attr.prototype,
+            attributeNS: Object.getPrototypeOf(document.createAttributeNS(null, "test")) === Attr.prototype,
+          };
+          for (const [name, passed] of Object.entries(checks)) {
+            if (!passed) throw new Error(`wrong isolated-world prototype: ${name}`);
+          }
           element.isolatedMarker = true;
           Object.setPrototypeOf(element, null);
-          return correct && document.getElementById("shared-node") === element &&
+          return document.getElementById("shared-node") === element &&
               Object.getPrototypeOf(element) === null;
         })()
     "#,

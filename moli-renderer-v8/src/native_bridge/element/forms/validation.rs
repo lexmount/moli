@@ -240,6 +240,20 @@ pub(in crate::native_bridge) fn control_matches_validity_pseudo(
     if !matches!(selector, ":valid" | ":invalid") {
         return None;
     }
+    let invalid = control_validity_pseudo_state(scope, runtime_ptr, handle)?;
+    Some(if selector == ":valid" {
+        !invalid
+    } else {
+        invalid
+    })
+}
+
+pub(in crate::native_bridge) fn control_validity_pseudo_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<bool> {
+    let runtime = unsafe { &*runtime_ptr };
     if runtime
         .dom_host()
         .node(handle)
@@ -250,24 +264,21 @@ pub(in crate::native_bridge) fn control_matches_validity_pseudo(
         let valid = controls
             .into_iter()
             .all(|control| control_satisfies_constraints(scope, runtime_ptr, control));
-        return Some(if selector == ":valid" { valid } else { !valid });
+        return Some(!valid);
     }
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return Some(false);
-    };
+    let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
     if is_form_associated_custom_element_handle(runtime, handle) {
         if !control_will_validate(runtime, handle) {
-            return Some(false);
+            return None;
         }
-        let valid = control_validity(scope, runtime_ptr, handle).valid();
-        return Some(if selector == ":valid" { valid } else { !valid });
+        return Some(!control_validity(scope, runtime_ptr, handle).valid());
     }
     if !element_matches_validity_pseudo(runtime, handle, element) {
-        return Some(false);
+        return None;
     }
     let valid = control_is_readonly_barred_from_constraint_validation(element)
         || control_validity(scope, runtime_ptr, handle).valid();
-    Some(if selector == ":valid" { valid } else { !valid })
+    Some(!valid)
 }
 
 pub(in crate::native_bridge) fn control_validation_message_getter_function<'s>(
@@ -441,7 +452,7 @@ fn element_is_constraint_validation_candidate(
     if control_is_readonly_barred_from_constraint_validation(element) {
         return false;
     }
-    element_type_supports_intrinsic_validation(element)
+    element_type_supports_intrinsic_validation_with_tree(runtime, handle, element)
 }
 
 fn element_matches_validity_pseudo(
@@ -455,17 +466,24 @@ fn element_matches_validity_pseudo(
     if control_has_datalist_ancestor(runtime, handle) {
         return false;
     }
-    element_type_supports_intrinsic_validation(element)
+    element_type_supports_intrinsic_validation_with_tree(runtime, handle, element)
 }
 
 fn element_type_supports_intrinsic_validation(element: &Element) -> bool {
     let input_type = element.is_html_input().then(|| element.input_type());
+    form_control_type_supports_intrinsic_validation(element.local_name(), input_type, false)
+}
+
+fn element_type_supports_intrinsic_validation_with_tree(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    element: &Element,
+) -> bool {
+    let input_type = element.is_html_input().then(|| element.input_type());
     form_control_type_supports_intrinsic_validation(
         element.local_name(),
         input_type,
-        element
-            .is_html_button()
-            .then(|| element.attribute("type").unwrap_or("submit")),
+        runtime.dom_host().button_is_submit_button(handle),
     )
 }
 

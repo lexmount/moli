@@ -44,9 +44,16 @@ fn enqueue_request_task_in_current_context<'s>(
     let typed_kind = match kind {
         "request-success" => IndexedDbTaskKind::RequestSuccess,
         "request-error" => IndexedDbTaskKind::RequestError,
+        "open-success" => IndexedDbTaskKind::OpenSuccess,
         _ => return,
     };
+    crate::context_bootstrap::indexed_db::queue_transaction_request_result(scope, request);
     let task = v8::Object::new(scope);
     register_indexed_db_request_dispatch_task(scope, task, typed_kind, request);
     enqueue_indexed_db_task(scope, task);
+    // The connection algorithm has finished and its result event is queued.
+    // Upgrade opens reach this point only after their transaction has finished.
+    if typed_kind != IndexedDbTaskKind::OpenSuccess {
+        finish_indexed_db_connection_request(scope, request);
+    }
 }

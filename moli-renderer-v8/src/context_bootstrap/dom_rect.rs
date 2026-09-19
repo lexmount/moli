@@ -136,7 +136,7 @@ struct DomRectPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRectReadOnly)]
+#[webapi(interface = web_api_interfaces::DOMRectReadOnly, enumerable)]
 struct DomRectReadOnlyConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",
@@ -147,7 +147,7 @@ struct DomRectReadOnlyConstructorDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::DOMRect)]
+#[webapi(interface = web_api_interfaces::DOMRect, enumerable)]
 struct DomRectConstructorDeclaration {
     #[webapi(
         static_method = "fromRect",
@@ -214,15 +214,15 @@ struct DomRectReadOnlyConstructorArgs {
 
 #[derive(Clone, Copy, Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "DOMRectInit")]
-struct DomRectInit {
+pub(super) struct DomRectInit {
     #[webidl(default = 0.0)]
-    x: f64,
+    pub(super) x: f64,
     #[webidl(default = 0.0)]
-    y: f64,
+    pub(super) y: f64,
     #[webidl(default = 0.0)]
-    width: f64,
+    pub(super) width: f64,
     #[webidl(default = 0.0)]
-    height: f64,
+    pub(super) height: f64,
 }
 
 pub(super) fn dom_rect_readonly_constructor_callback<'s>(
@@ -368,7 +368,7 @@ fn dom_rect_from_rect_callback<'s>(
     rv.set(build_dom_rect_object(scope, init.x, init.y, init.width, init.height).into());
 }
 
-fn dom_rect_init_arg<'s>(
+pub(super) fn dom_rect_init_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     prefix: &'static str,
@@ -559,6 +559,37 @@ fn dom_rect_receiver_branded<'s>(
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
     web_api_interfaces::DOMRectReadOnly::is_instance(scope, receiver)
+}
+
+pub(super) fn dom_rect_clone_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<(bool, [f64; 4])> {
+    if !dom_rect_receiver_branded(scope, object) {
+        return None;
+    }
+    let mutable = web_api_interfaces::DOMRect::is_instance(scope, object);
+    Some((
+        mutable,
+        [
+            dom_rect_slot(object, scope, DOM_RECT_X_SLOT),
+            dom_rect_slot(object, scope, DOM_RECT_Y_SLOT),
+            dom_rect_slot(object, scope, DOM_RECT_WIDTH_SLOT),
+            dom_rect_slot(object, scope, DOM_RECT_HEIGHT_SLOT),
+        ],
+    ))
+}
+
+pub(super) fn build_dom_rect_clone_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    mutable: bool,
+    [x, y, width, height]: [f64; 4],
+) -> v8::Local<'s, v8::Object> {
+    if mutable {
+        build_dom_rect_object(scope, x, y, width, height)
+    } else {
+        build_dom_rect_readonly_object(scope, x, y, width, height)
+    }
 }
 
 const DOM_RECT_WRITABLE_ATTRIBUTE_SLOTS: &[&str] = &[

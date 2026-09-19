@@ -5,7 +5,7 @@ pub(super) enum TreeMutationSideEffectSource {
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum TreeReactionDispatchPolicy {
+pub(in crate::document_runtime::mutation_commands) enum TreeReactionDispatchPolicy {
     DispatchNow,
     AppendToCurrentQueue,
 }
@@ -23,6 +23,7 @@ pub(super) struct TreeMutationSourceProfile {
     pub(super) nonce_policy: TreeNoncePolicy,
     pub(super) upgrade_connected_subtrees: bool,
     pub(super) queue_parser_details_toggle_events: bool,
+    pub(super) queue_resource_followups: bool,
 }
 
 impl TreeNoncePolicy {
@@ -55,6 +56,7 @@ impl TreeMutationSourceProfile {
             nonce_policy,
             upgrade_connected_subtrees: true,
             queue_parser_details_toggle_events: false,
+            queue_resource_followups: true,
         }
     }
 
@@ -72,6 +74,7 @@ impl TreeMutationSourceProfile {
             nonce_policy: TreeNoncePolicy::HideInsertedContentAttributes,
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
+            queue_resource_followups: true,
         }
     }
 
@@ -96,6 +99,7 @@ impl TreeMutationSourceProfile {
             nonce_policy: TreeNoncePolicy::HideInsertedContentAttributes,
             upgrade_connected_subtrees: false,
             queue_parser_details_toggle_events: true,
+            queue_resource_followups: true,
         }
     }
 }

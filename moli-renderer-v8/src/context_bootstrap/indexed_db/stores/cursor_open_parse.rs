@@ -30,10 +30,8 @@ pub(in crate::context_bootstrap::indexed_db::stores) fn parse_open_cursor_args<'
         parse_key_or_range(scope, query_value)
     };
     let query = match query {
-        Err(_) => {
-            let error =
-                dom_exception_value(scope, invalid_query_message(operation_name), "DataError");
-            scope.throw_exception(error);
+        Err(error) => {
+            error.throw(scope);
             return None;
         }
         Ok(query) => query,
@@ -46,13 +44,4 @@ pub(in crate::context_bootstrap::indexed_db::stores) fn parse_open_cursor_args<'
         }
     };
     Some(ParsedOpenCursorArgs { query, direction })
-}
-
-fn invalid_query_message(operation_name: &str) -> &'static str {
-    match operation_name {
-        "IDBObjectStore.openKeyCursor" | "IDBIndex.openKeyCursor" => {
-            "Failed to execute 'openKeyCursor': the query is not a valid key or key range."
-        }
-        _ => "Failed to execute 'openCursor': the query is not a valid key or key range.",
-    }
 }

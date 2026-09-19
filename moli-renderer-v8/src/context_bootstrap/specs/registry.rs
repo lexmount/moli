@@ -41,6 +41,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::DOMRectList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::PluginArray::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -85,6 +89,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumber::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -93,7 +101,27 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedString::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedLength::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedAngle::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedRect::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGPreserveAspectRatio::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedPreserveAspectRatio::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -109,7 +137,19 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedInteger::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGNumberList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGPointList::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGStringList::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -117,7 +157,15 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::SVGAnimatedBoolean::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::SVGAnimatedEnumeration::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::SVGUnitTypes::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -221,6 +269,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ClipboardEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ClipboardChangeEvent::DESCRIPTOR,
+        kind: ConstructorKind::ClipboardChangeEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::KeyboardEvent::DESCRIPTOR,
         kind: ConstructorKind::KeyboardEvent,
     },
@@ -290,11 +342,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::HashChangeEvent::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::HashChangeEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaQueryListEvent::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::MediaQueryListEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::SecurityPolicyViolationEvent::DESCRIPTOR,
@@ -337,6 +389,14 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::AbortController,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::Observable::DESCRIPTOR,
+        kind: ConstructorKind::Observable,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::Subscriber::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::BroadcastChannel::DESCRIPTOR,
         kind: ConstructorKind::BroadcastChannel,
     },
@@ -347,6 +407,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::IdleDetector::DESCRIPTOR,
         kind: ConstructorKind::IdleDetector,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::CloseWatcher::DESCRIPTOR,
+        kind: ConstructorKind::CloseWatcher,
     },
     ConstructorSpec {
         interface: web_api_interfaces::Notification::DESCRIPTOR,
@@ -451,6 +515,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         interface: web_api_interfaces::Navigator::DESCRIPTOR,
         kind: ConstructorKind::Navigator,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::UserActivation::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::Permissions::DESCRIPTOR,
@@ -836,6 +904,14 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::RtcSessionDescription,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::RTCPeerConnectionIceEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcPeerConnectionIceEvent,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::RTCDataChannelEvent::DESCRIPTOR,
+        kind: ConstructorKind::RtcDataChannelEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::RTCRtpReceiver::DESCRIPTOR,
         kind: ConstructorKind::Illegal,
     },
@@ -933,7 +1009,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::FileList::DESCRIPTOR,
-        kind: ConstructorKind::FileList,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         interface: web_api_interfaces::FileSystem::DESCRIPTOR,
@@ -973,7 +1049,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPointReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomPointReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMPoint::DESCRIPTOR,
@@ -985,11 +1061,11 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMQuad::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomQuad,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrixReadOnly::DESCRIPTOR,
-        kind: ConstructorKind::DomMatrix,
+        kind: ConstructorKind::DomMatrixReadOnly,
     },
     ConstructorSpec {
         interface: web_api_interfaces::DOMMatrix::DESCRIPTOR,
@@ -1173,6 +1249,10 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::IDBCursorWithValue::DESCRIPTOR,
+        kind: ConstructorKind::IndexedDb,
+    },
+    ConstructorSpec {
+        interface: web_api_interfaces::IDBRecord::DESCRIPTOR,
         kind: ConstructorKind::IndexedDb,
     },
     ConstructorSpec {

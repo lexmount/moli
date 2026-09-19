@@ -70,14 +70,15 @@ pub(crate) fn registry_association_from_create_options_value<'s>(
     registry_association_from_value(scope, registry)
 }
 
-pub(crate) fn registry_association_matches_document_default(
+pub(crate) fn registry_association_matches_document(
     host: &JsContextHost,
     document_handle: DomHandle,
     association: CustomElementRegistryAssociation,
 ) -> bool {
     if association.is_document_default_backed_registry() {
-        return host.default_custom_element_registry_association_for_document(document_handle)
-            == association;
+        // A Document keeps its registry after its browsing context is removed.
+        // Validate against that association, not a default inferred from live frames.
+        return host.effective_custom_element_registry_association(document_handle) == association;
     }
     true
 }

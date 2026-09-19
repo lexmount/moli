@@ -10,6 +10,33 @@ use moli_fetch::FetchConfig;
 use support::FixtureServer;
 use tokio::time::Duration;
 
+#[path = "web_apis/abort_signal.rs"]
+mod abort_signal;
+#[path = "web_apis/body_state.rs"]
+mod body_state;
+#[path = "web_apis/callback_cleanup.rs"]
+mod callback_cleanup;
+#[path = "web_apis/event_dispatch.rs"]
+mod event_dispatch;
+#[path = "web_apis/fetch_body_native.rs"]
+mod fetch_body_native;
+#[path = "web_apis/fetch_body_realm.rs"]
+mod fetch_body_realm;
+#[path = "web_apis/fetch_opaque_stream.rs"]
+mod fetch_opaque_stream;
+#[path = "web_apis/fetch_preaborted_upload.rs"]
+mod fetch_preaborted_upload;
+#[path = "web_apis/indexed_db_transaction.rs"]
+mod indexed_db_transaction;
+#[path = "web_apis/pipe_disturbed.rs"]
+mod pipe_disturbed;
+#[path = "web_apis/request_init.rs"]
+mod request_init;
+#[path = "web_apis/request_stream.rs"]
+mod request_stream;
+#[path = "web_apis/response_clone.rs"]
+mod response_clone;
+
 fn diagnostic_global<'a>(
     page: &'a moli_core::page::Page,
     name: &str,
@@ -195,7 +222,7 @@ async fn event_handler_accessors_cover_attribute_property_and_body_onload_reflec
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-body-onload-reflection=\"function:true:true:true\"")
+            .contains("data-body-onload-reflection=\"function:true:true:true:true\"")
     );
 
     server.shutdown().await;
@@ -350,7 +377,7 @@ async fn html_element_reflected_accessors_cover_simple_tag_specific_surface() ->
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-table-cell=\"1:1:1000:1000:0:0:65534:65534\"")
+            .contains("data-table-cell=\"1:1:1000:2000:0:0:65534:70000\"")
     );
     assert!(
         page.serialize_html_async()
@@ -5684,7 +5711,7 @@ async fn intersection_observer_options_reflect_root_margin_and_thresholds() -> R
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverThresholds"),
-        Some(&JsValueSnapshot::String("[0.25,0.75]".to_owned()))
+        Some(&JsValueSnapshot::String("[0.25,0.75,0.75]".to_owned()))
     );
     assert_eq!(
         diagnostic_global(&page, "intersectionObserverEntryPrototypeShape"),

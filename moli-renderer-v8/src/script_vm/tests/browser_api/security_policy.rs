@@ -1,6 +1,207 @@
 use super::*;
 
 #[test]
+fn inline_script_and_handler_csp_accept_base64url_hashes() {
+    for hash in [
+        "sha256-1u5siURgPyHwZ-QAD8UUU8_PSFeCLQfQgff1wmWe30c=",
+        "sha384-dfgfWBTXEJmr8n1u3heMCmQspfZzXztxsa6b_uRqupCtR1-hV5y1NIRIuk1GgyfX",
+        "sha512-yuIija81LFQ7iw1A1DtvkYIsDvqIgpOAzeloywzVVvfCZdYs43Z-Dh0lhILbiEstq4O56dtDfie_iALMCVjEMA==",
+    ] {
+        for unsafe_hashes in [false, true] {
+            let mut vm = new_storage_test_vm("https://inline-hash-csp.test/");
+            vm.document_runtime
+                .dom_host_mut()
+                .reset_html_document_shell();
+            let policy = format!(
+                "script-src '{hash}' {}",
+                if unsafe_hashes { "'unsafe-hashes'" } else { "" }
+            );
+            vm.set_response_content_security_policies(&[policy]);
+            let result = vm
+                .eval(&format!(
+                    "JSON.stringify({})",
+                    include_str!("../../../../tests/fixtures/csp-inline-hash.js")
+                ))
+                .unwrap();
+            assert_eq!(
+                result,
+                if unsafe_hashes {
+                    "[1,2,2,2]"
+                } else {
+                    "[1,1,1,1]"
+                },
+                "{hash}"
+            );
+        }
+    }
+}
+
+#[test]
+fn document_csp_eval_keywords_preserve_source_token_boundaries() {
+    for from_meta in [false, true] {
+        for keyword in ["unsafe-eval", "wasm-unsafe-eval"] {
+            for (prefix, suffix, valid) in [
+                ("", "", true),
+                ("\t\n", " \r\u{000c}", true),
+                ("\u{000b}", "", false),
+                ("", "\u{000b}", false),
+            ] {
+                let policy = format!("script-src {prefix}'{keyword}'{suffix}");
+                let mut vm = new_storage_test_vm("https://csp-source-tokens.test/");
+                if from_meta {
+                    vm.document_runtime
+                        .dom_host_mut()
+                        .reset_html_document_shell();
+                    vm.eval(&format!(
+                    "const meta = document.createElement('meta'); meta.httpEquiv = 'Content-Security-Policy'; meta.content = {}; document.head.appendChild(meta);",
+                    serde_json::to_string(&policy).unwrap(),
+                )).expect("install meta CSP without changing source token boundaries");
+                } else {
+                    vm.set_response_content_security_policies(std::slice::from_ref(&policy));
+                }
+                let result = vm
+                    .eval(&format!(
+                        "JSON.stringify({})",
+                        include_str!("../../../../tests/fixtures/csp-eval-source-tokens.js"),
+                    ))
+                    .expect("CSP execution probe");
+                let expected = serde_json::json!([
+                    if valid && keyword == "unsafe-eval" {
+                        "allowed"
+                    } else {
+                        "EvalError"
+                    },
+                    if valid && keyword == "unsafe-eval" {
+                        "allowed"
+                    } else {
+                        "EvalError"
+                    },
+                    if valid { "allowed" } else { "CompileError" },
+                ]);
+                assert_eq!(result, expected.to_string(), "meta={from_meta}: {policy:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn fetch_csp_violations_preserve_each_call_location_and_report_identity() {
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://fetch-source-location.test/page.html");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::CspReport),
+        );
+        let policies = ["connect-src 'none'; report-uri /report".to_owned()];
+        if enforce {
+            vm.set_response_content_security_policies(&policies);
+        } else {
+            vm.set_response_content_security_report_only_policies(&policies);
+        }
+        vm.eval(
+            r#"
+globalThis.fetchCspLocations = [];
+document.addEventListener('securitypolicyviolation', e => {
+  fetchCspLocations.push([e.sourceFile, e.lineNumber, e.columnNumber]);
+});
+for (let i = 0; i < 5; i++) { fetch('data:text/plain,blocked').catch(() => {}); }
+fetch('data:text/plain,blocked').catch(() => {});
+//# sourceURL=https://fetch-source-location.test/caller.js?secret#fragment
+"#,
+        )
+        .expect("fetch call locations should be captured synchronously");
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .pending_window_csp_report_execution_contexts_for_test()
+                .len(),
+            2,
+            "different call locations must produce distinct reports, enforce={enforce}"
+        );
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        let locations: Vec<(String, i32, i32)> =
+            serde_json::from_str(&vm.eval("JSON.stringify(fetchCspLocations)").unwrap()).unwrap();
+        assert_eq!(locations.len(), 6);
+        assert!(locations.iter().all(|(url, line, column)| url
+            == "https://fetch-source-location.test/caller.js"
+            && *line > 0
+            && *column > 0));
+        assert!(
+            locations[..5]
+                .iter()
+                .all(|location| location == &locations[0])
+        );
+        assert_ne!(locations[0].1, locations[5].1);
+    }
+}
+
+#[test]
+fn inline_script_reports_every_policy_and_only_enforced_policies_block() {
+    let policies = [
+        "script-src 'nonce-allowed' 'report-sample'".to_owned(),
+        "script-src 'nonce-allowed'".to_owned(),
+    ];
+    for enforce in [false, true] {
+        let mut vm = new_storage_test_vm("https://multiple-inline-csp.test/page.html");
+        if enforce {
+            vm.set_response_content_security_policies(&policies);
+        }
+        vm.set_response_content_security_report_only_policies(&policies);
+        vm.eval(
+            r#"
+globalThis.multipleCspEvents = [];
+document.addEventListener('securitypolicyviolation', event => {
+  multipleCspEvents.push({
+    policy: event.originalPolicy,
+    disposition: event.disposition,
+    directive: event.effectiveDirective,
+    blockedURI: event.blockedURI,
+    sample: event.sample,
+    target: event.target.id,
+  });
+});
+const root = document.documentElement || document.appendChild(document.createElement('html'));
+const blocked = document.createElement('script');
+blocked.id = 'reported';
+blocked.text = 'globalThis.untrustedRan = true';
+root.appendChild(blocked);
+const allowed = document.createElement('script');
+allowed.nonce = 'allowed';
+allowed.text = 'globalThis.trustedRan = true';
+root.appendChild(allowed);
+"#,
+        )
+        .expect("inline script probe");
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
+        assert_eq!(
+            vm.eval("globalThis.untrustedRan === true").unwrap(),
+            (!enforce).to_string(),
+        );
+        assert_eq!(vm.eval("globalThis.trustedRan === true").unwrap(), "true");
+        let events: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(multipleCspEvents)").unwrap()).unwrap();
+        let mut expected = Vec::new();
+        for disposition in if enforce {
+            vec!["report", "enforce"]
+        } else {
+            vec!["report"]
+        } {
+            for (index, policy) in policies.iter().enumerate() {
+                expected.push(serde_json::json!({
+                    "policy": policy,
+                    "disposition": disposition,
+                    "directive": "script-src-elem",
+                    "blockedURI": "inline",
+                    "sample": if index == 0 { "globalThis.untrustedRan = true" } else { "" },
+                    "target": "reported",
+                }));
+            }
+        }
+        assert_eq!(events, serde_json::json!(expected));
+    }
+}
+
+#[test]
 fn module_fetch_csp_uses_captured_parser_metadata_and_nonce() {
     let mut vm = new_storage_test_vm("https://module-csp-provenance.test/page.html");
     vm.set_response_content_security_policies(&[
@@ -1138,4 +1339,38 @@ document.addEventListener("securitypolicyviolation", event => {
             )
         );
     }
+}
+
+#[test]
+fn repeated_eval_violations_report_once_per_location_but_dispatch_every_event() {
+    let mut vm = new_storage_test_vm("https://eval-report-dedup.test/page.html");
+    vm.set_fetch_subresource_interception(
+        true,
+        Some(crate::types::SubresourceResourceType::CspReport),
+    );
+    vm.set_response_content_security_policies(
+        &["script-src 'self'; report-uri /report".to_owned()],
+    );
+    assert_eq!(vm.eval(r#"
+        globalThis.violations = 0;
+        document.addEventListener('securitypolicyviolation', () => violations++);
+        let errors = 0;
+        for (let i = 0; i < 5; i++) {
+            try { eval('throw new Error("must not execute")'); } catch (e) { if (e.name === 'EvalError') errors++; }
+        }
+        try { eval('throw new Error("different call")'); } catch (e) { if (e.name === 'EvalError') errors++; }
+        errors;
+    "#).unwrap(), "6");
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_window_csp_report_execution_contexts_for_test()
+            .len(),
+        2
+    );
+    assert_eq!(
+        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        6
+    );
+    assert_eq!(vm.eval("violations").unwrap(), "6");
 }

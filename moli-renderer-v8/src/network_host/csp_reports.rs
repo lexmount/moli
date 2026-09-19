@@ -1,7 +1,5 @@
 use super::*;
-use crate::content_security_policy::{
-    ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
-};
+use crate::content_security_policy::ContentSecurityPolicyViolationEventFields;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::WorkerOwnerScope;
 use crate::service_worker_runtime::{
@@ -107,6 +105,15 @@ pub(crate) struct WindowCspReportRequestContext {
     client_id: crate::service_worker_runtime::ServiceWorkerClientId,
 }
 
+impl std::fmt::Debug for WindowCspReportRequestContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WindowCspReportRequestContext")
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
 impl WindowCspReportRequestContext {
     pub(crate) fn identity(&self) -> crate::native_bridge::WindowDocumentNetworkRequestIdentity {
         self.identity
@@ -180,8 +187,10 @@ fn send_content_security_policy_reports_from_window_context(
     report_uri_endpoints: &[String],
     report_to_endpoints: &[String],
 ) {
-    for request in
-        content_security_policy_report_requests(fields, report_uri_endpoints, report_to_endpoints)
+    for request in request_context
+        .resource_loader
+        .content_security_policy_reports()
+        .requests(fields, report_uri_endpoints, report_to_endpoints)
     {
         send_content_security_policy_report_request(host, request_context, request);
     }
@@ -301,6 +310,7 @@ fn dispatch_service_worker_content_security_policy_report(
     );
     let request_body_text = report_request_body_text(&request);
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: None,
         internal_id,
         request: host.service_worker_fetch_request(
             request_context.client_id,

@@ -26,6 +26,11 @@ impl DocumentRuntime {
             .iter()
             .position(PostParsePageOwnedWork::starts_after_domcontentloaded_boundary)
             .unwrap_or(work.len());
+        // This is an owner-queue boundary marker, not yet the HTML event-loop
+        // queue point for DOMContentLoaded. When it reaches the front after all
+        // defer-like and parser-owned pre-DCL work has drained, the driver
+        // admits the event to the shared DOM task source before yielding to
+        // ready timer tasks recorded during classic defer execution.
         work.insert(
             domcontentloaded_index,
             PostParsePageOwnedWork::main_document_domcontentloaded(owner),
@@ -72,6 +77,13 @@ impl DocumentRuntime {
                         "dropping stale main parser-deferred adapter marker without owned parser work"
                     );
                 }
+            } else if item.is_async_phase_document_script() {
+                // Parser EOF does not make async scripts wait for the defer
+                // list or DOMContentLoaded. Transfer each remaining script to
+                // its exact Document producer; pending sources publish their
+                // own ready task when they complete.
+                self.enqueue_main_document_post_parse_work(item)
+                    .expect("post-parse async work must retain its main Document runtime route");
             } else {
                 queued_work.push(item);
             }

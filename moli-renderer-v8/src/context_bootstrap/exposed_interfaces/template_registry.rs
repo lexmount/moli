@@ -81,8 +81,12 @@ impl ExposedInterfaceTemplateRegistry {
             .ok_or_else(|| anyhow!("exposed interface template registry was already installed"))
     }
 
-    pub(super) fn current(scope: &mut v8::PinScope<'_, '_>) -> Option<Rc<Self>> {
-        scope.get_slot::<Rc<Self>>().cloned()
+    pub(super) fn current<C>(scope: &mut v8::PinScope<'_, '_, C>) -> Option<Rc<Self>> {
+        scope.as_mut().get_slot::<Rc<Self>>().cloned()
+    }
+
+    pub(super) const fn profile(&self) -> TemplateBuildProfile {
+        self.profile
     }
 
     pub(super) fn metadata(&self, id: InterfaceId) -> Option<ExposedInterfaceMetadata> {
@@ -231,7 +235,17 @@ impl ExposedInterfaceTemplateRegistry {
         }
         let template = build_profiled_exposed_interface_template(scope, spec, self.profile)?;
         if let Some(parent) = parent {
-            template.inherit(parent);
+            if metadata.name == "Window" {
+                parent.prototype_template(scope).set_immutable_proto();
+                let named_properties =
+                    crate::context_bootstrap::window_template::window_named_properties_template(
+                        scope, parent,
+                    );
+                template.inherit(named_properties);
+                template.prototype_template(scope).set_immutable_proto();
+            } else {
+                template.inherit(parent);
+            }
         }
         Ok(template)
     }

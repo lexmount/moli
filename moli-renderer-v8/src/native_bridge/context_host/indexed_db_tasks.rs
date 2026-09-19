@@ -10,26 +10,38 @@ use std::{
 
 struct IndexedDbOpenConnection {
     execution_context: WindowExecutionContextIdentity,
-    context: v8::Global<v8::Context>,
     database: v8::Global<v8::Object>,
     database_key: String,
-    version: u64,
-}
-
-pub(crate) struct IndexedDbOpenConnectionSnapshot {
-    pub(crate) execution_context: WindowExecutionContextIdentity,
-    pub(crate) context: v8::Global<v8::Context>,
-    pub(crate) database: v8::Global<v8::Object>,
 }
 
 #[derive(Default)]
 pub(super) struct IndexedDbContextRetirement {
     pub(super) retired_connections: Vec<DatabaseHandle>,
+    retired_requests: Vec<crate::context_bootstrap::ConnectionRequestHandle>,
     scheduled_drains: Vec<WindowExecutionContextIdentity>,
+}
+
+impl IndexedDbContextRetirement {
+    pub(super) fn finish(self, manager: Option<&crate::WeakIndexedDbManager>) {
+        if let Some(manager) = manager {
+            let _ = manager.close_database_handles(self.retired_connections);
+        }
+        // A successor can run on another worker immediately after its wake.
+        // Release queue positions only after closing the retired connections.
+        for request in self.retired_requests {
+            request.finish();
+        }
+    }
 }
 
 #[derive(Default)]
 pub(super) struct IndexedDbContextState {
+    connection_requests: RefCell<
+        HashMap<
+            WindowExecutionContextIdentity,
+            Vec<crate::context_bootstrap::ConnectionRequestHandle>,
+        >,
+    >,
     open_connections: RefCell<BTreeMap<DatabaseHandle, IndexedDbOpenConnection>>,
     blocked_contexts: RefCell<HashMap<(String, WindowExecutionContextIdentity), usize>>,
     pending_blocked_drains: RefCell<HashSet<WindowExecutionContextIdentity>>,
@@ -42,17 +54,14 @@ impl IndexedDbContextState {
         execution_context: WindowExecutionContextIdentity,
         handle: DatabaseHandle,
         database_key: String,
-        version: u64,
         database: v8::Local<'_, v8::Object>,
     ) {
         let previous = self.open_connections.borrow_mut().insert(
             handle,
             IndexedDbOpenConnection {
                 execution_context,
-                context: v8::Global::new(scope, scope.get_current_context()),
                 database: v8::Global::new(scope, database),
                 database_key,
-                version,
             },
         );
         assert!(
@@ -61,31 +70,15 @@ impl IndexedDbContextState {
         );
     }
 
-    fn open_connection_snapshots(
+    fn open_connection_for_handle<'s>(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        database_key: &str,
-    ) -> Vec<IndexedDbOpenConnectionSnapshot> {
-        self.open_connections
-            .borrow()
-            .values()
-            .filter(|connection| connection.database_key == database_key)
-            .map(|connection| IndexedDbOpenConnectionSnapshot {
-                execution_context: connection.execution_context,
-                context: v8::Global::new(scope, v8::Local::new(scope, &connection.context)),
-                database: v8::Global::new(scope, v8::Local::new(scope, &connection.database)),
-            })
-            .collect()
-    }
-
-    fn open_connection_version(&self, database_key: &str) -> Option<u64> {
-        self.open_connections
-            .borrow()
-            .values()
-            .filter_map(|connection| {
-                (connection.database_key == database_key).then_some(connection.version)
-            })
-            .max()
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DatabaseHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        Some(v8::Local::new(
+            scope,
+            &self.open_connections.borrow().get(&handle)?.database,
+        ))
     }
 
     fn register_blocked_context(
@@ -163,6 +156,16 @@ impl IndexedDbContextState {
         &self,
         should_retire: impl Fn(WindowExecutionContextIdentity) -> bool,
     ) -> IndexedDbContextRetirement {
+        let mut retired_requests = Vec::new();
+        self.connection_requests
+            .borrow_mut()
+            .retain(|owner, requests| {
+                if !should_retire(*owner) {
+                    return true;
+                }
+                retired_requests.append(requests);
+                false
+            });
         self.blocked_contexts
             .borrow_mut()
             .retain(|(_, candidate), _| !should_retire(*candidate));
@@ -186,6 +189,7 @@ impl IndexedDbContextState {
 
         IndexedDbContextRetirement {
             retired_connections,
+            retired_requests,
             scheduled_drains: scheduled_drains.into_iter().collect(),
         }
     }
@@ -203,6 +207,36 @@ impl IndexedDbContextState {
 }
 
 impl JsContextHost {
+    pub(crate) fn register_indexed_db_connection_request(
+        &self,
+        owner: WindowExecutionContextIdentity,
+        request: crate::context_bootstrap::ConnectionRequestHandle,
+    ) {
+        self.indexed_db_context_tasks
+            .connection_requests
+            .borrow_mut()
+            .entry(owner)
+            .or_default()
+            .push(request);
+    }
+
+    pub(crate) fn unregister_indexed_db_connection_request(
+        &self,
+        owner: WindowExecutionContextIdentity,
+        id: u64,
+    ) {
+        let mut requests = self
+            .indexed_db_context_tasks
+            .connection_requests
+            .borrow_mut();
+        if let Some(owned) = requests.get_mut(&owner) {
+            owned.retain(|request| request.id() != id);
+            if owned.is_empty() {
+                requests.remove(&owner);
+            }
+        }
+    }
+
     fn schedule_indexed_db_blocked_drains(
         &self,
         execution_contexts: impl IntoIterator<Item = WindowExecutionContextIdentity>,
@@ -239,7 +273,6 @@ impl JsContextHost {
         execution_context: WindowExecutionContextIdentity,
         handle: DatabaseHandle,
         database_key: String,
-        version: u64,
         database: v8::Local<'_, v8::Object>,
     ) {
         self.indexed_db_context_tasks.register_open_connection(
@@ -247,23 +280,17 @@ impl JsContextHost {
             execution_context,
             handle,
             database_key,
-            version,
             database,
         );
     }
 
-    pub(crate) fn indexed_db_open_connection_snapshots(
+    pub(crate) fn indexed_db_open_connection_for_handle<'s>(
         &self,
-        scope: &mut v8::PinScope<'_, '_>,
-        database_key: &str,
-    ) -> Vec<IndexedDbOpenConnectionSnapshot> {
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DatabaseHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
         self.indexed_db_context_tasks
-            .open_connection_snapshots(scope, database_key)
-    }
-
-    pub(crate) fn indexed_db_open_connection_version(&self, database_key: &str) -> Option<u64> {
-        self.indexed_db_context_tasks
-            .open_connection_version(database_key)
+            .open_connection_for_handle(scope, handle)
     }
 
     pub(crate) fn unregister_indexed_db_open_connection(&self, handle: DatabaseHandle) -> bool {
@@ -326,6 +353,50 @@ impl JsContextHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_db_retirement_closes_connections_before_waking_other_event_loops() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        };
+        let manager = crate::new_indexed_db_manager(None).unwrap();
+        let weak = crate::downgrade_indexed_db_manager(&manager);
+        let opened = manager
+            .lock()
+            .open(moli_indexeddb::OpenOptions {
+                origin: "origin".to_owned(),
+                name: "db".into(),
+                version: None,
+            })
+            .unwrap();
+        let queues = manager.lock().connection_request_queues();
+        let first = queues.enqueue("origin", "db", Arc::new(|| {}));
+        let woken = Arc::new(AtomicBool::new(false));
+        let second = queues.enqueue("origin", "db", {
+            let weak = weak.clone();
+            let woken = woken.clone();
+            Arc::new(move || {
+                assert!(
+                    weak.upgrade()
+                        .unwrap()
+                        .lock()
+                        .close_database(opened.database)
+                        .is_err(),
+                    "the retired connection must be closed before a successor can execute"
+                );
+                woken.store(true, Ordering::SeqCst);
+            })
+        });
+        IndexedDbContextRetirement {
+            retired_connections: vec![opened.database],
+            retired_requests: vec![first.handle().clone()],
+            ..Default::default()
+        }
+        .finish(Some(&weak));
+        assert!(woken.load(Ordering::SeqCst));
+        assert!(second.handle().is_head());
+    }
 
     fn identity(raw: u64) -> WindowExecutionContextIdentity {
         WindowExecutionContextIdentity::new(

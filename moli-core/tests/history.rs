@@ -1062,14 +1062,14 @@ async fn history_back_traversal_is_not_synchronous() -> Result<()> {
 }
 
 #[tokio::test]
-async fn history_same_turn_back_then_forward_coalesces_without_popstate() -> Result<()> {
+async fn history_same_turn_back_then_forward_dispatches_both_popstates() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
     let mut page = browser
-        .fetch(&server.url("/compat/history-back-forward-same-turn-coalesces"))
+        .fetch(&server.url("/compat/history-back-forward-same-turn-queues"))
         .await?;
-    wait_for_body_attribute(&browser, &mut page, "data-timeout-state", "2").await?;
+    wait_for_body_attribute(&browser, &mut page, "data-popstate-log", "1,2").await?;
 
     assert!(
         page.serialize_html_async()
@@ -1083,7 +1083,7 @@ async fn history_same_turn_back_then_forward_coalesces_without_popstate() -> Res
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-timeout-state=\"2\""),
+            .contains("data-final-state=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -1091,7 +1091,7 @@ async fn history_same_turn_back_then_forward_coalesces_without_popstate() -> Res
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-popstate-log=\"\""),
+            .contains("data-popstate-log=\"1,2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );

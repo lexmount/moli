@@ -62,6 +62,7 @@ pub(in crate::network) struct RawSubresourceCacheKey {
     page_cache_partition_id: u64,
     url: String,
     resource_type: &'static str,
+    follow_redirects: bool,
     credentials_mode: String,
     request_origin: Option<String>,
     request_mode: String,
@@ -635,6 +636,7 @@ pub(in crate::network) fn raw_subresource_memory_cache_key(
         page_cache_partition_id: 0,
         url: request.url.as_str().to_owned(),
         resource_type: raw_subresource_cache_resource_type_key(request.resource_type),
+        follow_redirects: request.follow_redirects,
         credentials_mode: request.credentials_mode.as_ref().to_owned(),
         request_origin: request
             .request_origin()
@@ -668,7 +670,10 @@ fn raw_subresource_request_is_memory_cacheable(request: &Request) -> bool {
         && request.method.eq_ignore_ascii_case("GET")
         && request.body.is_none()
         && request.auth().is_none()
-        && request.follow_redirects
+        // The browser's CORS loop follows redirects itself. Its individual
+        // transport requests can still reuse cached responses with an empty
+        // URL list, in a separate bucket from automatically followed fetches.
+        && request.redirect_mode == moli_fetch::RequestRedirectMode::Follow
         && raw_subresource_memory_cacheable_headers(request)
 }
 
@@ -822,6 +827,7 @@ mod tests {
     fn response(url: &str, body: &str) -> Response {
         Response::from_head_and_text_body(
             ResponseHead {
+                status_text: None,
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
                 headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
@@ -839,6 +845,7 @@ mod tests {
     fn raw_response(url: &str, body: &[u8]) -> RawResponse {
         RawResponse::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
                 headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
@@ -866,6 +873,47 @@ mod tests {
         cache.complete_script_text(&key, &load, request, &result);
         load.finish(result);
         load
+    }
+
+    #[test]
+    fn per_hop_cache_keeps_transport_redirects_and_client_origins_separate() {
+        let initiator = Url::parse("https://cache.test/page").unwrap();
+        let automatic = Request::get("https://cache.test/resource")
+            .unwrap()
+            .with_resource_type(RequestResourceType::Raw)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+            .with_request_origin((&initiator).into())
+            .with_initiator_url(&initiator);
+        let per_hop = automatic.clone().with_follow_redirects(false);
+        let key = raw_subresource_memory_cache_key(&per_hop).expect("cacheable first CORS hop");
+        let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
+        cache.insert_raw_subresource(
+            key.clone(),
+            raw_response(per_hop.url.as_str(), b"cached"),
+            u64::MAX,
+        );
+        assert!(cache.lookup_raw_subresource(&key).is_some());
+        for isolated in [
+            automatic,
+            per_hop
+                .clone()
+                .with_request_origin(moli_url::WebOrigin::Opaque),
+        ] {
+            let isolated_key = raw_subresource_memory_cache_key(&isolated).unwrap();
+            assert!(
+                cache.lookup_raw_subresource(&isolated_key).is_none(),
+                "a cached hop cannot replace an automatic redirect or another client's response"
+            );
+        }
+        for mode in [
+            moli_fetch::RequestRedirectMode::Manual,
+            moli_fetch::RequestRedirectMode::Error,
+        ] {
+            assert!(
+                raw_subresource_memory_cache_key(&per_hop.clone().with_redirect_mode(mode))
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -1001,6 +1049,7 @@ mod tests {
         };
         let response = Response::from_head_and_body(
             ResponseHead {
+                status_text: None,
                 final_url: request.url.clone(),
                 status: 200,
                 headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],

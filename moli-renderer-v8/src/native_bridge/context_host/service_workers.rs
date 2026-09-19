@@ -67,8 +67,10 @@ impl ServiceWorkerWindowRequestContext {
 
 pub(crate) struct PendingServiceWorkerRegister {
     pub(crate) owner: ServiceWorkerWindowOwner,
+    pub(crate) scope_url: Url,
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) resolver: v8::Global<v8::PromiseResolver>,
+    pub(crate) update_registration: Option<v8::Global<v8::Object>>,
 }
 
 pub(crate) struct PendingServiceWorkerReady {
@@ -441,7 +443,9 @@ impl JsContextHost {
     pub(crate) fn register_pending_service_worker_register(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        scope_url: Url,
         resolver: v8::Local<'_, v8::PromiseResolver>,
+        update_registration: Option<v8::Local<'_, v8::Object>>,
         owner: ServiceWorkerWindowOwner,
     ) -> (
         u64,
@@ -453,8 +457,11 @@ impl JsContextHost {
             request_id,
             PendingServiceWorkerRegister {
                 owner,
+                scope_url,
                 context: v8::Global::new(scope, scope.get_current_context()),
                 resolver: v8::Global::new(scope, resolver),
+                update_registration: update_registration
+                    .map(|registration| v8::Global::new(scope, registration)),
             },
         );
         tracing::debug!(
@@ -670,6 +677,54 @@ impl JsContextHost {
         self.watch_pending_service_worker_ready();
     }
 
+    pub(crate) fn start_service_worker_registration_update(
+        &mut self,
+        registration_id: crate::service_worker_runtime::ServiceWorkerRegistrationId,
+        request_context: &ServiceWorkerWindowRequestContext,
+        request_client: crate::network::ResourceRequestClient,
+        request_id: u64,
+        document_owner: WindowDocumentOwner,
+        completion_tx: crate::page_task_queue::RendererPageServiceWorkerTaskSender,
+    ) {
+        self.ensure_service_worker_client_for_request_context(request_context);
+        self.browser_context_runtime
+            .service_worker_runtime()
+            .start_registration_update(
+                crate::service_worker_runtime::ServiceWorkerRegistrationUpdate {
+                    registration_id,
+                    caller_version_id: None,
+                    storage_key: request_context.serialized_storage_key(),
+                    document_url: request_context.document_url().clone(),
+                    request_client,
+                    network_policy: WorkerNetworkPolicy {
+                        secure_context: moli_url::is_potentially_trustworthy_url(
+                            request_context.document_url(),
+                        ),
+                        permission_overrides: self.permission_overrides().to_vec(),
+                        extra_http_headers: self.extra_http_headers().to_vec(),
+                        network_offline: self.network_offline(),
+                        blocked_url_patterns: self.blocked_url_patterns().to_vec(),
+                        network_partition_key: None,
+                        fetch_subresource_interception_enabled: self
+                            .fetch_subresource_interception_enabled(),
+                        fetch_subresource_interception_resource_type: self
+                            .fetch_subresource_interception_resource_type(),
+                    },
+                    worker_context_runtime: self.browser_context_runtime.worker_context_runtime(),
+                    broadcast_channel_top_level_site: Some(
+                        request_context.storage_key_top_level_site(),
+                    ),
+                    indexed_db_manager: self.indexed_db_manager(),
+                    storage_bucket_store: Some(self.storage_bucket_store()),
+                    completion: crate::service_worker_runtime::ServiceWorkerRegisterJob::Page {
+                        request_id,
+                        document_owner,
+                        completion_tx,
+                    },
+                },
+            );
+    }
+
     pub(crate) fn watch_pending_service_worker_ready(&mut self) -> bool {
         let requests = self.pending_service_worker_ready_requests();
         let mut attached_any = false;
@@ -826,16 +881,17 @@ impl JsContextHost {
         let owner = request_context.owner();
         let storage_key = request_context.serialized_storage_key();
         self.compact_service_worker_registration_watchers();
-        if self
-            .service_worker_registration_watchers
-            .iter()
-            .any(|watcher| {
-                watcher.owner == owner
-                    && watcher.scope_url == scope_url
-                    && watcher.storage_key == storage_key
-                    && !watcher.registration.is_empty()
-            })
+        if let Some(watcher) =
+            self.service_worker_registration_watchers
+                .iter_mut()
+                .find(|watcher| {
+                    watcher.owner == owner
+                        && watcher.scope_url == scope_url
+                        && watcher.storage_key == storage_key
+                        && !watcher.registration.is_empty()
+                })
         {
+            watcher.registration = v8::Weak::new(scope, registration);
             return;
         }
         self.service_worker_registration_watchers

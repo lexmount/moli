@@ -168,6 +168,63 @@ async fn classic_script_exception_reports_window_error_then_completes() {
     );
 }
 
+#[tokio::test]
+async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"
+        globalThis.__mutedClassicScriptErrors = [];
+        window.onerror = (message, source, line, column, error) => {
+          globalThis.__mutedClassicScriptErrors.push({
+            message,
+            source,
+            line,
+            column,
+            errorIsNull: error === null,
+          });
+          return true;
+        };
+        "installed";
+        "#,
+    )
+    .expect("window error observer should install");
+
+    for (position, source) in [
+        (8, "throw new Error('runtime secret');"),
+        (9, "function syntaxError( {"),
+    ] {
+        let mut script = ready_dynamic_runtime_script(position);
+        script.url = Url::parse(&format!("https://cross-origin.test/script-{position}.js"))
+            .expect("cross-origin script URL");
+        script.base_url = script.url.clone();
+        let script = crate::planning::prepared_script_with_loaded_source(
+            script,
+            source.to_owned(),
+            None,
+            true,
+        );
+
+        let outcome = vm
+            .execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("a muted exception should still complete classic script evaluation");
+        assert!(matches!(
+            outcome,
+            crate::script_vm::LoadedScriptExecutionOutcome::Completed(
+                crate::script_vm::PreparedScriptBodyActivity::Entered
+            )
+        ));
+        assert_eq!(script.base_url.as_str(), "about:blank");
+    }
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__mutedClassicScriptErrors)")
+            .expect("muted classic script errors should remain observable"),
+        r#"[{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true},{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true}]"#,
+    );
+}
+
 fn is_document_script_execution_work(
     work: &PostParsePageOwnedWork,
     lane: crate::document_script_scheduler::DocumentScriptExecutionLane,
@@ -291,6 +348,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
     let final_url = Url::parse("https://cdn.test/final.js").unwrap();
     let response = Ok(crate::types::NavigationResponse::from_head_and_text_body(
         moli_fetch::ResponseHead {
+            status_text: None,
             final_url: final_url.clone(),
             status: 200,
             headers: Vec::new(),
@@ -3451,7 +3509,7 @@ async fn reentrant_runtime_admission_survives_page_task_claim_in_stable_authorit
 }
 
 #[test]
-fn script_terminal_event_body_defers_listener_reaction_to_task_completion() {
+fn script_terminal_event_body_cleans_up_listener_reactions_before_task_completion() {
     let _js_runtime = crate::JsRuntime::initialize();
     let document = HtmlParser::SCRIPTING_ENABLED.parse(
         Url::parse("https://example.com/").unwrap(),
@@ -3512,8 +3570,8 @@ fn script_terminal_event_body_defers_listener_reaction_to_task_completion() {
     assert_eq!(
         vm.eval_without_microtask_checkpoint_for_test("__runtimeTerminalOrder.join('|')")
             .expect("terminal body order should be readable without a checkpoint"),
-        "load",
-        "the terminal body must not perform the enclosing task-end checkpoint"
+        "load|load-microtask",
+        "terminal event callback cleanup must drain listener reactions before task completion"
     );
     vm.perform_script_task_checkpoint(None)
         .expect("selected task completion checkpoint should run");
@@ -4006,59 +4064,62 @@ fn indexed_db_declared_methods_have_webidl_operation_descriptors() {
             r#"
             (() => {
               const methods = [
-                [IDBFactory.prototype, "open", 2],
+                [IDBFactory.prototype, "open", 1],
                 [IDBFactory.prototype, "deleteDatabase", 1],
                 [IDBFactory.prototype, "databases", 0],
                 [IDBFactory.prototype, "cmp", 2],
                 [IDBFactory.prototype, "databases", 0],
-                [IDBDatabase.prototype, "createObjectStore", 2],
+                [IDBDatabase.prototype, "createObjectStore", 1],
                 [IDBDatabase.prototype, "deleteObjectStore", 1],
-                [IDBDatabase.prototype, "transaction", 2],
+                [IDBDatabase.prototype, "transaction", 1],
                 [IDBDatabase.prototype, "close", 0],
-                [IDBDatabase.prototype, "addEventListener", 2],
-                [IDBDatabase.prototype, "removeEventListener", 2],
-                [IDBDatabase.prototype, "dispatchEvent", 1],
                 [IDBTransaction.prototype, "objectStore", 1],
                 [IDBTransaction.prototype, "abort", 0],
                 [IDBTransaction.prototype, "commit", 0],
-                [IDBTransaction.prototype, "addEventListener", 2],
-                [IDBTransaction.prototype, "removeEventListener", 2],
-                [IDBTransaction.prototype, "dispatchEvent", 1],
-                [IDBRequest.prototype, "addEventListener", 2],
-                [IDBRequest.prototype, "removeEventListener", 2],
-                [IDBRequest.prototype, "dispatchEvent", 1],
+                [EventTarget.prototype, "addEventListener", 2],
+                [EventTarget.prototype, "removeEventListener", 2],
+                [EventTarget.prototype, "dispatchEvent", 1],
                 [IDBObjectStore.prototype, "get", 1],
-                [IDBObjectStore.prototype, "getAll", 2],
+                [IDBObjectStore.prototype, "getAll", 0],
                 [IDBObjectStore.prototype, "getKey", 1],
-                [IDBObjectStore.prototype, "getAllKeys", 2],
-                [IDBObjectStore.prototype, "count", 1],
-                [IDBObjectStore.prototype, "put", 2],
-                [IDBObjectStore.prototype, "add", 2],
+                [IDBObjectStore.prototype, "getAllKeys", 0],
+                [IDBObjectStore.prototype, "getAllRecords", 0],
+                [IDBObjectStore.prototype, "count", 0],
+                [IDBObjectStore.prototype, "put", 1],
+                [IDBObjectStore.prototype, "add", 1],
                 [IDBObjectStore.prototype, "delete", 1],
                 [IDBObjectStore.prototype, "clear", 0],
-                [IDBObjectStore.prototype, "createIndex", 3],
+                [IDBObjectStore.prototype, "createIndex", 2],
                 [IDBObjectStore.prototype, "index", 1],
                 [IDBObjectStore.prototype, "deleteIndex", 1],
-                [IDBObjectStore.prototype, "openCursor", 2],
-                [IDBObjectStore.prototype, "openKeyCursor", 2],
+                [IDBObjectStore.prototype, "openCursor", 0],
+                [IDBObjectStore.prototype, "openKeyCursor", 0],
                 [IDBIndex.prototype, "get", 1],
                 [IDBIndex.prototype, "getKey", 1],
-                [IDBIndex.prototype, "getAll", 2],
-                [IDBIndex.prototype, "getAllKeys", 2],
-                [IDBIndex.prototype, "count", 1],
-                [IDBIndex.prototype, "openCursor", 2],
-                [IDBIndex.prototype, "openKeyCursor", 2],
+                [IDBIndex.prototype, "getAll", 0],
+                [IDBIndex.prototype, "getAllKeys", 0],
+                [IDBIndex.prototype, "getAllRecords", 0],
+                [IDBIndex.prototype, "count", 0],
+                [IDBIndex.prototype, "openCursor", 0],
+                [IDBIndex.prototype, "openKeyCursor", 0],
                 [IDBCursor.prototype, "advance", 1],
-                [IDBCursor.prototype, "continue", 1],
+                [IDBCursor.prototype, "continue", 0],
                 [IDBCursor.prototype, "continuePrimaryKey", 2],
                 [IDBCursor.prototype, "update", 1],
                 [IDBCursor.prototype, "delete", 0],
                 [IDBKeyRange.prototype, "includes", 1],
                 [IDBKeyRange, "only", 1],
-                [IDBKeyRange, "bound", 4],
-                [IDBKeyRange, "lowerBound", 2],
-                [IDBKeyRange, "upperBound", 2],
+                [IDBKeyRange, "bound", 2],
+                [IDBKeyRange, "lowerBound", 1],
+                [IDBKeyRange, "upperBound", 1],
               ];
+              for (const prototype of [IDBDatabase.prototype, IDBTransaction.prototype, IDBRequest.prototype]) {
+                for (const name of ["addEventListener", "removeEventListener", "dispatchEvent"]) {
+                  if (Object.hasOwn(prototype, name) || prototype[name] !== EventTarget.prototype[name]) {
+                    throw new Error(`${name} should be inherited from EventTarget`);
+                  }
+                }
+              }
               for (const [target, name, length] of methods) {
                 const descriptor = Object.getOwnPropertyDescriptor(target, name);
                 if (!descriptor || typeof descriptor.value !== "function") {

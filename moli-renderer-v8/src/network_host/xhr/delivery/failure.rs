@@ -3,6 +3,16 @@ use super::super::events::{
 };
 use super::super::*;
 
+pub(crate) fn apply_xhr_streaming_failure(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    internal_id: u64,
+) {
+    if super::progress::xhr_stream_is_current(scope, xhr, internal_id) {
+        apply_xhr_failure(scope, xhr);
+    }
+}
+
 pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
     super::cancel_xhr_timeout(scope, xhr);
     super::clear_xhr_progress_throttle(scope, xhr);
@@ -21,6 +31,7 @@ pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local
     if xhr_is_aborted(scope, xhr) {
         return;
     }
+    super::super::upload::dispatch_xhr_upload_error_if_in_progress(scope, xhr, "error");
     xhr_dispatch_progress_event(scope, xhr, "error", 0.0, 0.0);
     if scope.is_execution_terminating() {
         return;

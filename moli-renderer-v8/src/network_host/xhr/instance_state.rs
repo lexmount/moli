@@ -69,8 +69,6 @@ struct XmlHttpRequestStateDeclaration {
     pending_kind: (),
     #[webapi(slot = XHR_PENDING_URL_SLOT, init = "")]
     pending_url: (),
-    #[webapi(slot = XHR_PENDING_BODY_SLOT, init = "")]
-    pending_body: (),
     #[webapi(slot = XHR_PENDING_BODY_BYTES_SLOT, init = "undefined")]
     pending_body_bytes: (),
     #[webapi(slot = XHR_PENDING_HEADERS_SLOT, init = string("[]"))]
@@ -83,10 +81,16 @@ struct XmlHttpRequestStateDeclaration {
     send_flag: (),
     #[webapi(slot = XHR_UPLOAD_IN_PROGRESS_SLOT, init = false)]
     upload_in_progress: (),
+    #[webapi(slot = XHR_UPLOAD_LOADED_SLOT, init = 0.0)]
+    upload_loaded: (),
+    #[webapi(slot = XHR_UPLOAD_LISTENER_SLOT, init = false)]
+    upload_listener: (),
     #[webapi(slot = XHR_ACTIVE_INTERNAL_ID_SLOT, init = 0)]
     active_internal_id: (),
     #[webapi(slot = XHR_PENDING_STATUS_SLOT, init = 0)]
     pending_status: (),
+    #[webapi(slot = XHR_PENDING_STATUS_TEXT_SLOT, init = "")]
+    pending_status_text: (),
     #[webapi(slot = XHR_TIMEOUT_SLOT, init = 0)]
     timeout: (),
     #[webapi(slot = XHR_TIMEOUT_START_MS_SLOT, init = 0)]

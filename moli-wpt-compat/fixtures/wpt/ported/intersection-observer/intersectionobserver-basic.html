@@ -43,7 +43,7 @@ test(function () {
   assert_true(observer instanceof IntersectionObserver);
   assert_equals(observer.root, root);
   assert_equals(observer.rootMargin, "10px 20px 10px 20px");
-  assert_array_equals(Array.from(observer.thresholds), [0, 0.5, 1]);
+  assert_array_equals(Array.from(observer.thresholds), [0, 0.5, 0.5, 1]);
   observer.disconnect();
 }, "IntersectionObserver exposes normalized root, rootMargin, and thresholds");
 
@@ -72,11 +72,13 @@ test(function () {
     () => new IntersectionObserver(function () {}, { threshold: [1.1] }),
     "threshold must be in range",
   );
-  assert_throws_name(
-    "TypeError",
-    () => new IntersectionObserver(function () {}, { rootMargin: "1px 1px 1px 1px 1px" }),
-    "rootMargin must contain one to four values",
-  );
+  for (const member of ["rootMargin", "scrollMargin"]) {
+    assert_throws_dom(
+      "SyntaxError",
+      () => new IntersectionObserver(function () {}, { [member]: "1px 1px 1px 1px 1px" }),
+      `${member} must contain one to four values`,
+    );
+  }
   assert_throws_name(
     "TypeError",
     () => new IntersectionObserver(function () {}, { root: document.createTextNode("root") }),

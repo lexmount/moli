@@ -764,14 +764,14 @@ fn assert_cli_dump_html_debug_callback_error_contract(output: &Output, expected_
     let stderr = clean_output(&output.stderr);
 
     assert!(stdout.contains("<main id=\"after\">after</main>"));
-    assert!(!stdout.contains("host callback threw"));
+    assert!(!stdout.contains("simple event listener threw"));
     assert!(!stdout.contains("Uncaught Error:"));
     assert!(
         stderr.contains(expected_message),
         "stderr start: {stderr} stderr end"
     );
     assert!(
-        stderr.contains("host callback threw"),
+        stderr.contains("simple event listener threw"),
         "stderr start: {stderr} stderr end"
     );
     assert!(

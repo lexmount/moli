@@ -1,11 +1,9 @@
 use super::{
     array_contains_strict, array_push_value, context_host_ptr_from_global_bridge,
-    define_non_enumerable_value_property as define_public_non_enumerable_value_property,
     global_constructor_prototype, object_bool_property as public_object_bool_property,
     object_number_property as public_object_number_property,
     object_property_as_object as public_object_property_as_object,
-    object_string_property as public_object_string_property, object_string_property_defined,
-    throw_type_error, v8_string, v8str,
+    object_string_property as public_object_string_property, throw_type_error, v8_string, v8str,
 };
 use crate::util::{new_null_prototype_object, private_key, set_private_value};
 
@@ -13,9 +11,11 @@ mod backend;
 mod core;
 mod cursor;
 mod database;
+mod durability;
 mod event_target;
 mod install;
 mod operation_state;
+mod record;
 mod runtime;
 mod slots;
 mod state;
@@ -29,9 +29,12 @@ use self::backend::*;
 use self::core::*;
 use self::cursor::*;
 use self::database::*;
+use self::durability::*;
+pub(crate) use self::event_target::dispatch_indexed_db_script_event;
 use self::event_target::*;
 use self::operation_state::*;
 use self::runtime::*;
+pub(crate) use self::slots::INDEXED_DB_EVENT_LISTENERS_SLOT;
 use self::slots::*;
 use self::storage_bucket::{
     storage_bucket_quota_check_for_object_store, storage_bucket_quota_check_for_transaction,
@@ -45,19 +48,64 @@ use self::types::*;
 pub(in crate::context_bootstrap) use self::event_target::idb_version_change_event_constructor_callback;
 
 pub(crate) use self::runtime::{
-    bind_indexed_db_factory_to_window_execution_context, indexed_db_has_pending_tasks,
-    materialized_indexed_db_factory_for_window, scoped_indexed_db_factory,
-    set_worker_indexed_db_task_wake_for_context,
+    IndexedDbTaskSourceEntry, bind_indexed_db_factory_to_window_execution_context,
+    indexed_db_has_pending_tasks, materialized_indexed_db_factory_for_window,
+    scoped_indexed_db_factory, set_worker_indexed_db_task_wake_for_context,
 };
+pub(crate) use self::state::ConnectionRequestHandle;
 pub(crate) use self::tasks::{
-    discard_indexed_db_task_by_id, flush_indexed_db_task_by_id, flush_next_indexed_db_task,
+    complete_indexed_db_version_change_notifications, discard_indexed_db_task_by_id,
+    flush_indexed_db_task_by_id, flush_next_indexed_db_task,
 };
 pub(crate) use self::typed_state::IndexedDbTaskId;
 pub(crate) use self::typed_state::deactivate_indexed_db_transaction_after_microtask_checkpoint;
+pub(crate) use self::typed_state::retire_indexed_db_context;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
 pub(crate) fn flush_blocked_indexed_db_requests(scope: &mut v8::PinScope<'_, '_>) {
     flush_drain_blocked_open_requests_task(scope);
+}
+
+pub(crate) fn flush_indexed_db_transaction_starts(scope: &mut v8::PinScope<'_, '_>) {
+    enqueue_ready_transaction_starts(scope);
+}
+
+pub(crate) fn flush_indexed_db_connection_notification(
+    scope: &mut v8::PinScope<'_, '_>,
+    handle: moli_indexeddb::DatabaseHandle,
+) -> bool {
+    let Ok(manager) = indexed_db_shared_manager(scope) else {
+        return false;
+    };
+    let coordinator = manager.lock().connection_notifications();
+    let Some(notification) = coordinator.take_notification(handle) else {
+        return false;
+    };
+    if let Some(database) = database_connection_for_handle(scope, handle)
+        && !object_bool_property(scope, database, INDEXED_DB_DATABASE_CLOSED_SLOT).unwrap_or(false)
+    {
+        let _ = dispatch_version_change_event(
+            scope,
+            database,
+            "versionchange",
+            notification.old_version,
+            notification.new_version,
+        );
+    }
+    crate::context_bootstrap::microtask_checkpoint::enqueue_indexed_db_notification_acknowledgement(
+        scope,
+        notification.completion,
+    );
+    true
+}
+
+pub(in crate::context_bootstrap) fn new_dom_string_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: &[String],
+) -> v8::Local<'s, v8::Object> {
+    super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "DOMStringList")
+        .expect("DOMStringList constructor should materialize before creating an instance");
+    new_idb_dom_string_list(scope, values)
 }
 
 pub(in crate::context_bootstrap) use self::core::indexed_db_usage_bytes_for_storage_key;
@@ -159,27 +207,6 @@ fn set_indexed_db_internal_object_property(
     let _ = object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
 }
 
-fn object_own_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    let key = v8_string(scope, key)?;
-    if !object.has_own_property(scope, key.into()).unwrap_or(false) {
-        return None;
-    }
-    object.get(scope, key.into())
-}
-
-fn object_own_property_as_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &str,
-) -> Option<v8::Local<'s, v8::Array>> {
-    object_own_value(scope, object, key)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-}
-
 fn indexed_db_private_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'_, v8::Object>,
@@ -228,30 +255,6 @@ fn indexed_db_request_transaction_object<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     object_hidden_value(scope, request, INDEXED_DB_REQUEST_TRANSACTION_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn set_indexed_db_request_surface_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    request: v8::Local<'_, v8::Object>,
-    slot: &'static str,
-    property: &'static str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(relevant_context) = request.get_creation_context(scope) else {
-        return;
-    };
-    set_indexed_db_slot_value(scope, request, slot, value);
-    if relevant_context == scope.get_current_context() {
-        let _ = request.set(scope, v8str(scope, property).into(), value);
-        return;
-    }
-
-    let request = v8::Global::new(scope, request);
-    let value = v8::Global::new(scope, value);
-    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
-    let request = v8::Local::new(target_scope, &request);
-    let value = v8::Local::new(target_scope, &value);
-    let _ = request.set(target_scope, v8str(target_scope, property).into(), value);
 }
 
 fn object_bool_property(

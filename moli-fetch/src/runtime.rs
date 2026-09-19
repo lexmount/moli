@@ -1331,6 +1331,7 @@ impl RuntimeOwner {
             .get_mut()
             .raw_streaming_mut()
             .expect("raw streaming request should use raw streaming collector");
+        collector.set_follow_redirects(job.request.follow_redirects);
         collector.begin_request_with_cache_plan(
             self.config.http_max_response_size(),
             job.current_url.clone(),
@@ -1653,6 +1654,13 @@ impl RuntimeOwner {
             return;
         }
 
+        let result = result.and_then(|()| {
+            easy.get_mut()
+                .streaming_mut()
+                .expect("streaming request should use streaming collector")
+                .finish_headers_at_eof()
+        });
+
         if !job.cancel_handle.is_cancelled()
             && easy
                 .get_ref()
@@ -1798,13 +1806,14 @@ impl RuntimeOwner {
 
         let final_url = job.current_url.clone();
         let negotiated_http_version = negotiated_http_version_from_easy(&easy);
-        let (status, headers, cookie_set_reports, collector_http_version) = {
+        let (status, status_text, headers, cookie_set_reports, collector_http_version) = {
             let streaming = easy
                 .get_mut()
                 .streaming_mut()
                 .expect("streaming request should use streaming collector");
             (
                 streaming.status(),
+                streaming.status_text().map(str::to_owned),
                 streaming.headers().to_vec(),
                 streaming.take_cookie_set_reports(),
                 streaming.negotiated_http_version(),
@@ -1849,6 +1858,7 @@ impl RuntimeOwner {
                     request_cookie_header.as_deref(),
                     &final_url,
                     status,
+                    status_text.as_deref(),
                     &headers,
                     false,
                     cache_body_writer,
@@ -1911,6 +1921,7 @@ impl RuntimeOwner {
                 request_cookie_header.as_deref(),
                 &final_url,
                 status,
+                status_text.as_deref(),
                 &headers,
                 false,
                 cache_body_writer,
@@ -1963,6 +1974,13 @@ impl RuntimeOwner {
             );
             return;
         }
+
+        let result = result.and_then(|()| {
+            easy.get_mut()
+                .raw_streaming_mut()
+                .expect("raw streaming request should use raw streaming collector")
+                .finish_headers_at_eof()
+        });
 
         if !job.cancel_handle.is_cancelled()
             && easy
@@ -2109,13 +2127,14 @@ impl RuntimeOwner {
 
         let final_url = job.current_url.clone();
         let negotiated_http_version = negotiated_http_version_from_easy(&easy);
-        let (status, headers, cookie_set_reports, collector_http_version) = {
+        let (status, status_text, headers, cookie_set_reports, collector_http_version) = {
             let streaming = easy
                 .get_mut()
                 .raw_streaming_mut()
                 .expect("raw streaming request should use raw streaming collector");
             (
                 streaming.status(),
+                streaming.status_text().map(str::to_owned),
                 streaming.headers().to_vec(),
                 streaming.take_cookie_set_reports(),
                 streaming.negotiated_http_version(),
@@ -2231,6 +2250,7 @@ impl RuntimeOwner {
                         request_cookie_header.as_deref(),
                         &final_url,
                         status,
+                        status_text.as_deref(),
                         &headers,
                         false,
                         cache_body_writer,
@@ -2298,6 +2318,7 @@ impl RuntimeOwner {
                     request_cookie_header.as_deref(),
                     &final_url,
                     status,
+                    status_text.as_deref(),
                     &headers,
                     false,
                     cache_body_writer,
@@ -2307,6 +2328,7 @@ impl RuntimeOwner {
             }
             if let Some(started_tx) = started_tx {
                 let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+                    status_text: status_text.clone(),
                     final_url,
                     status,
                     headers,
@@ -2341,6 +2363,7 @@ impl RuntimeOwner {
                 request_cookie_header.as_deref(),
                 &final_url,
                 status,
+                status_text.as_deref(),
                 &headers,
                 false,
                 cache_body_writer,
@@ -2658,9 +2681,11 @@ struct ActiveRawStreamingTransferContext {
     effective_request: Request,
 }
 
-struct FetchTransferHandler {
+pub(crate) struct FetchTransferHandler {
+    request_headers: crate::blocking::RequestHeaderList,
     response: FetchResponseCollector,
     network_observation_recorder: Option<NetworkObservationRecorder>,
+    upload_observer: Option<crate::UploadObserver>,
     proxy_connect_response_recorder: ProxyConnectResponseRecorder,
 }
 
@@ -2671,6 +2696,23 @@ enum FetchResponseCollector {
 }
 
 impl FetchTransferHandler {
+    pub(crate) fn set_request_headers(
+        easy: &mut Easy2<Self>,
+        headers: crate::blocking::RequestHeaderList,
+    ) -> Result<()> {
+        // SAFETY: libcurl borrows this list. On success, retain it in the
+        // handler until replacement or Easy2 cleanup (which precedes handler
+        // destruction). Keep the previous list alive if setopt fails.
+        let result = unsafe {
+            curl_sys::curl_easy_setopt(easy.raw(), curl_sys::CURLOPT_HTTPHEADER, headers.as_ptr())
+        };
+        if result != curl_sys::CURLE_OK {
+            return Err(curl::Error::new(result)).context("failed to attach curl request headers");
+        }
+        easy.get_mut().request_headers = headers;
+        Ok(())
+    }
+
     fn new_buffered(collector: ResponseCollector) -> Self {
         Self::new(FetchResponseCollector::Buffered(collector))
     }
@@ -2685,8 +2727,10 @@ impl FetchTransferHandler {
 
     fn new(response: FetchResponseCollector) -> Self {
         Self {
+            request_headers: crate::blocking::RequestHeaderList::default(),
             response,
             network_observation_recorder: None,
+            upload_observer: None,
             proxy_connect_response_recorder: ProxyConnectResponseRecorder::default(),
         }
     }
@@ -2737,7 +2781,9 @@ impl FetchTransferHandler {
         &mut self,
         network_observation_recorder: Option<NetworkObservationRecorder>,
         capture_proxy_connect_response: bool,
+        upload_observer: Option<crate::UploadObserver>,
     ) {
+        self.upload_observer = upload_observer;
         self.network_observation_recorder = network_observation_recorder;
         self.proxy_connect_response_recorder
             .begin_transfer(capture_proxy_connect_response);
@@ -2780,7 +2826,7 @@ impl Handler for FetchTransferHandler {
     }
 
     fn progress(&mut self, dltotal: f64, dlnow: f64, ultotal: f64, ulnow: f64) -> bool {
-        match &mut self.response {
+        let keep_going = match &mut self.response {
             FetchResponseCollector::Buffered(collector) => {
                 collector.progress(dltotal, dlnow, ultotal, ulnow)
             }
@@ -2790,7 +2836,11 @@ impl Handler for FetchTransferHandler {
             FetchResponseCollector::StreamingRaw(collector) => {
                 collector.progress(dltotal, dlnow, ultotal, ulnow)
             }
+        };
+        if keep_going && let Some(observer) = &self.upload_observer {
+            observer.bytes_sent(ulnow as u64);
         }
+        keep_going
     }
 
     fn debug(&mut self, kind: InfoType, data: &[u8]) {
@@ -2799,6 +2849,9 @@ impl Handler for FetchTransferHandler {
                 let is_proxy_connect = self
                     .proxy_connect_response_recorder
                     .record_outgoing_header_block(data);
+                if !is_proxy_connect && let Some(observer) = &self.upload_observer {
+                    observer.request_headers_sent();
+                }
                 if !is_proxy_connect
                     && let Some(recorder) = self.network_observation_recorder.as_ref()
                 {
@@ -2820,12 +2873,17 @@ fn configure_network_observation(
     capture_proxy_connect_response: bool,
 ) -> Result<()> {
     let recorder = request.network_observation_recorder().cloned();
-    let verbose = recorder.is_some() || capture_proxy_connect_response;
+    let upload_observer = request
+        .body
+        .as_ref()
+        .and(request.upload_observer())
+        .cloned();
+    let verbose = recorder.is_some() || capture_proxy_connect_response || upload_observer.is_some();
     if let Some(recorder) = recorder.as_ref() {
         recorder.set_current_request_cookie_report(request_cookie_report.cloned());
     }
     easy.get_mut()
-        .begin_transfer(recorder, capture_proxy_connect_response);
+        .begin_transfer(recorder, capture_proxy_connect_response, upload_observer);
     easy.verbose(verbose)
         .context("failed to configure curl network observation")
 }
@@ -2865,6 +2923,7 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
     let (head, body) = response.into_text_parts();
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            status_text: head.status_text,
             final_url: head.final_url,
             status: head.status,
             headers: head.headers,
@@ -2893,6 +2952,7 @@ fn complete_cached_streaming_html_job(
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
+        metadata,
         final_url,
         status,
         headers,
@@ -2916,6 +2976,7 @@ fn complete_cached_streaming_html_job(
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            status_text: metadata.status_text,
             final_url,
             status,
             headers,
@@ -3013,6 +3074,7 @@ fn complete_cached_streaming_raw_job(
     let redirected = !job.request.redirect_chain.is_empty();
     let redirect_chain = job.request.redirect_chain.clone();
     let CachedStreamingResponseLookup {
+        metadata,
         final_url,
         status,
         headers,
@@ -3036,6 +3098,7 @@ fn complete_cached_streaming_raw_job(
 
     if let Some(started_tx) = job.started_tx {
         let _ = started_tx.send(Ok(StreamingHtmlResponseStart {
+            status_text: metadata.status_text,
             final_url,
             status,
             headers,
@@ -3479,6 +3542,7 @@ fn proxy_connect_response_start(
     StreamingHtmlResponseStart {
         final_url: current_url.clone(),
         status: response.status,
+        status_text: Some(response.status_text),
         headers: response.headers,
         request_cookie_report,
         cookie_set_reports: Vec::new(),
@@ -3571,6 +3635,7 @@ fn collect_buffered_response(
         .get_ref()
         .buffered()
         .ok_or_else(|| anyhow!("curl runtime returned non-buffered easy for buffered request"))?;
+    let status_text = collector.status_text().map(str::to_owned);
     let headers = collector.headers().to_vec();
     let body = collector.body().to_vec();
     let transfer_metrics = transfer_metrics_from_easy(easy, &headers);
@@ -3578,6 +3643,7 @@ fn collect_buffered_response(
     Ok((
         RawResponse::from_head_and_body(
             ResponseHead {
+                status_text,
                 final_url,
                 status,
                 headers,
@@ -4237,6 +4303,7 @@ mod tests {
             job,
             Response::from_head_and_text_body(
                 ResponseHead {
+                    status_text: None,
                     final_url: final_url.clone(),
                     status: 200,
                     headers: vec![("content-type".to_owned(), "text/html".to_owned())],

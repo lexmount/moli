@@ -6,7 +6,8 @@ use url::Url;
 use crate::{
     BrowserNavigationRequestKind, BrowserRequestMetadata, FetchConfig, Request, RequestAuth,
     RequestAuthScheme, RequestAuthTarget, RequestCredentialsMode, RequestMode, RequestResourceType,
-    ScriptFetchRequestMetadata, cookie_header_for_request, outgoing_request_headers,
+    ScriptFetchRequestMetadata, SubresourceRequestMetadata, cookie_header_for_request,
+    outgoing_request_headers,
 };
 
 #[test]
@@ -1232,6 +1233,104 @@ fn script_referrer_policy_uses_origin_when_full_referrer_is_too_long() {
         ),
         Some("https://example.com/")
     );
+}
+
+#[test]
+fn fetch_referrer_selection_preserves_request_identity() -> anyhow::Result<()> {
+    let initiator = Url::parse("https://origin.test/context/page?source=1#fragment")?;
+    let target = Url::parse("https://target.test/echo")?;
+    let request = Request::new_browser("POST", target, None, Vec::new(), (&initiator).into())
+        .with_initiator_url(&initiator)
+        .with_network_partition_key(Some("original-partition".to_owned()))
+        .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
+        .with_subresource_request_metadata(SubresourceRequestMetadata {
+            referrer_policy: Some("unsafe-url".to_owned()),
+            ..Default::default()
+        })
+        .with_fetch_referrer("https://user:secret@target.test/selected?q=1#private")?;
+    let headers = outgoing_request_headers(&FetchConfig::default(), &request, None);
+    assert_eq!(
+        header_value(&headers, "referer"),
+        Some("https://target.test/selected?q=1")
+    );
+    assert_eq!(
+        header_value(&headers, "origin"),
+        Some("https://origin.test")
+    );
+    assert_eq!(header_value(&headers, "sec-fetch-site"), Some("cross-site"));
+    assert_eq!(
+        request.cookie_context.initiator_url.as_ref(),
+        Some(&initiator)
+    );
+    assert_eq!(request.network_partition_key(), Some("original-partition"));
+
+    let omitted = request.clone().with_fetch_referrer("")?;
+    assert_eq!(omitted.referrer_header_value(&omitted.url), None);
+    let client = omitted.with_fetch_referrer("about:client")?;
+    assert_eq!(
+        client.referrer_header_value(&client.url).as_deref(),
+        Some("https://origin.test/context/page?source=1")
+    );
+    assert!(request.with_fetch_referrer("invalid relative URL").is_err());
+    Ok(())
+}
+
+#[test]
+fn fetch_referrer_inheritance_copies_policy_without_integrity() -> anyhow::Result<()> {
+    let initiator = Url::parse("https://origin.test/context/page")?;
+    for (referrer, policy, expected) in [
+        (
+            "https://origin.test/selected?q=1#private",
+            Some("unsafe-url"),
+            Some("https://origin.test/selected?q=1"),
+        ),
+        (
+            "https://origin.test/selected",
+            Some("origin"),
+            Some("https://origin.test/"),
+        ),
+        ("https://origin.test/selected", Some("no-referrer"), None),
+        (
+            "https://origin.test/selected",
+            None,
+            Some("https://origin.test/selected"),
+        ),
+        (
+            "about:client",
+            None,
+            Some("https://origin.test/context/page"),
+        ),
+        ("", None, None),
+    ] {
+        let source = Request::new("GET", "https://target.test/echo", None, Vec::new())?
+            .with_initiator_url(&initiator)
+            .with_subresource_request_metadata(SubresourceRequestMetadata {
+                referrer_policy: policy.map(str::to_owned),
+                document_referrer_policy: Some("unsafe-url".to_owned()),
+                integrity: Some("source-integrity".to_owned()),
+            })
+            .with_fetch_referrer(referrer)?;
+        let derived = Request::new("OPTIONS", source.url.as_str(), None, Vec::new())?
+            .with_initiator_url(&initiator)
+            .with_referrer_from(&source);
+        assert_eq!(
+            derived.referrer_header_value(&derived.url).as_deref(),
+            expected
+        );
+        assert_eq!(
+            derived.subresource_request_metadata().unwrap().integrity,
+            None
+        );
+        assert_eq!(
+            source
+                .subresource_request_metadata()
+                .unwrap()
+                .integrity
+                .as_deref(),
+            Some("source-integrity")
+        );
+    }
+    Ok(())
 }
 
 #[test]

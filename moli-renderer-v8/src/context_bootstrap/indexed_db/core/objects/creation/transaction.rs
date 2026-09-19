@@ -1,29 +1,25 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::{
+    IdbTransactionDurability, TRANSACTION_DB_SLOT, TRANSACTION_ERROR_SLOT, TRANSACTION_MODE_SLOT,
+    initialize_indexed_db_event_target,
+};
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
 
 #[derive(WebApiObject)]
-#[webapi(
-    interface = web_api_interfaces::IDBTransaction,
-    require_prototype,
-    data_properties,
-    enumerable
-)]
+#[webapi(interface = web_api_interfaces::IDBTransaction, require_prototype)]
 struct IdbTransactionObjectDeclaration<'scope> {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
 
+    // Heap-owned references remain observable after dispatch roots are released,
+    // without introducing Rust Global roots for transaction/database cycles.
+    #[webapi(slot = TRANSACTION_DB_SLOT)]
     db: v8::Local<'scope, v8::Object>,
+    #[webapi(slot = TRANSACTION_MODE_SLOT)]
     mode: &'static str,
-    #[webapi(init = "null")]
+    #[webapi(slot = TRANSACTION_ERROR_SLOT, init = "null")]
     error: (),
-    object_store_names: v8::Local<'scope, v8::Object>,
-    #[webapi(init = "null")]
-    onabort: (),
-    #[webapi(init = "null")]
-    oncomplete: (),
-    #[webapi(init = "null")]
-    onerror: (),
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
@@ -31,13 +27,11 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     db: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
     mode: TransactionMode,
-    store_names: &[String],
+    durability: IdbTransactionDurability,
+    store_names: &[IndexedDbName],
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let handle_raw = handle.map(|handle| handle.into_raw() as f64);
-    let mode: &'static str = mode.into();
     let db_key = object_string_property(scope, db, INDEXED_DB_DATABASE_KEY_SLOT);
-    let object_store_names = new_idb_dom_string_list(scope, store_names);
-    let tx = IdbTransactionObjectDeclaration::new(db, mode, object_store_names)
+    let tx = IdbTransactionObjectDeclaration::new(db, mode.into())
         .bind(scope)
         .ok()?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);
@@ -50,6 +44,12 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_transaction_lifecycle(scope, tx, handle, handle_raw.is_some(), db_key);
+    register_indexed_db_transaction_lifecycle(scope, tx, db, handle, mode, durability, db_key);
+    crate::context_bootstrap::indexed_db::set_indexed_db_transaction_store_names(
+        scope,
+        tx,
+        store_names,
+    );
+    initialize_indexed_db_event_target(scope, tx, Some(db));
     Some(tx)
 }

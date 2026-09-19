@@ -797,32 +797,35 @@ fn child_initial_about_blank_executes_dynamic_inline_script_from_parent_document
 
               const script = document.createElement("script");
               script.textContent = `
-                top.__childDynamicScriptEvents.push(
+                const ownerWindow = top;
+                ownerWindow.__childDynamicScriptEvents.push(
                   "start:" + String(crypto.subtle instanceof SubtleCrypto)
                 );
                 const algorithm = { name: "SHA-256" };
                 Object.defineProperty(algorithm, "name", {
                   get() {
-                    top.__closeChildDynamicScriptFrame(frameElement);
+                    ownerWindow.__closeChildDynamicScriptFrame(frameElement);
                     return "SHA-256";
                   }
                 });
                 crypto.subtle.digest(algorithm, new Uint8Array());
-                top.__childDynamicScriptEvents.push("after-call");
+                ownerWindow.__childDynamicScriptEvents.push("after-call");
               `;
-              frame.contentDocument.body.appendChild(script);
+              const child = frame.contentDocument;
+              child.body.appendChild(script);
+              __childDynamicScriptEvents.push("returned");
               return [
-                String(frame.contentDocument.body !== null),
-                String(frame.contentDocument.getElementsByTagName("script").length)
+                String(child.body !== null),
+                String(child.getElementsByTagName("script").length),
+                JSON.stringify(__childDynamicScriptEvents)
               ].join("|");
             })()
         "#,
         )
         .expect("dynamic child script setup should evaluate");
-    assert_eq!(setup, "true|1");
-    assert!(
-        vm.has_pending_child_frame_realm_materialization(),
-        "the script must wait behind its typed child-realm prerequisite"
+    assert_eq!(
+        setup, r#"true|1|["start:true","getter","after-call","returned"]"#,
+        "the child script must execute before appendChild returns, even when it removes the frame"
     );
 
     vm.drain_pending_child_frame_work_for_test();
@@ -831,5 +834,5 @@ fn child_initial_about_blank_executes_dynamic_inline_script_from_parent_document
         .eval("JSON.stringify(globalThis.__childDynamicScriptEvents)")
         .expect("dynamic child script events should be readable");
 
-    assert_eq!(result, r#"["start:true","getter","after-call"]"#);
+    assert_eq!(result, r#"["start:true","getter","after-call","returned"]"#);
 }

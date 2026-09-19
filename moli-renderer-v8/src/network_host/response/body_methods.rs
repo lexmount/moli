@@ -5,10 +5,7 @@ use super::super::fetch_surface::{
     REQUEST_BODY_USED_SLOT, REQUEST_HEADERS_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
 };
 use super::*;
-use moli_web_mime::{
-    is_form_urlencoded_mime, multipart_form_data_boundary, response_blob_mime_type,
-    response_content_type,
-};
+use moli_web_mime::{response_blob_mime_type, response_content_type};
 
 use self::binary::{
     response_array_buffer_callback, response_blob_callback, response_bytes_callback,
@@ -55,20 +52,6 @@ fn response_form_data_callback<'s>(
     };
 
     let content_type = body_content_type(scope, &consumption);
-    let multipart_boundary = multipart_form_data_boundary(&content_type);
-    if !is_urlencoded_content_type(&content_type)
-        && multipart_boundary.is_none()
-        && !network_body_value_is_pending_stream(scope, consumption.object)
-    {
-        reject_body_form_data(
-            scope,
-            consumption.resolver,
-            BODY_FORM_DATA_UNSUPPORTED_CONTENT_TYPE_ERROR_TEXT,
-        );
-        rv.set(consumption.promise.into());
-        return;
-    }
-
     finish_body_consumption(
         scope,
         &mut rv,
@@ -154,14 +137,6 @@ fn reject_body_already_used<'s>(
     );
 }
 
-fn reject_body_form_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    resolver: v8::Local<'s, v8::PromiseResolver>,
-    message: &str,
-) {
-    reject_body_type_error(scope, resolver, message);
-}
-
 fn body_content_type<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     consumption: &BodyConsumptionPromise<'s>,
@@ -185,10 +160,6 @@ fn body_headers<'s>(
     }
 }
 
-fn is_urlencoded_content_type(content_type: &str) -> bool {
-    is_form_urlencoded_mime(content_type)
-}
-
 fn response_blob_mime_type_from_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     consumption: &BodyConsumptionPromise<'s>,
@@ -204,18 +175,18 @@ fn begin_body_consumption<'s>(
     object: v8::Local<'s, v8::Object>,
     receiver: BodyReceiver,
 ) -> bool {
+    let Some(stream) = body_stream_object(scope, object) else {
+        return true;
+    };
+    if readable_body_stream_unusable(scope, stream) {
+        return false;
+    }
     match receiver {
         BodyReceiver::Response => {
-            if response_slot_bool(scope, object, RESPONSE_BODY_USED_SLOT) {
-                return false;
-            }
             set_response_slot_bool(scope, object, RESPONSE_BODY_USED_SLOT, true);
             true
         }
         BodyReceiver::Request => {
-            if request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT) {
-                return false;
-            }
             set_request_slot_bool(scope, object, REQUEST_BODY_USED_SLOT, true);
             true
         }

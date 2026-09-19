@@ -21,13 +21,6 @@ impl From<CursorDirectionWebIdl> for CursorDirection {
     }
 }
 
-pub(in crate::context_bootstrap::indexed_db) fn cursor_direction_to_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    direction: CursorDirection,
-) -> v8::Local<'s, v8::Value> {
-    v8str(scope, direction.as_str()).into()
-}
-
 pub(in crate::context_bootstrap::indexed_db) fn parse_cursor_direction<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
@@ -73,8 +66,8 @@ pub(in crate::context_bootstrap::indexed_db) fn cursor_direction_from_cursor<'s>
     scope: &mut v8::PinScope<'s, '_>,
     cursor: v8::Local<'s, v8::Object>,
 ) -> CursorDirection {
-    object_string_property(scope, cursor, "direction")
-        .and_then(|direction| CursorDirection::parse(&direction))
+    indexed_db_cursor_state(scope, cursor)
+        .map(|state| state.direction)
         .unwrap_or_else(CursorDirection::default_next)
 }
 

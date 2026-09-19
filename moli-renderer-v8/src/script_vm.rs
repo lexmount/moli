@@ -292,10 +292,11 @@ fn runtime_protocol_message_user_gesture(raw_json: &str) -> bool {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum InspectorWindowDispatchTarget {
     DefaultTop,
     ExecutionContext(i64),
+    UniqueContext(String),
 }
 
 fn runtime_protocol_message_window_dispatch_target(
@@ -303,6 +304,15 @@ fn runtime_protocol_message_window_dispatch_target(
 ) -> Option<InspectorWindowDispatchTarget> {
     let message = serde_json::from_str::<Value>(raw_json).ok()?;
     let params = message.get("params")?;
+    if matches!(
+        message.get("method").and_then(Value::as_str),
+        Some("Runtime.evaluate" | "Runtime.callFunctionOn")
+    ) && let Some(unique_id) = params.get("uniqueContextId").and_then(Value::as_str)
+    {
+        return Some(InspectorWindowDispatchTarget::UniqueContext(
+            unique_id.to_owned(),
+        ));
+    }
     match message.get("method").and_then(Value::as_str) {
         Some("Runtime.evaluate") | Some("Runtime.compileScript") => Some(
             params
@@ -324,6 +334,47 @@ fn runtime_protocol_message_window_dispatch_target(
 struct InspectorWindowDispatchScope {
     context_ptr: *const v8::Global<v8::Context>,
     child_handle: Option<DomHandle>,
+}
+
+fn notify_close_watcher_protocol_activation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    session: &v8::inspector::V8InspectorSession,
+    raw_json: &str,
+    target: Option<InspectorWindowDispatchScope>,
+) {
+    if !runtime_protocol_message_user_gesture(raw_json) {
+        return;
+    }
+    let Ok(message) = serde_json::from_str::<Value>(raw_json) else {
+        return;
+    };
+    let object_id = message
+        .get("params")
+        .and_then(|params| params.get("objectId"))
+        .and_then(Value::as_str);
+    let context = if let Some(object_id) = object_id {
+        let Ok((_, context, _)) =
+            session.unwrap_object(scope, v8::inspector::StringView::from(object_id.as_bytes()))
+        else {
+            return;
+        };
+        context
+    } else if let Some(target) = target {
+        unsafe { v8::Local::new(scope, &*target.context_ptr) }
+    } else {
+        return;
+    };
+    let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context) else {
+        return;
+    };
+    let target_scope = &mut v8::ContextScope::new(scope, context);
+    let host = unsafe { &mut *host_ptr };
+    if let Some(identity) =
+        host.window_execution_context_identity_for_v8_context(target_scope, context)
+        && host.window_execution_context_identity_is_current(identity)
+    {
+        host.notify_close_watcher_user_activation(identity.dispatch_scope());
+    }
 }
 
 fn enter_inspector_window_dispatch_scope(
@@ -715,6 +766,8 @@ mod indexed_db_task_body;
 mod input_dispatch;
 mod input_helpers;
 mod inspector;
+mod promise_rejection_task;
+mod script_preparation_error;
 pub(crate) use inspector::{dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake};
 mod isolated_worlds;
 mod main_document_lifecycle;
@@ -743,6 +796,7 @@ mod page_task_enqueue;
 mod parser_owned_classic;
 pub(crate) use parser_owned_classic::*;
 mod parser_module_terminal;
+mod popup_close;
 mod popup_load_event;
 mod post_parse;
 mod post_parse_lifecycle;
@@ -756,6 +810,9 @@ pub(crate) use runtime_script_continuation::RuntimeScriptContinuationBodyEffect;
 #[cfg(test)]
 pub(crate) use runtime_script_continuation::RuntimeScriptOwnerAdvance;
 mod security_policy;
+pub(crate) use security_policy::{
+    string_code_generation_check_callback, wasm_code_generation_check_callback,
+};
 mod service_worker_client_message_body;
 #[cfg(test)]
 mod service_worker_client_message_test_support;
@@ -777,6 +834,7 @@ mod subresource_command_completion;
 mod subresource_fetch;
 pub(crate) use subresource_command_completion::AsyncSubresourceCommandExecution;
 pub(crate) use subresource_fetch::AsyncSubresourceFetchBodyActivity;
+mod bitmap_tasks;
 mod page_resource_completion_task_completion;
 mod text_search;
 mod text_track_default_mode;
@@ -863,6 +921,7 @@ pub(crate) use inspector::{
 };
 use isolated_worlds::*;
 pub(crate) use runtime_bindings::PromiseRejectDispatchSlot;
+pub(crate) use runtime_bindings::PromiseRejectionTaskPayload;
 pub(crate) use runtime_bindings::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use runtime_bindings::*;
 pub(crate) use runtime_work::*;
@@ -1761,6 +1820,12 @@ impl ScriptVm {
                         // callback even if they settle in this same owner turn.
                         let dispatch_response_capture = outbound.capture_dispatch_responses();
                         let dispatch_started = timing_started.map(|_| Instant::now());
+                        notify_close_watcher_protocol_activation(
+                            scope,
+                            session,
+                            raw_json,
+                            inspector_window_dispatch_scope,
+                        );
                         if let Err(error) = with_scoped_inspector_microtasks(scope, || {
                             dispatch_with_runtime_defaults(session, raw_json, &outbound)
                         }) {
@@ -2642,6 +2707,16 @@ impl ScriptVm {
         let Some(root) = root else {
             return;
         };
+        let skip_pristine_document = {
+            let host = self._context_host.borrow();
+            let document = host.document_handle();
+            host.document_web_font_sidecar_is_pristine()
+                && !host.document_has_style_state(document)
+                && !host.document_has_active_author_stylesheet_sources(document)
+        };
+        if skip_pristine_document {
+            return;
+        }
         let Some(resources) = crate::layout_renderer::current_native_stylesheet_resources(
             &self._context_host.borrow(),
             root,
@@ -3201,6 +3276,12 @@ impl ScriptVm {
             InspectorWindowDispatchTarget::ExecutionContext(execution_context_id) => {
                 execution_context_id
             }
+            InspectorWindowDispatchTarget::UniqueContext(unique_id) => {
+                self.known_runtime_realm_inventory()
+                    .into_iter()
+                    .find(|realm| realm.realm_id.as_deref() == Some(unique_id.as_str()))?
+                    .context_id
+            }
         };
         if self.runtime_observable_default_execution_context_id() == Some(execution_context_id) {
             return Some(InspectorWindowDispatchScope {
@@ -3571,18 +3652,22 @@ impl ScriptVm {
                 Some(context)
             }
             Some(context) => {
+                let context_ptr = &context.context as *const v8::Global<v8::Context>;
+                self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
                 self._context_host
                     .borrow_mut()
                     .retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
+                        self.resource_owner_id,
                     );
-                let context_ptr = &context.context as *const v8::Global<v8::Context>;
                 self.renderer_document_isolate
                     .with_entered_renderer_document_isolate(|isolate| {
                         let scope = pin!(v8::HandleScope::new(isolate));
                         let scope = &mut scope.init();
                         let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                        context.detach_global();
+                        self._context_host
+                            .borrow()
+                            .detach_child_window_proxy_for_reuse(scope, child_handle, context);
                         Ok(())
                     })?;
                 None
@@ -3702,15 +3787,19 @@ impl ScriptVm {
             let mut contexts = self.prebootstrapped_child_default_contexts.borrow_mut();
             stale_prebootstrapped_handles
                 .into_iter()
-                .filter_map(|handle| contexts.remove(&handle))
+                .filter_map(|handle| contexts.remove(&handle).map(|context| (handle, context)))
                 .collect::<Vec<_>>()
         };
         if !stale_prebootstrapped_contexts.is_empty() {
+            for (_, context) in &stale_prebootstrapped_contexts {
+                self.clear_context_wrapper_cache_for_context_ptr(&context.context, false);
+            }
             {
                 let mut host = self._context_host.borrow_mut();
-                for context in &stale_prebootstrapped_contexts {
+                for (_, context) in &stale_prebootstrapped_contexts {
                     host.retire_window_execution_contexts_for_context_token(
                         context.runtime_observable_context_token,
+                        self.resource_owner_id,
                     );
                 }
             }
@@ -3719,8 +3808,10 @@ impl ScriptVm {
                 .with_entered_renderer_document_isolate(|isolate| {
                     let scope = pin!(v8::HandleScope::new(isolate));
                     let scope = &mut scope.init();
-                    for context in &stale_prebootstrapped_contexts {
-                        v8::Local::new(scope, &context.context).detach_global();
+                    let host = self._context_host.borrow();
+                    for (handle, context) in &stale_prebootstrapped_contexts {
+                        let context = v8::Local::new(scope, &context.context);
+                        host.detach_child_window_proxy_for_reuse(scope, *handle, context);
                     }
                     Ok(())
                 });
@@ -3754,6 +3845,8 @@ impl ScriptVm {
         let Some(context) = self.child_frame_realm_store.remove(&execution_context_id) else {
             return;
         };
+        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
+        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         let retired_timer_count = self
             .document_runtime
             .cancel_timers_for_context_token(context.runtime_observable_context_token);
@@ -3769,6 +3862,8 @@ impl ScriptVm {
             let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
                 context.runtime_observable_context_token,
             );
+            let retired_bitmap_count =
+                host.retire_bitmap_context_token(context.runtime_observable_context_token);
             let retired_webcrypto_count =
                 host.retire_webcrypto_context_token(context.runtime_observable_context_token);
             host.retire_opfs_context_token(context.runtime_observable_context_token);
@@ -3792,6 +3887,7 @@ impl ScriptVm {
             let retired_window_execution_context_count = host
                 .retire_window_execution_contexts_for_context_token(
                     context.runtime_observable_context_token,
+                    self.resource_owner_id,
                 );
             (
                 runtime_binding_retirement,
@@ -3799,6 +3895,7 @@ impl ScriptVm {
                 retired_message_port_count,
                 retired_window_message_count,
                 retired_window_execution_context_count,
+                retired_bitmap_count,
                 retired_webcrypto_count,
                 retired_worker_count,
                 retired_shared_worker_count,
@@ -3815,17 +3912,16 @@ impl ScriptVm {
             retired_message_port_count = runtime_binding_retirement.2,
             retired_window_message_count = runtime_binding_retirement.3,
             retired_window_execution_context_count = runtime_binding_retirement.4,
-            retired_webcrypto_count = runtime_binding_retirement.5,
-            retired_worker_count = runtime_binding_retirement.6,
-            retired_shared_worker_count = runtime_binding_retirement.7,
-            retired_xhr_count = runtime_binding_retirement.8,
-            aborted_fetch_count = runtime_binding_retirement.9.0,
-            detached_keepalive_fetch_count = runtime_binding_retirement.9.1,
+            retired_bitmap_count = runtime_binding_retirement.5,
+            retired_webcrypto_count = runtime_binding_retirement.6,
+            retired_worker_count = runtime_binding_retirement.7,
+            retired_shared_worker_count = runtime_binding_retirement.8,
+            retired_xhr_count = runtime_binding_retirement.9,
+            aborted_fetch_count = runtime_binding_retirement.10.0,
+            detached_keepalive_fetch_count = runtime_binding_retirement.10.1,
             retired_timer_count,
             "retired child Runtime binding context"
         );
-        let context_ptr: *const v8::Global<v8::Context> = &context.context as *const _;
-        self.clear_context_wrapper_cache_for_context_ptr(context_ptr, false);
         assert!(
             self.page_inspector
                 .destroy_context_registration(context.inspector_context_registration_id),
@@ -3838,10 +3934,14 @@ impl ScriptVm {
                 let scope = pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
                 let local_context = unsafe { v8::Local::new(scope, &*context_ptr) };
-                local_context.detach_global();
                 let host_ptr = (*context_host).as_ptr();
                 let host = unsafe { &mut *host_ptr };
-                if host.child_browsing_context_is_live(context.child_handle)
+                let detached = host.detach_child_window_proxy_for_reuse(
+                    scope,
+                    context.child_handle,
+                    local_context,
+                );
+                if detached
                     && !host.preserve_child_window_proxy_between_realms(scope, context.child_handle)
                 {
                     anyhow::bail!("failed to park the live child WindowProxy between realms");
@@ -3861,7 +3961,7 @@ impl ScriptVm {
                 execution_context_id,
                 child_handle = context.child_handle.index(),
                 owner_realm_id = ?context.owner_realm_id,
-                "detached retired child WindowProxy global for identity reuse"
+                "retired child Window realm while preserving its WindowProxy identity"
             );
         }
     }
@@ -3880,6 +3980,7 @@ impl ScriptVm {
             runtime_binding_retirement,
             retired_image_decode_count,
             retired_message_port_count,
+            retired_bitmap_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,
@@ -3892,6 +3993,8 @@ impl ScriptVm {
             let retired_image_decode_count = host.retire_image_decode_requests_for_context_token(
                 context.runtime_observable_context_token,
             );
+            let retired_bitmap_count =
+                host.retire_bitmap_context_token(context.runtime_observable_context_token);
             let retired_webcrypto_count =
                 host.retire_webcrypto_context_token(context.runtime_observable_context_token);
             host.retire_opfs_context_token(context.runtime_observable_context_token);
@@ -3914,6 +4017,7 @@ impl ScriptVm {
                 runtime_binding_retirement,
                 retired_image_decode_count,
                 retired_message_port_count,
+                retired_bitmap_count,
                 retired_webcrypto_count,
                 retired_worker_count,
                 retired_shared_worker_count,
@@ -3934,7 +4038,10 @@ impl ScriptVm {
         let retired_window_execution_context_realm_count = self
             ._context_host
             .borrow_mut()
-            .retire_isolated_window_execution_context(context.runtime_observable_context_token);
+            .retire_isolated_window_execution_context(
+                context.runtime_observable_context_token,
+                self.resource_owner_id,
+            );
         tracing::debug!(
             execution_context_id,
             context_token = ?context.runtime_observable_context_token,
@@ -3942,6 +4049,7 @@ impl ScriptVm {
                 .retired_execution_context_count(),
             retired_image_decode_count,
             retired_message_port_count,
+            retired_bitmap_count,
             retired_webcrypto_count,
             retired_worker_count,
             retired_shared_worker_count,
@@ -4664,7 +4772,6 @@ impl ScriptVm {
     pub(crate) fn create_and_construct_parser_custom_element_direct_in_default_context(
         &mut self,
         document_handle: DomHandle,
-        document_has_body: bool,
         local_name: &str,
         namespace: &str,
         prefix: Option<&str>,
@@ -4689,7 +4796,6 @@ impl ScriptVm {
                         scope,
                         host_ptr,
                         document_handle,
-                        document_has_body,
                         local_name,
                         namespace,
                         prefix,
@@ -5253,8 +5359,39 @@ impl ScriptVm {
     ) -> bool {
         use crate::{
             frame_owner_model::ChildFrameSemanticTurnKind,
-            page_task_queue::RendererPageChildFrameTaskTarget,
+            page_task_queue::{
+                RendererPageChildFrameTaskTarget, RendererPageDomManipulationOwner,
+                RendererPageReadyDescriptor,
+            },
         };
+
+        if expected == ChildFrameSemanticTurnKind::HostLoad {
+            return self
+                ._page_task_residence_for_executor_test
+                .as_ref()
+                .expect("semantic fixture must retain its sources")
+                .task_sources()
+                .has_scheduler_task_for_executor_test(|descriptor| {
+                    matches!(
+                        descriptor,
+                        RendererPageReadyDescriptor::DomManipulation {
+                            owner: RendererPageDomManipulationOwner::ChildHostLoad(_),
+                            ..
+                        }
+                    )
+                });
+        }
+
+        if expected == ChildFrameSemanticTurnKind::DocumentLifecycle {
+            return self._page_task_residence_for_executor_test.as_ref().expect("semantic fixture must retain its sources").task_sources().has_scheduler_task_for_executor_test(|descriptor| {
+                matches!(descriptor,
+                    RendererPageReadyDescriptor::DomManipulation { owner: RendererPageDomManipulationOwner::ChildDocumentLifecycle(_), .. }
+                ) || matches!(descriptor,
+                    RendererPageReadyDescriptor::ChildFrameTask { owner, .. }
+                        if matches!(owner.target(), RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+                )
+            });
+        }
 
         let Some(target) = self
             ._page_task_residence_for_executor_test
@@ -5308,7 +5445,14 @@ impl ScriptVm {
         {
             return Some(ChildFrameSemanticTurnKind::NavigationCommit);
         }
-        if self
+        if matches!(
+            self._page_task_residence_for_executor_test
+                .as_ref()
+                .expect("child fixture must retain its sources")
+                .task_sources()
+                .next_child_semantic_task_target(),
+            Some(crate::page_task_queue::RendererPageChildFrameTaskTarget::DocumentLifecycle(_))
+        ) && self
             .run_child_document_lifecycle_body_for_test()
             .expect("typed child lifecycle executor turn should succeed")
             .is_some()
@@ -5816,6 +5960,17 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn sync_selectedcontents_after_parser_option_finished_in_default_context(
+        &mut self,
+        option: NativeNodeId,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            unsafe { &mut *host_ptr }
+                .sync_selectedcontents_after_parser_option_finished(scope, host_ptr, option);
+            Ok(())
+        })
+    }
+
     pub(crate) fn apply_parser_created_null_registry_associations_in_default_context(
         &mut self,
         handles: &[NativeNodeId],
@@ -5924,6 +6079,18 @@ impl ScriptVm {
         selection: crate::page_task_queue::RendererPageTimerSelection,
     ) -> Result<HostTimeoutRunResult> {
         let result = self.run_next_timeout_body(selection)?;
+        if let HostTimeoutRunResult::CallbackError(error) = &result {
+            self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
+        }
+        Ok(result)
+    }
+
+    /// Execute one ready timer whose scheduling sequence belongs to a classic
+    /// defer script, without committing its task-end callback completion.
+    pub(crate) fn run_next_classic_defer_timer_callback_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        let result = self.run_next_timeout_queued_by_classic_defer_script_body()?;
         if let HostTimeoutRunResult::CallbackError(error) = &result {
             self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
         }
@@ -6389,7 +6556,24 @@ impl ScriptVm {
         handle
     }
 
+    // Main-document work retains its preparation owner until it is ready. Check
+    // adoption when entering execution, without cancelling its fetch or order slot.
+    pub(crate) fn prepared_script_changed_documents(&self, script: &PreparedScript) -> bool {
+        let node = script
+            .host_script_handle
+            .as_deref()
+            .and_then(|handle| self.document_runtime.resolve_host_script_handle(handle))
+            .unwrap_or(script.node_id);
+        self.document_runtime
+            .dom_host()
+            .owner_document_handle(node)
+            .is_some_and(|document| document != self.document_runtime.document_handle())
+    }
+
     fn prepared_script_is_live_for_execution(&mut self, script: &PreparedScript) -> bool {
+        if self.prepared_script_changed_documents(script) {
+            return false;
+        }
         let Some(handle) = script.host_script_handle.as_deref() else {
             let allow_missing_handle = script.kind == ScriptKind::Classic
                 && script.source_kind == ScriptSourceKind::Inline
@@ -6429,6 +6613,12 @@ impl ScriptVm {
             "prepared script execution requires a live registered handle"
         );
         false
+    }
+
+    pub(crate) fn perform_parser_script_preparation_checkpoint(&mut self) -> Result<()> {
+        self.with_default_context_scope(|scope, _| {
+            crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope)
+        })
     }
 
     /// Run one explicit page-task microtask checkpoint before a queued script task.
@@ -7235,6 +7425,9 @@ impl ScriptVm {
             .dedicated_worker_running_worker_isolate_count_for_diagnostics()
     }
 
+    pub(crate) fn has_pending_bitmap_tasks(&self) -> bool {
+        self._context_host.borrow().has_pending_bitmap_tasks()
+    }
     pub(crate) fn has_pending_webcrypto_tasks(&self) -> bool {
         self._context_host.borrow().has_pending_webcrypto_tasks()
     }
@@ -8459,6 +8652,7 @@ impl ScriptVm {
                     Err(eval_exec::RawScriptExecutionError::Exception { report, .. }) => {
                         self.report_classic_script_exception_and_finish_evaluation_best_effort(
                             &report,
+                            fetch_metadata.muted_errors,
                         );
                         Ok(LoadedScriptExecutionOutcome::Completed(
                             PreparedScriptBodyActivity::Entered,

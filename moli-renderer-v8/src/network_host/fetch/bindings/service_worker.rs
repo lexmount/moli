@@ -50,6 +50,7 @@ pub(super) fn dispatch_service_worker_fetch(
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
+            false,
         )
         .is_some();
     let request_body_text = request_body_text(&prepared.body);
@@ -57,12 +58,14 @@ pub(super) fn dispatch_service_worker_fetch(
         prepared.fetch_context.duplicate(scope),
         v8::Global::new(scope, resolver),
         prepared.keepalive,
+        prepared.integrity.clone(),
         prepared.connect_policy.clone(),
         prepared.csp_report_context.clone(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.request_origin.clone(),
+        prepared.redirect_mode,
         prepared.network_partition_key.clone(),
         prepared.policy_context,
         PendingSubresourceFetchInfo {
@@ -98,9 +101,11 @@ pub(super) fn dispatch_service_worker_fetch(
             referrer_policy: prepared.referrer_policy.clone(),
             integrity: prepared.integrity.clone(),
             keepalive: prepared.keepalive,
+            use_cors_preflight: false,
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {
+        redirect_check: host.window_fetch_redirect_check(internal_id),
         internal_id,
         request,
         cors_preflight_request_headers: prepared.cors_preflight_request_headers.clone(),

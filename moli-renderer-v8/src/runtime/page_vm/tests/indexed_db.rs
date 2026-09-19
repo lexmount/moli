@@ -22,13 +22,13 @@ fn schedule_open(page_vm: &mut PageVm, database_name: &str, marker: &str) {
   const request = indexedDB.open({database_name:?}, 1);
   request.onupgradeneeded = () => {{
     globalThis[{marker:?}].push("upgrade");
+    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
   }};
   request.onerror = () => {{
     globalThis[{marker:?}].push(`error:${{request.error && request.error.name}}`);
   }};
   request.onsuccess = () => {{
     globalThis[{marker:?}].push("success");
-    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
     request.result.close();
   }};
   return "scheduled";
@@ -53,13 +53,15 @@ fn schedule_child_open(
 (() => {{
   globalThis[{marker:?}] = [];
   const request = indexedDB.open({database_name:?}, 1);
-  request.onupgradeneeded = () => globalThis[{marker:?}].push("upgrade");
+  request.onupgradeneeded = () => {{
+    globalThis[{marker:?}].push("upgrade");
+    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
+  }};
   request.onerror = () => {{
     globalThis[{marker:?}].push(`error:${{request.error && request.error.name}}`);
   }};
   request.onsuccess = () => {{
     globalThis[{marker:?}].push("success");
-    Promise.resolve().then(() => globalThis[{marker:?}].push("microtask"));
     request.result.close();
   }};
   return "scheduled";
@@ -113,8 +115,7 @@ async fn run_selected_indexed_db_task_for_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_selected_completion()
- {
+async fn indexed_db_task_body_runs_callback_cleanup_but_defers_runtime_followup_to_completion() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
@@ -149,6 +150,14 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
 })()
 "#,
         )?;
+        // Advance upgrade, put success, and commit as separate selected tasks.
+        // The next exact task is open.success. Web IDL callback cleanup runs
+        // its microtasks, but selected-task completion still owns publication
+        // of the runtime follow-up.
+        for _ in 0..3 {
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                .await?.is_some());
+        }
         page_vm
             .vm_mut()
             .enqueue_test_ready_runtime_script_followup();
@@ -168,8 +177,8 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
                 .eval_without_microtask_checkpoint_for_test(
                     "globalThis.__indexedDbTaskBodyBoundary.join('|')",
                 )?,
-            "upgrade|success",
-            "the IndexedDB body must leave Promise reactions and transaction deactivation for selected-task completion"
+            "upgrade|success|microtask-active",
+            "native event callbacks must run reactions while the newly-created transaction is still active"
         );
         assert!(
             !has_ready_runtime_script_continuation_for_test(&page_vm),
@@ -182,7 +191,7 @@ async fn indexed_db_task_body_leaves_reactions_and_transaction_deactivation_for_
                 .vm_mut()
                 .eval("globalThis.__indexedDbTaskBodyBoundary.join('|')")?,
             "upgrade|success|microtask-active",
-            "the selected task checkpoint must run reactions while the newly-created transaction is still active"
+            "selected-task completion must not repeat callback reactions"
         );
         assert_eq!(
             page_vm.vm_mut().eval(
@@ -298,6 +307,11 @@ async fn indexed_db_selected_callback_completion_reconciles_a_created_child() {
 "#,
         )?;
 
+        for _ in 0..2 {
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                .await?.is_some());
+            assert!(!page_vm.vm().has_pending_child_navigation_commit_for_test());
+        }
         assert!(
             run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
                 .await?
@@ -338,7 +352,7 @@ async fn indexed_db_task_applies_real_producer_work_and_one_microtask_checkpoint
             page_vm
                 .vm_mut()
                 .eval("globalThis.__indexedDbOwnerTurn.join('|')")?,
-            "upgrade|success|microtask",
+            "upgrade|microtask",
             "one authorized IDB turn must include its host-task microtask checkpoint"
         );
         Ok::<_, anyhow::Error>(())
@@ -368,7 +382,7 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
             page_vm
                 .vm_mut()
                 .eval("JSON.stringify([__firstIndexedDbTurn, __secondIndexedDbTurn])")?,
-            r#"[["upgrade","success","microtask"],[]]"#
+            r#"[["upgrade","microtask"],[]]"#
         );
 
         let second = run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
@@ -381,7 +395,7 @@ async fn indexed_db_source_consumes_exactly_one_runtime_task_per_turn() {
             page_vm
                 .vm_mut()
                 .eval("JSON.stringify([__firstIndexedDbTurn, __secondIndexedDbTurn])")?,
-            r#"[["upgrade","success","microtask"],["upgrade","success","microtask"]]"#
+            r#"[["upgrade","microtask"],["upgrade","microtask"]]"#
         );
         Ok::<_, anyhow::Error>(())
     })
@@ -413,7 +427,7 @@ async fn indexed_db_task_survives_document_open_in_the_same_window_realm() {
             page_vm
                 .vm_mut()
                 .eval("globalThis.__documentOpenIndexedDbTurn.join('|')")?,
-            "upgrade|success|microtask",
+            "upgrade|microtask",
             "document.open() must not retire work owned by its preserved Window realm"
         );
         Ok::<_, anyhow::Error>(())
@@ -523,7 +537,7 @@ async fn indexed_db_rejects_a_replaced_child_realm_without_stealing_its_task() {
                 current_execution_context_id,
                 "globalThis.__replacementRealmIndexedDbTurn.join('|')",
             )?,
-            "upgrade|success|microtask",
+            "upgrade|microtask",
             "the central Agent checkpoint must drain reactions queued by the exact child realm"
         );
         Ok::<_, anyhow::Error>(())
@@ -620,7 +634,7 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                         page_vm
                             .vm_mut()
                             .eval("globalThis.__replacementIndexedDbTurn.join('|')")?,
-                        "upgrade|success|microtask"
+                        "upgrade|microtask"
                     );
                     Ok::<_, anyhow::Error>(())
                 })
@@ -631,4 +645,131 @@ fn indexed_db_rejects_a_real_page_vm_replacement_identity_collision() {
                 .expect("IndexedDB PageVm replacement server should finish");
         },
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn indexed_db_retired_versionchange_notification_does_not_strand_open_request() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())
+            .expect("loader");
+        let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
+        let document_url = Url::parse("https://example.com/indexed-db-retired-notification")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        install_indexed_db_manager(&mut page_vm, &manager);
+        page_vm.vm_mut().eval(r#"
+          globalThis.notificationEvents = [];
+          const frame = document.createElement('iframe');
+          frame.id = 'notification-owner';
+          document.body.appendChild(frame);
+        "#)?;
+        let child_handle = page_vm.vm().element_handle_by_id_for_test("notification-owner")
+            .expect("notification owner frame should exist");
+        let child_context = materialize_only_child_realm_execution_context_through_page_turn_for_test(
+            &mut page_vm, "notification-owner",
+        )?;
+        page_vm.vm_mut().eval_in_child_default_context(child_context, r#"
+          const open = indexedDB.open('retired-notification', 1);
+          open.onupgradeneeded = () => open.result.createObjectStore('records');
+          open.onsuccess = () => {
+            globalThis.notificationDatabase = open.result;
+            notificationDatabase.onversionchange = () => top.notificationEvents.push('unexpected-retired-callback');
+          };
+        "#)?;
+        for _ in 0..3 {
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                .await?.is_some());
+        }
+        assert_eq!(page_vm.vm_mut().eval_in_child_default_context(
+            child_context, "String(notificationDatabase.version)",
+        )?, "1");
+        page_vm.vm_mut().eval(r#"
+          const upgrade = indexedDB.open('retired-notification', 2);
+          upgrade.onupgradeneeded = () => notificationEvents.push('upgrade');
+          upgrade.onblocked = () => notificationEvents.push('unexpected-blocked');
+          upgrade.onerror = () => notificationEvents.push(`error:${upgrade.error.name}`);
+          upgrade.onsuccess = () => {
+            notificationEvents.push('success');
+            upgrade.result.close();
+          };
+        "#)?;
+        // Queue the notification in the connection's realm, then retire that
+        // realm before its task can run. The requesting realm must still recheck.
+        assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+            .await?.is_some());
+        page_vm.vm_mut().retire_child_frame_realm_for_test(child_handle);
+        for _ in 0..16 {
+            if page_vm.vm_mut().eval("notificationEvents.includes('success')")? == "true" {
+                break;
+            }
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader)
+                .await?.is_some(), "a discarded notification must leave a runnable continuation");
+        }
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify(notificationEvents)")?,
+            r#"["upgrade","success"]"#);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("retiring a versionchange recipient should unblock the requesting realm");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn indexed_db_connection_queue_spans_realms_and_skips_retired_request_owners() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let manager = crate::new_indexed_db_manager(None).expect("IndexedDB manager");
+        let document_url = Url::parse("https://example.com/indexed-db-connection-queue")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        install_indexed_db_manager(&mut page_vm, &manager);
+        page_vm.vm_mut().eval(r#"
+          globalThis.connectionEvents = [];
+          const frame = document.createElement('iframe');
+          frame.id = 'connection-owner';
+          document.body.appendChild(frame);
+        "#)?;
+        let child_handle = page_vm.vm().element_handle_by_id_for_test("connection-owner").unwrap();
+        let child_context = materialize_only_child_realm_execution_context_through_page_turn_for_test(
+            &mut page_vm, "connection-owner",
+        )?;
+        page_vm.vm_mut().eval_in_child_default_context(child_context, r#"
+          const first = indexedDB.open('cross-realm-queue', 2);
+          first.onupgradeneeded = () => first.result.createObjectStore('records');
+          first.onsuccess = () => { top.connectionEvents.push('child:2'); first.result.close(); };
+        "#)?;
+        // The child upgrade has not even dispatched yet. The parent must join
+        // its connection queue rather than creating a second version-1 database.
+        page_vm.vm_mut().eval(r#"
+          const second = indexedDB.open('cross-realm-queue');
+          second.onupgradeneeded = () => connectionEvents.push('unexpected-parent-upgrade');
+          second.onsuccess = () => {
+            connectionEvents.push(`parent:${second.result.version}:${second.result.objectStoreNames[0]}`);
+            globalThis.parentDatabase = second.result;
+            parentDatabase.onversionchange = () => parentDatabase.close();
+          };
+        "#)?;
+        for _ in 0..24 {
+            if page_vm.vm_mut().eval("typeof parentDatabase")? == "object" { break; }
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader).await?.is_some());
+        }
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify(connectionEvents)")?,
+            r#"["child:2","parent:2:records"]"#);
+        page_vm.vm_mut().eval_in_child_default_context(child_context, r#"
+          const retired = indexedDB.open('cross-realm-queue', 3);
+          retired.onupgradeneeded = () => top.connectionEvents.push('unexpected-retired-upgrade');
+        "#)?;
+        page_vm.vm_mut().eval(r#"
+          const last = indexedDB.open('cross-realm-queue', 4);
+          last.onupgradeneeded = event => connectionEvents.push(`last:${event.oldVersion}:${event.newVersion}`);
+          last.onsuccess = () => { connectionEvents.push('done'); last.result.close(); };
+          last.onerror = () => connectionEvents.push(`error:${last.error.name}`);
+        "#)?;
+        page_vm.vm_mut().retire_child_frame_realm_for_test(child_handle);
+        for _ in 0..24 {
+            if page_vm.vm_mut().eval("connectionEvents.includes('done')")? == "true" { break; }
+            assert!(run_selected_indexed_db_task_for_test(&mut page_vm, &loader).await?.is_some(),
+                "retiring a queued owner must wake its successor");
+        }
+        assert_eq!(page_vm.vm_mut().eval("JSON.stringify(connectionEvents)")?,
+            r#"["child:2","parent:2:records","last:2:4","done"]"#);
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("connection queues should preserve realm ownership");
 }

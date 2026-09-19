@@ -25,7 +25,8 @@ use super::{
     jobs::ServiceWorkerLaunchParams,
     run_owner::ServiceWorkerRunOwner,
     script_loading::{
-        LoadedServiceWorkerScript, ServiceWorkerScriptResource, load_service_worker_script_source,
+        LoadedServiceWorkerScript, ServiceWorkerScriptMapSnapshot, ServiceWorkerScriptResource,
+        load_service_worker_script_source,
     },
     service::ServiceWorkerRuntimeService,
     version::{ServiceWorkerFetchHandlerType, ServiceWorkerVersionStartFailure},
@@ -89,6 +90,10 @@ impl RendererServiceWorkerHost {
             "a ServiceWorker host must start only its bound run owner"
         );
         let run_owner = params.run_owner.clone();
+        let Some(script_map) = service.script_resource_map_snapshot(&run_owner) else {
+            self.mark_failed();
+            return;
+        };
         let host_for_task = Arc::clone(self);
         let service_for_task = service.clone();
         let _ = std::thread::Builder::new()
@@ -97,11 +102,9 @@ impl RendererServiceWorkerHost {
                 params.run_owner.version_id().as_u64()
             ))
             .spawn(move || {
-                let result = match preloaded_script {
-                    Some(script) => Ok(script),
-                    None => load_service_worker_script_source(&params),
-                };
-                host_for_task.finish_loading(service_for_task, params, result);
+                let result =
+                    load_service_worker_version_script(&params, preloaded_script, &script_map);
+                host_for_task.finish_loading(service_for_task, params, result, script_map);
             })
             .map_err(|error| {
                 self.mark_failed();
@@ -222,6 +225,16 @@ impl RendererServiceWorkerHost {
         };
         handle.dispatch_service_worker_lifecycle_event(event);
         true
+    }
+
+    pub(super) fn dispatch_registration_update_found(&self) {
+        let state = self.state.lock();
+        if let RendererServiceWorkerHostState::Running {
+            handle: Some(handle),
+        } = &*state
+        {
+            handle.dispatch_service_worker_registration_update_found();
+        }
     }
 
     pub(super) fn dispatch_fetch_event(&self, event: ServiceWorkerFetchEvent) -> bool {
@@ -624,6 +637,7 @@ impl RendererServiceWorkerHost {
         service: ServiceWorkerRuntimeService,
         params: ServiceWorkerLaunchParams,
         result: Result<super::script_loading::LoadedServiceWorkerScript, String>,
+        script_map: ServiceWorkerScriptMapSnapshot,
     ) {
         let script = match result {
             Ok(script) => script,
@@ -658,6 +672,7 @@ impl RendererServiceWorkerHost {
             service.clone(),
             params.clone(),
             script,
+            script_map,
             bootstrap_completion_tx,
         );
         if let Some(receiver) = handle.take_receiver() {
@@ -918,16 +933,50 @@ fn service_worker_fetch_handler_type(
     }
 }
 
+fn load_service_worker_version_script(
+    params: &ServiceWorkerLaunchParams,
+    preloaded: Option<LoadedServiceWorkerScript>,
+    map: &ServiceWorkerScriptMapSnapshot,
+) -> Result<LoadedServiceWorkerScript, String> {
+    if let Some(script) = preloaded {
+        return Ok(script);
+    }
+    if let Some(resource) = &map.main_script
+        && let Some(script) = LoadedServiceWorkerScript::from_stored_resource(resource.clone())
+    {
+        return Ok(script);
+    }
+    let script = load_service_worker_script_source(params)?;
+    if let Some(stored) = &map.main_script {
+        if stored.body_sha256 != script.resource.body_sha256
+            || stored.final_url != script.resource.final_url
+        {
+            return Err("The installed ServiceWorker main script is unavailable.".into());
+        }
+        // Recover the missing text without changing the installed response's
+        // CSP, referrer policy, or other headers to today's server values.
+        let mut resource = stored.clone();
+        resource.classic_script = script.resource.classic_script;
+        return LoadedServiceWorkerScript::from_stored_resource(resource)
+            .ok_or_else(|| "The installed ServiceWorker main script has no source.".into());
+    }
+    Ok(script)
+}
+
 fn spawn_service_worker(
     service: ServiceWorkerRuntimeService,
     params: ServiceWorkerLaunchParams,
     script: LoadedServiceWorkerScript,
+    mut script_map: ServiceWorkerScriptMapSnapshot,
     bootstrap_completion_tx: mpsc::UnboundedSender<WorkerBootstrapCompletion>,
 ) -> WorkerHandle {
     let storage_key = moli_storage_key::deserialize_serialized_storage_key(&params.storage_key)
         .unwrap_or_else(|| MoliStorageKey::first_party_from_url(&params.scope_url, None));
     let policy_context =
         service_worker_script_policy_context(&script.resource.final_url, &script.resource.headers);
+    let mut main_resource = script.resource.to_worker_script_resource();
+    main_resource.request_url = params.script_url.clone();
+    script_map.imported_scripts.push(main_resource);
     crate::worker::spawn_worker_with_options(
         WorkerSpawnOptions::new_with_request_client(
             script.source,
@@ -948,6 +997,11 @@ fn spawn_service_worker(
         .with_policy_context(policy_context)
         .with_worker_context_runtime(params.worker_context_runtime)
         .with_service_worker_runtime(service)
+        .with_service_worker_script_resources(
+            script_map.imported_scripts,
+            script_map.can_import_new_scripts,
+        )
+        .with_service_worker_updated_script_resources(script.updated_imports)
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
             registration_id: params.registration_id,
             version_id: params.run_owner.version_id(),

@@ -3,6 +3,7 @@ use super::*;
 mod eval;
 mod rebind;
 mod seeds;
+mod url_alias;
 
 fn current_surface_state(scope: &mut v8::PinScope<'_, '_>) -> (bool, bool, bool) {
     let diagnostics = crate::context_bootstrap::window_lazy_surface_diagnostics(scope);
@@ -496,6 +497,18 @@ fn trusted_types_globals_share_one_lazy_native_realm_state() {
 
     assert_eq!(
         vm.eval(
+            "String(typeof Object.getOwnPropertyDescriptor(globalThis, 'trustedTypes').get === 'function')"
+        )
+        .expect("reading the trustedTypes getter descriptor should not invoke it"),
+        "true"
+    );
+    assert!(
+        !default_trusted_types_materialized(&mut vm),
+        "reflecting the accessor must not build Trusted Types prototypes or factory"
+    );
+
+    assert_eq!(
+        vm.eval(
             r#"
             JSON.stringify({
               html: "TrustedHTML" in globalThis,
@@ -548,6 +561,51 @@ fn trusted_types_globals_share_one_lazy_native_realm_state() {
         .expect("Trusted Types shared lazy state should create branded values"),
         r#"{"factorySame":true,"htmlPrototype":true,"scriptPrototype":true,"scriptURLPrototype":true,"htmlValue":"<b>ok</b>"}"#
     );
+}
+
+#[test]
+fn trusted_types_getter_materializes_intrinsics_without_replacing_public_overrides() {
+    let mut vm = new_storage_test_vm("https://lazy-trusted-types-overrides.test/");
+    vm.eval(
+        r#"
+        const replacement = function Replacement() {};
+        globalThis.TrustedHTML = replacement;
+        globalThis.TrustedScript = replacement;
+        globalThis.TrustedScriptURL = replacement;
+        globalThis.TrustedTypePolicy = replacement;
+        globalThis.TrustedTypePolicyFactory = replacement;
+        "#,
+    )
+    .expect("overriding public constructor names should not materialize Trusted Types");
+    assert!(!default_trusted_types_materialized(&mut vm));
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const factory = trustedTypes;
+              const policy = factory.createPolicy('private-intrinsics', {
+                createHTML: value => value,
+                createScript: value => value,
+                createScriptURL: value => value,
+              });
+              const values = [policy.createHTML('html'), policy.createScript('script'),
+                policy.createScriptURL('/app.js')];
+              return String(
+                [TrustedHTML, TrustedScript, TrustedScriptURL, TrustedTypePolicy,
+                  TrustedTypePolicyFactory].every(value => value === replacement) &&
+                !(factory instanceof replacement) && !(policy instanceof replacement) &&
+                values.every(value => !(value instanceof replacement)) &&
+                factory.isHTML(values[0]) && factory.isScript(values[1]) &&
+                factory.isScriptURL(values[2]) &&
+                values.map(String).join('|') === 'html|script|/app.js'
+              );
+            })()
+            "#,
+        )
+        .expect("lazy Trusted Types materialization should use private intrinsic identities"),
+        "true"
+    );
+    assert!(default_trusted_types_materialized(&mut vm));
 }
 
 #[test]
@@ -622,6 +680,7 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
         "MediaCapabilities",
         "Clipboard",
         "ClipboardItem",
+        "ClipboardChangeEvent",
     ] {
         assert_eq!(
             constructor_materialization_count(&mut vm, name),

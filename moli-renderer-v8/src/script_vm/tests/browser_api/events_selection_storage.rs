@@ -152,6 +152,77 @@ fn event_and_mouse_event_accessors_use_prototype_receivers() {
 }
 
 #[test]
+fn before_unload_event_uses_its_string_return_value_interface() {
+    let mut vm = new_storage_test_vm("https://before-unload-event-interface.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const descriptor = Object.getOwnPropertyDescriptor(
+                BeforeUnloadEvent.prototype,
+                "returnValue"
+              );
+              const event = document.createEvent("BeforeUnloadEvent");
+              const initial = [
+                event instanceof BeforeUnloadEvent,
+                event instanceof Event,
+                Object.hasOwn(event, "returnValue"),
+                event.returnValue
+              ];
+              event.initEvent("beforeunload", false, true);
+              event.returnValue = null;
+              const nullValue = event.returnValue;
+              event.returnValue = undefined;
+              const undefinedValue = event.returnValue;
+              event.returnValue = { toString() { return "object value"; } };
+              const objectValue = event.returnValue;
+              const symbolError = errorName(() => {
+                event.returnValue = Symbol("return value");
+              });
+
+              return JSON.stringify({
+                constructor: [
+                  typeof BeforeUnloadEvent,
+                  Object.getPrototypeOf(BeforeUnloadEvent.prototype) === Event.prototype,
+                  errorName(() => new BeforeUnloadEvent())
+                ],
+                initial,
+                initialized: [event.type, event.cancelable],
+                values: [nullValue, undefinedValue, objectValue, symbolError, event.returnValue],
+                metadata: [
+                  descriptor.get.name,
+                  descriptor.get.length,
+                  descriptor.set.name,
+                  descriptor.set.length,
+                  descriptor.enumerable,
+                  descriptor.configurable
+                ],
+                receiverErrors: [
+                  errorName(() => descriptor.get.call(new Event("plain"))),
+                  errorName(() => descriptor.set.call({}, "value"))
+                ]
+              });
+            })()
+            "#,
+        )
+        .expect("BeforeUnloadEvent returnValue interface probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"constructor":["function",true,"TypeError"],"initial":[true,true,false,""],"initialized":["beforeunload",true],"values":["null","undefined","object value","TypeError","object value"],"metadata":["get returnValue",0,"set returnValue",1,true,true],"receiverErrors":["TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
 fn event_core_attribute_getters_match_chromium_and_support_framework_capture() {
     let mut vm = new_storage_test_vm("https://event-core-attribute-accessors.test/");
 
@@ -1554,13 +1625,13 @@ fn stop_propagation_at_target_capture_skips_target_bubble_listeners() {
 
               const handlerTarget = document.createElement("div");
               const handlerCalls = [];
-              handlerTarget.addEventListener("y", () => handlerCalls.push("capture"), { capture: true });
-              handlerTarget.ony = event => {
+              handlerTarget.addEventListener("click", () => handlerCalls.push("capture"), { capture: true });
+              handlerTarget.onclick = event => {
                 handlerCalls.push("handler");
                 event.stopPropagation();
               };
-              handlerTarget.addEventListener("y", () => handlerCalls.push("bubble"));
-              handlerTarget.dispatchEvent(new Event("y", { bubbles: true }));
+              handlerTarget.addEventListener("click", () => handlerCalls.push("bubble"));
+              handlerTarget.dispatchEvent(new Event("click", { bubbles: true }));
 
               return `${nativeCalls.join(",")}|${handlerCalls.join(",")}`;
             })()
@@ -1568,7 +1639,7 @@ fn stop_propagation_at_target_capture_skips_target_bubble_listeners() {
         )
         .expect("target stopPropagation dispatch probe should evaluate");
 
-    assert_eq!(result, "capture:2,capture2:2|handler,capture");
+    assert_eq!(result, "capture:2,capture2:2|capture,handler,bubble");
 }
 #[test]
 fn bubble_stop_propagation_keeps_current_ancestor_listeners() {
@@ -1590,21 +1661,21 @@ fn bubble_stop_propagation_keeps_current_ancestor_listeners() {
               document.body.appendChild(outer);
 
               const stoppedCalls = [];
-              outer.onx = event => {
+              outer.onclick = event => {
                 stoppedCalls.push("handler");
                 event.stopPropagation();
               };
-              outer.addEventListener("x", () => stoppedCalls.push("listener"));
-              document.body.addEventListener("x", () => stoppedCalls.push("body"));
-              inner.dispatchEvent(new Event("x", { bubbles: true }));
+              outer.addEventListener("click", () => stoppedCalls.push("listener"));
+              document.body.addEventListener("click", () => stoppedCalls.push("body"));
+              inner.dispatchEvent(new Event("click", { bubbles: true }));
 
               const immediateCalls = [];
-              outer.ony = event => {
+              outer.ondblclick = event => {
                 immediateCalls.push("handler");
                 event.stopImmediatePropagation();
               };
-              outer.addEventListener("y", () => immediateCalls.push("listener"));
-              inner.dispatchEvent(new Event("y", { bubbles: true }));
+              outer.addEventListener("dblclick", () => immediateCalls.push("listener"));
+              inner.dispatchEvent(new Event("dblclick", { bubbles: true }));
 
               const sameTargetCalls = [];
               inner.addEventListener("z", event => {
@@ -1716,6 +1787,31 @@ fn synthetic_error_event_uses_normal_window_event_handler_arguments() {
     assert_eq!(
         result,
         r#"{"argumentCount":1,"receivedEvent":true,"defaultPrevented":false,"errorEvent":{"argumentCount":5,"message":"boom","source":"probe.js","errorMatches":true,"defaultPrevented":true}}"#
+    );
+}
+
+#[test]
+fn window_error_handler_only_boolean_true_cancels() {
+    let mut vm = new_storage_test_vm("https://window-error-return-value.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const run = returned => {
+                window.onerror = () => returned;
+                const event = new ErrorEvent("error", { cancelable: true });
+                return [window.dispatchEvent(event), event.defaultPrevented];
+              };
+              return JSON.stringify([run(true), run(1), run(false), run(0)]);
+            })()
+            "#,
+        )
+        .expect("window error handler return-value probe should evaluate");
+
+    assert_eq!(
+        result,
+        "[[false,true],[true,false],[true,false],[true,false]]"
     );
 }
 
@@ -2150,6 +2246,266 @@ fn cross_realm_listener_throw_reports_listener_global_not_target_global() {
         r#"[["function",true,true],["function-window-event-restored",true],["object",true,true],["object-window-event-restored",true]]"#
     );
 }
+
+#[test]
+fn listener_exception_reporting_preserves_outer_realm_window_event() {
+    let mut vm = new_storage_test_vm("https://event-listener-nested-window-event.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const host = document.body || document.documentElement || document;
+          const listenerFrame = document.createElement("iframe");
+          listenerFrame.srcdoc = `<script>
+            function listener() { throw new Error("listener failure"); }
+            function currentEventType() { return window.event?.type; }
+          <\/script>`;
+          const handlerFrame = document.createElement("iframe");
+          host.appendChild(listenerFrame);
+          host.appendChild(handlerFrame);
+          globalThis.__nestedEventFrames = [listenerFrame, handlerFrame];
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("nested window.event frame setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const [listenerFrame, handlerFrame] = globalThis.__nestedEventFrames;
+              const listenerWindow = listenerFrame.contentWindow;
+              const handlerWindow = handlerFrame.contentWindow;
+              listenerWindow.onerror = new handlerWindow.Function(`
+                parent.__nestedWindowEventState = [
+                  parent.__nestedEventFrames[0].contentWindow.currentEventType(),
+                  window.event?.type
+                ];
+                return true;
+              `);
+
+              const target = new EventTarget();
+              target.addEventListener("party", listenerWindow.listener);
+              target.dispatchEvent(new Event("party"));
+
+              return JSON.stringify({
+                during: globalThis.__nestedWindowEventState,
+                listenerAfter: listenerWindow.event,
+                handlerAfter: handlerWindow.event
+              });
+            })()
+            "#,
+        )
+        .expect("nested window.event exception reporting should evaluate");
+
+    assert_eq!(result, r#"{"during":["party","error"]}"#,);
+}
+
+#[test]
+fn cross_realm_window_event_getters_preserve_nested_handler_events() {
+    let mut vm = new_storage_test_vm("https://nested-handler-window-event.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const host = document.body || document.documentElement || document;
+          const firstFrame = document.createElement("iframe");
+          const secondFrame = document.createElement("iframe");
+          host.appendChild(firstFrame);
+          host.appendChild(secondFrame);
+          globalThis.__handlerEventFrames = [firstFrame, secondFrame];
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("nested handler frame setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const [firstFrame, secondFrame] = globalThis.__handlerEventFrames;
+              firstFrame.contentWindow.onerror = new secondFrame.contentWindow.Function(`
+                top.__secondHandlerEvents = [
+                  top.event?.type,
+                  top.frames[0].event?.type,
+                  top.frames[1].event?.type,
+                  top.frames[1].event?.error?.name
+                ];
+                return true;
+              `);
+              window.onerror = new firstFrame.contentWindow.Function(`
+                top.__firstHandlerEvents = [
+                  top.event?.type,
+                  top.frames[0].event?.type,
+                  top.frames[1].event?.type ?? null
+                ];
+                missingNestedHandlerName;
+              `);
+              window.onload = loadEvent => {
+                const errorEvent = new ErrorEvent("error", {
+                  error: new Error("outer error")
+                });
+                window.dispatchEvent(errorEvent);
+              };
+
+              window.dispatchEvent(new Event("load"));
+              return JSON.stringify({
+                first: globalThis.__firstHandlerEvents,
+                second: globalThis.__secondHandlerEvents,
+                after: [window.event, frames[0].event, frames[1].event]
+              });
+            })()
+            "#,
+        )
+        .expect("nested cross-realm Window event handlers should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"first":["load","error",null],"second":["load","error","error","ReferenceError"],"after":[null,null,null]}"#,
+    );
+}
+
+#[test]
+fn same_realm_onerror_throw_does_not_reenter_error_reporting() {
+    let mut vm = new_storage_test_vm("https://onerror-recursion.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              let calls = 0;
+              window.onerror = () => {
+                calls++;
+                throw new Error("nested onerror failure");
+              };
+              window.reportError(new Error("initial failure"));
+              return String(calls);
+            })()
+            "#,
+        )
+        .expect("same-realm onerror recursion probe should evaluate");
+
+    assert_eq!(result, "1");
+}
+
+#[test]
+fn report_error_uses_the_receiver_realm_without_observing_exception_getters() {
+    let mut vm = new_storage_test_vm("https://report-error-receiver-realm.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          (document.body || document.documentElement || document).appendChild(frame);
+          globalThis.__reportErrorRealmFrame = frame;
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("reportError receiver Realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const child = globalThis.__reportErrorRealmFrame.contentWindow;
+              const childEvents = [];
+              let topEvents = 0;
+              let getterCalls = 0;
+              window.addEventListener("error", () => topEvents++);
+              child.addEventListener("error", event => childEvents.push(event));
+
+              const error = new TypeError("receiver failure");
+              window.reportError.call(child, error);
+
+              const opaqueReason = {};
+              for (const name of ["name", "message", "fileName", "lineNumber", "columnNumber"]) {
+                Object.defineProperty(opaqueReason, name, {
+                  get() {
+                    getterCalls++;
+                    throw new Error(`unexpected ${name} getter`);
+                  }
+                });
+              }
+              window.reportError.call(child, opaqueReason);
+
+              let missingArgumentError = null;
+              try {
+                window.reportError();
+              } catch (exception) {
+                missingArgumentError = exception.name;
+              }
+
+              globalThis.__reportErrorRealmFrame.remove();
+              child.reportError("detached failure");
+              const detachedCallCompleted = true;
+
+              return JSON.stringify({
+                topEvents,
+                eventCount: childEvents.length,
+                exactErrors: [childEvents[0].error === error, childEvents[1].error === opaqueReason],
+                receiverRealm: childEvents.every(event => event instanceof child.ErrorEvent),
+                messagesAreNonEmpty: childEvents.every(event => event.message.length > 0),
+                getterCalls,
+                missingArgumentError,
+                detachedCallCompleted
+              });
+            })()
+            "#,
+        )
+        .expect("cross-Realm reportError probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"topEvents":0,"eventCount":2,"exactErrors":[true,true],"receiverRealm":true,"messagesAreNonEmpty":true,"getterCalls":0,"missingArgumentError":"TypeError","detachedCallCompleted":true}"#,
+    );
+}
+
+#[test]
+fn host_event_microtasks_observe_current_window_event_until_checkpoint_cleanup() {
+    let mut vm = new_storage_test_vm("https://host-event-microtasks.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          frame.srcdoc = `<script>window.__finalSrcdocRealm = true;<\/script>`;
+          globalThis.__hostEventMicrotaskState = null;
+          frame.addEventListener("load", event => {
+            if (!frame.contentWindow.__finalSrcdocRealm) return;
+            Promise.resolve().then(() => {
+              globalThis.__hostEventMicrotaskState = [
+                window.event === event,
+                window.event?.type
+              ];
+            });
+          });
+          (document.body || document.documentElement || document).appendChild(frame);
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("host-entered event microtask setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.perform_owner_lane_task_microtask_checkpoints()
+        .expect("host event task checkpoint should complete");
+
+    let result = vm
+        .eval(
+            r#"JSON.stringify({
+              during: globalThis.__hostEventMicrotaskState,
+              after: window.event ?? null
+            })"#,
+        )
+        .expect("host-entered event microtask state should evaluate");
+    assert_eq!(result, r#"{"during":[true,"load"],"after":null}"#);
+}
+
 #[test]
 fn event_timestamp_uses_performance_origin_and_safe_resolution() {
     let mut vm = new_storage_test_vm("https://event-timestamp.test/");
@@ -2447,6 +2803,75 @@ fn event_subclass_constructors_expose_legacy_keyboard_codes_and_validate_view() 
     assert_eq!(
         result,
         r#"{"defaults":[0,0,0],"nonDefaults":[7,8,9],"viewIsWindow":true,"wrongViewName":"TypeError","lengths":[7,15]}"#
+    );
+}
+
+#[test]
+fn pop_state_event_constructor_converts_visual_transition_and_state_members() {
+    let mut vm = new_storage_test_vm("https://pop-state-event-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const reads = [];
+              const state = { marker: true };
+              const initialized = new PopStateEvent("popstate", {
+                get state() {
+                  reads.push("state");
+                  return state;
+                },
+                get hasUAVisualTransition() {
+                  reads.push("hasUAVisualTransition");
+                  return 1;
+                }
+              });
+              let dispatchedState = null;
+              let dispatchedTransition = false;
+              addEventListener("popstate", event => {
+                dispatchedState = event.state;
+                dispatchedTransition = event.hasUAVisualTransition;
+              }, { once: true });
+              dispatchEvent(initialized);
+
+              let getterError = "none";
+              try {
+                new PopStateEvent("popstate", {
+                  get hasUAVisualTransition() {
+                    throw new RangeError("sentinel");
+                  }
+                });
+              } catch (error) {
+                getterError = `${error.name}:${error.message}`;
+              }
+
+              return JSON.stringify({
+                defaults: [
+                  new PopStateEvent("popstate").state,
+                  new PopStateEvent("popstate").hasUAVisualTransition
+                ],
+                initialized: [
+                  initialized.state === state,
+                  initialized.hasUAVisualTransition,
+                  reads.join(",")
+                ],
+                explicitFalse: new PopStateEvent("popstate", {
+                  hasUAVisualTransition: 0
+                }).hasUAVisualTransition,
+                dispatched: [
+                  dispatchedState === state,
+                  dispatchedTransition
+                ],
+                getterError
+              });
+            })()
+            "#,
+        )
+        .expect("PopStateEvent constructor dictionary probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaults":[null,false],"initialized":[true,true,"hasUAVisualTransition,state"],"explicitFalse":false,"dispatched":[true,true],"getterError":"RangeError:sentinel"}"#
     );
 }
 
@@ -5460,7 +5885,8 @@ popup.clearTimeout(cancelledPopupTimer);
 #[tokio::test]
 async fn lightweight_popup_close_retires_its_local_window_timers() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm_with_loader("https://timer-popup-close.test/", &loader);
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://timer-popup-close.test/", &loader);
 
     vm.eval(
         r#"
@@ -5472,9 +5898,14 @@ popup.close();
 "#,
     )
     .expect("popup timer close setup should evaluate");
-    vm.advance_timers_until_deadline_for_test(&loader)
-        .await
-        .expect("closed popup timer should leave the timer queue quiescent");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(popup.opener === null)",
+        "true",
+        "queued popup definite close",
+    )
+    .await;
     assert_eq!(
         vm.eval("__closedPopupTimerEvents.length")
             .expect("closed popup timer result should evaluate"),
@@ -7488,13 +7919,13 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
     __lmMessagePortOnmessageHandler: { value: () => "proto-message", configurable: true },
     __lmMessagePortOnmessageerrorHandler: { value: () => "proto-error", configurable: true },
     __lmMessagePortOncloseHandler: { value: () => "proto-close", configurable: true },
-    __moliMessagePortListeners: { value: [], configurable: true }
+    __moliMessagePortEventListeners: { value: [], configurable: true }
   });
   Object.defineProperties(standalone, {
     __lmMessagePortOnmessageHandler: { value: () => "own-message", configurable: true },
     __lmMessagePortOnmessageerrorHandler: { value: () => "own-error", configurable: true },
     __lmMessagePortOncloseHandler: { value: () => "own-close", configurable: true },
-    __moliMessagePortListeners: { value: [], configurable: true }
+    __moliMessagePortEventListeners: { value: [], configurable: true }
   });
   Object.defineProperties(MessageChannel.prototype, {
     __moliMessageChannelPort1: { value: "proto-port1", configurable: true },
@@ -7513,12 +7944,14 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
     standaloneCtor: standalone.constructor && standalone.constructor.name,
     standaloneProtoCtor: Object.getPrototypeOf(standalone)?.constructor?.name ?? null,
     standaloneKeys: Object.keys(standalone).join(","),
+    eventTargetMethodsInherited: ["addEventListener", "removeEventListener", "dispatchEvent"].every(name =>
+      !Object.hasOwn(MessagePort.prototype, name) && standalone[name] === EventTarget.prototype[name]),
     messagePortMethods: [
       methodDescriptor(MessagePort.prototype, "postMessage"),
       methodDescriptor(MessagePort.prototype, "start"),
       methodDescriptor(MessagePort.prototype, "close"),
-      methodDescriptor(MessagePort.prototype, "addEventListener"),
-      methodDescriptor(MessagePort.prototype, "removeEventListener")
+      methodDescriptor(EventTarget.prototype, "addEventListener"),
+      methodDescriptor(EventTarget.prototype, "removeEventListener")
     ],
     messagePortAccessors: [
       accessorDescriptor(MessagePort.prototype, "onmessage"),
@@ -7553,7 +7986,7 @@ fn message_port_is_not_constructible_and_channel_ports_keep_declared_state() {
 
     assert_eq!(
         result,
-        r#"{"constructorResult":"TypeError:true","standaloneTag":"[object MessagePort]","standaloneCtor":"MessagePort","standaloneProtoCtor":"MessagePort","standaloneKeys":"","messagePortMethods":["postMessage:function:postMessage:1:true:true:true","start:function:start:0:true:true:true","close:function:close:0:true:true:true","addEventListener:function:addEventListener:2:true:true:true","removeEventListener:function:removeEventListener:2:true:true:true"],"messagePortAccessors":["onmessage:function:get onmessage:0:true:function:true","onmessageerror:function:get onmessageerror:0:true:function:true","onclose:function:get onclose:0:true:function:true"],"messageChannelAccessors":["port1:function:get port1:0:true:undefined:true","port2:function:get port2:0:true:undefined:true"],"messagePortOwnSlots":[],"messageChannelOwnSlots":[],"standaloneOnmessage":"function","standaloneOnmessageIsSpoof":false,"standaloneOnmessageerror":"function","standaloneOnmessageerrorIsSpoof":false,"standaloneOnclose":"function","standaloneOncloseIsSpoof":false,"portTag":"[object MessagePort]","portCtor":"MessagePort","portKeys":"","portOnmessage":null,"channelKeys":"","stablePortAccessor":true,"channelPortSpoofed":false}"#
+        r#"{"constructorResult":"TypeError:true","standaloneTag":"[object MessagePort]","standaloneCtor":"MessagePort","standaloneProtoCtor":"MessagePort","standaloneKeys":"","eventTargetMethodsInherited":true,"messagePortMethods":["postMessage:function:postMessage:1:true:true:true","start:function:start:0:true:true:true","close:function:close:0:true:true:true","addEventListener:function:addEventListener:2:true:true:true","removeEventListener:function:removeEventListener:2:true:true:true"],"messagePortAccessors":["onmessage:function:get onmessage:0:true:function:true","onmessageerror:function:get onmessageerror:0:true:function:true","onclose:function:get onclose:0:true:function:true"],"messageChannelAccessors":["port1:function:get port1:0:true:undefined:true","port2:function:get port2:0:true:undefined:true"],"messagePortOwnSlots":[],"messageChannelOwnSlots":[],"standaloneOnmessage":"function","standaloneOnmessageIsSpoof":false,"standaloneOnmessageerror":"function","standaloneOnmessageerrorIsSpoof":false,"standaloneOnclose":"function","standaloneOncloseIsSpoof":false,"portTag":"[object MessagePort]","portCtor":"MessagePort","portKeys":"","portOnmessage":null,"channelKeys":"","stablePortAccessor":true,"channelPortSpoofed":false}"#
     );
 }
 

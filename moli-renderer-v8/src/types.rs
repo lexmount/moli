@@ -37,6 +37,21 @@ pub(crate) enum ScriptErrorConstructorKind {
     WebAssemblyLinkError,
 }
 
+/// The value carried by script-failure reporting tasks. Constructor metadata
+/// remains a fallback for failures originating in the host; a JavaScript
+/// exception must instead retain its original value in the reporting realm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ScriptErrorValue {
+    Constructor(ScriptErrorConstructorKind),
+    Retained(moli_module_script_tree::ModuleExceptionId),
+}
+
+impl From<ScriptErrorConstructorKind> for ScriptErrorValue {
+    fn from(constructor: ScriptErrorConstructorKind) -> Self {
+        Self::Constructor(constructor)
+    }
+}
+
 pub use moli_script::{
     ScriptElementClassificationInput, ScriptPreparationClassificationInput,
     classify_script_preparation,
@@ -89,7 +104,10 @@ pub(super) enum PendingSubresourceContinuation {
         web_font: Option<crate::css_resource_urls::StylesheetWebFont>,
         css_image: Option<crate::native_bridge::CssImageResourceRequestIdentity>,
     },
-    Xhr(v8::Global<v8::Object>),
+    Xhr {
+        xhr: v8::Global<v8::Object>,
+        use_cors_preflight: bool,
+    },
     WebSocket(PendingWebSocketConnection),
     WorkerFetch {
         worker_id: DedicatedWorkerId,
@@ -179,7 +197,17 @@ impl PendingSubresourceContinuation {
     }
 
     pub(super) fn is_window_xhr(&self) -> bool {
-        matches!(self, Self::Xhr(_))
+        matches!(self, Self::Xhr { .. })
+    }
+
+    pub(super) fn use_cors_preflight(&self) -> bool {
+        matches!(
+            self,
+            Self::Xhr {
+                use_cors_preflight: true,
+                ..
+            }
+        )
     }
 
     pub(super) fn is_window_fetch(&self) -> bool {
@@ -217,6 +245,9 @@ pub(super) struct PendingWindowFetchContinuation {
     keepalive: bool,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
+    redirect_csp_state: crate::network_host::FetchCspRedirectState,
+    redirect_mode: moli_fetch::RequestRedirectMode,
+    integrity: String,
 }
 
 enum PendingWindowFetchPromise {
@@ -230,12 +261,17 @@ impl PendingWindowFetchContinuation {
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
+        redirect_mode: moli_fetch::RequestRedirectMode,
+        integrity: String,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
+            redirect_csp_state: crate::network_host::FetchCspRedirectState::new(&connect_policy),
             connect_policy,
             csp_report_context,
+            redirect_mode,
+            integrity,
         }
     }
 
@@ -275,6 +311,18 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn csp_report_context(&self) -> &crate::network_host::WindowCspReportRequestContext {
         &self.csp_report_context
+    }
+
+    pub(super) fn redirect_csp_state(&self) -> &crate::network_host::FetchCspRedirectState {
+        &self.redirect_csp_state
+    }
+
+    pub(super) fn redirect_mode(&self) -> moli_fetch::RequestRedirectMode {
+        self.redirect_mode
+    }
+
+    pub(super) fn integrity(&self) -> &str {
+        &self.integrity
     }
 }
 
@@ -517,9 +565,14 @@ pub(super) struct PendingSubresourceFetchState {
     // Window fetches that need CORS preflight emit the actual request-start
     // after the preflight record, not when the pending fetch is registered.
     pub(super) deferred_request_started: bool,
+    pub(super) blob_url_entry: Option<crate::network_host::CapturedBlobUrl>,
 }
 
 impl PendingSubresourceFetchState {
+    pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
+        self.request_origin.clone()
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {
@@ -598,17 +651,17 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) result: std::result::Result<NavigationResponse, String>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum AsyncSubresourceFetchResponseFilter {
     Basic,
-    Cors,
+    Cors(Vec<String>),
     Opaque,
     OpaqueRedirect,
 }
 
 impl AsyncSubresourceFetchResponseFilter {
-    pub(super) fn is_readable(self) -> bool {
-        matches!(self, Self::Basic | Self::Cors)
+    pub(super) fn is_readable(&self) -> bool {
+        matches!(self, Self::Basic | Self::Cors(_))
     }
 }
 
@@ -675,6 +728,12 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    /// The violation carries its source Document's reporting authority and
+    /// remains reportable after the originating fetch has settled or aborted.
+    ContentSecurityPolicyViolation,
+    Upload {
+        internal_id: u64,
+    },
     Completion {
         internal_id: u64,
     },
@@ -696,6 +755,14 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    ContentSecurityPolicyViolation {
+        report_context: Box<crate::network_host::WindowCspReportRequestContext>,
+        violation: Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
+    },
+    Upload {
+        internal_id: u64,
+        event: moli_fetch::UploadEvent,
+    },
     Completion(Box<AsyncSubresourceFetchCompletion>),
     ObservedNetworkRecord(Box<SubresourceNetworkRecord>),
     StreamingStarted(Box<AsyncSubresourceStreamingStarted>),
@@ -706,6 +773,12 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::ContentSecurityPolicyViolation { .. } => {
+                AsyncSubresourceFetchEventTarget::ContentSecurityPolicyViolation
+            }
+            Self::Upload { internal_id, .. } => AsyncSubresourceFetchEventTarget::Upload {
+                internal_id: *internal_id,
+            },
             Self::Completion(completion) => AsyncSubresourceFetchEventTarget::Completion {
                 internal_id: completion.internal_id,
             },
@@ -864,6 +937,7 @@ pub(super) struct ServiceWorkerControllerChangeCompletion {
 
 pub(super) struct StreamingSubresourceFetchState {
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
@@ -877,6 +951,18 @@ pub(super) struct StreamingSubresourceFetchState {
     pub(super) xhr_response: Option<XhrStreamingResponseState>,
 }
 
+impl StreamingSubresourceFetchState {
+    pub(super) fn needs_orb_body_validation(&self) -> bool {
+        !self.skip_fetch_security_validation
+            && crate::network_host::fetch_response_needs_orb_body_validation(
+                &self.pending.request_origin,
+                &self.head.final_url,
+                &self.head.headers,
+                self.pending.request_mode,
+            )
+    }
+}
+
 pub(super) struct EventSourceStreamingChunkDelivery<'s> {
     pub(super) context: v8::Local<'s, v8::Context>,
     pub(super) event_source: v8::Local<'s, v8::Object>,
@@ -885,7 +971,7 @@ pub(super) struct EventSourceStreamingChunkDelivery<'s> {
 }
 
 pub(super) struct XhrStreamingResponseState {
-    pending_utf8_bytes: Vec<u8>,
+    decoder: Option<moli_encoding::XhrResponseDecoder>,
     loaded: usize,
     total: Option<usize>,
 }
@@ -897,44 +983,20 @@ impl XhrStreamingResponseState {
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
             .and_then(|(_, value)| value.trim().parse::<usize>().ok());
         Self {
-            pending_utf8_bytes: Vec::new(),
+            decoder: None,
             loaded: 0,
             total,
         }
     }
 
-    pub(super) fn append(&mut self, bytes: &[u8]) -> (String, usize, Option<usize>) {
+    pub(super) fn append(
+        &mut self,
+        bytes: &[u8],
+        make_decoder: impl FnOnce() -> moli_encoding::XhrResponseDecoder,
+    ) -> (String, usize, Option<usize>) {
         self.loaded = self.loaded.saturating_add(bytes.len());
-        self.pending_utf8_bytes.extend_from_slice(bytes);
-
-        let mut decoded = String::new();
-        let mut consumed = 0;
-        while consumed < self.pending_utf8_bytes.len() {
-            let remaining = &self.pending_utf8_bytes[consumed..];
-            match std::str::from_utf8(remaining) {
-                Ok(text) => {
-                    decoded.push_str(text);
-                    consumed = self.pending_utf8_bytes.len();
-                }
-                Err(error) => {
-                    let valid_end = consumed + error.valid_up_to();
-                    decoded.push_str(
-                        std::str::from_utf8(&self.pending_utf8_bytes[consumed..valid_end])
-                            .expect("Utf8Error::valid_up_to must identify a valid UTF-8 prefix"),
-                    );
-                    consumed = valid_end;
-                    let Some(invalid_len) = error.error_len() else {
-                        break;
-                    };
-                    decoded.push('\u{fffd}');
-                    consumed += invalid_len;
-                }
-            }
-        }
-        if consumed > 0 {
-            self.pending_utf8_bytes.drain(..consumed);
-        }
-        (decoded, self.loaded, self.total)
+        let decoder = self.decoder.get_or_insert_with(make_decoder);
+        (decoder.push(bytes), self.loaded, self.total)
     }
 }
 

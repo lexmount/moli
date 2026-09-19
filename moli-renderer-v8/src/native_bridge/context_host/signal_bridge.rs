@@ -1,5 +1,4 @@
 use super::*;
-use crate::webidl;
 
 impl JsContextHost {
     pub(crate) fn is_abort_signal<'s>(
@@ -45,121 +44,6 @@ impl JsContextHost {
         );
     }
 
-    pub(crate) fn register_abort_signal_event_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        event_type: &str,
-        callback: webidl::WebIdlCallbackInterface,
-        options: webidl::EventListenerOptions,
-    ) -> bool {
-        let Some(signal_id) =
-            crate::native_bridge::abort::AbortStore::signal_id_from_object(scope, signal)
-        else {
-            return false;
-        };
-        if !self.bridge.abort.is_signal_object(scope, signal) {
-            return false;
-        }
-        let callback_value = callback.value(scope);
-        let Ok(callback_object) = v8::Local::<v8::Object>::try_from(callback_value) else {
-            return false;
-        };
-        if self
-            .bridge
-            .abort
-            .listener_callback_ids(signal_id, event_type, options.capture)
-            .into_iter()
-            .any(|callback_id| self.event_callback_matches(scope, callback_id, callback_object))
-        {
-            return false;
-        }
-
-        let callback_id = self.register_webidl_event_callback(scope, callback);
-        if self.bridge.abort.register_listener(
-            signal_id,
-            event_type,
-            callback_id,
-            options.capture,
-            options.once,
-            options.passive.unwrap_or(false),
-        ) {
-            true
-        } else {
-            self.release_event_callback(callback_id);
-            false
-        }
-    }
-
-    pub(crate) fn unregister_abort_signal_event_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        event_type: &str,
-        callback: &webidl::WebIdlCallbackInterface,
-        capture: bool,
-    ) -> bool {
-        let Some(signal_id) =
-            crate::native_bridge::abort::AbortStore::signal_id_from_object(scope, signal)
-        else {
-            return false;
-        };
-        let callback_value = callback.value(scope);
-        let Ok(callback_object) = v8::Local::<v8::Object>::try_from(callback_value) else {
-            return false;
-        };
-        let Some(callback_id) = self
-            .bridge
-            .abort
-            .listener_callback_ids(signal_id, event_type, capture)
-            .into_iter()
-            .find(|callback_id| self.event_callback_matches(scope, *callback_id, callback_object))
-        else {
-            return false;
-        };
-        if !self
-            .bridge
-            .abort
-            .unregister_listener_by_id(signal_id, event_type, callback_id, capture)
-        {
-            return false;
-        }
-        self.release_event_callback(callback_id);
-        true
-    }
-
-    pub(in crate::native_bridge) fn claim_abort_signal_event_listener_for_dispatch(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        signal_id: u32,
-        event_type: &str,
-        callback_id: EventCallbackId,
-    ) -> Option<crate::native_bridge::abort::PreparedAbortListener> {
-        let listener =
-            self.bridge
-                .abort
-                .claim_listener_for_dispatch(signal_id, event_type, callback_id)?;
-        let callback = self.prepare_event_callback(scope, callback_id);
-        if listener.once {
-            self.release_event_callback(callback_id);
-        }
-        let Some(callback) = callback else {
-            if !listener.once {
-                let _ = self.bridge.abort.unregister_listener_by_id(
-                    signal_id,
-                    event_type,
-                    callback_id,
-                    listener.capture,
-                );
-            }
-            return None;
-        };
-        Some(crate::native_bridge::abort::PreparedAbortListener {
-            callback,
-            passive: listener.passive,
-        })
-    }
-
     pub(crate) fn register_abort_signal_algorithm<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -184,28 +68,6 @@ impl JsContextHost {
 
     pub(crate) fn unregister_abort_target_listener(&mut self, callback_id: EventCallbackId) {
         self.bridge.abort.unregister_target_listener(callback_id);
-    }
-
-    pub(crate) fn register_abort_message_port_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        port_id: crate::types::MessagePortId,
-        listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-    ) -> bool {
-        self.bridge
-            .abort
-            .register_message_port_listener(scope, signal, port_id, listener_id)
-    }
-
-    pub(crate) fn unregister_abort_message_port_listener(
-        &mut self,
-        port_id: crate::types::MessagePortId,
-        listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-    ) {
-        self.bridge
-            .abort
-            .unregister_message_port_listener(port_id, listener_id);
     }
 
     pub(crate) fn remove_registered_event_listener_by_id(

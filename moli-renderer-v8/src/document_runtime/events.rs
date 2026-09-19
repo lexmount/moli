@@ -1,5 +1,4 @@
 use super::*;
-use crate::dom::native::Node;
 use crate::host::HostTimerOwner;
 use crate::host::PublicEventDispatchResult;
 use crate::script_provenance::CompiledStringProvenance;
@@ -33,9 +32,19 @@ impl DocumentRuntime {
             EventTargetHandle::Window => clear_window,
             EventTargetHandle::ChildWindow(_) => clear_window,
             EventTargetHandle::Node(handle) => {
-                handle == document_handle
-                    || (dom_host.owner_document_handle(handle) == Some(document_handle)
-                        && dom_host.is_connected(handle))
+                // Retiring a browsing context can disconnect the native tree
+                // without removing its Document/child relationships.
+                let mut current = Some(handle);
+                while let Some(node) = current {
+                    if node == document_handle {
+                        return true;
+                    }
+                    current = dom_host
+                        .dom()
+                        .parent_node(node)
+                        .or_else(|| dom_host.shadow_root_host(node));
+                }
+                false
             }
         })
     }
@@ -71,7 +80,7 @@ impl DocumentRuntime {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
-        delay_ms: u32,
+        delay_ms: u64,
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {
@@ -276,6 +285,51 @@ impl DocumentRuntime {
         self.timeouts.run_next_body(scope, selection)
     }
 
+    /// Starts the exact timer sequence range owned by one classic defer task.
+    ///
+    /// Parser-time scripts still execute inside the parser's task and module
+    /// evaluation has its own pending-completion semantics. Neither category
+    /// should make all of its older timers precede DOMContentLoaded. A classic
+    /// defer task, however, can queue a timer before the subsequent DCL task is
+    /// queued; record only that task-local interval.
+    pub(crate) fn begin_classic_defer_timer_schedule_range(&mut self) {
+        debug_assert!(
+            self.classic_defer_timer_schedule_start.is_none(),
+            "classic defer timer range must not overlap another script task"
+        );
+        self.classic_defer_timer_schedule_start = Some(self.timeouts.schedule_snapshot());
+    }
+
+    pub(crate) fn finish_classic_defer_timer_schedule_range(&mut self) {
+        let Some(start) = self.classic_defer_timer_schedule_start.take() else {
+            // A defer script may replace the document and clear the old
+            // lifecycle state while it is executing.
+            return;
+        };
+        let range = self.timeouts.schedule_range_since(start);
+        if !range.is_empty() {
+            self.classic_defer_timer_schedule_ranges.push(range);
+        }
+    }
+
+    pub(crate) fn clear_classic_defer_timer_schedule_ranges(&mut self) {
+        self.classic_defer_timer_schedule_start = None;
+        self.classic_defer_timer_schedule_ranges.clear();
+    }
+
+    pub(crate) fn run_next_timeout_queued_by_classic_defer_script(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+    ) -> HostTimeoutRunResult {
+        self.timeouts
+            .run_next_from_schedule_ranges(scope, &self.classic_defer_timer_schedule_ranges)
+    }
+
+    pub(crate) fn has_ready_timeout_queued_by_classic_defer_script(&self) -> bool {
+        self.timeouts
+            .has_ready_from_schedule_ranges(&self.classic_defer_timer_schedule_ranges)
+    }
+
     #[cfg(test)]
     pub(crate) fn has_ready_timeout(&self) -> bool {
         self.timeouts.has_ready_timer()
@@ -319,6 +373,18 @@ impl DocumentRuntime {
         event_type: &str,
         registration: crate::host::EventListenerRegistration,
     ) {
+        if !self
+            .events
+            .has_event_handler_property_entry(target, event_type)
+        {
+            let content_attribute_owner =
+                crate::host::event_handler_content_attribute_owner(self, target, event_type);
+            self.events.ensure_event_handler_content_attribute(
+                target,
+                event_type,
+                content_attribute_owner,
+            );
+        }
         self.events
             .insert_listener(target, event_type, registration);
     }
@@ -351,38 +417,76 @@ impl DocumentRuntime {
             .set_event_handler_property(target, event_type, callback_id)
     }
 
-    pub(crate) fn clear_event_handler_property(
+    pub(crate) fn set_compiled_event_handler_property(
         &mut self,
         target: EventTargetHandle,
         event_type: &str,
+        callback_id: Option<crate::native_bridge::EventCallbackId>,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        self.events.clear_event_handler_property(target, event_type)
+        self.events
+            .set_compiled_event_handler_property(target, event_type, callback_id)
     }
 
-    pub(crate) fn sync_body_window_messageerror_content_attribute(
+    pub(crate) fn set_event_handler_content_attribute(
         &mut self,
+        target: EventTargetHandle,
+        event_type: &str,
+        owner: Option<DomHandle>,
+    ) -> Option<crate::native_bridge::EventCallbackId> {
+        self.events
+            .set_event_handler_content_attribute(target, event_type, owner)
+    }
+
+    pub(crate) fn sync_event_handler_content_attribute(
+        &mut self,
+        host_ptr: *mut JsContextHost,
         handle: DomHandle,
         name: &str,
         namespace: Option<&str>,
         present: bool,
     ) -> Option<crate::native_bridge::EventCallbackId> {
-        if namespace.is_some() || !name.eq_ignore_ascii_case("onmessageerror") {
+        if namespace.is_some() {
             return None;
         }
-        let document_handle = self.document_handle();
-        let dom = self.dom_host().dom();
-        let body_handle = dom
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .and_then(|document| document.body_or_frameset_handle(dom, document_handle));
-        if body_handle != Some(handle) {
-            return None;
-        }
-        if present {
-            self.clear_event_handler_property(EventTargetHandle::Window, "messageerror")
-        } else {
-            self.set_event_handler_property(EventTargetHandle::Window, "messageerror", None)
-        }
+        let normalized_name = name.to_ascii_lowercase();
+        let event_type = normalized_name
+            .strip_prefix("on")
+            .filter(|event_type| !event_type.is_empty())?;
+        let event_type =
+            crate::native_bridge::element::canonical_event_handler_event_type(event_type);
+        let is_body_or_frameset = self.dom_host().node(handle).is_some_and(|node| {
+            node.is_html_element_named("body") || node.is_html_element_named("frameset")
+        });
+        let target = match (
+            is_body_or_frameset,
+            crate::native_bridge::element::body_or_frameset_reflects_window_event_type(event_type),
+        ) {
+            (true, true) => match unsafe { &*host_ptr }.owner_dispatch_scope_for_node(handle) {
+                Some(crate::native_bridge::OwnerDispatchScope::Top) => EventTargetHandle::Window,
+                Some(crate::native_bridge::OwnerDispatchScope::Child(child_handle)) => {
+                    return unsafe { &mut *host_ptr }
+                        .set_child_window_event_handler_content_attribute(
+                            child_handle,
+                            event_type,
+                            present.then_some(handle),
+                        );
+                }
+                Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)) | None => {
+                    return None;
+                }
+            },
+            _ => EventTargetHandle::Node(handle),
+        };
+        self.set_event_handler_content_attribute(target, event_type, present.then_some(handle))
+    }
+
+    pub(crate) fn uncompiled_event_handler_content_attribute_owner(
+        &self,
+        target: EventTargetHandle,
+        event_type: &str,
+    ) -> Option<DomHandle> {
+        self.events
+            .uncompiled_event_handler_content_attribute_owner(target, event_type)
     }
 
     pub(crate) fn event_handler_property_callback_id(
@@ -453,7 +557,12 @@ impl DocumentRuntime {
         let composed = event
             .get(scope, v8str(scope, "composed").into())
             .is_some_and(|value| value.boolean_value(scope));
-        let mut path = if let Some(source_target) =
+        // A caller-created composed event is not confined to the tree that
+        // contains its reference source. Its path crosses shadow boundaries
+        // normally while `source` is retargeted for each listener.
+        let mut path = if composed {
+            self.build_propagation_path(dispatch_target, composed)
+        } else if let Some(source_target) =
             source_target_for_reference_event(scope, host_ptr, event)
         {
             self.build_source_scoped_propagation_path(dispatch_target, source_target)

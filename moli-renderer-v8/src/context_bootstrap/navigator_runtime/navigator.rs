@@ -416,13 +416,34 @@ struct ServiceWorkerContainerDeclaration {
     #[webapi(accessor_property = "controller", enumerable, getter = navigator_service_worker_controller_getter_callback)]
     controller: (),
 
-    #[webapi(method, enumerable, callback = navigator_service_worker_register_callback, length = 1)]
+    #[webapi(
+        method,
+        enumerable,
+        callback = navigator_service_worker_register_callback,
+        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
+        returns_promise,
+        length = 1
+    )]
     register: (),
 
-    #[webapi(method, enumerable, callback = navigator_service_worker_get_registration_callback, length = 1)]
+    #[webapi(
+        method,
+        enumerable,
+        callback = navigator_service_worker_get_registration_callback,
+        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
+        returns_promise,
+        length = 0
+    )]
     get_registration: (),
 
-    #[webapi(method, enumerable, callback = navigator_service_worker_get_registrations_callback, length = 0)]
+    #[webapi(
+        method,
+        enumerable,
+        callback = navigator_service_worker_get_registrations_callback,
+        receiver = web_api_interfaces::ServiceWorkerContainer::is_instance,
+        returns_promise,
+        length = 0
+    )]
     get_registrations: (),
 
     #[webapi(method, enumerable, callback = simple_event_target_add_event_listener_callback)]
@@ -457,16 +478,6 @@ struct ServiceWorkerContainerDeclaration {
         setter = navigator_service_worker_controllerchange_handler_setter_callback
     )]
     oncontrollerchange: (),
-}
-
-#[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::UserActivation)]
-struct UserActivationObjectDeclaration {
-    #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
-    is_active: (),
-
-    #[webapi(accessor_property, getter = navigator_user_activation_state_getter_callback, enumerable)]
-    has_been_active: (),
 }
 
 #[derive(WebApiObject)]
@@ -765,19 +776,6 @@ pub(crate) fn current_protocol_user_gesture_activation(scope: &mut v8::PinScope<
         .is_some_and(|host_ptr| unsafe { (&*host_ptr).protocol_user_gesture_activation() })
 }
 
-fn navigator_user_activation_state_getter_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    if !web_api_interfaces::UserActivation::is_instance(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
-        return;
-    }
-    let active = current_protocol_user_gesture_activation(scope);
-    rv.set(v8::Boolean::new(scope, active).into());
-}
-
 fn navigator_connection_save_data_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -873,6 +871,11 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_geolocation_template_bindings(scope, template, interface_name);
     install_navigator_collection_template_bindings(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
+    super::user_activation::install_user_activation_template_bindings(
+        scope,
+        template,
+        interface_name,
+    );
     let prototype = template.prototype_template(scope);
     match interface_name {
         "MediaDevices" => install_media_devices_template_bindings(scope, template),
@@ -993,14 +996,6 @@ pub(in crate::context_bootstrap) fn service_worker_owner_token_value<'s>(
         .unwrap_or_else(|| v8::undefined(scope).into())
 }
 
-fn build_user_activation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Result<v8::Local<'s, v8::Object>> {
-    UserActivationObjectDeclaration::default()
-        .bind(scope)
-        .map_err(|error| anyhow!("failed to bind UserActivation object: {error}"))
-}
-
 fn build_navigator_plugin_collection_subobject<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     backing: v8::Local<'s, v8::Object>,
@@ -1061,7 +1056,9 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
             build_service_worker_container(scope, owner_child, owner_popup)?.into()
         }
         NavigatorSubobject::Clipboard => build_clipboard_object(scope)?.into(),
-        NavigatorSubobject::UserActivation => build_user_activation(scope)?.into(),
+        NavigatorSubobject::UserActivation => {
+            super::user_activation::associated_user_activation(scope, backing)?.into()
+        }
         NavigatorSubobject::StorageBuckets => {
             build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()
         }
@@ -1253,7 +1250,13 @@ fn build_window_navigator_backing_for_owner<'s>(
     }
     .bind(scope)
     .map_err(|error| anyhow!("failed to bind Navigator backing object: {error}"))
-    .inspect(|&backing| {
+    .and_then(|backing| {
+        super::user_activation::bind_navigator_user_activation(
+            scope,
+            backing,
+            owner_child,
+            owner_popup,
+        )?;
         set_navigator_identity_profile(scope, backing, &identity);
         set_navigator_storage_owner(scope, backing, owner_child, owner_popup);
         if let Some(accept_language) = v8_string(scope, identity.accept_language()) {
@@ -1264,6 +1267,7 @@ fn build_window_navigator_backing_for_owner<'s>(
                 accept_language.into(),
             );
         }
+        Ok(backing)
     })
 }
 

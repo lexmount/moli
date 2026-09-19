@@ -24,28 +24,25 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_callback<'s>
         return;
     };
     let cursor = args.this();
-    let current = cursor_position(scope, cursor);
-    if current < 0 {
-        let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
-        scope.throw_exception(error);
+    if cursor_active_transaction(scope, cursor).is_none()
+        || cursor_effective_object_store(scope, cursor).is_none()
+    {
         return;
     }
+    let Some(current) = cursor_iteration_position(scope, cursor) else {
+        return;
+    };
     let key = parsed.key.unwrap_or_else(|| v8::undefined(scope).into());
     let target = match parse_idb_key(scope, key) {
         Ok(key) => key,
-        Err(_) => {
-            let error = dom_exception_value(
-                scope,
-                "Failed to execute 'continue': the key is not valid.",
-                "DataError",
-            );
-            scope.throw_exception(error);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
     };
     let direction = cursor_direction_from_cursor(scope, cursor);
     if let Some(target) = &target
-        && let Some(current_key) = cursor_key_at(scope, cursor, current as usize)
+        && let Some(current_key) = cursor_key_at(scope, cursor, current)
         && compare::cursor_direction_cmp(direction, target, &current_key)
             != std::cmp::Ordering::Greater
     {
@@ -57,8 +54,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_continue_callback<'s>
         scope.throw_exception(error);
         return;
     }
-    let next = next_cursor_position(scope, cursor, current as usize, target.as_ref(), &direction);
-    let _ = result::enqueue_cursor_result(scope, cursor, next);
+    let _ = result::enqueue_cursor_result(scope, cursor, CursorIteration::Continue(target));
     rv.set_undefined();
 }
 
@@ -71,12 +67,6 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_advance_callback<'s>(
         return;
     };
     let cursor = args.this();
-    let current = cursor_position(scope, cursor);
-    if current < 0 {
-        let error = dom_exception_value(scope, "The cursor is exhausted.", "InvalidStateError");
-        scope.throw_exception(error);
-        return;
-    }
     let count = parsed.count;
     if count == 0 {
         throw_type_error(
@@ -85,30 +75,14 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_cursor_advance_callback<'s>(
         );
         return;
     }
-    let next = current as usize + count as usize;
-    let next = (next < cursor_entries_len(scope, cursor)).then_some(next);
-    let _ = result::enqueue_cursor_result(scope, cursor, next);
-    rv.set_undefined();
-}
-
-fn next_cursor_position<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    cursor: v8::Local<'s, v8::Object>,
-    current: usize,
-    target: Option<&Key>,
-    direction: &CursorDirection,
-) -> Option<usize> {
-    for index in (current + 1)..cursor_entries_len(scope, cursor) {
-        let Some(candidate_key) = cursor_key_at(scope, cursor, index) else {
-            continue;
-        };
-        if let Some(target) = target {
-            let cmp = compare::cursor_direction_cmp(*direction, &candidate_key, target);
-            if cmp == std::cmp::Ordering::Less {
-                continue;
-            }
-        }
-        return Some(index);
+    if cursor_active_transaction(scope, cursor).is_none()
+        || cursor_effective_object_store(scope, cursor).is_none()
+    {
+        return;
     }
-    None
+    if cursor_iteration_position(scope, cursor).is_none() {
+        return;
+    }
+    let _ = result::enqueue_cursor_result(scope, cursor, CursorIteration::Advance(count));
+    rv.set_undefined();
 }

@@ -24,6 +24,18 @@ struct CachedInferredFrameStyleViewport {
     viewport: StyleViewport,
 }
 
+/// Inputs sampled by the owner of the latest layout pass. The frozen tree
+/// remains available to snapshot consumers, but synchronous geometry queries
+/// must rebuild it after any of these inputs change.
+#[derive(PartialEq)]
+pub(super) struct LayoutSnapshotInputs {
+    pub(super) dom_version: u64,
+    pub(super) style_generations: Vec<(DomHandle, u64, u64, u64)>,
+    pub(super) style_viewport_generation: u64,
+    pub(super) environment: StyloStyleEnvironment,
+    pub(super) visual_resource_generation: u64,
+}
+
 /// Layout-facing state whose lifetime is bounded by exactly one main Document.
 ///
 /// `ScriptVm` outlives `document.open()`, so the main-document owner
@@ -43,6 +55,7 @@ pub(super) struct DocumentLayoutState {
     web_font_resource_generation: Option<StylesheetResourceGeneration>,
     visual_state_generation: u64,
     latest_layout: LatestLayoutTreeCache,
+    latest_layout_inputs: Option<LayoutSnapshotInputs>,
     /// Last used content viewport published by each live iframe owner's
     /// parent layout. Blink keeps the equivalent size on LocalFrameView; it is
     /// separate from the single latest-tree slot because a later fresh layout
@@ -59,6 +72,13 @@ pub(super) struct DocumentLayoutState {
 }
 
 impl DocumentLayoutState {
+    /// Both conditions are required: a request can own a slot before its
+    /// stylesheet generation is published, while an empty published manifest
+    /// still records reconciliation state that later mutations must advance.
+    pub(super) fn web_font_sidecar_is_pristine(&self) -> bool {
+        self.web_font_resource_generation.is_none() && self.web_fonts.is_empty()
+    }
+
     pub(super) fn web_font_resources_are_current(
         &self,
         generation: StylesheetResourceGeneration,
@@ -133,16 +153,23 @@ impl DocumentLayoutState {
         document: DomHandle,
         tree: FrozenLayoutTree<DomHandle>,
         environment: LayoutEnvironment,
+        inputs: LayoutSnapshotInputs,
     ) {
         self.latest_layout.publish(document, tree, environment);
+        self.latest_layout_inputs = Some(inputs);
     }
 
     pub(super) fn latest_layout_matches_environment(&self, environment: LayoutEnvironment) -> bool {
         self.latest_layout.matches_environment(environment)
     }
 
+    pub(super) fn latest_layout_inputs_match(&self, inputs: &LayoutSnapshotInputs) -> bool {
+        self.latest_layout_inputs.as_ref() == Some(inputs)
+    }
+
     pub(super) fn clear_latest_layout(&mut self) {
         self.latest_layout.clear();
+        self.latest_layout_inputs = None;
         self.mark_visual_state_dirty();
     }
 

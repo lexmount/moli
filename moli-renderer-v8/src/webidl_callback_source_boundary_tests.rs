@@ -32,16 +32,16 @@ struct AllowedDirectCallFile {
 }
 
 const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
+    // Shared strong/weak handle representation for browser-created abort
+    // algorithms. The Window and worker stores still own these handles;
+    // page-supplied abort listeners remain in the typed EventTarget registry.
+    ("abort_signal_route.rs", 1),
     ("custom_elements/construction.rs", 1),
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
     ("host/timers.rs", 1),
-    ("native_bridge/abort.rs", 3),
-    ("native_bridge/abort/event.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),
-    ("worker/abort.rs", 3),
-    ("worker/abort/event_listener.rs", 1),
     ("worker/timer_callback.rs", 1),
 ];
 
@@ -76,6 +76,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::JavaScriptEntryPoint,
     ),
     // Browser-created functions, Promise capabilities, and algorithm steps.
+    // Only native-marked algorithms use this direct call to propagate iterator
+    // close errors. Author observers/teardowns still use typed Web IDL callbacks.
+    allowed(
+        "abort_signal_route.rs",
+        1,
+        DirectCallOwner::BrowserAlgorithm,
+    ),
     allowed("blob.rs", 1, DirectCallOwner::BrowserAlgorithm),
     allowed(
         "context_bootstrap/animation_runtime.rs",
@@ -114,7 +121,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/stream_adapter/utils.rs",
-        9,
+        // Cancellation now uses a native Promise reaction instead of calling
+        // the page-visible `then` method through this browser-algorithm shim.
+        8,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -128,13 +137,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "native_bridge/abort/statics.rs",
-        2,
+        "network_host/body_source.rs",
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "network_host/body_source.rs",
-        3,
+        "network_host/body_source/stream_consumer.rs",
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
@@ -144,10 +153,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "network_host/fetch_surface.rs",
-        2,
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
-    allowed("worker/abort.rs", 2, DirectCallOwner::BrowserAlgorithm),
     allowed(
         "worker/timer_callback.rs",
         1,
@@ -201,11 +209,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "native_bridge/child_window_surface/webassembly_realm.rs",
-        1,
-        DirectCallOwner::NativeForwardingOrScript,
-    ),
-    allowed(
-        "native_bridge/context_host/child_events.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),

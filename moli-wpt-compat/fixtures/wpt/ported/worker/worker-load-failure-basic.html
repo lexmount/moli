@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function wait(ms) {
   return new Promise(function (resolve) {
@@ -39,19 +40,7 @@ promise_test(async function () {
       "worker load failure onerror",
     );
 
-    assert_equals(event.type, "error", "load failures should dispatch error events");
-    assert_true(
-      event.message.indexOf("HTTP request") !== -1,
-      "load failure should mention the HTTP request",
-    );
-    assert_true(
-      event.message.indexOf("404") !== -1,
-      "load failure should surface the HTTP status",
-    );
-    assert_true(
-      event.message.indexOf("/wpt/ported/worker/resources/missing-worker.js") !== -1,
-      "load failure should mention the missing worker URL",
-    );
+    assert_worker_bootstrap_error(event, worker);
   } finally {
     window.onerror = previousOnerror;
     worker.terminate();

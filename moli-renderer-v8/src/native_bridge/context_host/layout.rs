@@ -7,7 +7,7 @@ use moli_layout::{
 
 use super::JsContextHost;
 use super::layout_snapshot::LayoutEnvironment;
-use super::layout_state::InferredFrameStyleViewportCacheKey;
+use super::layout_state::{InferredFrameStyleViewportCacheKey, LayoutSnapshotInputs};
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
@@ -143,6 +143,27 @@ impl JsContextHost {
             .try_borrow()
             .ok()?
             .frame_viewport(frame)
+    }
+
+    pub(crate) fn invalidate_published_frame_viewports(
+        &self,
+        frames: impl IntoIterator<Item = DomHandle>,
+    ) {
+        let frames = frames.into_iter().collect::<Vec<_>>();
+        if frames.is_empty() {
+            return;
+        }
+        let changed = {
+            let mut state = self.document_layout_state.borrow_mut();
+            let changed =
+                state.update_frame_viewports(frames.into_iter().map(|frame| (frame, None)));
+            state.clear_latest_layout();
+            changed
+        };
+        if changed {
+            self.style_viewport_generation
+                .set(self.style_viewport_generation.get().saturating_add(1));
+        }
     }
 
     #[cfg(debug_assertions)]
@@ -306,16 +327,18 @@ impl JsContextHost {
                 (frame, viewport)
             })
             .collect::<Vec<_>>();
-        let tree = pass.into_tree();
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
-            state.publish_latest_layout(document, tree, environment);
             state.update_frame_viewports(frame_viewports)
         };
         if frame_viewports_changed {
             self.style_viewport_generation
                 .set(self.style_viewport_generation.get().saturating_add(1));
         }
+        let inputs = self.layout_snapshot_inputs(document);
+        self.document_layout_state
+            .borrow_mut()
+            .publish_latest_layout(document, pass.into_tree(), environment, inputs);
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
@@ -330,6 +353,21 @@ impl JsContextHost {
     ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
         let viewport = self.layout_viewport_for_document(document);
         self.answer_layout_at_viewport(document, reason, viewport, queries)
+    }
+
+    pub(crate) fn answer_fresh_layout_for_document(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        queries: &LayoutQueryBatch<DomHandle>,
+    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+        let viewport = self.layout_viewport_for_document(document);
+        self.with_fresh_layout_pass_for_document(
+            document,
+            LayoutPassRequest::new(viewport, reason),
+            |pass| Ok(pass.answer_queries(queries)),
+        )?
+        .ok_or(LayoutError::NoLayoutRoot)
     }
 
     pub(crate) fn can_answer_layout_from_snapshot(
@@ -360,10 +398,11 @@ impl JsContextHost {
         if self.force_fresh_layout_reads_for_test {
             return None;
         }
-        if !self
-            .document_layout_state
-            .borrow()
-            .latest_layout_matches_environment(self.layout_environment())
+        if !self.layout_snapshot_inputs_are_current(document)
+            || !self
+                .document_layout_state
+                .borrow()
+                .latest_layout_matches_environment(self.layout_environment())
         {
             return None;
         }
@@ -371,6 +410,27 @@ impl JsContextHost {
             layout_tree_satisfies_request(tree, reason, viewport).then(|| inspect(tree))
         })
         .flatten()
+    }
+
+    fn layout_snapshot_inputs(&self, document: DomHandle) -> LayoutSnapshotInputs {
+        let mut documents = self.active_layout_document_handles();
+        documents.push(document);
+        LayoutSnapshotInputs {
+            dom_version: self.dom_host().dom_version(),
+            style_generations: self
+                .style_engine
+                .computed_style_observation_generations(documents),
+            style_viewport_generation: self.style_viewport_generation.get(),
+            environment: StyloStyleEnvironment::from_emulated_media(self.emulated_media()),
+            visual_resource_generation: self.visual_resource_generation(),
+        }
+    }
+
+    fn layout_snapshot_inputs_are_current(&self, document: DomHandle) -> bool {
+        let inputs = self.layout_snapshot_inputs(document);
+        self.document_layout_state
+            .borrow()
+            .latest_layout_inputs_match(&inputs)
     }
 
     /// Inspects the member tree for one exact Document in the single latest
@@ -548,6 +608,12 @@ impl JsContextHost {
         self.document_layout_state
             .borrow()
             .web_font_resources_are_current(generation)
+    }
+
+    pub(crate) fn document_web_font_sidecar_is_pristine(&self) -> bool {
+        self.document_layout_state
+            .borrow()
+            .web_font_sidecar_is_pristine()
     }
 
     pub(crate) fn publish_document_web_font_resource_generation(

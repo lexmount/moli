@@ -3,37 +3,39 @@ use super::{
     idb_cursor_continue_primary_key_callback, idb_cursor_delete_callback,
     idb_cursor_update_callback, idb_database_close_callback,
     idb_database_create_object_store_callback, idb_database_delete_object_store_callback,
-    idb_database_transaction_callback, idb_event_target_add_event_listener_callback,
-    idb_event_target_dispatch_event_callback, idb_event_target_remove_event_listener_callback,
+    idb_database_object_store_names_getter, idb_database_transaction_callback,
     idb_factory_cmp_callback, idb_factory_databases_callback, idb_factory_delete_database_callback,
     idb_factory_open_callback,
     idb_index_count_callback as idb_index_count_callback_in_current_context,
-    idb_index_get_all_callback as idb_index_get_all_callback_in_current_context,
-    idb_index_get_all_keys_callback as idb_index_get_all_keys_callback_in_current_context,
+    idb_index_get_all_callback, idb_index_get_all_keys_callback,
+    idb_index_get_all_records_callback,
     idb_index_get_callback as idb_index_get_callback_in_current_context,
     idb_index_get_key_callback as idb_index_get_key_callback_in_current_context,
+    idb_index_key_path_getter, idb_index_multi_entry_getter, idb_index_name_getter,
+    idb_index_name_setter, idb_index_object_store_getter,
     idb_index_open_cursor_callback as idb_index_open_cursor_callback_in_current_context,
     idb_index_open_key_cursor_callback as idb_index_open_key_cursor_callback_in_current_context,
-    idb_key_range_bound_callback, idb_key_range_includes_callback,
+    idb_index_unique_getter, idb_key_range_bound_callback, idb_key_range_includes_callback,
     idb_key_range_lower_bound_callback, idb_key_range_only_callback,
     idb_key_range_upper_bound_callback,
     idb_object_store_add_callback as idb_object_store_add_callback_in_current_context,
-    idb_object_store_clear_callback as idb_object_store_clear_callback_in_current_context,
+    idb_object_store_auto_increment_getter, idb_object_store_clear_callback,
     idb_object_store_count_callback as idb_object_store_count_callback_in_current_context,
-    idb_object_store_create_index_callback as idb_object_store_create_index_callback_in_current_context,
+    idb_object_store_create_index_callback,
     idb_object_store_delete_callback as idb_object_store_delete_callback_in_current_context,
-    idb_object_store_delete_index_callback as idb_object_store_delete_index_callback_in_current_context,
-    idb_object_store_get_all_callback as idb_object_store_get_all_callback_in_current_context,
-    idb_object_store_get_all_keys_callback as idb_object_store_get_all_keys_callback_in_current_context,
+    idb_object_store_delete_index_callback, idb_object_store_get_all_callback,
+    idb_object_store_get_all_keys_callback, idb_object_store_get_all_records_callback,
     idb_object_store_get_callback as idb_object_store_get_callback_in_current_context,
     idb_object_store_get_key_callback as idb_object_store_get_key_callback_in_current_context,
-    idb_object_store_index_callback as idb_object_store_index_callback_in_current_context,
+    idb_object_store_index_callback, idb_object_store_index_names_getter,
+    idb_object_store_key_path_getter, idb_object_store_name_getter, idb_object_store_name_setter,
     idb_object_store_open_cursor_callback as idb_object_store_open_cursor_callback_in_current_context,
     idb_object_store_open_key_cursor_callback as idb_object_store_open_key_cursor_callback_in_current_context,
     idb_object_store_put_callback as idb_object_store_put_callback_in_current_context,
-    idb_transaction_abort_callback, idb_transaction_commit_callback,
-    idb_transaction_object_store_callback, indexed_db_runtime_factory,
-    install_dom_string_list_template_bindings, v8str,
+    idb_object_store_transaction_getter, idb_transaction_abort_callback,
+    idb_transaction_commit_callback, idb_transaction_object_store_callback,
+    idb_transaction_object_store_names_getter, indexed_db_runtime_factory,
+    install_dom_string_list_template_bindings,
 };
 use anyhow::{Result, anyhow};
 
@@ -63,14 +65,6 @@ indexed_db_receiver_realm_callback!(
     idb_index_count_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
-    idb_index_get_all_callback,
-    idb_index_get_all_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_index_get_all_keys_callback,
-    idb_index_get_all_keys_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
     idb_index_get_callback,
     idb_index_get_callback_in_current_context
 );
@@ -91,32 +85,12 @@ indexed_db_receiver_realm_callback!(
     idb_object_store_add_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
-    idb_object_store_clear_callback,
-    idb_object_store_clear_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
     idb_object_store_count_callback,
     idb_object_store_count_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
-    idb_object_store_create_index_callback,
-    idb_object_store_create_index_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
     idb_object_store_delete_callback,
     idb_object_store_delete_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_delete_index_callback,
-    idb_object_store_delete_index_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_get_all_callback,
-    idb_object_store_get_all_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_get_all_keys_callback,
-    idb_object_store_get_all_keys_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
     idb_object_store_get_callback,
@@ -125,10 +99,6 @@ indexed_db_receiver_realm_callback!(
 indexed_db_receiver_realm_callback!(
     idb_object_store_get_key_callback,
     idb_object_store_get_key_callback_in_current_context
-);
-indexed_db_receiver_realm_callback!(
-    idb_object_store_index_callback,
-    idb_object_store_index_callback_in_current_context
 );
 indexed_db_receiver_realm_callback!(
     idb_object_store_open_cursor_callback,

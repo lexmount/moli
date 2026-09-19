@@ -2,8 +2,8 @@
 
 use super::{
     IndexedDbError, IndexedDbQuotaCheck, IndexedDbStorageScope, build_scoped_indexed_db_factory,
-    indexed_db_object_store_database, indexed_db_typed_storage_scope, object_property_as_object,
-    storage_scope_for_current_partition,
+    indexed_db_object_store_database, indexed_db_transaction_database,
+    indexed_db_typed_storage_scope, storage_scope_for_current_partition,
 };
 use crate::context_bootstrap::storage_buckets::{
     storage_bucket_quota_owner_for_locator, with_storage_bucket_store_entry,
@@ -95,6 +95,6 @@ pub(in crate::context_bootstrap::indexed_db) fn storage_bucket_quota_check_for_t
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
 ) -> Option<std::result::Result<IndexedDbBucketQuotaCommit, IndexedDbError>> {
-    let database = object_property_as_object(scope, transaction, "db")?;
+    let database = indexed_db_transaction_database(scope, transaction)?;
     storage_bucket_quota_check_for_database(scope, database)
 }

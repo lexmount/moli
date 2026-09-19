@@ -14,18 +14,14 @@ use html5ever::tree_builder::QuirksMode;
 // selector semantics or orchestrate mutation side effects on their own.
 impl DocumentRuntime {
     pub(crate) fn document_design_mode_enabled(&self, document: DomHandle) -> bool {
-        self.design_mode_documents.contains(&document)
+        self.dom_host
+            .document_design_mode_enabled_for_handle(document)
+            .unwrap_or(false)
     }
 
     pub(crate) fn set_document_design_mode_enabled(&mut self, document: DomHandle, enabled: bool) {
-        if !self.dom_host.node(document).is_some_and(Node::is_document) {
-            return;
-        }
-        if enabled {
-            self.design_mode_documents.insert(document);
-        } else {
-            self.design_mode_documents.remove(&document);
-        }
+        self.dom_host
+            .set_document_design_mode_enabled_for_handle(document, enabled);
     }
 
     pub(crate) fn snapshot_document(&self) -> NativeDom {
@@ -98,8 +94,28 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         effects: DomMutationEffects,
     ) {
+        self.apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::parser_tree_sink(),
+        );
+    }
+
+    pub(super) fn apply_parser_stream_mutation_effects_to_live_dom_host_with_options(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+        options: RuntimeMutationOptions,
+    ) {
         self.assert_active_parser_document_incarnation();
-        apply_parser_mutation_effects(scope, host_ptr, self, &effects);
+        self.apply_base_url_csp_mutation_steps(scope, host_ptr, &effects);
+        let mut owner = RuntimeParserMutationEffects {
+            runtime: self,
+            options,
+        };
+        apply_parser_mutation_effects(scope, host_ptr, &mut owner, &effects);
     }
 
     pub(crate) fn parser_runtime_dom_node_exists(&mut self, node_id: DomHandle) -> bool {
@@ -551,8 +567,13 @@ impl DocumentRuntime {
         self.dom_host.create_detached_xml_document()
     }
 
-    pub(crate) fn create_detached_html_document_with_url(&mut self, url: url::Url) -> DomHandle {
-        self.dom_host.create_detached_html_document_with_url(url)
+    pub(crate) fn create_detached_html_document_with_url_and_scripting(
+        &mut self,
+        url: url::Url,
+        scripting_enabled: bool,
+    ) -> DomHandle {
+        self.dom_host
+            .create_detached_html_document_with_url_and_scripting(url, scripting_enabled)
     }
 
     pub(crate) fn create_detached_xml_document_with_url(&mut self, url: url::Url) -> DomHandle {
@@ -566,7 +587,14 @@ impl DocumentRuntime {
         handle: DomHandle,
         deep: bool,
     ) -> Option<DomHandle> {
+        let character_set = self
+            .document_character_set_for_handle(handle)
+            .map(str::to_owned);
         let clone = self.dom_host.clone_node(handle, deep)?;
+        if let Some(character_set) = character_set {
+            self.dom_host
+                .set_document_character_set_for_handle(clone, &character_set);
+        }
         let registry_retargets =
             custom_elements::registry_association_retargets_for_clone(host_ptr, handle, clone);
         custom_elements::apply_registry_association_retargets(host_ptr, &registry_retargets);
@@ -798,6 +826,14 @@ impl DocumentRuntime {
         self.dom_host.set_active_element_handle(handle);
     }
 
+    pub(crate) fn autofocus_processed(&self) -> bool {
+        self.autofocus_processed
+    }
+
+    pub(crate) fn mark_autofocus_processed(&mut self) {
+        self.autofocus_processed = true;
+    }
+
     pub(crate) fn document_focus_fallback_handle(&self) -> Option<DomHandle> {
         self.dom_host
             .document_body_handle()
@@ -809,20 +845,26 @@ impl DocumentRuntime {
     }
 }
 
-impl ParserMutationEffectsOwner for DocumentRuntime {
+struct RuntimeParserMutationEffects<'a> {
+    runtime: &'a mut DocumentRuntime,
+    options: RuntimeMutationOptions,
+}
+
+impl ParserMutationEffectsOwner for RuntimeParserMutationEffects<'_> {
     type Prepared = RuntimeMutationApplyResult;
 
     fn prepare_parser_mutation_effects(&mut self, effects: &DomMutationEffects) -> Self::Prepared {
         prepare_runtime_mutation_effects(
-            self.dom_host(),
-            self.document.url(),
+            self.runtime.dom_host(),
+            self.runtime.document.url(),
             effects,
-            RuntimeMutationOptions::parser_tree_sink(),
+            self.options,
         )
     }
 
     fn ensure_parser_reaction_queue(&mut self, host_ptr: *mut JsContextHost) {
-        self.ensure_parser_custom_element_reaction_queue(host_ptr);
+        self.runtime
+            .ensure_parser_custom_element_reaction_queue(host_ptr);
     }
 
     fn finish_parser_mutation_effects(
@@ -831,7 +873,7 @@ impl ParserMutationEffectsOwner for DocumentRuntime {
         host_ptr: *mut JsContextHost,
         prepared: Self::Prepared,
     ) {
-        let _ = finish_runtime_mutation_effects(self, scope, host_ptr, prepared);
+        let _ = finish_runtime_mutation_effects(self.runtime, scope, host_ptr, prepared);
     }
 }
 

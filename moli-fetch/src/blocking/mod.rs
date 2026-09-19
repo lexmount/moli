@@ -1,5 +1,8 @@
 mod cache;
 mod collectors;
+mod request_headers;
+
+pub(crate) use request_headers::RequestHeaderList;
 
 use std::{
     ffi::{c_char, c_long},
@@ -66,6 +69,7 @@ pub(crate) enum RequestHttpVersion {
 pub struct StreamingHtmlResponseStart {
     pub final_url: Url,
     pub status: u16,
+    pub status_text: Option<String>,
     pub headers: Vec<(String, String)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -81,6 +85,7 @@ impl StreamingHtmlResponseStart {
         ResponseHead {
             final_url: self.final_url,
             status: self.status,
+            status_text: self.status_text,
             headers: self.headers,
             request_cookie_report: self.request_cookie_report,
             cookie_set_reports: self.cookie_set_reports,
@@ -183,6 +188,12 @@ pub(crate) fn outgoing_request_headers_for_url(
         outgoing.push((name.clone(), value.clone()));
     }
 
+    // Fetch selects identity whenever Range is present, even with an invalid
+    // value. Explicit embedder encoding preferences still take precedence.
+    if header_present(&outgoing, "range") {
+        append_header_if_missing(&mut outgoing, "Accept-Encoding", "identity".to_owned());
+    }
+
     if request.has_browser_identity_override() {
         append_header_if_missing(
             &mut outgoing,
@@ -200,7 +211,7 @@ pub(crate) fn outgoing_request_headers_for_url(
     }
 
     if !header_present(&outgoing, "referer")
-        && let Some(referer) = referrer_header_value_for_request(request, request_url)
+        && let Some(referer) = request.referrer_header_value(request_url)
     {
         outgoing.push(("Referer".to_owned(), referer));
     }
@@ -318,12 +329,44 @@ fn append_browser_subresource_headers(
     request: &Request,
     request_url: &Url,
 ) {
-    let Some(metadata) = request.browser_request_metadata() else {
-        return;
-    };
     if !matches!(request_url.scheme(), "http" | "https") {
         return;
     }
+    let Some(metadata) = request.browser_request_metadata() else {
+        if matches!(
+            request.resource_type,
+            crate::RequestResourceType::Script
+                | crate::RequestResourceType::ParserBlockingScript
+                | crate::RequestResourceType::ClassicAsyncOrDeferScript
+                | crate::RequestResourceType::LatePreloadScript
+        ) {
+            append_header_if_missing(outgoing, "Accept", "*/*".to_owned());
+            append_header_if_missing(
+                outgoing,
+                "Accept-Language",
+                request
+                    .browser_identity(config)
+                    .accept_language()
+                    .to_owned(),
+            );
+            append_header_if_missing(
+                outgoing,
+                "Sec-Fetch-Site",
+                request_sec_fetch_site(request, request_url),
+            );
+            append_header_if_missing(
+                outgoing,
+                "Sec-Fetch-Mode",
+                request.request_mode.as_ref().to_owned(),
+            );
+            append_header_if_missing(outgoing, "Sec-Fetch-Dest", "script".to_owned());
+            if let Some(origin) = request_origin_header_value(request, request_url) {
+                append_header_if_missing(outgoing, "Origin", origin);
+            }
+            append_browser_client_hints(outgoing, request.browser_identity(config));
+        }
+        return;
+    };
 
     match metadata {
         BrowserRequestMetadata::Audio
@@ -477,28 +520,6 @@ fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
     }
 }
 
-fn referrer_header_value_for_request(request: &Request, request_url: &Url) -> Option<String> {
-    if !request.infers_referrer_from_initiator() {
-        return None;
-    }
-    let referrer_url = request.cookie_context.initiator_url.as_ref()?;
-    let (referrer_policy, document_referrer_policy) = request
-        .subresource_request_metadata()
-        .map(|metadata| {
-            (
-                metadata.referrer_policy.as_deref(),
-                metadata.document_referrer_policy.as_deref(),
-            )
-        })
-        .unwrap_or((None, None));
-    crate::referrer_header_value(
-        referrer_url,
-        request_url,
-        referrer_policy,
-        document_referrer_policy,
-    )
-}
-
 pub(crate) fn store_response_cookies(
     cookie_store: &SharedBrowserCookieStore,
     response_url: &Url,
@@ -513,8 +534,8 @@ pub(crate) fn store_response_cookies(
     ))
 }
 
-pub(crate) fn configure_easy<H: Handler>(
-    easy: &mut Easy2<H>,
+pub(crate) fn configure_easy(
+    easy: &mut Easy2<crate::runtime::FetchTransferHandler>,
     config: &FetchConfig,
     proxy_route: &HttpProxyRoute,
     request: &Request,
@@ -597,6 +618,7 @@ pub(crate) fn configure_easy<H: Handler>(
     easy.url(request_url.as_str())
         .with_context(|| anyhow!("failed to set curl request url to {}", request_url))?;
 
+    let mut uses_post_fields = false;
     match request.method.as_str() {
         "GET" => easy.get(true).context("failed to configure GET request")?,
         "HEAD" => easy
@@ -608,6 +630,7 @@ pub(crate) fn configure_easy<H: Handler>(
             let body_bytes = request.body.as_deref().unwrap_or(&[]);
             easy.post_fields_copy(body_bytes)
                 .context("failed to set POST body")?;
+            uses_post_fields = true;
         }
         method => {
             easy.custom_request(method)
@@ -616,6 +639,7 @@ pub(crate) fn configure_easy<H: Handler>(
             if request.body.is_some() || method == "PUT" {
                 easy.post_fields_copy(request.body.as_deref().unwrap_or(&[]))
                     .context("failed to set custom request body")?;
+                uses_post_fields = true;
             }
         }
     }
@@ -648,7 +672,7 @@ pub(crate) fn configure_easy<H: Handler>(
             .context("failed to configure curl host resolve overrides")?;
     }
 
-    let mut headers = List::new();
+    let mut headers = RequestHeaderList::default();
     let mut outgoing_headers =
         outgoing_request_headers_for_url(config, request, request_url, cookie_header);
     // A 407 can come from a transparent proxy even when no explicit proxy
@@ -666,46 +690,30 @@ pub(crate) fn configure_easy<H: Handler>(
             .append_request_headers(&mut outgoing_headers, &request.method, request_url)
             .with_context(|| anyhow!("failed to sign web bot auth request for {request_url}"))?;
     }
-    let mut has_headers = false;
 
     let mut has_content_type_header = false;
-    for (name, value) in &outgoing_headers {
+    for (name, value) in outgoing_headers
+        .iter()
+        .chain(validation_headers.iter().flatten())
+    {
         has_content_type_header |= name.eq_ignore_ascii_case("content-type");
         let header_line = if value.is_empty() {
-            format!("{name}:")
+            // libcurl's semicolon form sends an empty value; `Name:` suppresses it.
+            format!("{name};")
         } else {
             format!("{name}: {value}")
         };
         headers
             .append(&header_line)
             .context("failed to build request header")?;
-        has_headers = true;
     }
-    if let Some(validation_headers) = validation_headers {
-        for (name, value) in validation_headers {
-            has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-            headers
-                .append(&format!("{name}: {value}"))
-                .context("failed to build cache validation request header")?;
-            has_headers = true;
-        }
-    }
-    if (request.method.eq_ignore_ascii_case("POST")
-        || (request.method == "PUT" && request.body.is_none()))
-        && !has_content_type_header
-    {
+    if uses_post_fields && !has_content_type_header {
         // libcurl otherwise synthesizes `Content-Type: application/x-www-form-urlencoded`
-        // for POST bodies and bodyless PUT requests. Browser requests only send Content-Type when
-        // BodyInit or caller headers produce one, so suppress curl's transport default.
+        // when using post_fields_copy, including uploads with custom methods.
+        // Keep this transport-only suppression separate from explicit empty headers.
         headers
             .append("Content-Type:")
-            .context("failed to suppress curl default content-type")?;
-        has_headers = true;
-    }
-
-    if has_headers {
-        easy.http_headers(headers)
-            .context("failed to attach curl request headers")?;
+            .context("failed to suppress curl default upload content-type")?;
     }
 
     if let Some(auth) = request.auth()
@@ -747,6 +755,7 @@ pub(crate) fn configure_easy<H: Handler>(
         }
     }
 
+    crate::runtime::FetchTransferHandler::set_request_headers(easy, headers)?;
     Ok(outgoing_headers)
 }
 
@@ -911,6 +920,69 @@ mod tests {
     struct ProtocolAllowlistHandler;
 
     impl Handler for ProtocolAllowlistHandler {}
+
+    #[test]
+    fn script_headers_use_request_identity_with_or_without_browser_metadata() {
+        let config = FetchConfig::default();
+        let overridden = std::sync::Arc::new(
+            moli_browser_profile::BrowserIdentityProfile::from_devtools_override(
+                config.browser_identity(),
+                "OverrideBrowser/1",
+                Some("fr-FR".to_owned()),
+                None,
+                None,
+            ),
+        );
+        for resource_type in [
+            crate::RequestResourceType::Script,
+            crate::RequestResourceType::ParserBlockingScript,
+            crate::RequestResourceType::ClassicAsyncOrDeferScript,
+            crate::RequestResourceType::LatePreloadScript,
+        ] {
+            for metadata in [false, true] {
+                for override_identity in [false, true] {
+                    let mut request =
+                        Request::new("GET", "https://app.test/script.js", None, Vec::new())
+                            .unwrap()
+                            .with_resource_type(resource_type);
+                    if metadata {
+                        request =
+                            request.with_browser_request_metadata(BrowserRequestMetadata::Script);
+                    }
+                    if override_identity {
+                        request = request.with_browser_identity(overridden.clone());
+                    }
+                    for target in [&request.url, &url("https://cdn.test/redirected.js")] {
+                        let headers =
+                            outgoing_request_headers_for_url(&config, &request, target, None);
+                        assert_eq!(
+                            header_value(&headers, "Accept-Language").as_deref(),
+                            Some(if override_identity {
+                                "fr-FR"
+                            } else {
+                                config.browser_identity().accept_language()
+                            }),
+                            "{resource_type:?} metadata={metadata} override={override_identity} target={target}"
+                        );
+                        if override_identity {
+                            assert_eq!(
+                                header_value(&headers, "User-Agent").as_deref(),
+                                Some("OverrideBrowser/1")
+                            );
+                            for name in ["Sec-CH-UA", "Sec-CH-UA-Mobile", "Sec-CH-UA-Platform"] {
+                                assert_eq!(header_value(&headers, name), None, "{name}");
+                            }
+                        } else {
+                            assert_eq!(
+                                header_value(&headers, "Sec-CH-UA"),
+                                config.browser_identity().sec_ch_ua_value()
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn curl_string_protocol_allowlist_rejects_file_transfer() {
@@ -1109,6 +1181,29 @@ mod tests {
                 .map(|(_, value)| value.as_str())
                 .collect::<Vec<_>>(),
             vec!["https://explicit.test"]
+        );
+    }
+
+    #[test]
+    fn opaque_request_origin_is_cross_origin_without_hiding_referrer_url() {
+        let config = FetchConfig::default();
+        let request_url = url("https://app.test/data");
+        let request = Request::new("GET", request_url.as_str(), None, Vec::new())
+            .unwrap()
+            .with_initiator_url(&url("https://app.test/sandboxed-frame"))
+            .with_request_origin(moli_url::WebOrigin::Opaque)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+
+        let headers = outgoing_request_headers_for_url(&config, &request, &request_url, None);
+
+        assert_eq!(header_value(&headers, "origin").as_deref(), Some("null"));
+        assert_eq!(
+            header_value(&headers, "sec-fetch-site").as_deref(),
+            Some("cross-site")
+        );
+        assert_eq!(
+            header_value(&headers, "referer").as_deref(),
+            Some("https://app.test/sandboxed-frame")
         );
     }
 

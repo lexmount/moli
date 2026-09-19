@@ -1,10 +1,13 @@
-use super::dispatch_media_query_list_event;
+use super::event::create_media_query_list_event;
+use super::{
+    dispatch_media_query_list_event, install_simple_event_target_ordered_handlers,
+    mark_simple_event_target_slot, simple_object_event_set_ordered_handler,
+};
 use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
 use crate::context_bootstrap::current_window_style_viewport;
-use crate::context_bootstrap::events::initialize_event_object;
 use crate::context_bootstrap::{
-    MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
-    MEDIA_QUERY_LIST_REGISTRY_SLOT,
+    MEDIA_QUERY_LIST_LISTENERS_SLOT, MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT,
+    MEDIA_QUERY_LIST_ONCHANGE_SLOT, MEDIA_QUERY_LIST_REGISTRY_SLOT,
 };
 use crate::context_bootstrap::{global_queue_array, push_object_to_global_registry};
 use crate::style_engine::{
@@ -31,7 +34,7 @@ struct MediaQueryListObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::MediaQueryList)]
+#[webapi(interface = web_api_interfaces::MediaQueryList, receiver)]
 struct MediaQueryListPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -54,19 +57,6 @@ struct MediaQueryListPrototypeAccessorsDeclaration {
         enumerable
     )]
     onchange: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event)]
-struct MediaQueryListChangeEventObjectDeclaration {}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event)]
-struct MediaQueryListChangeEventPropertiesDeclaration {
-    #[webapi(data_property)]
-    media: String,
-    #[webapi(data_property)]
-    matches: bool,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -99,6 +89,11 @@ fn media_query_list_attribute_getter_callback<'s>(
         return;
     };
     if slot == MEDIA_QUERY_LIST_MATCHES_SLOT {
+        let context = args
+            .this()
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         let media = media_query_list_media_slot(scope, args.this()).unwrap_or_default();
         let matches = if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let host = unsafe { &*host_ptr };
@@ -141,12 +136,22 @@ fn media_query_list_onchange_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let value = if args.get(0).is_null_or_undefined() {
-        v8::null(scope).into()
-    } else {
+    let active = args.get(0).is_object();
+    let value = if active {
         args.get(0)
+    } else {
+        v8::null(scope).into()
     };
-    set_media_query_list_slot_value(scope, args.this(), MEDIA_QUERY_LIST_ONCHANGE_SLOT, value);
+    let target = args.this();
+    set_media_query_list_slot_value(scope, target, MEDIA_QUERY_LIST_ONCHANGE_SLOT, value);
+    simple_object_event_set_ordered_handler(
+        scope,
+        target,
+        MEDIA_QUERY_LIST_LISTENERS_SLOT,
+        "change",
+        MEDIA_QUERY_LIST_ONCHANGE_SLOT,
+        active,
+    );
     rv.set_undefined();
 }
 
@@ -177,6 +182,8 @@ pub(crate) fn window_match_media_callback<'s>(
     let mql = MediaQueryListObjectDeclaration::new(serialized_query, matches)
         .bind(scope)
         .expect("MediaQueryList declaration should bind");
+    mark_simple_event_target_slot(scope, mql, MEDIA_QUERY_LIST_LISTENERS_SLOT);
+    install_simple_event_target_ordered_handlers(scope, mql);
     if global_queue_array(scope, MEDIA_QUERY_LIST_REGISTRY_SLOT).is_none() {
         let global = scope.get_current_context().global(scope);
         let registry = v8::Array::new(scope, 0);
@@ -234,27 +241,11 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         if previous_matches == current_matches {
             continue;
         }
-        let event = media_query_list_change_event(scope, &media, current_matches);
+        let event = create_media_query_list_event(scope, &media, current_matches);
         let _ = dispatch_media_query_list_event(scope, mql, event);
         dispatched = true;
     }
     dispatched
-}
-
-fn media_query_list_change_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    media: &str,
-    matches: bool,
-) -> v8::Local<'s, v8::Object> {
-    let event = MediaQueryListChangeEventObjectDeclaration::new()
-        .bind(scope)
-        .expect("MediaQueryList change Event declaration should bind");
-    initialize_event_object(scope, event, "change", false, false);
-    crate::context_bootstrap::events::mark_event_trusted(scope, event);
-    MediaQueryListChangeEventPropertiesDeclaration::new(media.to_owned(), matches)
-        .initialize(scope, event)
-        .expect("MediaQueryList change Event properties should initialize object");
-    event
 }
 
 fn media_query_list_slot_value<'s>(

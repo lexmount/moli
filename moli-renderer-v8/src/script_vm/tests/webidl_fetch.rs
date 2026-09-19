@@ -2875,9 +2875,9 @@ fn readable_stream_default_reader_release_lock_rejects_closed_and_reads() {
     );
 }
 
-#[test]
-fn readable_stream_default_reader_release_lock_suppresses_internal_closed_rejection() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+#[tokio::test(flavor = "current_thread")]
+async fn readable_stream_default_reader_release_lock_suppresses_internal_closed_rejection() {
+    let mut vm = new_storage_page_task_executor_test_vm("https://example.com/");
 
     let initial = vm
         .eval(
@@ -2912,6 +2912,12 @@ fn readable_stream_default_reader_release_lock_suppresses_internal_closed_reject
             .expect("ReadableStreamDefaultReader.releaseLock suppress promises should drain");
     }
 
+    assert!(
+        !vm.has_ready_dom_manipulation_family_for_test(
+            PageDomManipulationTestFamily::PromiseRejection,
+        ),
+        "no rejection notification may remain queued"
+    );
     let unhandled = vm
         .eval("JSON.stringify(globalThis.__readerReleaseUnhandled)")
         .expect("ReadableStreamDefaultReader.releaseLock suppress events should evaluate");
@@ -6113,6 +6119,241 @@ fn webidl_sequence_conversion_uses_iterator_without_mutable_array_from() {
 }
 
 #[test]
+fn initializer_sequences_convert_all_entries_before_validating_pairs() {
+    let mut vm = new_storage_test_vm("https://initializer-sequence.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const consumers = [
+    ['Headers', input => new Headers(input)],
+    ['URLSearchParams', input => new URLSearchParams(input)],
+    ['Request', input => new Request('https://initializer-sequence.test/', {headers: input})],
+    ['Response', input => new Response(null, {headers: input})]
+  ];
+  for (const [name, consume] of consumers) {
+    const invalidPairs = [['short'], ['key', 'value', 'extra']];
+    if (name !== 'URLSearchParams') invalidPairs.push(['', 'value'], ['key', 'bad\nvalue']);
+    for (const bad of invalidPairs) {
+      for (const stage of ['complete', 'next', 'done', 'value', 'convert']) {
+        const marker = {};
+        const log = [];
+        const fail = () => { log.push('fail:' + stage); throw marker; };
+        const input = {[Symbol.iterator]() {
+          let index = 0;
+          return {
+            next() {
+              log.push('next:' + index);
+              if (index++ === 0) return {done: false, value: bad};
+              if (index === 2) {
+                if (stage === 'next') fail();
+                return {
+                  get done() { if (stage === 'done') fail(); return false; },
+                  get value() {
+                    if (stage === 'value') fail();
+                    return ['later', {toString() {
+                      if (stage === 'convert') fail();
+                      log.push('convert:later');
+                      return 'value';
+                    }}];
+                  }
+                };
+              }
+              return {done: true};
+            },
+            get return() { log.push('return'); throw new Error('return must not be read'); }
+          };
+        }};
+        let caught;
+        try { consume(input); } catch (error) { caught = error; }
+        const label = name + ' ' + JSON.stringify(bad) + ' ' + stage;
+        check(stage === 'complete' ? caught instanceof TypeError : caught === marker, label + ' exception');
+        const expected = stage === 'complete' ? ['next:0', 'next:1', 'convert:later', 'next:2'] :
+          ['next:0', 'next:1', 'fail:' + stage];
+        check(JSON.stringify(log) === JSON.stringify(expected), label + ': ' + JSON.stringify(log));
+      }
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn initializer_pairs_use_inner_iterators_and_convert_extra_elements() {
+    let mut vm = new_storage_test_vm("https://initializer-inner-sequence.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  for (const Constructor of [Headers, URLSearchParams]) {
+    let iteratorReads = 0;
+    const pair = {
+      get length() { throw new Error('length must not be read'); },
+      get 0() { throw new Error('indexed properties must not be read'); },
+      get [Symbol.iterator]() {
+        iteratorReads++;
+        return function*() {
+          check(this === pair, 'inner iterator receiver');
+          yield 'X-Key';
+          yield ' one ';
+        };
+      }
+    };
+    const expected = Constructor === Headers ? [['x-key', 'one']] : [['X-Key', ' one ']];
+    const actual = Array.from(new Constructor([pair]));
+    check(JSON.stringify(actual) === JSON.stringify(expected) && iteratorReads === 1, Constructor.name + ' inner iteration');
+    for (const invalid of ['ab', {0: 'key', 1: 'value', length: 2}]) {
+      let caught;
+      try { new Constructor([invalid]); } catch (error) { caught = error; }
+      check(caught instanceof TypeError, Constructor.name + ' requires object iterables');
+    }
+    const marker = {};
+    let conversions = 0;
+    let caught;
+    try {
+      new Constructor([['key', 'value', {toString() { conversions++; throw marker; }}]]);
+    } catch (error) { caught = error; }
+    check(caught === marker && conversions === 1, Constructor.name + ' must convert the extra element');
+
+    const log = [];
+    const input = {[Symbol.iterator]() {
+      let index = 0;
+      return {next() {
+        log.push('next:' + index);
+        if (index++ > 0) return {done: true};
+        return {done: false, value: ['key', 'value', {toString() {
+          log.push('extra');
+          return '\u0100';
+        }}]};
+      }};
+    }};
+    caught = undefined;
+    try { new Constructor(input); } catch (error) { caught = error; }
+    check(caught instanceof TypeError, Constructor.name + ' rejects the invalid initializer');
+    const expectedLog = Constructor === Headers ? ['next:0', 'extra'] : ['next:0', 'extra', 'next:1'];
+    check(JSON.stringify(log) === JSON.stringify(expectedLog), Constructor.name + ': ' + JSON.stringify(log));
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_sequences_propagate_abrupt_completion_without_closing_iterators() {
+    let mut vm = new_storage_test_vm("https://sequence-abrupt.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const consumers = [
+    ['USVString', input => new URLSearchParams([input])],
+    ['DOMString', input => new PerformanceObserver(() => {}).observe({entryTypes: input})]
+  ];
+  if (typeof IntersectionObserver === 'function') consumers.push(
+    ['double', input => new IntersectionObserver(() => {}, {threshold: input})]);
+  for (const [name, consume] of consumers) {
+    for (const stage of ['next', 'done', 'value', 'convert', 'symbol']) {
+      const marker = {};
+      const log = [];
+      const fail = () => { log.push(stage); throw marker; };
+      const input = {[Symbol.iterator]() {
+        let finished = false;
+        return {
+          next() {
+            if (finished) return {done: true};
+            finished = true;
+            if (stage === 'next') fail();
+            return {
+              get done() { if (stage === 'done') fail(); return false; },
+              get value() {
+                if (stage === 'value') fail();
+                return stage === 'symbol' ? Symbol() : {[Symbol.toPrimitive]: fail};
+              }
+            };
+          },
+          get return() { log.push('get:return'); throw new Error('return must not be read'); }
+        };
+      }};
+      let caught;
+      try { consume(input); } catch (error) { caught = error; }
+      check(stage === 'symbol' ? caught instanceof TypeError : caught === marker, name + ' ' + stage + ' exception');
+      const expected = stage === 'symbol' ? [] : [stage];
+      check(JSON.stringify(log) === JSON.stringify(expected), name + ' ' + stage + ': ' + JSON.stringify(log));
+    }
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_nested_and_interface_sequences_do_not_read_iterator_return_on_errors() {
+    let mut vm = new_storage_test_vm("https://nested-sequence-abrupt.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  for (const stage of ['iterator', 'next', 'value', 'convert']) {
+    const marker = {};
+    let returnReads = 0;
+    const fail = () => { throw marker; };
+    const wrap = value => ({[Symbol.iterator]() {
+      let finished = false;
+      return {
+        next() {
+          if (finished) return {done: true};
+          finished = true;
+          return {done: false, value};
+        },
+        get return() { returnReads++; throw new Error('outer return'); }
+      };
+    }});
+    const pair = {get [Symbol.iterator]() {
+      if (stage === 'iterator') fail();
+      return function() {
+        let finished = false;
+        return {
+          next() {
+            if (finished) return {done: true};
+            finished = true;
+            if (stage === 'next') fail();
+            return {done: false, get value() {
+              if (stage === 'value') fail();
+              return {[Symbol.toPrimitive]: fail};
+            }};
+          },
+          get return() { returnReads++; throw new Error('inner return'); }
+        };
+      };
+    }};
+    let caught;
+    try { new URLSearchParams(wrap(pair)); } catch (error) { caught = error; }
+    check(caught === marker && returnReads === 0, stage + ' must propagate without closing either iterator');
+  }
+  for (const member of ['coalescedEvents', 'predictedEvents']) {
+    let returnReads = 0;
+    const events = {[Symbol.iterator]() {
+      let finished = false;
+      return {
+        next() {
+          if (finished) return {done: true};
+          finished = true;
+          return {done: false, value: new Event('invalid')};
+        },
+        get return() { returnReads++; throw new Error('interface sequence return'); }
+      };
+    }};
+    let caught;
+    try { new PointerEvent('pointermove', {[member]: events}); } catch (error) { caught = error; }
+    check(caught instanceof TypeError && returnReads === 0, member + ' must reject the interface without closing');
+  }
+  return 'ok';
+})()
+"#).unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn url_search_params_sequence_discrimination_reads_iterator_once() {
     let mut vm = new_storage_test_vm("https://url-search-params-sequence.test/");
 
@@ -6419,8 +6660,380 @@ fn intersection_observer_servo_aligned_options_surface() {
 
     assert_eq!(
         result,
-        "0px 0px 0px 0px|0|false|1px 2% 3px 2%|4px 5% 6px 7%|[0.25,0.75]|100|true|[0]|8px 8px 8px 8px|100|1:1|function|true|function|function|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError|true|throw:TypeError|throw:TypeError|undefined|throw:TypeError|throw:TypeError"
+        "0px 0px 0px 0px|0|false|1px 2% 3px 2%|4px 5% 6px 7%|[0.25,0.75]|100|true|[0]|8px 8px 8px 8px|100|1:1|function|true|function|function|throw:TypeError|throw:SyntaxError|throw:SyntaxError|throw:TypeError|true|throw:TypeError|throw:TypeError|undefined|throw:TypeError|throw:TypeError"
     );
+}
+
+#[test]
+fn intersection_observer_margins_follow_css_token_syntax() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-tokens.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    for (const value of [0, '0', '+0', '-0', '0.0', '0e0', '1e-50', '1px 0', '0% 0 1px',
+                         '\u00a0', '\u2003', '\u000b', '\u0085', '\u2028', '\u2029',
+                         '()', '[]', '{}', ')', ']', '}']) {
+      let caught;
+      try { new IntersectionObserver(() => {}, {[member]: value}); }
+      catch (error) { caught = error; }
+      check(caught instanceof DOMException && caught.name === 'SyntaxError',
+            member + ': ' + JSON.stringify(value) + ' must throw SyntaxError');
+    }
+    for (const value of ['', ' \t\r\n\f', '/**/', '/**/ /**/', '/* unclosed', ' /**/ \n /**/ ']) {
+      const observer = new IntersectionObserver(() => {}, {[member]: value});
+      check(observer[member] === '0px 0px 0px 0px',
+            member + ': ' + JSON.stringify(value) + ' must normalize to zero margins');
+      observer.disconnect();
+    }
+    for (const [value, expected] of [
+      ['1PX /* comment */ 2%', '1px 2% 1px 2%'],
+      ['1px/**/2%', '1px 2% 1px 2%'],
+      ['1\\70x', '1px 1px 1px 1px'],
+      ['1px 2% 3px 4%', '1px 2% 3px 4%']
+    ]) {
+      const observer = new IntersectionObserver(() => {}, {[member]: value});
+      check(observer[member] === expected, member + ': ' + JSON.stringify(value));
+      observer.disconnect();
+    }
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("IntersectionObserver margins should use CSS token syntax");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn intersection_observer_invalid_margins_throw_syntax_dom_exceptions() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-errors.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    for (const value of ['1', '2em', 'auto', 'calc(1px + 2px)',
+                         '1px !important', '1px 1px 1px 1px 1px', null]) {
+      const label = `${member}: ${JSON.stringify(value)}`;
+      try {
+        new IntersectionObserver(() => {}, { [member]: value });
+        failures.push(`${label}: did not throw`);
+      } catch (error) {
+        if (!(error instanceof DOMException) || error instanceof SyntaxError ||
+            error.name !== 'SyntaxError' || error.code !== DOMException.SYNTAX_ERR) {
+          failures.push(`${label}: ${error.name}, code ${error.code}`);
+        }
+      }
+    }
+  }
+  return failures.join('|');
+})()
+"#,
+        )
+        .expect("IntersectionObserver margin syntax errors should evaluate");
+
+    assert_eq!(result, "");
+}
+
+#[test]
+fn intersection_observer_margin_errors_use_the_intrinsic_dom_exception() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-intrinsic.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'DOMException');
+    let calls = 0;
+    let caught;
+    Object.defineProperty(globalThis, 'DOMException', {
+      configurable: true,
+      get() { calls++; throw new Error('replaced DOMException getter'); }
+    });
+    try {
+      new IntersectionObserver(() => {}, { [member]: 'invalid' });
+    } catch (error) {
+      caught = error;
+    } finally {
+      Object.defineProperty(globalThis, 'DOMException', descriptor);
+    }
+    if (calls !== 0) failures.push(`${member}: read the global constructor`);
+    if (!(caught instanceof DOMException) || caught.name !== 'SyntaxError' || caught.code !== 12) {
+      failures.push(`${member}: ${caught}`);
+    }
+  }
+  return failures.join('|');
+})()
+"#,
+        )
+        .expect("IntersectionObserver should use the intrinsic DOMException prototype");
+
+    assert_eq!(result, "");
+}
+
+#[test]
+fn intersection_observer_margin_errors_preserve_dictionary_conversion_exceptions() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-margin-conversion.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const failures = [];
+  const sentinel = {};
+  const expectSentinel = (label, options) => {
+    try {
+      new IntersectionObserver(() => {}, options);
+      failures.push(`${label}: did not throw`);
+    } catch (error) {
+      if (error !== sentinel) failures.push(`${label}: ${error.name}`);
+    }
+  };
+  for (const member of ['rootMargin', 'scrollMargin']) {
+    for (const conversion of ['getter', 'toString', 'toPrimitive']) {
+      let calls = 0;
+      const fail = () => { calls++; throw sentinel; };
+      const options = conversion === 'getter'
+        ? Object.defineProperty({}, member, { get: fail })
+        : { [member]: conversion === 'toString'
+            ? { toString: fail } : { [Symbol.toPrimitive]: fail } };
+      expectSentinel(`${member}: ${conversion}`, options);
+      if (calls !== 1) failures.push(`${member}: ${conversion} called ${calls} times`);
+    }
+    expectSentinel(`${member}: later dictionary member`, {
+      [member]: 'invalid',
+      get threshold() { throw sentinel; }
+    });
+    try {
+      new IntersectionObserver(() => {}, { [member]: Symbol() });
+      failures.push(`${member}: Symbol did not throw`);
+    } catch (error) {
+      if (!(error instanceof TypeError)) failures.push(`${member}: Symbol ${error.name}`);
+    }
+  }
+  expectSentinel('scrollMargin conversion precedes rootMargin parsing', {
+    rootMargin: 'invalid',
+    scrollMargin: { toString() { throw sentinel; } }
+  });
+  return failures.join('|');
+})()
+"#,
+        )
+        .expect("IntersectionObserver should preserve dictionary conversion exceptions");
+
+    assert_eq!(result, "");
+}
+
+#[test]
+fn intersection_observer_threshold_union_converts_numbers_and_iterables() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-threshold-union.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const cases = [
+    ['default', undefined, [0]], ['null', null, [0]],
+    ['false', false, [0]], ['true', true, [1]],
+    ['string', '0.25', [0.25]], ['boxed number', new Number(0.25), [0.25]],
+    ['object', {valueOf() { return 0.25; }}, [0.25]],
+    ['null iterator', {[Symbol.iterator]: null, valueOf() { return 0.25; }}, [0.25]],
+    ['undefined iterator', {[Symbol.iterator]: undefined, valueOf() { return 0.25; }}, [0.25]],
+    ['string object', new String('01'), [0, 1]],
+    ['duplicates', [0.75, 0.25, 0.25], [0.25, 0.25, 0.75]],
+    ['typed array', new Float64Array([0.75, 0.25, 0.25]), [0.25, 0.25, 0.75]],
+    ['empty sequence', [], [0]]
+  ];
+  for (const [label, threshold, expected] of cases) {
+    const observer = new IntersectionObserver(() => {}, {threshold});
+    check(JSON.stringify(observer.thresholds) === JSON.stringify(expected), label);
+    observer.disconnect();
+  }
+
+  let reads = 0;
+  let calls = 0;
+  const iterable = {
+    get [Symbol.iterator]() {
+      reads++;
+      return function*() {
+        calls++;
+        check(this === iterable, 'iterator receiver');
+        yield 0.75;
+        yield 0.25;
+        yield 0.25;
+      };
+    },
+    valueOf() { throw new Error('iterable must not use numeric fallback'); }
+  };
+  const observer = new IntersectionObserver(() => {}, {threshold: iterable});
+  check(reads === 1 && calls === 1, 'iterator must be read and called once');
+  check(JSON.stringify(observer.thresholds) === '[0.25,0.25,0.75]', 'iterable thresholds');
+  observer.disconnect();
+
+  reads = 0;
+  calls = 0;
+  const number = new IntersectionObserver(() => {}, {threshold: {
+    get [Symbol.iterator]() { reads++; return null; },
+    valueOf() { calls++; return 0.5; }
+  }});
+  check(reads === 1 && calls === 1 && number.thresholds[0] === 0.5, 'numeric fallback');
+  number.disconnect();
+  let caught;
+  try {
+    new IntersectionObserver(() => {}, {threshold: {
+      [Symbol.iterator]: 1,
+      valueOf() { throw new Error('noncallable iterator must not fall back'); }
+    }});
+  } catch (error) { caught = error; }
+  check(caught instanceof TypeError, 'noncallable iterator');
+  return 'ok';
+})()
+"#,
+        )
+        .expect("IntersectionObserver threshold union should convert through WebIDL");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn intersection_observer_converts_dictionary_members_in_order() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-dictionary-order.test/");
+    let result = vm.eval(r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const log = [];
+  const observer = new IntersectionObserver(() => {}, {
+    get trackVisibility() { log.push('trackVisibility'); return false; },
+    get threshold() {
+      log.push('threshold');
+      return {get [Symbol.iterator]() {
+        log.push('iterator');
+        return function*() {
+          log.push('iterate');
+          yield {valueOf() { log.push('double'); return 0.25; }};
+          log.push('done');
+        };
+      }};
+    },
+    get scrollMargin() {
+      log.push('scrollMargin');
+      return {toString() { log.push('scrollMargin string'); return '0px'; }};
+    },
+    get rootMargin() {
+      log.push('rootMargin');
+      return {toString() { log.push('rootMargin string'); return '0px'; }};
+    },
+    get root() { log.push('root'); return document; },
+    get delay() {
+      log.push('delay');
+      return {valueOf() { log.push('delay number'); return 3; }};
+    }
+  });
+  check(log.join(',') === 'delay,delay number,root,rootMargin,rootMargin string,scrollMargin,scrollMargin string,threshold,iterator,iterate,double,done,trackVisibility', log.join(','));
+  check(observer.root === document && observer.delay === 3, 'converted root and delay');
+  observer.disconnect();
+
+  const threshold = [0.25];
+  const snapshot = new IntersectionObserver(() => {}, {
+    threshold,
+    get trackVisibility() { threshold[0] = 0.75; return false; }
+  });
+  check(snapshot.thresholds[0] === 0.25, 'threshold converted before later getter mutation');
+  snapshot.disconnect();
+
+  const sentinel = {};
+  let caught;
+  try {
+    new IntersectionObserver(() => {}, {
+      get delay() { throw sentinel; },
+      get root() { throw new Error('root must not be read'); }
+    });
+  } catch (error) { caught = error; }
+  check(caught === sentinel, 'delay conversion is first');
+
+  for (const root of [{}, document.createTextNode('root'), document.createDocumentFragment()]) {
+    for (const member of ['rootMargin', 'scrollMargin', 'threshold', 'trackVisibility']) {
+      let calls = 0;
+      caught = undefined;
+      try {
+        new IntersectionObserver(() => {}, {
+          root,
+          get [member]() { calls++; throw sentinel; }
+        });
+      } catch (error) { caught = error; }
+      check(caught instanceof TypeError && calls === 0, 'invalid root precedes ' + member);
+    }
+  }
+  for (const root of [null, undefined, document, document.createElement('div')]) {
+    const valid = new IntersectionObserver(() => {}, {root});
+    check(valid.root === (root ?? null), 'valid root');
+    valid.disconnect();
+  }
+  return 'ok';
+})()
+"#).expect("IntersectionObserver options should convert in dictionary member order");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn intersection_observer_validates_thresholds_after_dictionary_conversion() {
+    let mut vm = new_storage_test_vm("https://intersection-observer-threshold-validation.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const check = (condition, label) => { if (!condition) throw new Error(label); };
+  const capture = options => {
+    try { new IntersectionObserver(() => {}, options); } catch (error) { return error; }
+    return undefined;
+  };
+  for (const value of [NaN, Infinity, -Infinity, 'foo', Symbol(), 1n]) {
+    for (const threshold of [value, [value]]) {
+      check(capture({threshold}) instanceof TypeError, 'invalid double');
+      check(capture({threshold, rootMargin: 'invalid'}) instanceof TypeError,
+            'double conversion precedes margin parsing');
+    }
+  }
+  for (const value of [-0.25, 1.25]) {
+    for (const threshold of [value, [value]]) {
+      check(capture({threshold}) instanceof RangeError, 'out-of-range threshold');
+      for (const member of ['rootMargin', 'scrollMargin']) {
+        const error = capture({threshold, [member]: 'invalid'});
+        check(error instanceof DOMException && error.name === 'SyntaxError',
+              member + ' parsing precedes range validation');
+      }
+      const sentinel = {};
+      check(capture({threshold, get trackVisibility() { throw sentinel; }}) === sentinel,
+            'dictionary conversion precedes range validation');
+    }
+  }
+
+  const sentinel = {};
+  const fail = () => { throw sentinel; };
+  for (const threshold of [
+    {get [Symbol.iterator]() { throw sentinel; }},
+    {valueOf: fail},
+    [{valueOf: fail}],
+    [1.25, {valueOf: fail}]
+  ]) {
+    for (const member of ['rootMargin', 'scrollMargin']) {
+      check(capture({threshold, [member]: 'invalid'}) === sentinel,
+            member + ' must preserve threshold conversion exception');
+    }
+    let calls = 0;
+    check(capture({threshold, get trackVisibility() { calls++; return false; }}) === sentinel,
+          'threshold conversion must preserve exception identity');
+    check(calls === 0, 'failed conversion must stop dictionary reads');
+  }
+  return 'ok';
+})()
+"#,
+        )
+        .expect("IntersectionObserver should separate conversion from threshold validation");
+    assert_eq!(result, "ok");
 }
 
 #[test]
@@ -7030,6 +7643,61 @@ fn headers_for_each_uses_webidl_callback_function_semantics() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn headers_for_each_visits_live_entries_in_window_and_worker() {
+    let fixture = include_str!("../../../tests/fixtures/headers-foreach.js");
+    for worker in [false, true] {
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_page_task_executor_test_vm_with_loader("https://headers-foreach.test/", &loader);
+        vm.eval("globalThis.headersForEachResult = null;").unwrap();
+        let script = if worker {
+            let source = format!(
+                "{fixture}\nheadersForEachProbe().then(postMessage, error => postMessage({{error: String(error.stack || error)}}));"
+            );
+            format!(
+                r#"
+                const workerUrl = URL.createObjectURL(new Blob([{}], {{type: 'text/javascript'}}));
+                const worker = new Worker(workerUrl);
+                const finish = value => {{
+                    headersForEachResult = value;
+                    worker.terminate();
+                    URL.revokeObjectURL(workerUrl);
+                }};
+                worker.onmessage = event => finish(event.data);
+                worker.onerror = event => {{ finish({{error: event.message}}); event.preventDefault(); }};
+                "#,
+                serde_json::to_string(&source).unwrap()
+            )
+        } else {
+            format!(
+                "{fixture}\nheadersForEachProbe().then(value => {{ headersForEachResult = value; }}, error => {{ headersForEachResult = {{error: String(error.stack || error)}}; }});"
+            )
+        };
+        vm.eval(&script).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(headersForEachResult !== null)",
+            "true",
+            "Headers.forEach checks should finish",
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(headersForEachResult)").unwrap())
+                .unwrap();
+        let checks = result["checks"]
+            .as_array()
+            .unwrap_or_else(|| panic!("worker={worker}: {result}"));
+        let failures: Vec<_> = checks
+            .iter()
+            .filter(|check| check["pass"] != true)
+            .collect();
+        assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
+        assert_eq!(checks.len(), 36, "worker={worker}");
+    }
+}
+
 #[tokio::test]
 async fn headers_for_each_uses_callback_relevant_realm() {
     let mut vm = new_storage_test_vm("https://headers-callback-realm.test/");
@@ -7075,7 +7743,8 @@ async fn headers_for_each_uses_callback_relevant_realm() {
       name,
       value,
       owner === globalThis.__headersOwner
-    ].join(':'))`
+    ].join(':'));
+    if (name === 'x-realm') owner.append('x-tail', 'tail');`
   );
   headers.forEach(callback, { receiverMarker: 'parent-this' });
   return JSON.stringify({
@@ -7089,7 +7758,7 @@ async fn headers_for_each_uses_callback_relevant_realm() {
 
     assert_eq!(
         result,
-        r#"{"callbackRealm":true,"seen":["child:parent-this:x-realm:ok:true"]}"#
+        r#"{"callbackRealm":true,"seen":["child:parent-this:x-realm:ok:true","child:parent-this:x-tail:tail:true"]}"#
     );
 }
 
@@ -7319,7 +7988,7 @@ fn request_and_response_headers_share_intrinsic_prototype_methods() {
 }
 
 #[tokio::test]
-async fn response_headers_keep_receiver_realm_across_borrowed_getters() {
+async fn response_headers_keep_receiver_realm_across_borrowed_getters_and_clones() {
     let mut vm = new_storage_test_vm("https://headers-owner-realm.test/");
     vm.eval(
         r#"
@@ -7348,12 +8017,12 @@ body.appendChild(headersFrame);
     configurable: true, get() { throw new Error('public Headers lookup'); }
   });
   try {
-    for (const [response, ctor, getter, value] of [
-      [parentResponse, parentHeaders, childGetter, 'parent'],
-      [childResponse, childHeaders, parentGetter, 'child']
+    for (const [response, clone, ctor, getter, value] of [
+      [parentResponse, child.Response.prototype.clone.call(parentResponse), parentHeaders, childGetter, 'parent'],
+      [childResponse, Response.prototype.clone.call(childResponse), childHeaders, parentGetter, 'child']
     ]) {
       check(getter.call(response) === response.headers, 'borrowed getter returns associated Headers');
-      for (const entry of [response]) {
+      for (const entry of [response, clone]) {
         const headers = entry.headers;
         check(Object.getPrototypeOf(headers) === ctor.prototype && headers instanceof ctor,
           'Headers must use the response realm');
@@ -9417,6 +10086,208 @@ fn response_clone_tees_user_readable_stream_body() {
 }
 
 #[test]
+fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
+    use crate::network_host::MaterializedResponseBody;
+    for (mime, bytes, expected) in [
+        (
+            "application/json",
+            &b"globalThis.value = 1;"[..],
+            &b"globalThis.value = 1;"[..],
+        ),
+        ("application/json", &b"{\"secret\":true}"[..], &b""[..]),
+        (
+            "text/html",
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+            &b"\x89PNG\r\n\x1a\nimage data"[..],
+        ),
+    ] {
+        let mut vm = new_storage_test_vm("https://opaque-stream.test/");
+        vm.set_fetch_subresource_interception(
+            true,
+            Some(crate::types::SubresourceResourceType::Fetch),
+        );
+        vm.eval(
+            r#"
+            globalThis.__chunks = [];
+            globalThis.__finished = false;
+            globalThis.__onChunk = chunk => __chunks.push(...chunk);
+            fetch('https://cross-origin.test/body', {mode: 'no-cors'}).then(response => {
+                globalThis.__opaque = response;
+                globalThis.__clone = response.clone();
+            });
+        "#,
+        )
+        .unwrap();
+        let pending = vm.take_pending_subresource_fetch_infos();
+        assert_eq!(pending.len(), 1);
+        let pending = &pending[0];
+        let id = crate::network_host::new_network_body_source_id();
+        vm.start_streaming_async_subresource_fetch(
+            crate::types::AsyncSubresourceStreamingStarted {
+                skip_fetch_security_validation: false,
+                response_filter: None,
+                internal_id: pending.internal_id,
+                request_url: pending.url.clone(),
+                request_method: "GET".to_owned(),
+                request_headers: Vec::new(),
+                request_body: None,
+                body_source_id: id,
+                network_request_headers: None,
+                head: moli_fetch::ResponseHead {
+                    status_text: None,
+                    final_url: pending.url.clone(),
+                    status: 200,
+                    headers: vec![("Content-Type".to_owned(), mime.to_owned())],
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([__opaque.type, __opaque.body, __clone.body])")
+                .unwrap(),
+            r#"["opaque",null,null]"#
+        );
+        vm.with_default_context_scope_and_checkpoint_for_test(|scope, _| {
+            let global = scope.get_current_context().global(scope);
+            let response = v8::Local::<v8::Object>::try_from(
+                global.get(scope, v8str(scope, "__clone").into()).unwrap(),
+            )
+            .unwrap();
+            let callback = v8::Local::<v8::Function>::try_from(
+                global.get(scope, v8str(scope, "__onChunk").into()).unwrap(),
+            )
+            .unwrap();
+            let (body, _) =
+                crate::network_host::materialize_response_object_body_with_chunk_callback(
+                    scope,
+                    response,
+                    "opaque clone consumer",
+                    callback,
+                );
+            let MaterializedResponseBody::Pending(promise) = body else {
+                panic!("incomplete opaque body must remain pending");
+            };
+            assert_eq!(
+                global.set(scope, v8str(scope, "__bodyDone").into(), promise.into()),
+                Some(true)
+            );
+            Ok(())
+        })
+        .unwrap();
+        vm.eval("__bodyDone.then(() => __finished = true)").unwrap();
+        vm.append_streaming_async_subresource_fetch_chunk(id, bytes[..bytes.len() - 1].to_vec());
+        if expected.is_empty() {
+            assert_eq!(
+                vm.eval("JSON.stringify(__chunks)").unwrap(),
+                "[]",
+                "blocked prefix reached internal consumer"
+            );
+        } else {
+            assert_eq!(
+                vm.eval("String(__finished)").unwrap(),
+                "false",
+                "allowed body ended before its last byte"
+            );
+        }
+        vm.append_streaming_async_subresource_fetch_chunk(id, bytes[bytes.len() - 1..].to_vec());
+        vm.finish_streaming_async_subresource_fetch(pending.internal_id, id, Ok(()))
+            .unwrap();
+        assert_eq!(vm.eval("String(__finished)").unwrap(), "true");
+        assert_eq!(
+            vm.eval("JSON.stringify(__chunks)").unwrap(),
+            serde_json::to_string(expected).unwrap(),
+            "{mime}"
+        );
+    }
+}
+
+#[test]
+fn fetched_null_bodies_discard_payloads_without_registering_pending_streams() {
+    use crate::network_host::{FetchResponseRequest, MaterializedResponseBody};
+
+    let vm = new_storage_test_vm("https://null-response.test/");
+    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+    let host = vm._context_host.clone();
+    vm.renderer_document_isolate
+        .with_entered_renderer_document_isolate(move |isolate| {
+            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let document_url = Url::parse("https://null-response.test/").unwrap();
+            for (method, status) in [
+                ("HEAD", 200), ("HEAD", 302), ("CONNECT", 200),
+                ("GET", 101), ("GET", 103), ("GET", 204), ("GET", 205), ("GET", 304),
+            ] {
+                for opaque in [false, true] {
+                    for source in ["response", "bytes", "subresource", "stream", "preload"] {
+                        let request = FetchResponseRequest {
+redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                            method,
+                            mode: if opaque { moli_fetch::RequestMode::NoCors } else { moli_fetch::RequestMode::Cors },
+                        };
+                        let head = moli_fetch::ResponseHead {
+                            status_text: None,
+                            final_url: Url::parse("https://cross-null-response.test/data").unwrap(),
+                            status,
+                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            request_cookie_report: None,
+                            cookie_set_reports: Vec::new(),
+                            redirected: false,
+                            redirect_chain: Vec::new(),
+                            from_cache: false,
+                            negotiated_http_version: None,
+                        };
+                        let id = crate::network_host::new_network_body_source_id();
+                        let response = match source {
+                            "response" => crate::network_host::build_fetch_response_object_for_request_mode(
+                                scope, &document_url, request,
+                                moli_fetch::Response::from_head_and_text_body(head, "discard me".to_owned()),
+                            ),
+                            "bytes" => crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
+                                scope, &document_url, request, head,
+                                moli_fetch::ResponseBody::materialized_bytes(b"discard me".to_vec()),
+                                opaque.then_some(crate::types::AsyncSubresourceFetchResponseFilter::Opaque),
+                            ),
+                            "subresource" => crate::network_host::build_fetch_response_object_from_subresource_body_for_request_mode(
+                                scope, &document_url, request, head,
+                                crate::protocol_types::SubresourceResponseBody::from_bytes(b"discard me".to_vec()),
+                            ),
+                            "stream" => crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            "preload" => crate::network_host::build_navigation_preload_response_object_from_stream_for_request_mode(
+                                scope, &document_url, request, head, id,
+                            ),
+                            _ => unreachable!(),
+                        };
+                        assert!(response.get(scope, v8str(scope, "body").into()).unwrap().is_null(),
+                            "{method}/{status}/{opaque}/{source}");
+                        assert!(!host.borrow().pending_network_body_sources.contains_key(&id));
+                        crate::network_host::enqueue_pending_network_body_chunk(scope, id, b"late bytes".to_vec());
+                        crate::network_host::error_pending_network_body_stream(scope, id, "late error".to_owned());
+                        crate::network_host::close_pending_network_body_stream(scope, id);
+                        match crate::network_host::materialize_response_object_body(scope, response, "null body") {
+                            MaterializedResponseBody::Ready(bytes) => assert!(bytes.is_empty()),
+                            _ => panic!("null internal body must materialize immediately: {method}/{status}/{opaque}/{source}"),
+                        }
+                        assert!(host.borrow().pending_network_body_sources.is_empty());
+                        assert!(host.borrow().pending_network_body_clones.is_empty());
+                    }
+                }
+            }
+            Ok(())
+        })
+        .expect("null response body checks should complete");
+}
+
+#[test]
 fn response_clone_tees_pending_network_body_after_parent_consumption() {
     let mut vm = new_storage_test_vm("https://response-clone-pending-stream.test/");
     let body_source_id = crate::network_host::new_network_body_source_id();
@@ -9436,8 +10307,13 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: response_url,
                         status: 200,
                         headers: vec![("content-type".to_owned(), "application/json".to_owned())],
@@ -9537,8 +10413,13 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                 crate::network_host::build_fetch_response_object_from_stream_for_request_mode(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+                        redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                        method: "GET",
+                        mode: moli_fetch::RequestMode::Cors,
+                    },
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: response_url,
                         status: 200,
                         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -9654,9 +10535,14 @@ fn materialize_response_object_preserves_redirected_slot() {
             let response = crate::network_host::build_fetch_response_object_for_request_mode(
                 scope,
                 &document_url,
-                moli_fetch::RequestMode::Cors,
+                crate::network_host::FetchResponseRequest {
+                    redirect_mode: moli_fetch::RequestRedirectMode::Follow,
+                    method: "GET",
+                    mode: moli_fetch::RequestMode::Cors,
+                },
                 moli_fetch::Response::from_head_and_text_body(
                     moli_fetch::ResponseHead {
+                        status_text: None,
                         final_url: final_url.clone(),
                         status: 200,
                         headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
@@ -9684,17 +10570,32 @@ fn materialize_response_object_preserves_redirected_slot() {
 }
 
 #[test]
-fn filtered_response_materialization_preserves_internal_url_without_exposing_url() {
-    let mut vm = new_storage_test_vm("https://response-materialize-filtered.test/");
-    let document_url = Url::parse("https://response-materialize-filtered.test/")
-        .expect("document URL should parse");
-    let final_url = Url::parse("https://cross-response-materialize-filtered.test/redirect-start")
+fn filtered_response_materialization_preserves_internal_head_across_clone_and_cache() {
+    use crate::types::AsyncSubresourceFetchResponseFilter::{Opaque, OpaqueRedirect};
+    for (response_type, filter) in [("opaque", Opaque), ("opaqueredirect", OpaqueRedirect)] {
+        let internal_status = if response_type == "opaque" { 206 } else { 302 };
+        let internal_headers = vec![
+            (
+                "cross-origin-resource-policy".to_owned(),
+                "cross-origin".to_owned(),
+            ),
+            ("location".to_owned(), "target.html".to_owned()),
+            ("set-cookie".to_owned(), "hidden=secret".to_owned()),
+            ("vary".to_owned(), "*".to_owned()),
+        ];
+        let mut vm = new_storage_test_vm("https://response-materialize-filtered.test/");
+        let document_url = Url::parse("https://response-materialize-filtered.test/")
+            .expect("document URL should parse");
+        let final_url = Url::parse(
+            "https://cross-response-materialize-filtered.test/redirect-start?x=%23#hidden",
+        )
         .expect("final URL should parse");
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
 
-    vm.renderer_document_isolate
+        vm.renderer_document_isolate
         .with_entered_renderer_document_isolate({
             let final_url = final_url.clone();
+            let internal_headers = internal_headers.clone();
             move |isolate| {
                 let scope = std::pin::pin!(v8::HandleScope::new(isolate));
                 let scope = &mut scope.init();
@@ -9703,11 +10604,13 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                 let response = crate::network_host::build_fetch_response_object_from_body_source_for_request_mode_with_filter(
                     scope,
                     &document_url,
-                    moli_fetch::RequestMode::Cors,
+                    crate::network_host::FetchResponseRequest {
+redirect_mode: moli_fetch::RequestRedirectMode::Follow, method: "GET", mode: moli_fetch::RequestMode::Cors },
                     moli_fetch::ResponseHead {
+                        status_text: Some("Internal Status".to_owned()),
                         final_url: final_url.clone(),
-                        status: 302,
-                        headers: vec![("location".to_owned(), "target.html".to_owned())],
+                        status: internal_status,
+                        headers: internal_headers,
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -9716,7 +10619,7 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(Vec::new()),
-                    Some(crate::types::AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
+                    Some(filter),
                 );
                 let global = context.global(scope);
                 let _ = global.set(
@@ -9732,20 +10635,25 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                     )
                     .expect("filtered response head should materialize with internal URL");
                 assert_eq!(head.final_url.as_ref(), Some(&final_url));
-                assert_eq!(head.response_type, "opaqueredirect");
+                assert_eq!(head.response_type, response_type);
                 assert_eq!(head.status, 0);
                 Ok(())
             }
         })
         .expect("filtered response should install");
 
-    let visible_url = vm
-        .eval("globalThis.__filteredResponse.url")
-        .expect("filtered response visible URL should evaluate");
-    assert_eq!(visible_url, "");
+        let visible_url = vm
+            .eval("globalThis.__filteredResponse.url")
+            .expect("filtered response visible URL should evaluate");
+        let expected_url = if response_type == "opaque" {
+            ""
+        } else {
+            "https://cross-response-materialize-filtered.test/redirect-start?x=%23"
+        };
+        assert_eq!(visible_url, expected_url);
 
-    vm.exec(
-        r#"
+        vm.exec(
+            r#"
         globalThis.__filteredResponseClone = globalThis.__filteredResponse.clone();
         globalThis.__filteredResponseCacheClone = globalThis.__filteredResponse.clone();
         globalThis.__filteredResponseCacheProbe = "pending";
@@ -9758,51 +10666,73 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
           globalThis.__filteredResponseCacheProbe = [
             globalThis.__filteredResponseCached.type,
             globalThis.__filteredResponseCached.status,
-            globalThis.__filteredResponseCached.url === "",
-            globalThis.__filteredResponseCached.body === null
+            globalThis.__filteredResponseCached.url,
+            globalThis.__filteredResponseCached.body === null,
+            [...globalThis.__filteredResponseCached.headers].length,
+            globalThis.__filteredResponseCached.statusText
           ].join("|");
         })().catch(error => {
           globalThis.__filteredResponseCacheProbe =
             "error:" + String(error && error.name) + ":" + String(error && error.message);
         });
         "#,
-        None,
-    )
-    .expect("filtered response cache roundtrip should schedule");
+            None,
+        )
+        .expect("filtered response cache roundtrip should schedule");
 
-    let cache_probe = vm
-        .eval("String(globalThis.__filteredResponseCacheProbe)")
-        .expect("filtered response cache roundtrip should settle");
-    assert_eq!(cache_probe, "opaqueredirect|0|true|true");
+        let cache_probe = vm
+            .eval("String(globalThis.__filteredResponseCacheProbe)")
+            .expect("filtered response cache roundtrip should settle");
+        assert_eq!(
+            cache_probe,
+            format!("{response_type}|0|{expected_url}|true|0|")
+        );
+        assert_eq!(
+            vm.eval("__filteredResponseClone.url").unwrap(),
+            expected_url
+        );
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
-    vm.renderer_document_isolate
-        .with_entered_renderer_document_isolate(move |isolate| {
-            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
-            let scope = &mut scope.init();
-            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-            let scope = &mut v8::ContextScope::new(scope, context);
-            let global = context.global(scope);
-            let clone = global
-                .get(scope, v8str(scope, "__filteredResponseClone").into())
-                .expect("filtered response clone should exist");
-            let materialized_clone =
-                crate::network_host::materialize_response_object(scope, clone, "clone")
-                    .expect("filtered response clone should preserve internal URL");
-            assert_eq!(materialized_clone.final_url.as_ref(), Some(&final_url));
-            assert_eq!(materialized_clone.response_type, "opaqueredirect");
+        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        vm.renderer_document_isolate
+            .with_entered_renderer_document_isolate(move |isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let global = context.global(scope);
+                let clone = global
+                    .get(scope, v8str(scope, "__filteredResponseClone").into())
+                    .expect("filtered response clone should exist");
+                let materialized_clone =
+                    crate::network_host::materialize_response_object_internal_head(
+                        scope, clone, "clone",
+                    )
+                    .expect("filtered response clone should preserve the internal head")
+                    .0;
+                assert_eq!(materialized_clone.final_url.as_ref(), Some(&final_url));
+                assert_eq!(materialized_clone.response_type, response_type);
+                assert_eq!(materialized_clone.status, internal_status);
+                assert_eq!(materialized_clone.status_text, "Internal Status");
+                assert_eq!(materialized_clone.headers, internal_headers);
 
-            let cached = global
-                .get(scope, v8str(scope, "__filteredResponseCached").into())
-                .expect("cached filtered response should exist");
-            let materialized_cached =
-                crate::network_host::materialize_response_object(scope, cached, "cache")
-                    .expect("cached filtered response should preserve internal URL");
-            assert_eq!(materialized_cached.final_url.as_ref(), Some(&final_url));
-            assert_eq!(materialized_cached.response_type, "opaqueredirect");
-            Ok(())
-        })
-        .expect("filtered response clone/cache should materialize");
+                let cached = global
+                    .get(scope, v8str(scope, "__filteredResponseCached").into())
+                    .expect("cached filtered response should exist");
+                let materialized_cached =
+                    crate::network_host::materialize_response_object_internal_head(
+                        scope, cached, "cache",
+                    )
+                    .expect("cached filtered response should preserve the internal head")
+                    .0;
+                assert_eq!(materialized_cached.final_url.as_ref(), Some(&final_url));
+                assert_eq!(materialized_cached.response_type, response_type);
+                assert_eq!(materialized_cached.status, internal_status);
+                assert_eq!(materialized_cached.status_text, "Internal Status");
+                assert_eq!(materialized_cached.headers, internal_headers);
+                Ok(())
+            })
+            .expect("filtered response clone/cache should materialize");
+    }
 }
 
 #[test]
@@ -9966,172 +10896,135 @@ fn fetch_body_binary_and_form_methods_preserve_bom_bytes() {
 }
 
 #[test]
-fn webidl_sequences_propagate_abrupt_completion_without_closing_iterators() {
-    let mut vm = new_storage_test_vm("https://sequence-abrupt.test/");
+fn webidl_string_records_observe_descriptors_and_values_in_key_order() {
+    let mut vm = new_storage_test_vm("https://webidl-record-order.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const equal = (actual, expected, label) => {
+    if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+      throw new Error(label + ': ' + JSON.stringify(actual));
+    }
+  };
+  for (const Constructor of [Headers, URLSearchParams]) {
+    const log = [];
+    const symbol = Symbol('hidden');
+    const label = key => key === Symbol.iterator ? '@@iterator' : key === symbol ? '@@hidden' : key;
+    const source = Object.create({inherited: 'ignored'});
+    source.a = {toString() { log.push('value:a'); return 'aye'; }};
+    source[2] = {toString() { log.push('value:2'); return 'two'; }};
+    Object.defineProperty(source, '\uFFFF', {get() { throw new Error('hidden value'); }});
+    Object.defineProperty(source, symbol, {get() { throw new Error('hidden symbol'); }});
+    const proxy = new Proxy(source, {
+      ownKeys(target) { log.push('keys'); return Reflect.ownKeys(target); },
+      getOwnPropertyDescriptor(target, key) {
+        log.push('desc:' + label(key));
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+      get(target, key, receiver) {
+        log.push('get:' + label(key));
+        return Reflect.get(target, key, receiver);
+      }
+    });
+    const result = new Constructor(proxy);
+    equal(log, ['get:@@iterator', 'keys', 'desc:2', 'get:2', 'value:2',
+      'desc:a', 'get:a', 'value:a', 'desc:\uFFFF', 'desc:@@hidden'], Constructor.name);
+    equal(Array.from(result), [['2', 'two'], ['a', 'aye']], 'record entries');
+  }
+  const params = new URLSearchParams({'\uD800x': 'first', b: 'middle', '\uD801x': 'last'});
+  equal(Array.from(params), [['\uFFFDx', 'last'], ['b', 'middle']], 'converted duplicate keys');
+  return 'ok';
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_records_observe_mutations_and_propagate_abrupt_completion() {
+    let mut vm = new_storage_test_vm("https://webidl-record-mutations.test/");
     let result = vm.eval(r#"
 (() => {
   const check = (condition, label) => { if (!condition) throw new Error(label); };
-  const consumers = [
-    ['USVString', input => new URLSearchParams([input])],
-    ['DOMString', input => new PerformanceObserver(() => {}).observe({entryTypes: input})]
+  const equal = (actual, expected, label) => check(
+    JSON.stringify(actual) === JSON.stringify(expected), label + ': ' + JSON.stringify(actual));
+  const factories = [
+    ['Headers', 'a', 'b', value => new Headers(value), value => Array.from(value.keys())],
+    ['URLSearchParams', 'a', 'b', value => new URLSearchParams(value), value => Array.from(value.keys())]
   ];
-  if (typeof IntersectionObserver === 'function') consumers.push(
-    ['double', input => new IntersectionObserver(() => {}, {threshold: input})]);
-  for (const [name, consume] of consumers) {
-    for (const stage of ['next', 'done', 'value', 'convert', 'symbol']) {
+  if (typeof ClipboardItem === 'function') factories.push(
+    ['ClipboardItem', 'text/plain', 'text/html', value => new ClipboardItem(value), value => Array.from(value.types)]);
+  for (const [name, first, second, create, keys] of factories) {
+    for (const mutation of ['delete', 'hide', 'show']) {
+      const source = Object.create({inherited: 'ignored'});
+      Object.defineProperty(source, first, {enumerable: true, get() {
+        if (mutation === 'delete') delete source[second];
+        else Object.defineProperty(source, second, {enumerable: mutation === 'show'});
+        return 'first';
+      }});
+      Object.defineProperty(source, second, {
+        configurable: true, enumerable: mutation !== 'show', value: 'second'
+      });
+      equal(keys(create(source)), mutation === 'show' ? [first, second] : [first], name + ' ' + mutation);
+    }
+    for (const stage of ['keys', 'descriptor', 'value']) {
       const marker = {};
       const log = [];
-      const fail = () => { log.push(stage); throw marker; };
-      const input = {[Symbol.iterator]() {
-        let finished = false;
-        return {
-          next() {
-            if (finished) return {done: true};
-            finished = true;
-            if (stage === 'next') fail();
-            return {
-              get done() { if (stage === 'done') fail(); return false; },
-              get value() {
-                if (stage === 'value') fail();
-                return stage === 'symbol' ? Symbol() : {[Symbol.toPrimitive]: fail};
-              }
-            };
-          },
-          get return() { log.push('get:return'); throw new Error('return must not be read'); }
-        };
-      }};
-      let caught;
-      try { consume(input); } catch (error) { caught = error; }
-      check(stage === 'symbol' ? caught instanceof TypeError : caught === marker, name + ' ' + stage + ' exception');
-      const expected = stage === 'symbol' ? [] : [stage];
-      check(JSON.stringify(log) === JSON.stringify(expected), name + ' ' + stage + ': ' + JSON.stringify(log));
-    }
-  }
-  return 'ok';
-})()
-"#).unwrap();
-    assert_eq!(result, "ok");
-}
-
-#[test]
-fn webidl_nested_and_interface_sequences_do_not_read_iterator_return_on_errors() {
-    let mut vm = new_storage_test_vm("https://nested-sequence-abrupt.test/");
-    let result = vm.eval(r#"
-(() => {
-  const check = (condition, label) => { if (!condition) throw new Error(label); };
-  for (const stage of ['iterator', 'next', 'value', 'convert']) {
-    const marker = {};
-    let returnReads = 0;
-    const fail = () => { throw marker; };
-    const wrap = value => ({[Symbol.iterator]() {
-      let finished = false;
-      return {
-        next() {
-          if (finished) return {done: true};
-          finished = true;
-          return {done: false, value};
+      const source = {[first]: 'first', [second]: 'second'};
+      const proxy = new Proxy(source, {
+        ownKeys(target) {
+          log.push('keys');
+          if (stage === 'keys') throw marker;
+          return Reflect.ownKeys(target);
         },
-        get return() { returnReads++; throw new Error('outer return'); }
-      };
+        getOwnPropertyDescriptor(target, key) {
+          log.push('desc:' + key);
+          if (stage === 'descriptor') throw marker;
+          return Reflect.getOwnPropertyDescriptor(target, key);
+        },
+        get(target, key, receiver) {
+          if (typeof key !== 'symbol') {
+            log.push('get:' + key);
+            if (stage === 'value') throw marker;
+          }
+          return Reflect.get(target, key, receiver);
+        }
+      });
+      let caught;
+      try { create(proxy); } catch (error) { caught = error; }
+      check(caught === marker, name + ' exception identity at ' + stage);
+      const expected = ['keys'];
+      if (stage !== 'keys') expected.push('desc:' + first);
+      if (stage === 'value') expected.push('get:' + first);
+      equal(log, expected, name + ' must stop at ' + stage);
+    }
+    const symbol = Symbol('invalid key');
+    let readSymbolValue = false;
+    const source = {[first]: 'first'};
+    Object.defineProperty(source, symbol, {enumerable: true, get() {
+      readSymbolValue = true;
+      throw new Error('symbol value must not be read');
     }});
-    const pair = {get [Symbol.iterator]() {
-      if (stage === 'iterator') fail();
-      return function() {
-        let finished = false;
-        return {
-          next() {
-            if (finished) return {done: true};
-            finished = true;
-            if (stage === 'next') fail();
-            return {done: false, get value() {
-              if (stage === 'value') fail();
-              return {[Symbol.toPrimitive]: fail};
-            }};
-          },
-          get return() { returnReads++; throw new Error('inner return'); }
-        };
-      };
-    }};
     let caught;
-    try { new URLSearchParams(wrap(pair)); } catch (error) { caught = error; }
-    check(caught === marker && returnReads === 0, stage + ' must propagate without closing either iterator');
-  }
-  for (const member of ['coalescedEvents', 'predictedEvents']) {
-    let returnReads = 0;
-    const events = {[Symbol.iterator]() {
-      let finished = false;
-      return {
-        next() {
-          if (finished) return {done: true};
-          finished = true;
-          return {done: false, value: new Event('invalid')};
-        },
-        get return() { returnReads++; throw new Error('interface sequence return'); }
-      };
-    }};
-    let caught;
-    try { new PointerEvent('pointermove', {[member]: events}); } catch (error) { caught = error; }
-    check(caught instanceof TypeError && returnReads === 0, member + ' must reject the interface without closing');
-  }
-  return 'ok';
-})()
-"#).unwrap();
-    assert_eq!(result, "ok");
-}
-
-#[test]
-fn initializer_sequences_convert_all_entries_before_validating_pairs() {
-    let mut vm = new_storage_test_vm("https://initializer-sequence.test/");
-    let result = vm.eval(r#"
-(() => {
-  const check = (condition, label) => { if (!condition) throw new Error(label); };
-  const consumers = [
-    ['Headers', input => new Headers(input)],
-    ['URLSearchParams', input => new URLSearchParams(input)],
-    ['Request', input => new Request('https://initializer-sequence.test/', {headers: input})],
-    ['Response', input => new Response(null, {headers: input})]
-  ];
-  for (const [name, consume] of consumers) {
-    const invalidPairs = [['short'], ['key', 'value', 'extra']];
-    if (name !== 'URLSearchParams') invalidPairs.push(['', 'value'], ['key', 'bad\nvalue']);
-    for (const bad of invalidPairs) {
-      for (const stage of ['complete', 'next', 'done', 'value', 'convert']) {
-        const marker = {};
-        const log = [];
-        const fail = () => { log.push('fail:' + stage); throw marker; };
-        const input = {[Symbol.iterator]() {
-          let index = 0;
-          return {
-            next() {
-              log.push('next:' + index);
-              if (index++ === 0) return {done: false, value: bad};
-              if (index === 2) {
-                if (stage === 'next') fail();
-                return {
-                  get done() { if (stage === 'done') fail(); return false; },
-                  get value() {
-                    if (stage === 'value') fail();
-                    return ['later', {toString() {
-                      if (stage === 'convert') fail();
-                      log.push('convert:later');
-                      return 'value';
-                    }}];
-                  }
-                };
-              }
-              return {done: true};
-            },
-            get return() { log.push('return'); throw new Error('return must not be read'); }
-          };
-        }};
-        let caught;
-        try { consume(input); } catch (error) { caught = error; }
-        const label = name + ' ' + JSON.stringify(bad) + ' ' + stage;
-        check(stage === 'complete' ? caught instanceof TypeError : caught === marker, label + ' exception');
-        const expected = stage === 'complete' ? ['next:0', 'next:1', 'convert:later', 'next:2'] :
-          ['next:0', 'next:1', 'fail:' + stage];
-        check(JSON.stringify(log) === JSON.stringify(expected), label + ': ' + JSON.stringify(log));
-      }
+    try { create(source); } catch (error) { caught = error; }
+    check(caught instanceof TypeError && !readSymbolValue, name + ' must convert the key before reading its value');
+    if (name !== 'ClipboardItem') {
+      const marker = {};
+      const log = [];
+      const proxy = new Proxy({a: {toString() {log.push('convert:a'); throw marker;}}, b: 'later'}, {
+        ownKeys(target) {log.push('keys'); return Reflect.ownKeys(target);},
+        getOwnPropertyDescriptor(target, key) {log.push('desc:' + key); return Reflect.getOwnPropertyDescriptor(target, key);},
+        get(target, key, receiver) {
+          if (typeof key !== 'symbol') log.push('get:' + key);
+          return Reflect.get(target, key, receiver);
+        }
+      });
+      caught = undefined;
+      try { create(proxy); } catch (error) { caught = error; }
+      check(caught === marker, name + ' value conversion exception identity');
+      equal(log, ['keys', 'desc:a', 'get:a', 'convert:a'], name + ' value conversion must stop before later descriptors');
     }
   }
   return 'ok';
@@ -10141,58 +11034,71 @@ fn initializer_sequences_convert_all_entries_before_validating_pairs() {
 }
 
 #[test]
-fn initializer_pairs_use_inner_iterators_and_convert_extra_elements() {
-    let mut vm = new_storage_test_vm("https://initializer-inner-sequence.test/");
+fn clipboard_item_record_converts_thenables_before_later_descriptors() {
+    let mut vm = new_storage_test_vm("https://clipboard-record-order.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const log = [];
+  const source = {};
+  for (const type of ['text/plain', 'text/html']) source[type] = {get then() {
+    log.push('then:' + type);
+    return resolve => resolve(type);
+  }};
+  const symbol = Symbol('hidden');
+  Object.defineProperty(source, symbol, {value: 'ignored'});
+  const proxy = new Proxy(source, {
+    ownKeys(target) {log.push('keys'); return Reflect.ownKeys(target);},
+    getOwnPropertyDescriptor(target, key) {
+      log.push('desc:' + (key === symbol ? '@@hidden' : key));
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    get(target, key, receiver) {log.push('get:' + key); return Reflect.get(target, key, receiver);}
+  });
+  const item = new ClipboardItem(proxy);
+  const expected = ['keys', 'desc:text/plain', 'get:text/plain', 'then:text/plain',
+    'desc:text/html', 'get:text/html', 'then:text/html', 'desc:@@hidden'];
+  if (JSON.stringify(log) !== JSON.stringify(expected)) throw new Error(JSON.stringify(log));
+  if (item.types.join(',') !== 'text/plain,text/html') throw new Error('clipboard record types');
+  return 'ok';
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn webidl_initializer_unions_convert_platform_objects_without_iterators_as_records() {
+    let mut vm = new_storage_test_vm("https://initializer-record.test/");
     let result = vm.eval(r#"
 (() => {
-  const check = (condition, label) => { if (!condition) throw new Error(label); };
   for (const Constructor of [Headers, URLSearchParams]) {
-    let iteratorReads = 0;
-    const pair = {
-      get length() { throw new Error('length must not be read'); },
-      get 0() { throw new Error('indexed properties must not be read'); },
-      get [Symbol.iterator]() {
-        iteratorReads++;
-        return function*() {
-          check(this === pair, 'inner iterator receiver');
-          yield 'X-Key';
-          yield ' one ';
-        };
-      }
-    };
-    const expected = Constructor === Headers ? [['x-key', 'one']] : [['X-Key', ' one ']];
-    const actual = Array.from(new Constructor([pair]));
-    check(JSON.stringify(actual) === JSON.stringify(expected) && iteratorReads === 1, Constructor.name + ' inner iteration');
-    for (const invalid of ['ab', {0: 'key', 1: 'value', length: 2}]) {
-      let caught;
-      try { new Constructor([invalid]); } catch (error) { caught = error; }
-      check(caught instanceof TypeError, Constructor.name + ' requires object iterables');
+    const url = new URL('https://initializer-record.test/path?query=value');
+    Object.defineProperty(url, Symbol.toPrimitive, {value() {
+      throw new Error('URL object must use record conversion');
+    }});
+    if (Array.from(new Constructor(url)).length !== 0) throw new Error('empty URL record');
+    url['x-record'] = 'record';
+    if (JSON.stringify(Array.from(new Constructor(url))) !== '[["x-record","record"]]') {
+      throw new Error(Constructor.name + ' must use own URL properties');
     }
-    const marker = {};
-    let conversions = 0;
-    let caught;
-    try {
-      new Constructor([['key', 'value', {toString() { conversions++; throw marker; }}]]);
-    } catch (error) { caught = error; }
-    check(caught === marker && conversions === 1, Constructor.name + ' must convert the extra element');
-
-    const log = [];
-    const input = {[Symbol.iterator]() {
-      let index = 0;
-      return {next() {
-        log.push('next:' + index);
-        if (index++ > 0) return {done: true};
-        return {done: false, value: ['key', 'value', {toString() {
-          log.push('extra');
-          return '\u0100';
-        }}]};
-      }};
-    }};
-    caught = undefined;
-    try { new Constructor(input); } catch (error) { caught = error; }
-    check(caught instanceof TypeError, Constructor.name + ' rejects the invalid initializer');
-    const expectedLog = Constructor === Headers ? ['next:0', 'extra'] : ['next:0', 'extra', 'next:1'];
-    check(JSON.stringify(log) === JSON.stringify(expectedLog), Constructor.name + ': ' + JSON.stringify(log));
+    for (const factory of [() => new Headers(), () => new URLSearchParams(), () => new FormData()]) {
+      for (const value of [undefined, null]) {
+        const input = factory();
+        let iteratorReads = 0;
+        Object.defineProperty(input, Symbol.iterator, {enumerable: true, get() {
+          iteratorReads++;
+          return value;
+        }});
+        let caught;
+        try { new Constructor(input); } catch (error) { caught = error; }
+        if (!(caught instanceof TypeError) || iteratorReads !== 1) {
+          throw new Error(Constructor.name + ' must reject the enumerable Symbol key before reading its value');
+        }
+      }
+    }
   }
   return 'ok';
 })()

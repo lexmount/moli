@@ -50,6 +50,7 @@ fn browser_client_rejects_http_requests_even_with_an_initiator() -> Result<()> {
     owner.handle().apply_network_policy(browser)?;
     Ok(())
 }
+mod script_cors;
 
 #[test]
 fn loader_clones_share_one_browser_resource_runtime() {
@@ -171,6 +172,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
     let (mut completion_tx, completion_rx) = oneshot::channel();
     let inner = StreamingRawResponse::new_with_head(
         ResponseHead {
+            status_text: None,
             final_url: request.url.clone(),
             status: 200,
             headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
@@ -1049,7 +1051,10 @@ async fn local_blob_method_errors_reach_streaming_and_callback_consumers() -> Re
             data.status, 200,
             "data: must not inherit the blob method restriction"
         );
-        assert_eq!(data.body_text(), "payload");
+        assert_eq!(
+            data.body_text(),
+            if method == "HEAD" { "" } else { "payload" }
+        );
     }
     Ok(())
 }
@@ -1466,6 +1471,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
     let final_url = Url::parse("http://example.test/final.txt")?;
     let response = RawResponse::from_head_and_body(
         ResponseHead {
+            status_text: None,
             final_url: final_url.clone(),
             status: 200,
             headers: vec![("content-type".to_owned(), "text/plain".to_owned())],

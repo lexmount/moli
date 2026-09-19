@@ -1,11 +1,11 @@
-//! Detached SVGRect values created by SVGSVGElement.createSVGRect().
+//! Native SVGRect values, detached or bound to SVGAnimatedRect viewBox values.
 //!
-//! JSXGraph uses this method to detect SVG support. Returning a DOMRect would
+//! JSXGraph uses createSVGRect() to detect SVG support. Returning a DOMRect would
 //! pass that check but expose the wrong interface and double (not float) fields.
 
 use crate::web_api_interfaces;
 use crate::{
-    native_bridge::node_runtime_and_handle_from_object_or_detached,
+    native_bridge::{node_runtime_and_handle_from_object_or_detached, throw_dom_exception},
     util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
     webidl,
 };
@@ -15,6 +15,8 @@ const X: &str = "__moliSvgRectX";
 const Y: &str = "__moliSvgRectY";
 const WIDTH: &str = "__moliSvgRectWidth";
 const HEIGHT: &str = "__moliSvgRectHeight";
+const VIEW_BOX_OWNER: &str = "__moliSvgRectViewBoxOwner";
+const READ_ONLY: &str = "__moliSvgRectReadOnly";
 const FIELDS: &[(&str, &str)] = &[("x", X), ("y", Y), ("width", WIDTH), ("height", HEIGHT)];
 
 #[derive(WebApiObject)]
@@ -82,6 +84,60 @@ pub(super) fn create_svg_rect<'s>(
     rv.set(rect.into());
 }
 
+pub(super) fn build_svg_view_box_rect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    values: [f64; 4],
+    read_only: bool,
+) -> v8::Local<'s, v8::Object> {
+    let [x, y, width, height] = values.map(|value| f64::from(value as f32));
+    let rect = SvgRectObjectDeclaration::new(x, y, width, height)
+        .bind(scope)
+        .expect("SVGRect declaration should bind");
+    set_private_value(scope, rect, VIEW_BOX_OWNER, owner.into());
+    set_private_value(
+        scope,
+        rect,
+        READ_ONLY,
+        v8::Boolean::new(scope, read_only).into(),
+    );
+    rect
+}
+
+pub(super) fn svg_view_box_rect_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rect: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_value(scope, rect, VIEW_BOX_OWNER)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+pub(super) fn svg_view_box_rect_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rect: v8::Local<'s, v8::Object>,
+) -> [f64; 4] {
+    [X, Y, WIDTH, HEIGHT].map(|slot| {
+        get_private_value(scope, rect, slot)
+            .and_then(|value| v8::Local::<v8::Number>::try_from(value).ok())
+            .map_or(0.0, |value| value.value())
+    })
+}
+
+pub(super) fn set_svg_view_box_rect_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    rect: v8::Local<'s, v8::Object>,
+    values: [f64; 4],
+) {
+    for (slot, value) in [X, Y, WIDTH, HEIGHT].into_iter().zip(values) {
+        set_private_value(
+            scope,
+            rect,
+            slot,
+            v8::Number::new(scope, f64::from(value as f32)).into(),
+        );
+    }
+}
+
 fn field_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -101,6 +157,7 @@ fn get_field<'s>(
     let Some((_, slot)) = field_for_receiver(scope, &args) else {
         return;
     };
+    super::builders::sync_svg_view_box_rect_from_owner(scope, args.this());
     if let Some(value) = get_private_value(scope, args.this(), slot) {
         rv.set(value);
     }
@@ -114,6 +171,17 @@ fn set_field<'s>(
     let Some((name, slot)) = field_for_receiver(scope, &args) else {
         return;
     };
+    if get_private_value(scope, args.this(), READ_ONLY)
+        .is_some_and(|value| value.boolean_value(scope))
+    {
+        throw_dom_exception(
+            scope,
+            "NoModificationAllowedError",
+            7,
+            "The SVG rectangle is read-only.",
+        );
+        return;
+    }
     let value = match webidl::convert::<webidl::Double>(
         scope,
         args.get(0),
@@ -131,10 +199,14 @@ fn set_field<'s>(
         webidl::throw_type_error(scope, "SVGRect value is outside the finite float range.");
         return;
     }
+    // ToNumber may re-enter JS and change the owner's viewBox. Preserve those
+    // changes to the other fields before applying this one-field mutation.
+    super::builders::sync_svg_view_box_rect_from_owner(scope, args.this());
     set_private_value(
         scope,
         args.this(),
         slot,
         v8::Number::new(scope, f64::from(value)).into(),
     );
+    super::builders::reflect_svg_view_box_rect_mutation(scope, args.this());
 }

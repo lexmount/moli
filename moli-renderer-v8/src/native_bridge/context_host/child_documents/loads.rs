@@ -10,7 +10,10 @@ use crate::{
     content_security_policy::{
         ContentSecurityPolicyViolationEventFields, send_content_security_policy_reports,
     },
-    document_runtime::{DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle},
+    context_bootstrap::construct_original_event,
+    document_runtime::{
+        DocumentNavigationEmbeddingContext, DocumentPolicyContainer, DomHandle, EventTargetHandle,
+    },
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
     frame_owner_model::{
         ChildDocumentNavigationFetchTarget, DocumentCreationKind,
@@ -113,6 +116,7 @@ impl JsContextHost {
         bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
         initiator: ChildDocumentNavigationInitiator,
+        initiator_url: Option<url::Url>,
     ) -> Option<u64> {
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_loader = self.document_resource_loader_for_owner(navigation_load.owner())?;
@@ -176,17 +180,20 @@ impl JsContextHost {
             .and_then(|entry| entry.pending_service_worker_client_id());
         let frame_owner_resource_timing =
             self.pending_frame_owner_resource_timing(handle, &target_url, initiator);
-        let initiator_url = self.document_url_for_child_context(handle);
+        let initiator_url =
+            initiator_url.unwrap_or_else(|| self.document_url_for_child_context(handle));
         let browser_context = self.host_document().cookie_browser_context();
         self.pending_child_document_navigations.insert(
             load_id,
             PendingChildDocumentNavigation {
                 target,
                 target_url: target_url.clone(),
+                referrer_source_url: initiator_url.clone(),
                 resource_loader: resource_loader.clone(),
                 reserved_service_worker_client_id: service_worker_client_id,
                 document_credentialless,
                 credentialless_storage_nonce,
+                initiator,
                 frame_owner_resource_timing,
             },
         );
@@ -397,6 +404,9 @@ impl JsContextHost {
         );
         self.finish_pending_child_document_navigation_owner_request(&pending);
         let handle = target.child_handle();
+        let object_attribute_navigation = pending.initiator
+            == ChildDocumentNavigationInitiator::FrameOwnerElement
+            && self.child_browsing_context_host_is_object_element(handle);
         self.clear_child_browsing_context_pending_document_load_if_matches(
             handle,
             target.load_id(),
@@ -409,16 +419,18 @@ impl JsContextHost {
                         .clear_content_security_policy_for_bypass();
                 }
                 let ancestor_origins = self.child_document_frame_ancestor_origins(handle);
-                let (report_only_violation, enforced_violation) = loaded
+                let (report_only_violations, enforced_violations) = loaded
                     .policy_container
                     .navigation_response_frame_ancestors_check(
                         &loaded.final_url,
                         DocumentNavigationEmbeddingContext::Nested(&ancestor_origins),
                     )
                     .into_violations();
-                for violation in report_only_violation
+                let reports =
+                    crate::content_security_policy::ContentSecurityPolicyReports::default();
+                for violation in report_only_violations
                     .iter()
-                    .chain(enforced_violation.iter())
+                    .chain(enforced_violations.iter())
                 {
                     // The protected response never receives a Document when enforcement blocks
                     // it, so there is no target on which to dispatch a DOM event. Keep the
@@ -429,6 +441,7 @@ impl JsContextHost {
                     let fields =
                         ContentSecurityPolicyViolationEventFields::from_url_violation(violation);
                     send_content_security_policy_reports(
+                        &reports,
                         pending.resource_loader.request_client(),
                         moli_url::WebOrigin::from_url(&loaded.final_url),
                         &fields,
@@ -436,7 +449,7 @@ impl JsContextHost {
                         &violation.report_to_endpoints,
                     );
                 }
-                if let Some(violation) = enforced_violation {
+                if let Some(violation) = enforced_violations.into_iter().next() {
                     Err(format!(
                         "child document response blocked by Content Security Policy `{}` for `{}`",
                         violation.effective_directive, violation.blocked_uri
@@ -446,6 +459,32 @@ impl JsContextHost {
                 }
             }
             result => result,
+        };
+        let (result, object_fallback_required) = if object_attribute_navigation {
+            match result {
+                Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => {
+                    let failed_status = loaded
+                        .document_network
+                        .as_ref()
+                        .map(|network| network.status)
+                        .filter(|status| !(200..300).contains(status));
+                    if let Some(status) = failed_status {
+                        (
+                            Err(format!("object resource returned HTTP status {status}")),
+                            true,
+                        )
+                    } else {
+                        (Ok(ChildDocumentLoadOutcome::Loaded(loaded)), false)
+                    }
+                }
+                Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => (
+                    Err("object resource cannot be represented as a nested document".to_owned()),
+                    true,
+                ),
+                Err(error) => (Err(error), true),
+            }
+        } else {
+            (result, false)
         };
         let document_credentialless = pending.document_credentialless;
         let credentialless_storage_nonce = pending.credentialless_storage_nonce;
@@ -514,6 +553,13 @@ impl JsContextHost {
                     loaded.final_url.clone(),
                     &pending.target_url,
                 );
+                let document_referrer = moli_fetch::referrer_header_value(
+                    &pending.referrer_source_url,
+                    &final_url,
+                    None,
+                    None,
+                )
+                .unwrap_or_default();
                 self.clear_child_browsing_context_pending_navigation(handle);
                 let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                     self.clear_pending_service_worker_child_client_if_matches(
@@ -535,6 +581,7 @@ impl JsContextHost {
                 };
                 entry.commit_pending_child_document_load(
                     &final_url,
+                    &document_referrer,
                     &loaded.policy_container,
                     sandbox,
                     document_credentialless,
@@ -607,6 +654,7 @@ impl JsContextHost {
                 };
                 entry.clear_cached_snapshot();
                 entry.clear_completed_document_network();
+                entry.clear_pending_top_level_history_length_increment();
                 self.reject_replaced_service_worker_child_client_navigation(
                     handle,
                     format!("Cannot navigate to URL: {error}"),
@@ -615,6 +663,25 @@ impl JsContextHost {
                     handle,
                     target.navigation_load(),
                 );
+                if object_fallback_required {
+                    self.enter_object_fallback_state(scope, handle);
+                    if let Some(event) = construct_original_event(scope, "error") {
+                        let host_ptr: *mut JsContextHost = self;
+                        let runtime = unsafe { &mut *self.runtime };
+                        let _ = runtime.dispatch_public_event_best_effort(
+                            scope,
+                            host_ptr,
+                            EventTargetHandle::Node(handle),
+                            event,
+                            "object resource error event",
+                        );
+                        body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
+                    }
+                    return ChildDocumentLoadApplication::Applied {
+                        followup: None,
+                        body_activity,
+                    };
+                }
                 None
             }
         };
@@ -642,6 +709,7 @@ impl JsContextHost {
                     body_activity,
                 };
             };
+            self.commit_pending_child_joint_history_push(scope, handle);
             initial_classic_ready_work = install.initial_classic_ready_work;
             parser_stop_action = install.parser_stop_action;
             owner_transition = Some(install.owner_transition);
@@ -839,6 +907,7 @@ mod tests {
             "GET".to_owned(),
             Vec::new(),
             moli_fetch::ResponseHead {
+                status_text: None,
                 final_url: url::Url::parse("https://example.test/child").unwrap(),
                 status: 200,
                 headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],

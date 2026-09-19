@@ -9,6 +9,7 @@ use super::{
     context_bootstrap::increment_performance_event_count,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
+    context_bootstrap::set_event_trusted,
     context_bootstrap::simple_event_target_add_event_listener_callback,
     context_bootstrap::simple_event_target_dispatch_event_callback,
     context_bootstrap::simple_event_target_remove_event_listener_callback,
@@ -17,8 +18,9 @@ use super::{
     document_runtime::{DocumentContentSecurityPolicyViolation, DomHandle, EventTargetHandle},
     native_bridge::{
         ComputedStyleDescriptor, ComputedStylePseudoKey, ComputedStyleTargetKey, JsContextHost,
-        PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
-        RuntimeObservableContextToken, WindowExecutionContextOwner, WindowTaskTarget,
+        OwnerDispatchScope, PendingWindowMessage, PendingWindowMessageEndpoint,
+        PendingWindowMessageSource, RuntimeObservableContextToken, WindowExecutionContextOwner,
+        WindowOperationReceiver, WindowOperationReceiverCaptureError, WindowTaskTarget,
         active_child_window_handle, active_lightweight_popup_id,
         current_or_live_delegate_node_arg_handle,
         element::{
@@ -39,7 +41,7 @@ use super::{
     },
     script_provenance::CompiledStringProvenance,
     util::{
-        callback_arg_string, context_host_from_global_bridge, context_host_ptr_from_global_bridge,
+        context_host_from_global_bridge, context_host_ptr_from_global_bridge,
         context_host_ptr_from_window_object, define_non_enumerable_static_bool_property,
         get_private_value, object_bool_property, object_number_property,
         script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
@@ -47,6 +49,7 @@ use super::{
     },
     webidl,
 };
+use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -142,122 +145,42 @@ struct IdleDeadlinePrototypeDeclaration {
     time_remaining: (),
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.addEventListener")]
-struct WindowAddEventListenerArgs<'s> {
-    #[webidl(with = window_add_event_listener_call)]
-    call: webidl::ParseOutcome<WindowAddEventListenerCall<'s>>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.removeEventListener")]
-struct WindowRemoveEventListenerArgs<'s> {
-    #[webidl(with = window_remove_event_listener_call)]
-    call: webidl::ParseOutcome<WindowRemoveEventListenerCall<'s>>,
-}
-
-struct WindowAddEventListenerCall<'s> {
-    event_type: String,
-    callback: v8::Local<'s, v8::Object>,
-    callback_relevant_context: v8::Local<'s, v8::Context>,
-    incumbent_context: v8::Local<'s, v8::Context>,
-    options: webidl::EventListenerOptions,
-    signal: Option<v8::Local<'s, v8::Object>>,
-}
-
-struct WindowRemoveEventListenerCall<'s> {
-    event_type: String,
-    callback: v8::Local<'s, v8::Object>,
-    options: webidl::EventListenerOptions,
-}
-
-fn window_add_event_listener_call<'s>(
+pub(crate) fn capture_window_event_target_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<WindowAddEventListenerCall<'s>>, webidl::WebIdlError> {
-    let Some(event_type) = callback_arg_string(scope, args, 0) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let options = webidl::event_listener_options(scope, args, 2, true);
-    let listener_arg = args.get(1);
-    let current_context = scope.get_current_context();
-    let callback = if let Ok(function) = v8::Local::<v8::Function>::try_from(listener_arg) {
-        let callback = v8::Local::<v8::Object>::from(function);
-        let callback_relevant_context = callback
-            .get_creation_context(scope)
-            .unwrap_or(current_context);
-        Some((callback, callback_relevant_context))
-    } else if listener_arg.is_object() && !listener_arg.is_null_or_undefined() {
-        let Ok(object) = v8::Local::<v8::Object>::try_from(listener_arg) else {
-            return Ok(webidl::ParseOutcome::Skip);
-        };
-        let callback_relevant_context = object
-            .get_creation_context(scope)
-            .unwrap_or(current_context);
-        Some((object, callback_relevant_context))
-    } else {
-        None
-    };
-    let Some((callback, callback_relevant_context)) = callback else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let incumbent_context = scope.get_incumbent_context().unwrap_or(current_context);
-    Ok(webidl::ParseOutcome::Parsed(WindowAddEventListenerCall {
-        event_type,
-        callback,
-        callback_relevant_context,
-        incumbent_context,
-        signal: signal_from_options_value(scope, args.get(2)),
-        options,
-    }))
+    receiver: v8::Local<'s, v8::Object>,
+    host: &JsContextHost,
+) -> Result<Option<WindowOperationReceiver>, ()> {
+    // EventTarget branding already ran in the generated binding. Freeze the
+    // Window owner here, before argument conversion can replace its realm.
+    if !web_api_interfaces::Window::is_instance(scope, receiver) {
+        return Ok(None);
+    }
+    match WindowOperationReceiver::capture_and_authorize(scope, receiver, host) {
+        Ok(receiver) => Ok(Some(receiver)),
+        Err(WindowOperationReceiverCaptureError::IllegalInvocation) => {
+            throw_type_error(scope, "Illegal invocation");
+            Err(())
+        }
+        Err(WindowOperationReceiverCaptureError::CrossOrigin) => {
+            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+            Err(())
+        }
+    }
 }
 
-fn window_remove_event_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<WindowRemoveEventListenerCall<'s>>, webidl::WebIdlError> {
-    let Some(event_type) = callback_arg_string(scope, args, 0) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let options = webidl::event_listener_options(scope, args, 2, true);
-    let listener_arg = args.get(1);
-    let callback = if let Ok(function) = v8::Local::<v8::Function>::try_from(listener_arg) {
-        Some(v8::Local::<v8::Object>::from(function))
-    } else if listener_arg.is_object() && !listener_arg.is_null_or_undefined() {
-        v8::Local::<v8::Object>::try_from(listener_arg).ok()
-    } else {
-        None
-    };
-    let Some(callback) = callback else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    Ok(webidl::ParseOutcome::Parsed(
-        WindowRemoveEventListenerCall {
-            event_type,
-            callback,
-            options,
-        },
-    ))
-}
-
-fn signal_from_options_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return None;
-    };
-    options
-        .get(scope, v8str(scope, "signal").into())
-        .and_then(|value| {
-            if value.is_null_or_undefined() {
-                None
-            } else {
-                v8::Local::<v8::Object>::try_from(value).ok()
-            }
-        })
+fn captured_window_event_target(
+    receiver: WindowOperationReceiver,
+    host: &JsContextHost,
+) -> Option<EventTargetHandle> {
+    let binding = receiver.resolve_live_binding(host)?;
+    match binding.dispatch_scope() {
+        OwnerDispatchScope::Child(handle) => host
+            .current_child_window_event_target(handle)
+            .map(EventTargetHandle::ChildWindow),
+        OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {
+            Some(EventTargetHandle::Window)
+        }
+    }
 }
 
 pub(super) fn event_target_add_event_listener_callback<'s>(
@@ -273,47 +196,94 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let parsed = webidl::parse_args::<WindowAddEventListenerArgs>(scope, &args);
-    let Some(parsed) = parsed else {
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let parsed = webidl::parse_args::<AddEventListenerArgs>(scope, &args);
+    let Some(call) = parsed else {
         return;
     };
-    let capture = call.options.capture;
-    let once = call.options.once;
-    let signal = call.signal;
+    register_dom_event_target_listener(scope, args.this(), host_ptr, window_receiver, call);
+}
+
+/// Native algorithms enter after Web IDL conversion, without consulting an
+/// author-visible addEventListener method or converting dictionary members twice.
+pub(crate) fn register_event_target_webidl_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    call: AddEventListenerArgs<'s>,
+) {
+    if let Some(slot_name) = simple_event_target_slot_name(scope, receiver) {
+        if let Some(listener) = call.listener {
+            crate::context_bootstrap::simple_object_event_target_register_webidl_listener(
+                scope,
+                receiver,
+                &slot_name,
+                call.event_type,
+                listener,
+                call.options.options,
+                call.options.signal,
+            );
+        }
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Ok(window_receiver) =
+        capture_window_event_target_receiver(scope, receiver, unsafe { &*host_ptr })
+    else {
+        return;
+    };
+    register_dom_event_target_listener(scope, receiver, host_ptr, window_receiver, call);
+}
+
+fn register_dom_event_target_listener<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    window_receiver: Option<WindowOperationReceiver>,
+    call: AddEventListenerArgs<'s>,
+) {
+    let host = unsafe { &mut *host_ptr };
+    let Some(listener) = call.listener else {
+        return;
+    };
+    let options = call.options.options;
+    let capture = options.capture;
+    let once = options.once;
+    let signal = call.options.signal.map(|signal| signal.value());
     if let Some(signal) = signal
         && host.abort_signal_aborted(scope, signal)
     {
         return;
     }
-    let child_window_target = child_window_handle(scope, args.this());
-    let target = if let Some(handle) = child_window_target {
-        let Some(target) = host.current_child_window_event_target(handle) else {
-            // Detachment clears the Window's listeners and execution context,
-            // but retained references still have a valid EventTarget receiver.
+    let target = if let Some(receiver) = window_receiver {
+        let Some(target) = captured_window_event_target(receiver, host) else {
             return;
         };
-        Some(EventTargetHandle::ChildWindow(target))
+        Some(target)
     } else {
-        event_target_handle_from_this(scope, &args, host_ptr, host)
+        event_target_handle_from_object(scope, receiver, host_ptr, host)
     };
     let Some(target) = target else {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    let passive = call
-        .options
+    let passive = options
         .passive
         .unwrap_or_else(|| default_passive_value(host, target, &call.event_type));
+    let callback = v8::Local::<v8::Object>::try_from(listener.value(scope))
+        .expect("converted EventListener must remain an object");
+    let callback_relevant_context = listener.relevant_context(scope);
+    let incumbent_context = listener.incumbent_context(scope);
     let Some(callback_id) = host.register_target_event_listener(
         scope,
         target,
         &call.event_type,
-        call.callback,
-        call.callback_relevant_context,
-        call.incumbent_context,
+        callback,
+        callback_relevant_context,
+        incumbent_context,
         capture,
         once,
         passive,
@@ -325,7 +295,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
     {
         define_non_enumerable_static_bool_property(
             scope,
-            args.this(),
+            receiver,
             DOCUMENT_SELECTION_CHANGE_LISTENER_SLOT,
             true,
         );
@@ -340,7 +310,7 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
             capture,
         );
     }
-    if child_window_target.is_none() && call.event_type == "animationstart" {
+    if !matches!(target, EventTargetHandle::ChildWindow(_)) && call.event_type == "animationstart" {
         queue_animation_start_for_listener_target(scope, host_ptr, target);
     }
 }
@@ -391,27 +361,34 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(parsed) = webidl::parse_args::<WindowRemoveEventListenerArgs>(scope, &args) else {
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(call) = webidl::parse_args::<RemoveEventListenerArgs>(scope, &args) else {
+        return;
+    };
+    let Some(listener) = call.listener else {
         return;
     };
     let capture = call.options.capture;
-    let target = if let Some(handle) = child_window_handle(scope, args.this()) {
-        let Some(target) = host.current_child_window_event_target(handle) else {
-            // The listeners were already removed when this Window detached.
+    let target = if let Some(receiver) = window_receiver {
+        let Some(target) = captured_window_event_target(receiver, host) else {
             return;
         };
-        Some(EventTargetHandle::ChildWindow(target))
+        Some(target)
     } else {
         event_target_handle_from_this(scope, &args, host_ptr, host)
     };
     let Some(target) = target else {
+        if crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+            return;
+        }
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    host.remove_registered_event_listener(scope, target, &call.event_type, call.callback, capture);
+    let callback = v8::Local::<v8::Object>::try_from(listener.value(scope))
+        .expect("converted EventListener must remain an object");
+    host.remove_registered_event_listener(scope, target, &call.event_type, callback, capture);
 }
 
 pub(super) fn event_target_dispatch_event_callback<'s>(
@@ -428,13 +405,15 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let child_window_target = child_window_handle(scope, args.this());
-    let target = if child_window_target.is_none() {
+    let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
+        return;
+    };
+    let target = if window_receiver.is_none() {
         event_target_handle_from_this(scope, &args, host_ptr, host)
     } else {
         None
     };
-    if child_window_target.is_none() && target.is_none() {
+    if window_receiver.is_none() && target.is_none() {
         throw_type_error(scope, "Illegal invocation");
         return;
     };
@@ -485,11 +464,40 @@ pub(super) fn event_target_dispatch_event_callback<'s>(
         return;
     }
 
+    set_event_trusted(scope, event, false);
     let event_type = event_type_string(scope, event);
-    if let Some(handle) = child_window_target {
-        let event_type = event_type.as_deref().unwrap_or_default();
-        host.dispatch_child_window_event(scope, handle, event_type, event);
-        rv.set_bool(!object_bool_property(scope, event, "defaultPrevented").unwrap_or(false));
+    if let Some(receiver) = window_receiver {
+        let Some(binding) = receiver.resolve_live_binding(host) else {
+            rv.set_bool(true);
+            return;
+        };
+        let event = v8::Global::new(scope, event);
+        let result = binding.with_current_scope(scope, host_ptr, |scope, dispatch_scope| {
+            let event = v8::Local::new(scope, &event);
+            let host = unsafe { &mut *host_ptr };
+            if let OwnerDispatchScope::Child(handle) = dispatch_scope {
+                host.dispatch_child_window_event(
+                    scope,
+                    handle,
+                    event_type.as_deref().unwrap_or_default(),
+                    event,
+                );
+                Ok(!object_bool_property(scope, event, "defaultPrevented").unwrap_or(false))
+            } else {
+                host.dispatch_public_event(scope, host_ptr, EventTargetHandle::Window, event)
+                    .map(|dispatch| {
+                        if let Some(event_type) = event_type.as_deref() {
+                            increment_performance_event_count(scope, event_type);
+                        }
+                        dispatch.dispatch_event_return_value()
+                    })
+            }
+        });
+        match result {
+            Some(Ok(returned)) => rv.set_bool(returned),
+            Some(Err(message)) => throw_type_error(scope, &message),
+            None => rv.set_bool(true),
+        }
         return;
     }
     let Some(target) = target else {
@@ -671,7 +679,7 @@ fn prepare_window_timer_handler<'s>(
     let host = unsafe { &mut *host_ptr };
     let allow_trusted_types_eval =
         requirements.is_enforced() && host.allows_trusted_types_eval(scope);
-    host.allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval)
+    host.allows_eval_code_generation_by_csp(scope, allow_trusted_types_eval, Some(source.as_str()))
         .then_some(WindowTimerHandler::Source(source))
 }
 
@@ -732,6 +740,10 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let id_val = args.get(0);
     let id = id_val.number_value(scope).unwrap_or(0.0) as u32;
     cancel_window_timer_for_receiver(scope, args.this(), id);
@@ -2066,7 +2078,15 @@ fn event_target_handle_from_this<'s>(
     host_ptr: *mut JsContextHost,
     host: &JsContextHost,
 ) -> Option<EventTargetHandle> {
-    let this = args.this();
+    event_target_handle_from_object(scope, args.this(), host_ptr, host)
+}
+
+fn event_target_handle_from_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    this: v8::Local<'s, v8::Object>,
+    host_ptr: *mut JsContextHost,
+    host: &JsContextHost,
+) -> Option<EventTargetHandle> {
     let global = scope.get_current_context().global(scope);
     if this.strict_equals(global.into()) {
         return Some(EventTargetHandle::Window);
