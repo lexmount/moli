@@ -11,7 +11,7 @@ impl JsContextHost {
         if document_handle == self.document_handle() {
             return self
                 .document_domain_override
-                .clone()
+                .get()
                 .unwrap_or_else(|| url_host_domain(self.document_url()).unwrap_or_default());
         }
         if let Some(child_handle) =
@@ -48,7 +48,7 @@ impl JsContextHost {
             if !document_domain_is_allowed_for_host(&current_host, &domain) {
                 return false;
             }
-            self.document_domain_override = Some(domain);
+            self.document_domain_override.set(domain);
             return true;
         }
         let Some(child_handle) =
@@ -67,12 +67,19 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> Option<String> {
+        self.child_document_domain_state(handle)?.get()
+    }
+
+    pub(super) fn child_document_domain_state(
+        &self,
+        handle: DomHandle,
+    ) -> Option<DocumentDomainState> {
         match self.child_browsing_context_security_origin_owner(handle)? {
-            ChildSecurityOriginOwner::Main => self.document_domain_override.clone(),
+            ChildSecurityOriginOwner::Main => Some(self.document_domain_override.clone()),
             ChildSecurityOriginOwner::Child(owner) => self
                 .child_browsing_contexts
                 .get(&owner)
-                .and_then(|entry| entry.document_domain_override()),
+                .map(|entry| entry.document_domain_state()),
         }
     }
 
@@ -114,7 +121,7 @@ impl JsContextHost {
             return false;
         };
         match origin_owner {
-            ChildSecurityOriginOwner::Main => self.document_domain_override = Some(domain),
+            ChildSecurityOriginOwner::Main => self.document_domain_override.set(domain),
             ChildSecurityOriginOwner::Child(owner) => {
                 let Some(entry) = self.child_browsing_contexts.get_mut(&owner) else {
                     return false;

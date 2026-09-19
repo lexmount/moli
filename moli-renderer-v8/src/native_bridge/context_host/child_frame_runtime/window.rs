@@ -666,34 +666,18 @@ unsafe extern "C" fn window_access_check_callback(
     }
 
     let host = unsafe { &*accessing_host_ptr };
-    let Some(accessing_identity) =
-        host.window_execution_context_identity_for_access_check(accessing_context)
-    else {
-        return false;
-    };
-    if let Some(accessed_identity) =
-        host.window_execution_context_identity_for_access_check(accessed_context)
-        && host.window_execution_context_can_access(accessing_identity, accessed_identity)
+    if let (Some(accessing), Some(accessed)) = (
+        host.window_execution_context_identity_for_access_check(accessing_context),
+        host.window_execution_context_identity_for_access_check(accessed_context),
+    ) && host.window_execution_context_identity_is_current(accessing)
+        && host.window_execution_context_identity_is_current(accessed)
     {
-        return true;
-    }
-    if !host.window_execution_context_identity_is_current(accessing_identity)
-        || accessed_context
-            .get_slot::<super::super::RuntimeObservableContextToken>()
-            .is_none()
-    {
-        return false;
+        return host.window_execution_context_can_access(accessing, accessed);
     }
 
-    // Removing a same-origin iframe retires its LocalWindow registration, but
-    // JavaScript can still retain that inner global long enough to clean up
-    // listeners and other realm-owned state. The context's internalized
-    // security token is the last live effective-origin snapshot, so equal
-    // tokens preserve that access without reopening retired cross-origin or
-    // opaque realms.
-    accessing_context
-        .get_security_token(scope)
-        .strict_equals(accessed_context.get_security_token(scope))
+    // Execution registrations retire before script-held globals do. Their
+    // origin-domain and access policy still govern synchronous Window access.
+    host.window_context_origins_allow_access(accessing_context, accessed_context)
 }
 
 impl JsContextHost {

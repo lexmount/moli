@@ -1,13 +1,140 @@
 use super::{
-    JsContextHost, OwnerDispatchScope, WindowExecutionContextIdentity, WindowExecutionContextOwner,
+    JsContextHost, OwnerDispatchScope, WindowExecutionContextAccessPolicy,
+    WindowExecutionContextIdentity, WindowExecutionContextOwner,
     child_frames::{ChildAncestorOriginsReferrerPolicy, ChildBrowsingContextEntry},
 };
 use crate::document_runtime::DomHandle;
+use std::{cell::RefCell, rc::Rc};
 
 const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
+#[derive(Clone, Default)]
+pub(in crate::native_bridge::context_host) struct DocumentDomainState(Rc<DocumentDomainStateData>);
+
+#[derive(Default)]
+struct DocumentDomainStateData {
+    value: RefCell<Option<String>>,
+    contexts: RefCell<Vec<v8::Weak<v8::Context>>>,
+}
+
+impl std::fmt::Debug for DocumentDomainState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_tuple("DocumentDomainState")
+            .field(&self.get())
+            .finish()
+    }
+}
+
+impl DocumentDomainState {
+    pub(super) fn get(&self) -> Option<String> {
+        self.0.value.borrow().clone()
+    }
+
+    pub(super) fn set(&self, domain: String) {
+        *self.0.value.borrow_mut() = Some(domain);
+    }
+
+    fn register_context(
+        &self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        context: v8::Local<'_, v8::Context>,
+    ) {
+        let mut contexts = self.0.contexts.borrow_mut();
+        contexts.retain(|weak| {
+            weak.to_local(scope)
+                .is_some_and(|current| current != context)
+        });
+        contexts.push(v8::Weak::new(scope, context));
+    }
+
+    fn invalidate_context_tokens(&self, scope: &mut v8::PinScope<'_, '_>) {
+        // Inherited origins can still be shared with a retired realm. Its old
+        // tuple token must not bypass the changed origin-domain check. Weak
+        // handles keep this propagation independent of execution registrations.
+        self.0.contexts.borrow_mut().retain(|weak| {
+            let Some(context) = weak.to_local(scope) else {
+                return false;
+            };
+            let shares_domain = context
+                .get_slot::<WindowContextSecurityOrigin>()
+                .as_deref()
+                .and_then(|origin| origin.domain.as_ref())
+                .is_some_and(|domain| Rc::ptr_eq(&self.0, &domain.0));
+            if shares_domain {
+                context.use_default_security_token();
+            }
+            shares_domain
+        });
+    }
+}
+
+struct WindowContextSecurityOrigin {
+    origin: WindowAccessOrigin,
+    domain: Option<DocumentDomainState>,
+    access_policy: WindowExecutionContextAccessPolicy,
+}
+
+impl WindowContextSecurityOrigin {
+    fn current_origin(&self) -> WindowAccessOrigin {
+        let mut origin = self.origin.clone();
+        if let WindowAccessOrigin::Tuple {
+            document_domain, ..
+        } = &mut origin
+            && let Some(domain) = &self.domain
+        {
+            *document_domain = domain.get();
+        }
+        origin
+    }
+}
+
 impl JsContextHost {
+    pub(crate) fn install_window_context_security_origin(
+        &self,
+        scope: &mut v8::PinScope<'_, '_, ()>,
+        context: v8::Local<'_, v8::Context>,
+        dispatch_scope: OwnerDispatchScope,
+        access_policy: WindowExecutionContextAccessPolicy,
+    ) {
+        let Some(origin) = self.window_access_origin_for_dispatch_scope(dispatch_scope) else {
+            context.remove_slot::<WindowContextSecurityOrigin>();
+            return;
+        };
+        let domain = match dispatch_scope {
+            OwnerDispatchScope::Top => Some(self.document_domain_override.clone()),
+            OwnerDispatchScope::Child(handle) => self.child_document_domain_state(handle),
+            // Popups currently alias their opener's concrete realm.
+            OwnerDispatchScope::LightweightPopup(_) => return,
+        };
+        if let Some(domain) = &domain {
+            domain.register_context(scope, context);
+        }
+        context.set_slot(Rc::new(WindowContextSecurityOrigin {
+            origin,
+            domain,
+            access_policy,
+        }));
+    }
+
+    pub(in crate::native_bridge::context_host) fn window_context_origins_allow_access(
+        &self,
+        accessing_context: v8::Local<'_, v8::Context>,
+        accessed_context: v8::Local<'_, v8::Context>,
+    ) -> bool {
+        let Some(accessing) = accessing_context.get_slot::<WindowContextSecurityOrigin>() else {
+            return false;
+        };
+        let Some(accessed) = accessed_context.get_slot::<WindowContextSecurityOrigin>() else {
+            return false;
+        };
+        accessing.access_policy == WindowExecutionContextAccessPolicy::Universal
+            || accessing
+                .current_origin()
+                .can_access(&accessed.current_origin())
+    }
+
     pub(in crate::native_bridge::context_host) fn child_ancestor_origins_referrer_policy_from_owner_attribute(
         &self,
         handle: DomHandle,
@@ -83,7 +210,7 @@ impl JsContextHost {
 
     pub(crate) fn main_default_world_security_token_key(&self) -> Option<String> {
         let origin = moli_url::origin_ascii_serialization(self.document_url());
-        if self.document_domain_override.is_some() {
+        if self.document_domain_override.get().is_some() {
             return None;
         }
         window_security_token_key(origin)
@@ -109,7 +236,7 @@ impl JsContextHost {
     pub(crate) fn main_isolated_world_security_token_key(&self) -> Option<String> {
         window_isolated_world_security_token_key(
             moli_url::origin_ascii_serialization(self.document_url()),
-            self.document_domain_override.is_some(),
+            self.document_domain_override.get().is_some(),
         )
     }
 
@@ -139,6 +266,15 @@ impl JsContextHost {
             // Lightweight popups still share the opener V8 context. Until they have a concrete
             // LocalWindow realm, changing that shared context token would also mutate the opener.
             return 0;
+        }
+
+        let domain = if target_is_main {
+            Some(self.document_domain_override.clone())
+        } else {
+            target_child.and_then(|handle| self.child_document_domain_state(handle))
+        };
+        if let Some(domain) = domain {
+            domain.invalidate_context_tokens(scope);
         }
 
         let mut dispatch_scopes = vec![OwnerDispatchScope::Top];
@@ -184,6 +320,12 @@ impl JsContextHost {
         let Some((_, context)) = self.window_execution_context(scope, owner, dispatch_scope) else {
             return false;
         };
+        self.install_window_context_security_origin(
+            scope,
+            context,
+            dispatch_scope,
+            WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+        );
         set_window_security_token(
             scope,
             context,
@@ -349,7 +491,7 @@ impl JsContextHost {
         }
         WindowAccessOrigin::from_serialized_origin(
             serialized_origin,
-            self.document_domain_override.clone(),
+            self.document_domain_override.get(),
         )
     }
 
