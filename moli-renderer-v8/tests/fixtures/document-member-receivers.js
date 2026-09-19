@@ -37,7 +37,8 @@ async function documentMemberReceiverProbe() {
           const fn = descriptor[kind];
           if (typeof fn !== 'function') continue;
           const label = `${realmName}/${C.name}.${name}/${kind}`;
-          const lenient = name === 'onmouseenter' || name === 'onmouseleave';
+          // HTML marks all three attributes [LegacyLenientThis].
+          const lenient = ['onmouseenter', 'onmouseleave', 'onreadystatechange'].includes(name);
           const argumentLists = kind === 'get' ? [[]] : kind === 'set' ? [[poison]] :
             [[], Array(5).fill(poison), ...(nodeArguments[name] ? [nodeArguments[name]] : [])];
           const errors = [];
