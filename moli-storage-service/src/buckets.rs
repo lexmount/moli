@@ -1914,14 +1914,41 @@ fn remove_storage_bucket_cache_path_if_exists(path: &Path, label: &str) -> Resul
 }
 
 fn sync_storage_bucket_cache_directory(path: &Path) -> Result<()> {
-    fs::File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .with_context(|| {
-            format!(
-                "failed to sync StorageBucket CacheStorage directory `{}`",
-                path.display()
-            )
-        })
+    sync_storage_bucket_cache_directory_handle(path).with_context(|| {
+        format!(
+            "failed to sync StorageBucket CacheStorage directory `{}`",
+            path.display()
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn sync_storage_bucket_cache_directory_handle(path: &Path) -> io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(windows)]
+fn sync_storage_bucket_cache_directory_handle(path: &Path) -> io::Result<()> {
+    use std::{fs::OpenOptions, os::windows::fs::OpenOptionsExt};
+
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+
+    OpenOptions::new()
+        .access_mode(GENERIC_WRITE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)?
+        .sync_all()
+}
+
+#[cfg(not(windows))]
+fn sync_storage_bucket_cache_file(path: &Path) -> io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(windows)]
+fn sync_storage_bucket_cache_file(path: &Path) -> io::Result<()> {
+    fs::OpenOptions::new().write(true).open(path)?.sync_all()
 }
 
 fn sync_storage_bucket_cache_parent(path: &Path) -> Result<()> {
@@ -1957,14 +1984,12 @@ fn sync_storage_bucket_cache_tree(path: &Path) -> Result<()> {
         if file_type.is_dir() {
             sync_storage_bucket_cache_tree(&entry_path)?;
         } else if file_type.is_file() {
-            fs::File::open(&entry_path)
-                .and_then(|file| file.sync_all())
-                .with_context(|| {
-                    format!(
-                        "failed to sync StorageBucket CacheStorage replacement file `{}`",
-                        entry_path.display()
-                    )
-                })?;
+            sync_storage_bucket_cache_file(&entry_path).with_context(|| {
+                format!(
+                    "failed to sync StorageBucket CacheStorage replacement file `{}`",
+                    entry_path.display()
+                )
+            })?;
         } else {
             bail!(
                 "unsupported entry in StorageBucket CacheStorage replacement `{}`",
