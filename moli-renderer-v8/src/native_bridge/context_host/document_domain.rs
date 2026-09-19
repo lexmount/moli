@@ -4,17 +4,17 @@ use std::net::IpAddr;
 use url::{Host, Url};
 
 impl JsContextHost {
-    pub(crate) fn inherit_document_domain_override(&mut self, domain: Rc<RefCell<Option<String>>>) {
+    pub(crate) fn inherit_document_domain_override(&mut self, domain: DocumentDomainState) {
         self.document_domain_override = domain;
     }
 
     pub(crate) fn inherited_document_domain(
         &self,
         child: Option<DomHandle>,
-    ) -> Rc<RefCell<Option<String>>> {
+    ) -> DocumentDomainState {
         match child.and_then(|handle| self.child_browsing_context_security_origin_owner(handle)) {
             Some(ChildSecurityOriginOwner::Child(owner)) => {
-                self.child_browsing_contexts[&owner].shared_document_domain_override()
+                self.child_browsing_contexts[&owner].document_domain_state()
             }
             Some(ChildSecurityOriginOwner::Main) | None => self.document_domain_override.clone(),
         }
@@ -27,8 +27,7 @@ impl JsContextHost {
         if document_handle == self.document_handle() {
             return self
                 .document_domain_override
-                .borrow()
-                .clone()
+                .get()
                 .unwrap_or_else(|| self.main_document_domain_host().unwrap_or_default());
         }
         if let Some(child_handle) =
@@ -65,7 +64,7 @@ impl JsContextHost {
             if !document_domain_is_allowed_for_host(&current_host, &domain) {
                 return false;
             }
-            *self.document_domain_override.borrow_mut() = Some(domain);
+            self.document_domain_override.set(domain);
             return true;
         }
         let Some(child_handle) =
@@ -84,12 +83,19 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> Option<String> {
+        self.child_document_domain_state(handle)?.get()
+    }
+
+    pub(super) fn child_document_domain_state(
+        &self,
+        handle: DomHandle,
+    ) -> Option<DocumentDomainState> {
         match self.child_browsing_context_security_origin_owner(handle)? {
-            ChildSecurityOriginOwner::Main => self.document_domain_override.borrow().clone(),
+            ChildSecurityOriginOwner::Main => Some(self.document_domain_override.clone()),
             ChildSecurityOriginOwner::Child(owner) => self
                 .child_browsing_contexts
                 .get(&owner)
-                .and_then(|entry| entry.document_domain_override()),
+                .map(|entry| entry.document_domain_state()),
         }
     }
 
@@ -132,9 +138,7 @@ impl JsContextHost {
             return false;
         };
         match origin_owner {
-            ChildSecurityOriginOwner::Main => {
-                *self.document_domain_override.borrow_mut() = Some(domain);
-            }
+            ChildSecurityOriginOwner::Main => self.document_domain_override.set(domain),
             ChildSecurityOriginOwner::Child(owner) => {
                 let Some(entry) = self.child_browsing_contexts.get_mut(&owner) else {
                     return false;
