@@ -1330,6 +1330,10 @@ impl JsContextHost {
         self.app_manifest_link_change_epoch
     }
 
+    pub(crate) fn page_context_resources_closed(&self) -> bool {
+        self.page_context_resources_closed
+    }
+
     pub(crate) fn close_page_context_resources_for_teardown(&mut self) {
         if self.page_context_resources_closed {
             return;

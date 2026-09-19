@@ -3582,7 +3582,7 @@ fn detached_document_view_uses_document_prototype_accessors() {
 }
 
 #[test]
-fn detached_iframe_windows_do_not_change_document_visibility() {
+fn detached_iframe_windows_do_not_create_document_browsing_contexts() {
     let mut vm = new_storage_test_vm("https://detached-iframe-visibility.test/");
 
     let result = vm
@@ -3612,7 +3612,7 @@ fn detached_iframe_windows_do_not_change_document_visibility() {
       const view = frame.contentWindow;
       child ||= frame.contentDocument;
       check(view !== null && view.document === child, `${label}: synthetic window`);
-      check(child.defaultView === view, `${label}: associated window retained`);
+      check(child.defaultView === null, `${label}: synthetic window has no browsing context`);
       check(child.hidden && child.visibilityState === "hidden", `${label}: after contentWindow`);
       check(outer.hidden && outer.visibilityState === "hidden", `${label}: owner stays hidden`);
       const nested = child.createElement("iframe");
@@ -3621,6 +3621,8 @@ fn detached_iframe_windows_do_not_change_document_visibility() {
       const nestedChild = nested.contentDocument;
       check(nestedChild.hidden && nestedChild.visibilityState === "hidden", `${label}: nested before contentWindow`);
       check(nested.contentWindow.document === nestedChild, `${label}: nested window`);
+      check(nested.contentWindow.parent === view, `${label}: nested compatibility parent`);
+      check(nestedChild.defaultView === null, `${label}: nested synthetic window has no browsing context`);
       check(nestedChild.hidden && nestedChild.visibilityState === "hidden", `${label}: nested after contentWindow`);
     }
   }
