@@ -737,6 +737,46 @@ pub fn clear_element_command(
     })
 }
 
+/// Read-only activation preflight (apart from scrolling). Ordinary elements
+/// must subsequently use shared pointer input, not HTMLElement.click().
+pub fn element_click_preflight_command(
+    context: &ClassicDevToolsCommandContext,
+    object_id: impl Into<String>,
+) -> DevToolsCommand {
+    let DevToolsCommand::CallFunction(mut command) = element_click_command(context, object_id)
+    else {
+        unreachable!("element click is a call-function command")
+    };
+    command.function_declaration = r#"function() {
+        if (!this || this.nodeType !== Node.ELEMENT_NODE || !this.isConnected)
+            throw new Error('__moli_webdriver_classic_stale_element_reference__');
+        if (this.localName === 'input' && this.type === 'file')
+            return {status: 'file'};
+        // Options have a separate selection algorithm, not a pointer target
+        // in the page's rendered select popup.
+        if (this.localName === 'option') return {status: 'option'};
+        this.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+        const rect = this.getBoundingClientRect();
+        if (!rect || rect.width <= 0 || rect.height <= 0)
+            return {status: 'not interactable'};
+        // Match the shared geometry helper's center. Do not silently test a
+        // clipped point and then dispatch input at a different position.
+        const x = (rect.left + rect.right) / 2, y = (rect.top + rect.bottom) / 2;
+        if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight)
+            return {status: 'not interactable'};
+        const root = this.getRootNode();
+        const hit = (typeof root.elementFromPoint === 'function' ? root : this.ownerDocument)
+            .elementFromPoint(x, y);
+        if (!hit || !(hit === this || this.contains(hit)))
+            return {status: 'intercepted'};
+        return {status: 'pointer'};
+    }"#
+    .to_owned();
+    command.await_promise = false;
+    command.user_gesture = false;
+    DevToolsCommand::CallFunction(command)
+}
+
 pub fn element_click_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
@@ -755,6 +795,15 @@ pub fn element_click_command(
                 throw new Error('__moli_webdriver_classic_element_not_interactable__');
             }
             const frameElementBeforeClick = window.frameElement || null;
+            // WebDriver's option branch focuses its select container. This
+            // is deliberately not part of ordinary HTMLElement.click().
+            if (this.localName === 'option') {
+                const select = this.closest('select');
+                if (select) {
+                    select.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
+                    HTMLElement.prototype.focus.call(select);
+                }
+            }
             HTMLElement.prototype.click.call(this);
             let detachedFrame = false;
             try {

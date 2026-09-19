@@ -41,12 +41,13 @@ use moli_protocol_webdriver_classic::{
     clear_element_command, create_initial_target_command, current_url_command,
     delete_session_response, describe_node_command, describe_node_reference_command,
     element_center_from_geometry, element_click_command, element_click_input_commands,
-    element_click_prepare_reference_commands, element_screenshot_command,
-    element_send_keys_input_commands, element_send_keys_prepare_text_control_command,
-    element_send_keys_text, execute_async_command, execute_sync_command, find_element_command,
-    find_element_command_with_root, get_element_attributes_reference_command,
-    get_element_computed_label_command, get_element_computed_role_command,
-    get_element_css_value_command, get_element_displayed_command, get_element_enabled_command,
+    element_click_preflight_command, element_click_prepare_reference_commands,
+    element_screenshot_command, element_send_keys_input_commands,
+    element_send_keys_prepare_text_control_command, element_send_keys_text, execute_async_command,
+    execute_sync_command, find_element_command, find_element_command_with_root,
+    get_element_attributes_reference_command, get_element_computed_label_command,
+    get_element_computed_role_command, get_element_css_value_command,
+    get_element_displayed_command, get_element_enabled_command,
     get_element_property_reference_command, get_element_rect_reference_command,
     get_element_rendered_text_command, get_element_text_reference_command, history_traversal_entry,
     layout_metrics_command, matched_capabilities_from_new_session_params, navigate_command,
@@ -4532,18 +4533,108 @@ async fn webdriver_classic_activate_element_by_handle(
         object_group,
     )
     .await?;
-    let result = binding
+    let prepared = binding
         .runtime
-        .execute_with_pending_navigation_wait_on_page(
-            element_click_command(context, object_id.object_id.clone()),
-            None,
-            binding.timeouts.page_load.map(Duration::from_millis),
+        .execute_on_page(
+            element_click_preflight_command(context, object_id.object_id.clone()),
             object_id.page_residence.clone(),
         )
         .await;
+    let preparation = match prepared {
+        Ok(DevToolsCommandResult::Script(result)) => match *result {
+            DevToolsScriptResult::Value(value) => Ok(value.value),
+            DevToolsScriptResult::Exception(exception) => {
+                Err(classic_webdriver_command_exception_error(exception))
+            }
+        },
+        Ok(_) => Err(ClassicError::new(
+            ClassicErrorCode::UnknownError,
+            "element click preflight returned an unexpected result",
+        )),
+        Err(error) => Err(classic_error_from_devtools_error(error)),
+    };
+    let mut activation_dispatched = false;
+    let mut pointer_press_completed = false;
+    let operation = async {
+        let preparation = preparation?;
+        match preparation.get("status").and_then(Value::as_str) {
+            Some("option") => {
+                activation_dispatched = true;
+                Ok(binding
+                    .runtime
+                    .execute_on_page(
+                        element_click_command(context, object_id.object_id.clone()),
+                        object_id.page_residence.clone(),
+                    )
+                    .await)
+            }
+            Some("file") => Err(ClassicError::new(
+                ClassicErrorCode::InvalidArgument,
+                "file inputs cannot be clicked by WebDriver",
+            )),
+            Some("not interactable") => Err(ClassicError::new(
+                ClassicErrorCode::ElementNotInteractable,
+                "element has no in-view clickable rectangle",
+            )),
+            Some("intercepted") => Err(ClassicError::new(
+                ClassicErrorCode::ElementClickIntercepted,
+                "another element obscures the element's in-view center",
+            )),
+            Some("pointer") => {
+                let geometry =
+                    webdriver_classic_element_geometry(state, binding, context, element_id).await?;
+                // Geometry already includes ancestor-frame transforms. Pointer
+                // input is routed through the top-level browsing context.
+                let pointer_context = classic_top_level_context(binding);
+                let commands = element_click_input_commands(&pointer_context, &geometry)?;
+                let mut result = Ok(DevToolsCommandResult::Empty);
+                for (phase, command) in commands.into_iter().enumerate() {
+                    activation_dispatched = phase == 2;
+                    // Do not retry an input command or wait for navigation
+                    // between pointer phases. Page residence is not a promise
+                    // that the active Document cannot change during input.
+                    result = binding
+                        .runtime
+                        .execute_on_page(command, object_id.page_residence.clone())
+                        .await;
+                    if !matches!(result, Ok(DevToolsCommandResult::Empty)) {
+                        break;
+                    }
+                    if phase == 1 {
+                        pointer_press_completed = true;
+                    }
+                }
+                Ok(result)
+            }
+            _ => Err(ClassicError::new(
+                ClassicErrorCode::UnknownError,
+                "element click preflight returned an invalid status",
+            )),
+        }
+    }
+    .await;
     release_classic_page_bound_remote_object(binding, context, object_id, object_group).await;
+    let result = operation?;
     let post_click_navigation = classic_wait_for_current_document(binding).await;
     match result {
+        Ok(DevToolsCommandResult::Empty) => {
+            post_click_navigation?;
+            if binding.current_frame_id.is_some()
+                && let Err(error) = ensure_classic_current_browsing_context_exists(binding).await
+            {
+                if error.code != ClassicErrorCode::NoSuchWindow {
+                    return Err(error);
+                }
+                state.classic_session_registry.lock().set_current_frame_id(
+                    &binding.session_id,
+                    Some(format!(
+                        "__moli-detached-frame__:{}",
+                        binding.browsing_context_target_id()
+                    )),
+                );
+            }
+            Ok(())
+        }
         Ok(DevToolsCommandResult::Script(result)) => {
             post_click_navigation?;
             match *result {
@@ -4588,7 +4679,20 @@ async fn webdriver_classic_activate_element_by_handle(
         // Chromium references:
         // chrome/test/chromedriver/element_commands.cc (ExecuteClickElement)
         // chrome/test/chromedriver/window_commands.cc (ExecuteWindowCommand)
-        Err(error) if error.message == "Renderer attachment changed" => post_click_navigation,
+        // A completed mousedown can replace the Page before the queued
+        // mouseup is admitted. The page-bound guard then rejects that phase
+        // before dispatch, rather than losing the renderer response. Both
+        // outcomes must leave the successor untouched. Require a completed
+        // pointer press so preflight/option stale handles remain errors.
+        Err(error)
+            if activation_dispatched
+                && (error.message == "Renderer attachment changed"
+                    || (pointer_press_completed
+                        && error.kind == DevToolsErrorKind::NoSuchNode
+                        && error.message == "DOM reference belongs to a replaced Page")) =>
+        {
+            post_click_navigation
+        }
         Err(error) => Err(classic_error_from_devtools_error(error)),
     }
 }

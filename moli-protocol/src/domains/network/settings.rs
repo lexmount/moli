@@ -13,6 +13,35 @@ struct SetBlockedUrlsParams {
     urls: Vec<String>,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DurableBodyParams {
+    #[serde(default)]
+    enable_durable_messages: bool,
+    max_total_buffer_size: Option<usize>,
+    max_resource_buffer_size: Option<usize>,
+}
+
+pub(super) fn durable_body_limits(
+    cmd: &Cmd<'_>,
+) -> Result<Option<moli_bounded_buffer::ByteLimits>, CommandOutputPlan> {
+    let params = cmd
+        .get_params::<DurableBodyParams>()
+        .map_err(|_| CommandOutputPlan::error(-32602, "InvalidParams"))?
+        .unwrap_or_default();
+    if !params.enable_durable_messages {
+        return Ok(None);
+    }
+    let Some(total) = params.max_total_buffer_size.filter(|size| *size > 0) else {
+        return Err(CommandOutputPlan::error(-32602, "InvalidParams"));
+    };
+    let resource = params.max_resource_buffer_size.unwrap_or(2_000_000);
+    if resource == 0 {
+        return Err(CommandOutputPlan::error(-32602, "InvalidParams"));
+    }
+    Ok(Some(moli_bounded_buffer::ByteLimits::new(total, resource)))
+}
+
 pub(super) fn enabled_command_output_plan(
     conn: &mut CdpConnection,
     session_id: Option<&str>,

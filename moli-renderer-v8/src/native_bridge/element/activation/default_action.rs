@@ -754,6 +754,7 @@ fn click_handle_internal(
     click_detail: i32,
     modifiers: u8,
     user_initiated: bool,
+    focus_before_dispatch: bool,
 ) -> RendererInputDispatchOutcome {
     let runtime = unsafe { &*runtime_ptr };
     if is_disabled_form_control(runtime, handle) {
@@ -764,7 +765,8 @@ fn click_handle_internal(
             pending_file_chooser: None,
         };
     }
-    if user_initiated || synthetic_click_focuses_element(runtime, handle) {
+    if focus_before_dispatch && (user_initiated || synthetic_click_focuses_element(runtime, handle))
+    {
         let focus_handle = if is_focusable(runtime, handle) {
             Some(handle)
         } else {
@@ -954,6 +956,9 @@ fn click_handle_internal(
                             0,
                             modifiers,
                             user_initiated,
+                            // Label activation focuses its associated control,
+                            // even when the initiating script click does not.
+                            true,
                         );
                         pending_file_chooser = control_outcome.pending_file_chooser;
                         control_outcome.pending_download
@@ -1117,6 +1122,7 @@ pub(crate) fn activate_handle_via_click(
         0,
         0,
         true,
+        true,
     )
 }
 
@@ -1142,6 +1148,59 @@ pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(
         click_detail,
         modifiers,
         true,
+        true,
+    )
+}
+
+pub(crate) fn activate_default_submit_button_via_keyboard(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    modifiers: u8,
+) -> RendererInputDispatchOutcome {
+    // Implicit submission runs trusted synthetic click activation steps. The
+    // click has detail 0 and does not move focus away from the text control.
+    click_handle_internal(
+        scope,
+        runtime_ptr,
+        handle,
+        0.0,
+        0.0,
+        0,
+        0,
+        0,
+        modifiers,
+        true,
+        false,
+    )
+}
+
+pub(crate) fn activate_handle_after_pointer_release(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    x: f64,
+    y: f64,
+    button: i32,
+    buttons: i32,
+    click_detail: i32,
+    modifiers: u8,
+) -> RendererInputDispatchOutcome {
+    // Ordinary pointer focus belongs to uncanceled mouse-down default action.
+    // Reapplying it here would undo a canceled pointerdown/mousedown. Label
+    // activation still applies its separate associated-control focus rule.
+    click_handle_internal(
+        scope,
+        runtime_ptr,
+        handle,
+        x,
+        y,
+        button,
+        buttons,
+        click_detail,
+        modifiers,
+        true,
+        false,
     )
 }
 
@@ -1164,6 +1223,7 @@ pub(crate) fn activate_handle_via_synthetic_click(
         buttons,
         0,
         0,
+        false,
         false,
     )
 }
@@ -1391,6 +1451,7 @@ fn perform_click_default_action(
             0,
             modifiers,
             user_initiated,
+            true,
         );
         return None;
     }
@@ -1695,7 +1756,7 @@ fn image_submitter_coordinate(
     let rect = observable_bounding_client_rect(
         runtime,
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     )?;
     Ok((
         image_submitter_coordinate_component(client_x - rect.left, rect.width),

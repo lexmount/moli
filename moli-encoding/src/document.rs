@@ -47,9 +47,26 @@ pub struct HtmlDocumentStreamingDecoder {
     url_hint: Option<String>,
     decoder: Option<Decoder>,
     selected_encoding: Option<&'static Encoding>,
+    sniff_html_declarations: bool,
 }
 
 impl HtmlDocumentStreamingDecoder {
+    /// Decode a text document without interpreting literal HTML/XML declarations.
+    /// JSON defaults to UTF-8; other text retains the configured legacy detector.
+    pub fn new_text_document(
+        headers: &[(String, String)],
+        url_hint: &str,
+        detector: LegacyEncodingDetector,
+        json: bool,
+    ) -> Self {
+        let mut decoder = Self::new_with_options(headers, None, Some(url_hint), Some(detector));
+        decoder.sniff_html_declarations = false;
+        if json && decoder.transport_encoding.is_none() {
+            decoder.transport_encoding = Some(encoding_rs::UTF_8);
+        }
+        decoder
+    }
+
     pub fn new(headers: &[(String, String)]) -> Self {
         Self::new_with_options(headers, None, None, None)
     }
@@ -88,6 +105,7 @@ impl HtmlDocumentStreamingDecoder {
             url_hint: url_hint.map(str::to_owned),
             decoder: None,
             selected_encoding: None,
+            sniff_html_declarations: true,
         }
     }
 
@@ -97,6 +115,7 @@ impl HtmlDocumentStreamingDecoder {
 
     pub fn document_encoding_name(&self) -> &'static str {
         self.selected_encoding_name()
+            .or_else(|| self.transport_encoding.map(Encoding::name))
             .unwrap_or(self.fallback_encoding.name())
     }
 
@@ -148,6 +167,12 @@ impl HtmlDocumentStreamingDecoder {
         }
         if let Some(encoding) = self.transport_encoding {
             return Some(encoding);
+        }
+        if !self.sniff_html_declarations {
+            return (finishing || self.sniff_buffer.len() >= 1024).then(|| {
+                self.detected_legacy_content_encoding()
+                    .unwrap_or(self.fallback_encoding)
+            });
         }
         if let Some(encoding) = encoding_for_document_utf16_xml_prefix(&self.sniff_buffer) {
             return Some(encoding);

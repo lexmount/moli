@@ -420,6 +420,7 @@ impl super::JsContextHost {
                     .optional_resource_fetch_enabled(crate::types::SubresourceResourceType::Image)
             });
         if decode_enabled && self.image_resources.complete_shared_ready(&identity) {
+            self.mark_layout_input_dirty();
             let Some(pending) = self.pending_image_load_events.get_mut(&element) else {
                 return ImageResponseCompletion::Ignored;
             };
@@ -567,6 +568,9 @@ impl super::JsContextHost {
                 false
             }
         };
+        if successful {
+            self.mark_layout_input_dirty();
+        }
         let Some(pending) = self.pending_image_load_events.get_mut(&task_id.element()) else {
             return false;
         };

@@ -570,7 +570,9 @@ async fn admitted_idle_override_is_visible_to_concurrent_same_site_navigation() 
             listener,
             Router::new().route(
                 "/",
-                get(|| async { "<!doctype html><title>idle navigation</title>" }),
+                get(|| async {
+                    axum::response::Html("<!doctype html><title>idle navigation</title>")
+                }),
             ),
         )
         .await
@@ -641,7 +643,9 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             listener,
             Router::new().route(
                 "/",
-                get(|| async { "<!doctype html><title>idle detector</title>" }),
+                get(|| async {
+                    axum::response::Html("<!doctype html><title>idle detector</title>")
+                }),
             ),
         )
         .await
@@ -2216,7 +2220,7 @@ async fn emulation_async_dispatch_updates_live_page_user_agent_and_xhr_header() 
 #[tokio::test(flavor = "multi_thread")]
 async fn emulation_async_dispatch_updates_live_page_surface_without_mutating_accept_language() {
     async fn page_handler() -> impl IntoResponse {
-        "<!doctype html><html><body>ok</body></html>"
+        axum::response::Html("<!doctype html><html><body>ok</body></html>")
     }
 
     async fn xhr_handler(
@@ -2708,9 +2712,9 @@ async fn locale_override_updates_intl_without_mutating_language_surfaces() {
             .get(axum::http::header::ACCEPT_LANGUAGE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        format!(
+        axum::response::Html(format!(
             "<!doctype html><html><body data-accept-language=\"{accept_language}\"><script>document.body.textContent = [Intl.DateTimeFormat().resolvedOptions().locale, navigator.language, navigator.languages.join(','), document.body.dataset.acceptLanguage].join('|');</script></body></html>"
-        )
+        ))
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2764,9 +2768,9 @@ async fn bidi_user_context_locale_composes_with_user_agent_on_all_identity_surfa
             .get(axum::http::header::ACCEPT_LANGUAGE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        format!(
+        axum::response::Html(format!(
             "<!doctype html><html><body data-user-agent=\"{user_agent}\" data-accept-language=\"{accept_language}\"><script>document.body.textContent = [navigator.userAgent, Intl.DateTimeFormat().resolvedOptions().locale, navigator.language, navigator.languages.join(','), document.body.dataset.acceptLanguage].join('|');</script></body></html>"
-        )
+        ))
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

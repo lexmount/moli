@@ -60,7 +60,7 @@ pub(in crate::native_bridge) fn node_get_bounding_client_rect_callback(
     let rect = match observable_bounding_client_rect(
         unsafe { &*runtime_ptr },
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     ) {
         Ok(rect) => rect,
         Err(error) => {
@@ -92,7 +92,7 @@ pub(in crate::native_bridge) fn node_get_client_rects_callback(
     let rects = match observable_client_rects(
         unsafe { &*runtime_ptr },
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     ) {
         Ok(rects) => rects,
         Err(error) => {

@@ -11137,7 +11137,7 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {
     let session_id = session["value"]["sessionId"]
         .as_str()
         .expect("classic session id");
-    let url = "data:text/html,<button id='target' onclick='window.__clicked = true'>go</button>";
+    let url = "data:text/html,<button id='target' onclick='window.__clicked = true'>go</button><script>window.events=[];for(const type of ['pointerdown','mousedown','focus','mouseup','click'])target.addEventListener(type,e=>events.push([e.type,e.isTrusted]));</script>";
 
     let navigated = classic_request_json_with_body(
         app.clone(),
@@ -11175,12 +11175,18 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {
         Method::POST,
         &format!("/session/{session_id}/execute/sync"),
         json!({
-            "script": "return Boolean(window.__clicked);",
+            "script": "return [Boolean(window.__clicked),document.activeElement.id,window.events];",
             "args": []
         }),
     )
     .await;
-    assert_eq!(clicked_state, json!({ "value": true }));
+    assert_eq!(
+        clicked_state,
+        json!({ "value": [true, "target", [
+        ["pointerdown", true], ["mousedown", true], ["focus", true],
+        ["mouseup", true], ["click", true]
+    ]] })
+    );
 
     let _ = classic_request_json(
         app.clone(),
@@ -11188,6 +11194,233 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {
         &format!("/session/{session_id}"),
     )
     .await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_click_pointer_focus_and_interactability_controls() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().expect("session id");
+    for (name, target, setup, expected_focus, expected_clicks, expected_error) in [
+        ("ordinary", "<input id='target'>", "", "target", 1, None),
+        (
+            "cancel mousedown",
+            "<button id='target'>go</button>",
+            "target.onmousedown=e=>e.preventDefault();",
+            "origin",
+            1,
+            None,
+        ),
+        (
+            "cancel pointerdown",
+            "<button id='target'>go</button>",
+            "target.onpointerdown=e=>e.preventDefault();",
+            "origin",
+            1,
+            None,
+        ),
+        (
+            "label",
+            "<label id='target' for='check'>toggle</label><input id='check' type='checkbox'>",
+            "",
+            "check",
+            1,
+            None,
+        ),
+        (
+            "disabled",
+            "<button id='target' disabled>go</button>",
+            "",
+            "origin",
+            0,
+            None,
+        ),
+        (
+            "scroll",
+            "<button id='target' style='position:absolute;top:2500px'>go</button>",
+            "",
+            "target",
+            1,
+            None,
+        ),
+        (
+            "file",
+            "<input id='target' type='file'>",
+            "",
+            "origin",
+            0,
+            Some("invalid argument"),
+        ),
+        (
+            "hidden",
+            "<button id='target' hidden>go</button>",
+            "",
+            "origin",
+            0,
+            Some("element not interactable"),
+        ),
+        (
+            "obscured",
+            "<button id='target'>go</button><div style='position:fixed;inset:0;z-index:9'></div>",
+            "",
+            "origin",
+            0,
+            Some("element click intercepted"),
+        ),
+    ] {
+        let html = format!(
+            "<input id='origin'>{target}<script>window.clicks=0;target.onclick=()=>clicks++;document.getElementById('origin').focus();{setup}</script>"
+        );
+        let navigated = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/url"),
+            json!({"url":format!("data:text/html,{html}")}),
+        )
+        .await;
+        assert_eq!(navigated, json!({"value":null}), "{name}");
+        let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+        let (status, clicked) = classic_request_status_and_json(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/element/{element_id}/click"),
+        )
+        .await;
+        if let Some(error) = expected_error {
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{name}: {clicked}");
+            assert_eq!(clicked["value"]["error"], error, "{name}");
+        } else {
+            assert_eq!(clicked, json!({"value":null}), "{name}");
+        }
+        let observed = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({
+                "script":"return [document.activeElement.id,window.clicks];", "args":[]
+            }),
+        )
+        .await;
+        assert_eq!(observed["value"][1], expected_clicks, "{name}");
+        // Disabled controls must not be rejected or activated. Their focus
+        // result is not the behavior this adapter correction changes.
+        if name != "disabled" {
+            assert_eq!(observed["value"][0], expected_focus, "{name}");
+        }
+    }
+    // execute/sync remains a JavaScript operation, even with user_gesture set.
+    classic_request_json_with_body(app.clone(), Method::POST,
+        &format!("/session/{session_id}/url"), json!({
+            "url":"data:text/html,<input id='origin'><input id='target'><script>document.getElementById('origin').focus();</script>"
+        })).await;
+    let synthetic = classic_request_json_with_body(app.clone(), Method::POST,
+        &format!("/session/{session_id}/execute/sync"), json!({
+            "script":"let events=[];for(const type of ['pointerdown','mousedown','focus','mouseup','click'])target.addEventListener(type,e=>events.push([e.type,e.isTrusted]));target.click();return [document.activeElement.id,events];", "args":[]
+        })).await;
+    assert_eq!(synthetic, json!({"value":["origin",[["click",false]]]}));
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offset_frame() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().expect("session id");
+    let html = "<iframe style='position:absolute;left:200px;top:180px;width:400px;height:200px' srcdoc=\"<input id='target' style='margin:40px'><script>window.clicks=0;target.onclick=e=>{clicks++;window.trusted=e.isTrusted;};</script>\"></iframe>";
+    classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/url"),
+        json!({"url":format!("data:text/html,{html}")}),
+    )
+    .await;
+    assert_eq!(
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/frame"),
+            json!({"id":0})
+        )
+        .await,
+        json!({"value":null})
+    );
+    let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+    assert_eq!(
+        classic_request_json(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/element/{element_id}/click")
+        )
+        .await,
+        json!({"value":null})
+    );
+    let observed = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script":"return [document.activeElement.id,window.clicks,window.trusted];", "args":[]
+        }),
+    )
+    .await;
+    assert_eq!(observed, json!({"value":["target",1,true]}));
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_click_mousedown_navigation_does_not_activate_successor() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().expect("session id");
+    let successor = classic_data_url(
+        "<button id='target' style='width:200px;height:80px'>next</button><script>window.clicks=0;window.buttons=[];target.onclick=()=>clicks++;target.onmouseup=e=>buttons.push(e.buttons);</script>",
+    );
+    let source = classic_data_url(&format!(
+        "<button id='target' style='width:200px;height:80px' onmousedown=\"window.open('{successor}','_self')\">first</button>"
+    ));
+    classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/url"),
+        json!({"url":source}),
+    )
+    .await;
+    let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+    let clicked = classic_request_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/element/{element_id}/click"),
+    )
+    .await;
+    // A complete physical sequence may navigate during mousedown; no input
+    // phase is retried against the successor document.
+    assert_eq!(clicked, json!({"value":null}));
+    let observed = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script":"return window.clicks;", "args":[]
+        }),
+    )
+    .await;
+    assert_eq!(observed, json!({"value":0}));
+    let successor_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+    assert_eq!(
+        classic_request_json(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/element/{successor_id}/click")
+        )
+        .await,
+        json!({"value":null})
+    );
+    let observed = classic_request_json_with_body(app.clone(), Method::POST,
+        &format!("/session/{session_id}/execute/sync"), json!({
+            "script":"return [window.clicks,document.activeElement.id,window.buttons.every(b=>b===0)];", "args":[]
+        })).await;
+    assert_eq!(observed, json!({"value":[1,"target",true]}));
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
 }
 
 #[tokio::test]
@@ -11532,6 +11765,14 @@ async fn webdriver_classic_option_click_updates_select_state_ported_from_seleniu
     )
     .await;
     assert_eq!(clicked_brie, json!({ "value": null }));
+    let focused_select = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({"script":"return document.activeElement.id;", "args":[]}),
+    )
+    .await;
+    assert_eq!(focused_select, json!({"value":"single"}));
     let clicked_ham = classic_request_json(
         app.clone(),
         Method::POST,

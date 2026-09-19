@@ -350,14 +350,23 @@ fn materialize_navigation_load_outcome(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
         NavigationLoadOutcome::NetworkFailure(error_text) => {
+            let document_policy = failed_navigation_document_policy(&error_text);
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,
                 error_text,
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+                document_policy,
                 FailedNavigationResponseMode::CdpErrorTextResult,
             ))
         }
+    }
+}
+
+fn failed_navigation_document_policy(error_text: &str) -> FailedNavigationDocumentPolicy {
+    if error_text == moli_fetch::NET_ERR_ABORTED_ERROR_TEXT {
+        FailedNavigationDocumentPolicy::PreserveCommittedDocument
+    } else {
+        FailedNavigationDocumentPolicy::InvalidateCommittedDocument
     }
 }
 
@@ -602,7 +611,7 @@ impl MainDocumentBodyProgressSource {
                     response_headers,
                     response_cookie_reports,
                     network_observation_journal,
-                    redirect_chain.len(),
+                    redirect_chain,
                     network_extra_info_available,
                     response_from_cache,
                     negotiated_http_version,
@@ -695,7 +704,7 @@ impl MainDocumentBodyProgressSource {
         };
         let final_exchange = navigation_exchange_group(
             network_observation_journal,
-            redirect_chain.len(),
+            redirect_chain,
             redirect_chain.len(),
         )
         .and_then(|group| group.last());
@@ -712,6 +721,7 @@ impl MainDocumentBodyProgressSource {
             redirect_chain,
             network_observation_journal,
             final_network_extra_info_available,
+            SubresourceRequestInitiatorType::Other,
         );
         live_source.send_progress_events(MainDocumentProgressPhase::RequestStarted, events);
     }
@@ -750,7 +760,7 @@ impl MainDocumentBodyProgressSource {
         if network_extra_info_available {
             let (response_status, response_headers) = observed_response_metadata(
                 network_observation_journal,
-                redirect_chain.len(),
+                redirect_chain,
                 redirect_chain.len(),
                 response_status,
                 response_headers,
@@ -935,6 +945,7 @@ impl MainDocumentLiveNetworkProgressSource {
             redirect_chain,
             network_observation_journal,
             final_network_extra_info_available,
+            SubresourceRequestInitiatorType::Other,
         );
         self.send_progress_events(MainDocumentProgressPhase::RequestStarted, events);
     }
@@ -958,6 +969,7 @@ impl MainDocumentLiveNetworkProgressSource {
             redirect_chain,
             network_observation_journal,
             final_network_extra_info_available,
+            SubresourceRequestInitiatorType::Other,
         );
         self.send_progress_events_into_output(
             MainDocumentProgressPhase::RequestStarted,
@@ -975,13 +987,15 @@ impl MainDocumentLiveNetworkProgressSource {
         redirect_chain: &[RedirectInfo],
         network_observation_journal: &NetworkObservationJournal,
         final_network_extra_info_available: bool,
+        request_initiator_type: SubresourceRequestInitiatorType,
     ) -> Vec<MainDocumentNavigationProgressEvent> {
         let mut events = Vec::new();
-        let initial_network_extra_info_available = !network_observation_journal.is_empty()
-            || redirect_chain
-                .first()
-                .is_some_and(|redirect| redirect.network_extra_info_available)
-            || (redirect_chain.is_empty() && final_network_extra_info_available);
+        let initial_network_extra_info_available =
+            navigation_exchange_group(network_observation_journal, redirect_chain, 0).is_some()
+                || redirect_chain
+                    .first()
+                    .is_some_and(|redirect| redirect.network_extra_info_available)
+                || (redirect_chain.is_empty() && final_network_extra_info_available);
         if initial_network_extra_info_available {
             let initial_request_cookie_report = if redirect_chain.is_empty() {
                 final_request_cookie_report
@@ -994,7 +1008,7 @@ impl MainDocumentLiveNetworkProgressSource {
                 self.progress_target(),
                 observed_request_headers(
                     network_observation_journal,
-                    redirect_chain.len(),
+                    redirect_chain,
                     0,
                     &self.initial_request_headers,
                 ),
@@ -1003,15 +1017,27 @@ impl MainDocumentLiveNetworkProgressSource {
         }
         for (index, redirect) in redirect_chain.iter().enumerate() {
             let target = self.progress_target();
+            let request_method = observed_request_method(
+                network_observation_journal,
+                redirect_chain,
+                index + 1,
+                final_request_method,
+            );
+            let request_headers = observed_request_headers(
+                network_observation_journal,
+                redirect_chain,
+                index + 1,
+                final_request_headers,
+            );
             let observed_response_available =
-                navigation_exchange_group(network_observation_journal, redirect_chain.len(), index)
+                navigation_exchange_group(network_observation_journal, redirect_chain, index)
                     .and_then(|group| group.last())
                     .and_then(NetworkExchangeObservation::response)
                     .is_some();
             if observed_response_available && !redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     network_observation_journal,
-                    redirect_chain.len(),
+                    redirect_chain,
                     index,
                     redirect.status,
                     &redirect.headers,
@@ -1028,10 +1054,12 @@ impl MainDocumentLiveNetworkProgressSource {
             events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
                 target: target.clone(),
                 url: redirect.to_url.clone(),
-                method: final_request_method.to_owned(),
-                request_body: request_body.map(str::to_owned),
-                request_headers: final_request_headers.to_vec(),
-                request_initiator_type: SubresourceRequestInitiatorType::Other,
+                method: request_method.clone(),
+                request_body: (request_method == final_request_method)
+                    .then(|| request_body.map(str::to_owned))
+                    .flatten(),
+                request_headers,
+                request_initiator_type,
                 redirect_response: Box::new(Some(MainDocumentRedirectResponse {
                     url: redirect.from_url.clone(),
                     status: redirect.status,
@@ -1052,7 +1080,7 @@ impl MainDocumentLiveNetworkProgressSource {
             if observed_response_available && redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     network_observation_journal,
-                    redirect_chain.len(),
+                    redirect_chain,
                     index,
                     redirect.status,
                     &redirect.headers,
@@ -1066,14 +1094,13 @@ impl MainDocumentLiveNetworkProgressSource {
                     },
                 );
             }
-            let request_network_extra_info_available = network_observation_journal
-                .exchanges()
-                .get(index + 1)
-                .is_some()
-                || redirect_chain
-                    .get(index + 1)
-                    .is_some_and(|next| next.network_extra_info_available)
-                || (index + 1 == redirect_chain.len() && final_network_extra_info_available);
+            let request_network_extra_info_available =
+                navigation_exchange_group(network_observation_journal, redirect_chain, index + 1)
+                    .is_some()
+                    || redirect_chain
+                        .get(index + 1)
+                        .is_some_and(|next| next.network_extra_info_available)
+                    || (index + 1 == redirect_chain.len() && final_network_extra_info_available);
             if request_network_extra_info_available {
                 let cookie_report = redirect.request_cookie_report.clone().or_else(|| {
                     (index + 1 == redirect_chain.len())
@@ -1084,7 +1111,7 @@ impl MainDocumentLiveNetworkProgressSource {
                     target,
                     observed_request_headers(
                         network_observation_journal,
-                        redirect_chain.len(),
+                        redirect_chain,
                         index + 1,
                         final_request_headers,
                     ),
@@ -1102,15 +1129,15 @@ impl MainDocumentLiveNetworkProgressSource {
         response_headers: &[(String, String)],
         response_cookie_reports: &[StoredCookieSetReport],
         network_observation_journal: &NetworkObservationJournal,
-        redirect_count: usize,
+        redirect_chain: &[RedirectInfo],
         network_extra_info_available: bool,
         response_from_cache: bool,
         negotiated_http_version: Option<NegotiatedHttpVersion>,
     ) {
         let (extra_info_status, extra_info_headers) = observed_response_metadata(
             network_observation_journal,
-            redirect_count,
-            redirect_count,
+            redirect_chain,
+            redirect_chain.len(),
             response_status,
             response_headers,
         );
@@ -1345,32 +1372,85 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
         frame_id: frame_id.to_owned(),
         timestamp,
     };
+    let redirect_count = network.redirect_chain.len();
+    let request_method = observed_request_method(
+        &network.network_observation_journal,
+        &network.redirect_chain,
+        0,
+        &network.request_method,
+    );
+    let request_headers = observed_request_headers(
+        &network.network_observation_journal,
+        &network.redirect_chain,
+        0,
+        &network.request_headers,
+    );
     let mut output = MainDocumentProgressOutputTarget::background_events(out);
     output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
         target: target.clone(),
         url: request_url,
-        method: network.request_method.clone(),
+        method: request_method,
         request_body: None,
-        request_headers: network.request_headers.clone(),
+        request_headers,
         request_initiator_type: SubresourceRequestInitiatorType::Parser,
         redirect_response: Box::new(None),
         redirect_has_extra_info: false,
         cookie_access_report: None,
     });
+    let source = MainDocumentLiveNetworkProgressSource {
+        sender: None,
+        progress_queue: MainDocumentProgressQueueHandle::from_source(
+            MainDocumentProgressSource::streaming(),
+        ),
+        session_ids: session_ids.clone(),
+        request_id: request_id.to_owned(),
+        loader_id: loader_id.to_owned(),
+        frame_id: frame_id.to_owned(),
+        timestamp,
+        initial_request_headers: network.request_headers.clone(),
+        initial_request_cookie_report: None,
+    };
+    for event in source.redirect_request_events(
+        &network.request_method,
+        None,
+        &network.request_headers,
+        None,
+        &network.redirect_chain,
+        &network.network_observation_journal,
+        !network.network_observation_journal.is_empty(),
+        SubresourceRequestInitiatorType::Parser,
+    ) {
+        output.emit_event(event);
+    }
+    let (extra_info_status, extra_info_headers) = observed_response_metadata(
+        &network.network_observation_journal,
+        &network.redirect_chain,
+        redirect_count,
+        network.status,
+        &network.response_headers,
+    );
+    let network_extra_info_available = navigation_exchange_group(
+        &network.network_observation_journal,
+        &network.redirect_chain,
+        redirect_count,
+    )
+    .and_then(|group| group.last())
+    .and_then(NetworkExchangeObservation::response)
+    .is_some();
     output.emit_event(MainDocumentNavigationProgressEvent::ResponseReceived {
         target: target.clone(),
         final_url,
         status: network.status,
         headers: network.response_headers.clone(),
         cookie_set_reports: Vec::new(),
-        extra_info_status: network.status,
-        extra_info_headers: network.response_headers.clone(),
-        network_extra_info_available: false,
-        emit_extra_info: false,
+        extra_info_status,
+        extra_info_headers,
+        network_extra_info_available,
+        emit_extra_info: network_extra_info_available,
         encoded_data_length: 0,
         from_cache: network.from_cache,
         negotiated_http_version: None,
-        has_extra_info: false,
+        has_extra_info: network_extra_info_available,
     });
     record_child_document_response_body(
         conn,
@@ -1625,7 +1705,12 @@ impl CompletedMainDocumentProgressContext {
                 cookie_access_report: initial_request_cookie_report.clone(),
             });
         }
-        let initial_network_extra_info_available = !events.network_observation_journal.is_empty()
+        let initial_network_extra_info_available = navigation_exchange_group(
+            &events.network_observation_journal,
+            &events.redirect_chain,
+            0,
+        )
+        .is_some()
             || events
                 .redirect_chain
                 .first()
@@ -1636,7 +1721,7 @@ impl CompletedMainDocumentProgressContext {
                 target.clone(),
                 observed_request_headers(
                     &events.network_observation_journal,
-                    events.redirect_chain.len(),
+                    &events.redirect_chain,
                     0,
                     &self.request_headers,
                 ),
@@ -1644,9 +1729,21 @@ impl CompletedMainDocumentProgressContext {
             ));
         }
         for (index, redirect) in events.redirect_chain.iter().enumerate() {
+            let request_method = observed_request_method(
+                &events.network_observation_journal,
+                &events.redirect_chain,
+                index + 1,
+                &events.request_method,
+            );
+            let request_headers = observed_request_headers(
+                &events.network_observation_journal,
+                &events.redirect_chain,
+                index + 1,
+                &events.request_headers,
+            );
             let observed_response_available = navigation_exchange_group(
                 &events.network_observation_journal,
-                events.redirect_chain.len(),
+                &events.redirect_chain,
                 index,
             )
             .and_then(|group| group.last())
@@ -1655,7 +1752,7 @@ impl CompletedMainDocumentProgressContext {
             if observed_response_available && !redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     &events.network_observation_journal,
-                    events.redirect_chain.len(),
+                    &events.redirect_chain,
                     index,
                     redirect.status,
                     &redirect.headers,
@@ -1672,9 +1769,11 @@ impl CompletedMainDocumentProgressContext {
             progress_events.push(MainDocumentNavigationProgressEvent::RequestWillBeSent {
                 target: target.clone(),
                 url: redirect.to_url.clone(),
-                method: events.request_method.clone(),
-                request_body: self.request_body.clone(),
-                request_headers: events.request_headers.clone(),
+                method: request_method.clone(),
+                request_body: (request_method == self.request_method)
+                    .then(|| self.request_body.clone())
+                    .flatten(),
+                request_headers,
                 request_initiator_type: SubresourceRequestInitiatorType::Other,
                 redirect_response: Box::new(Some(MainDocumentRedirectResponse {
                     url: redirect.from_url.clone(),
@@ -1696,7 +1795,7 @@ impl CompletedMainDocumentProgressContext {
             if observed_response_available && redirect.network_extra_info_available {
                 let (status, headers) = observed_response_metadata(
                     &events.network_observation_journal,
-                    events.redirect_chain.len(),
+                    &events.redirect_chain,
                     index,
                     redirect.status,
                     &redirect.headers,
@@ -1710,11 +1809,12 @@ impl CompletedMainDocumentProgressContext {
                     },
                 );
             }
-            let request_network_extra_info_available = events
-                .network_observation_journal
-                .exchanges()
-                .get(index + 1)
-                .is_some()
+            let request_network_extra_info_available = navigation_exchange_group(
+                &events.network_observation_journal,
+                &events.redirect_chain,
+                index + 1,
+            )
+            .is_some()
                 || events
                     .redirect_chain
                     .get(index + 1)
@@ -1731,7 +1831,7 @@ impl CompletedMainDocumentProgressContext {
                     target.clone(),
                     observed_request_headers(
                         &events.network_observation_journal,
-                        events.redirect_chain.len(),
+                        &events.redirect_chain,
                         index + 1,
                         &events.request_headers,
                     ),
@@ -1753,7 +1853,7 @@ impl CompletedMainDocumentProgressContext {
         };
         let (extra_info_status, extra_info_headers) = observed_response_metadata(
             &events.network_observation_journal,
-            events.redirect_chain.len(),
+            &events.redirect_chain,
             events.redirect_chain.len(),
             events.response_status,
             &events.response_headers,
@@ -1898,62 +1998,107 @@ fn request_extra_info_event(
     }
 }
 
-fn navigation_exchange_group(
-    journal: &NetworkObservationJournal,
-    redirect_count: usize,
+fn navigation_exchange_group<'a>(
+    journal: &'a NetworkObservationJournal,
+    redirect_chain: &[impl RedirectTransportBoundary],
     hop_index: usize,
-) -> Option<&[NetworkExchangeObservation]> {
+) -> Option<&'a [NetworkExchangeObservation]> {
     // A truncated journal still proves that a transport exchange happened, but
     // no longer provides a trustworthy tail for redirect-hop correlation.
     if journal.truncated() {
         return None;
     }
-    if hop_index > redirect_count {
+    if hop_index > redirect_chain.len() {
         return None;
     }
 
     let exchanges = journal.exchanges();
     let mut group_start = 0;
-    let mut current_hop = 0;
-    for (index, exchange) in exchanges.iter().enumerate() {
-        let ends_redirect_hop = exchange.response().is_some_and(|response| {
-            matches!(response.status(), 301 | 302 | 303 | 307 | 308)
-                || response.headers().iter().any(|(name, value)| {
-                    name.eq_ignore_ascii_case("critical-ch") && !value.trim().is_empty()
-                })
-        });
-        if !ends_redirect_hop || current_hop >= redirect_count {
+    for (redirect_index, redirect) in redirect_chain.iter().enumerate() {
+        let Some(expected_status) = redirect.transport_response_status() else {
+            if redirect_index == hop_index {
+                return None;
+            }
             continue;
+        };
+        let group_end = exchanges[group_start..]
+            .iter()
+            .position(|exchange| {
+                exchange
+                    .response()
+                    .is_some_and(|response| response.status() == expected_status)
+            })?
+            .saturating_add(group_start);
+        if redirect_index == hop_index {
+            return Some(&exchanges[group_start..=group_end]);
         }
-        if current_hop == hop_index {
-            return Some(&exchanges[group_start..=index]);
-        }
-        current_hop += 1;
-        group_start = index.saturating_add(1);
+        group_start = group_end.saturating_add(1);
     }
-    (current_hop == hop_index && group_start < exchanges.len()).then_some(&exchanges[group_start..])
+    (hop_index == redirect_chain.len() && group_start < exchanges.len())
+        .then_some(&exchanges[group_start..])
+}
+
+trait RedirectTransportBoundary {
+    fn transport_response_status(&self) -> Option<u16>;
+}
+
+impl RedirectTransportBoundary for RedirectInfo {
+    fn transport_response_status(&self) -> Option<u16> {
+        self.response_extra_info
+            .as_ref()
+            .map(|response| response.status)
+            .or_else(|| {
+                (self.source == moli_fetch::RedirectSource::Network && !self.from_cache)
+                    .then_some(self.status)
+            })
+    }
+}
+
+impl RedirectTransportBoundary for NavigationRedirect {
+    fn transport_response_status(&self) -> Option<u16> {
+        self.response_extra_info
+            .as_ref()
+            .map(|response| response.status)
+            .or_else(|| {
+                (self.source == moli_fetch::RedirectSource::Network && !self.from_cache)
+                    .then_some(self.status)
+            })
+    }
 }
 
 fn observed_request_headers(
     journal: &NetworkObservationJournal,
-    redirect_count: usize,
+    redirect_chain: &[impl RedirectTransportBoundary],
     hop_index: usize,
     fallback: &[(String, String)],
 ) -> Vec<(String, String)> {
-    navigation_exchange_group(journal, redirect_count, hop_index)
+    navigation_exchange_group(journal, redirect_chain, hop_index)
         .and_then(|group| group.first())
         .map(|exchange| exchange.request().headers().to_vec())
         .unwrap_or_else(|| fallback.to_vec())
 }
 
+fn observed_request_method(
+    journal: &NetworkObservationJournal,
+    redirect_chain: &[impl RedirectTransportBoundary],
+    hop_index: usize,
+    fallback: &str,
+) -> String {
+    navigation_exchange_group(journal, redirect_chain, hop_index)
+        .and_then(|group| group.first())
+        .and_then(|exchange| exchange.request().method())
+        .unwrap_or(fallback)
+        .to_owned()
+}
+
 fn observed_response_metadata(
     journal: &NetworkObservationJournal,
-    redirect_count: usize,
+    redirect_chain: &[impl RedirectTransportBoundary],
     hop_index: usize,
     fallback_status: u16,
     fallback_headers: &[(String, String)],
 ) -> (u16, Vec<(String, String)>) {
-    navigation_exchange_group(journal, redirect_count, hop_index)
+    navigation_exchange_group(journal, redirect_chain, hop_index)
         .and_then(|group| group.last())
         .and_then(NetworkExchangeObservation::response)
         .map(|response| (response.status(), response.headers().to_vec()))

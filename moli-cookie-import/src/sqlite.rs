@@ -1,4 +1,8 @@
-use std::{fs, io::ErrorKind, path::Path};
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
@@ -20,8 +24,7 @@ impl SqliteSnapshot {
         fs::copy(source, &database)
             .with_context(|| format!("failed to snapshot {label} `{}`", source.display()))?;
         for suffix in ["-wal", "-shm"] {
-            let mut companion = source.as_os_str().to_owned();
-            companion.push(suffix);
+            let companion = sqlite_companion_path(source, suffix);
             match fs::copy(
                 &companion,
                 directory.path().join(format!("database.sqlite{suffix}")),
@@ -47,6 +50,12 @@ impl SqliteSnapshot {
     }
 }
 
+fn sqlite_companion_path(source: &Path, suffix: &str) -> PathBuf {
+    let mut companion = source.as_os_str().to_owned();
+    companion.push(suffix);
+    companion.into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -56,19 +65,36 @@ mod tests {
         check_wal_snapshot(Path::new("cookies.sqlite"))
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn snapshot_preserves_non_utf8_paths_when_finding_wal_files() -> Result<()> {
+    fn companion_paths_preserve_non_utf8_database_names() {
         use std::os::unix::ffi::OsStrExt;
-        check_wal_snapshot(Path::new(std::ffi::OsStr::from_bytes(
-            b"cookies-\xff.sqlite",
-        )))
+
+        let source = Path::new(std::ffi::OsStr::from_bytes(b"cookies-\xff.sqlite"));
+        assert_eq!(
+            sqlite_companion_path(source, "-wal").as_os_str().as_bytes(),
+            b"cookies-\xff.sqlite-wal",
+        );
+        assert_eq!(
+            sqlite_companion_path(source, "-shm").as_os_str().as_bytes(),
+            b"cookies-\xff.sqlite-shm",
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn snapshot_preserves_non_ascii_paths_when_finding_wal_files() -> Result<()> {
+        check_wal_snapshot(Path::new("cookies-é.sqlite"))
     }
 
     fn check_wal_snapshot(name: &Path) -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join(name);
-        let writer = Connection::open(&source)?;
+        // SQLite's filename conversion differs by platform. Create the WAL
+        // through an ordinary path, then rename its three files so this test
+        // isolates the snapshot's handling of non-UTF-8 source paths.
+        let writer_source = directory.path().join("cookies.sqlite");
+        let writer = Connection::open(&writer_source)?;
         writer.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA wal_autocheckpoint=0;
@@ -76,6 +102,15 @@ mod tests {
              PRAGMA wal_checkpoint(TRUNCATE);
              INSERT INTO entries VALUES ('only in WAL');",
         )?;
+        if source != writer_source {
+            for suffix in ["", "-wal", "-shm"] {
+                let mut original = writer_source.as_os_str().to_owned();
+                original.push(suffix);
+                let mut renamed = source.as_os_str().to_owned();
+                renamed.push(suffix);
+                fs::rename(Path::new(&original), Path::new(&renamed))?;
+            }
+        }
         let files = fs::read_dir(directory.path())?
             .map(|entry| {
                 let path = entry?.path();

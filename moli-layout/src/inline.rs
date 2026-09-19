@@ -36,6 +36,16 @@ pub(crate) fn relative_atomic_inset_offset(
     containing_block_size: Size<f32>,
     container_direction: InlineDirection,
 ) -> Point<f32> {
+    relative_inset_offset(style, containing_block_size.map(Some), container_direction)
+}
+
+/// The block-axis percentage basis may be indefinite even when the final
+/// content height is nonzero (auto height or min-height-only sizing).
+pub(crate) fn relative_inset_offset(
+    style: &taffy::Style<style::Atom>,
+    containing_block_size: Size<Option<f32>>,
+    container_direction: InlineDirection,
+) -> Point<f32> {
     let inset = taffy::Rect {
         left: style.inset.left.maybe_resolve(
             containing_block_size.width,
@@ -89,6 +99,9 @@ pub(crate) struct InlineTextUnit {
     pub(crate) ancestors: Vec<LayoutBoxId>,
     pub(crate) sources: Vec<SourceOrigin>,
     pub(crate) control: bool,
+    /// A collapsed CSS space, removable again at a wrapped line boundary.
+    /// Preserved spaces and non-breaking spaces must retain their geometry.
+    pub(crate) collapsed_space: bool,
     pub(crate) break_spaces_opportunity: bool,
 }
 
@@ -439,10 +452,28 @@ pub(crate) fn build_inline_fragments(
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
+        let line_range = line.text_range();
+        let trailing_start = overlapping_output_ranges(&context.text_units, &line_range)
+            .iter()
+            .rev()
+            .take_while(|unit| unit.control || unit.collapsed_space)
+            .filter(|unit| unit.collapsed_space)
+            .map(|unit| unit.output_range.start)
+            .last();
+        let mut collapsed_trailing_advance = 0.0;
+        if let Some(start) = trailing_start {
+            for run in line.runs() {
+                for cluster in run.visual_clusters() {
+                    if cluster.text_range().start >= start {
+                        collapsed_trailing_advance += cluster.advance().max(0.0);
+                    }
+                }
+            }
+        }
         let placement = line_placements
             .get(line_index)
             .filter(|placement| placement.line_index == line_index);
-        let line_rect = placement.map_or_else(
+        let mut line_rect = placement.map_or_else(
             || {
                 PaintRect::new(
                     metrics.inline_min_coord + metrics.offset,
@@ -453,6 +484,14 @@ pub(crate) fn build_inline_fragments(
             },
             |placement| placement.rect,
         );
+        // Parley retains hanging spaces for shaping/line breaking. CSS
+        // collapsed line-end spaces contribute neither range/inline-box
+        // geometry nor scrollable overflow. Do not trim preserved or NBSP
+        // advances merely because Parley classifies them as whitespace.
+        line_rect.width = (line_rect.width - collapsed_trailing_advance).max(0.0);
+        if layout.is_rtl() {
+            line_rect.x += collapsed_trailing_advance;
+        }
         fragments.lines.push(InlineLineFragment {
             line_index,
             rect: line_rect,
@@ -477,6 +516,9 @@ pub(crate) fn build_inline_fragments(
             let run_metrics = run.metrics();
             for cluster in run.visual_clusters() {
                 let range = cluster.text_range();
+                if trailing_start.is_some_and(|start| range.start >= start) {
+                    continue;
+                }
                 let style_index = cluster
                     .glyphs()
                     .next()
@@ -2248,6 +2290,7 @@ impl InlineNormalizer {
                 ancestors: pending.ancestors,
                 sources: pending.sources,
                 control: false,
+                collapsed_space: true,
                 break_spaces_opportunity: false,
             },
         );
@@ -2349,6 +2392,7 @@ impl InlineNormalizer {
             ancestors: ancestors.to_vec(),
             sources,
             control,
+            collapsed_space: false,
             break_spaces_opportunity: false,
         });
     }
@@ -2735,6 +2779,40 @@ mod tests {
             normalizer.push_text(*box_id, text, mode, transform, &[root]);
         }
         normalizer.finish()
+    }
+
+    #[test]
+    fn only_collapsed_spaces_are_marked_for_line_end_removal() {
+        let text = LayoutBoxId::from_index(1);
+        for mode in [
+            InlineWhiteSpaceCollapse::Collapse,
+            InlineWhiteSpaceCollapse::PreserveBreaks,
+            InlineWhiteSpaceCollapse::Preserve,
+            InlineWhiteSpaceCollapse::BreakSpaces,
+        ] {
+            let input = normalize(&[(text, "A \u{a0} B")], mode, InlineTextTransform::None);
+            let collapsed = input
+                .units
+                .iter()
+                .filter(|unit| unit.collapsed_space)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                collapsed.len(),
+                if matches!(
+                    mode,
+                    InlineWhiteSpaceCollapse::Collapse | InlineWhiteSpaceCollapse::PreserveBreaks
+                ) {
+                    2
+                } else {
+                    0
+                }
+            );
+            assert!(
+                collapsed
+                    .iter()
+                    .all(|unit| &input.text[unit.output_range.clone()] == " ")
+            );
+        }
     }
 
     #[test]

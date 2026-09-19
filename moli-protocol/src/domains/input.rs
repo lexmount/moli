@@ -7,8 +7,8 @@ use crate::devtools_runtime::{
     DevToolsDispatchDragEventCommand, DevToolsDispatchKeyEventCommand,
     DevToolsDispatchMouseEventCommand, DevToolsDispatchTouchEventCommand, DevToolsDragData,
     DevToolsDragDataItem, DevToolsDragEventType, DevToolsError, DevToolsErrorKind,
-    DevToolsMouseEventType, DevToolsPointerType, DevToolsSynthesizeTapGestureCommand,
-    DevToolsTouchEventType, DevToolsTouchPoint,
+    DevToolsKeyEventType, DevToolsMouseEventType, DevToolsPointerType,
+    DevToolsSynthesizeTapGestureCommand, DevToolsTouchEventType, DevToolsTouchPoint,
 };
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
@@ -571,7 +571,23 @@ fn start_pending_input_command(
     action: InputAction,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let parsed_key_event = match action {
+        InputAction::DispatchKeyEvent => Some(
+            key::parse_dispatch_key_event(cmd)
+                .map_err(|_| PendingInputCommandStartError::invalid_params())?,
+        ),
+        _ => None,
+    };
+    // A key press is a CDP sequence. Its keydown can start a replacement
+    // navigation before Playwright sends the matching keyup. Keep that
+    // terminal event on the still-attached outgoing Page; every other key
+    // event retains the normal cross-document navigation gate.
+    let targets_outgoing_document = conn.has_pending_document_navigation_for_owner(&owner)
+        && parsed_key_event
+            .as_ref()
+            .is_some_and(|parsed| parsed.event_type == DevToolsKeyEventType::KeyUp);
     if action.requires_document_access()
+        && !targets_outgoing_document
         && let Err(message) = conn.ensure_document_accessible_for_owner(&owner)
     {
         return Err(PendingInputCommandStartError {
@@ -582,8 +598,7 @@ fn start_pending_input_command(
     }
     match action {
         InputAction::DispatchKeyEvent => {
-            let parsed = key::parse_dispatch_key_event(cmd)
-                .map_err(|_| PendingInputCommandStartError::invalid_params())?;
+            let parsed = parsed_key_event.expect("dispatchKeyEvent parameters were parsed above");
             if input_events_ignored_for_owner(conn, &owner) {
                 return Ok(None);
             }
@@ -977,11 +992,14 @@ fn start_devtools_dispatch_key_event_command(
     owner: &CommandOwnerScope,
     command: DevToolsDispatchKeyEventCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
-    start_page_input_command(
+    let targets_outgoing_document = command.event_type == DevToolsKeyEventType::KeyUp
+        && conn.has_pending_document_navigation_for_owner(owner);
+    start_page_input_command_with_access(
         conn,
         command_id,
         owner,
         PendingInputCommandKind::DispatchKeyEvent,
+        targets_outgoing_document,
         |page| {
             page.start_dispatch_key_event_with_outcome(
                 key::devtools_key_event_dom_event_name(command.event_type),
@@ -1003,6 +1021,17 @@ fn start_page_input_command(
     kind: PendingInputCommandKind,
     start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
+    start_page_input_command_with_access(conn, command_id, command_owner, kind, false, start)
+}
+
+fn start_page_input_command_with_access(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    command_owner: &CommandOwnerScope,
+    kind: PendingInputCommandKind,
+    targets_outgoing_document: bool,
+    start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
+) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
@@ -1014,10 +1043,13 @@ fn start_page_input_command(
     } else {
         None
     };
-    let page = conn
-        .loaded_page_mut_for_protocol_access_for_owner(command_owner)
-        .ok()
-        .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    let page = if targets_outgoing_document {
+        conn.loaded_page_mut_for_interruptible_protocol_access_for_owner(command_owner)
+    } else {
+        conn.loaded_page_mut_for_protocol_access_for_owner(command_owner)
+    }
+    .ok()
+    .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
     let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
     Ok(Some(PendingInputCommandDispatch {
         command_id,

@@ -429,6 +429,10 @@ pub(crate) fn prepare_parser_script_handoff_for_static_document(
 }
 
 impl HtmlTreeSinkStream {
+    pub(super) fn initialize_text_document(&mut self, content_type: &str) {
+        self.parser.initialize_text_document(content_type);
+    }
+
     pub(super) fn from_target_with_scripting(
         target: ParserStreamHtmlTreeSinkTarget,
         scripting_enabled: bool,

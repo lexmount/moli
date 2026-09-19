@@ -1564,9 +1564,44 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {
         .primary
         .insert(5, nav_item_style(BLUE, 19.0, Overflow::Hidden));
     let fallback = render(&source, &mut styles, 300, 100);
-    assert_close(rect(&fallback, RED).y, 45.0);
-    assert_close(rect(&fallback, GREEN).y, 45.0);
-    assert_close(rect(&fallback, BLUE).y, 19.0);
+    let fallback_news = rect(&fallback, RED);
+    let fallback_hao = rect(&fallback, GREEN);
+    let fallback_more = rect(&fallback, BLUE);
+    let glyph_baselines = fallback
+        .fragments
+        .iter()
+        .filter_map(|fragment| match fragment {
+            moli_layout::PaintFragment::GlyphRun(run) => run.glyphs.first().map(|glyph| {
+                run.transform
+                    .map_point(moli_layout::LayoutPoint::new(glyph.x, glyph.y))
+                    .y
+            }),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(glyph_baselines.len(), 3);
+    assert_close(glyph_baselines[0], fallback_more.bottom());
+    assert_close(glyph_baselines[1], fallback_more.bottom());
+    assert_close(fallback_news.y, fallback_hao.y);
+    assert!(fallback_news.y > news.y);
+    assert_close(fallback_more.y, more.y);
+
+    // The scrolling inline-block synthesizes its baseline from its margin-box
+    // edge. Increasing only its block-end padding must therefore move both
+    // text-backed peers by exactly the same amount while its own top remains
+    // fixed. This checks the fallback contract without baking a platform font's
+    // ascent into an absolute y coordinate.
+    styles
+        .primary
+        .insert(5, nav_item_style(BLUE, 29.0, Overflow::Hidden));
+    let deeper_fallback = render(&source, &mut styles, 300, 100);
+    assert_close(rect(&deeper_fallback, RED).y, fallback_news.y + 10.0);
+    assert_close(rect(&deeper_fallback, GREEN).y, fallback_hao.y + 10.0);
+    assert_close(rect(&deeper_fallback, BLUE).y, fallback_more.y);
+    assert_close(
+        rect(&deeper_fallback, BLUE).height,
+        fallback_more.height + 10.0,
+    );
 }
 
 #[test]

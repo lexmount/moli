@@ -1388,9 +1388,9 @@ async fn scroll_into_view_if_needed_accepts_element_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
-    let rows = "<div>row</div>".repeat(60);
+    let spacer = "<div style='height:24px'>row</div>".repeat(60);
     let url = format!(
-        "data:text/html,<!doctype html><html><body>{rows}<div id='box'></div></body></html>"
+        "data:text/html,<!doctype html><html><body>{spacer}<div id='box'></div></body></html>"
     );
 
     navigate_to_url_and_wait_for_load_async(&mut ctx, 1, url).await;
@@ -1542,9 +1542,9 @@ async fn scroll_into_view_if_needed_supports_object_id() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
-    let rows = "<div>row</div>".repeat(60);
+    let spacer = "<div style='height:24px'>row</div>".repeat(60);
     let url = format!(
-        "data:text/html,<!doctype html><html><body>{rows}<div id='box'></div></body></html>"
+        "data:text/html,<!doctype html><html><body>{spacer}<div id='box'></div></body></html>"
     );
 
     navigate_to_url_and_wait_for_load_async(&mut ctx, 1, url).await;
@@ -1591,7 +1591,7 @@ async fn scroll_into_view_if_needed_supports_object_id() {
 async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_contents() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let rows = "<div>row</div>".repeat(60);
+    let rows = "<div style='height:24px'>row</div>".repeat(60);
     let url = format!(
         "data:text/html,<!doctype html><body>{rows}<button id=contents style='display:contents'>target</button></body>"
     );
@@ -1621,11 +1621,22 @@ async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_content
         "params": { "expression": "window.scrollY" }
     }))
     .await;
+    let scroll_y = take_response_by_id(&mut ctx, 33)["result"]["result"]["value"]
+        .as_f64()
+        .unwrap_or_default();
+    ctx.process_async(json!({
+        "id": 34,
+        "method": "Runtime.evaluate",
+        "params": { "expression": "JSON.stringify({scrollY:window.scrollY, viewport:innerHeight, scrollHeight:document.documentElement.scrollHeight, targetRect:document.querySelector('#contents').getBoundingClientRect().toJSON()})" }
+    }))
+    .await;
+    let diagnostics = take_response_by_id(&mut ctx, 34)["result"]["result"]["value"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned();
     assert!(
-        take_response_by_id(&mut ctx, 33)["result"]["result"]["value"]
-            .as_f64()
-            .is_some_and(|scroll_y| scroll_y > 0.0),
-        "the display:contents element should use its rendered descendant geometry"
+        scroll_y > 0.0,
+        "the display:contents element should use its rendered descendant geometry: {diagnostics}"
     );
 }
 
@@ -1633,9 +1644,9 @@ async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_content
 async fn scroll_into_view_if_needed_honors_stylesheet_display_and_visibility() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let rows = "<div>row</div>".repeat(60);
+    let spacer = "<div style='height:24px'>row</div>".repeat(60);
     let url = format!(
-        "data:text/html,<!doctype html><style>.contents{{display:contents}}.none{{display:none}}.invisible{{visibility:hidden}}</style><body>{rows}<button id=contents class=contents>contents text</button><div id=none class=none><span>suppressed child</span></div><button id=invisible class=invisible>invisible box</button></body>"
+        "data:text/html,<!doctype html><style>.contents{{display:contents}}.none{{display:none}}.invisible{{visibility:hidden}}</style><body>{spacer}<button id=contents class=contents>contents text</button><div id=none class=none><span>suppressed child</span></div><button id=invisible class=invisible>invisible box</button></body>"
     );
     navigate_to_url_and_wait_for_load_async(&mut ctx, 60, url).await;
 
@@ -1790,7 +1801,7 @@ async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling(
 async fn scroll_into_view_if_needed_clamps_relative_rect_to_document_scroll_range() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let rows = "<div>row</div>".repeat(60);
+    let rows = "<div style='height:24px'>row</div>".repeat(60);
     let url = format!("data:text/html,<!doctype html><body>{rows}<div id=target></div></body>");
     navigate_to_url_and_wait_for_load_async(&mut ctx, 44, url).await;
     ctx.process_async(json!({
