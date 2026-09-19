@@ -26,7 +26,7 @@ impl ScriptVm {
             false
         };
         let inherited_domain =
-            inherited.map(|environment| environment.document_domain_override.borrow());
+            inherited.map(|environment| environment.document_domain_override.get());
         Ok(self
             ._context_host
             .borrow()
