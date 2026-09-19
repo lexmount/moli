@@ -227,6 +227,24 @@ impl ScriptVmContextBootstrap {
                 child_handle: None, ..
             } => unsafe { &*host_ptr }.main_isolated_world_security_token_key(),
         };
+        let dispatch_scope = match mode {
+            WindowContextBootstrapMode::ChildDefault { child_handle, .. }
+            | WindowContextBootstrapMode::Isolated {
+                child_handle: Some(child_handle),
+                ..
+            } => crate::native_bridge::OwnerDispatchScope::Child(child_handle),
+            _ => crate::native_bridge::OwnerDispatchScope::Top,
+        };
+        let access_policy = match mode {
+            WindowContextBootstrapMode::Isolated { access_policy, .. } => access_policy,
+            _ => crate::native_bridge::WindowExecutionContextAccessPolicy::EnforceWebOrigin,
+        };
+        unsafe { &*host_ptr }.install_window_context_security_origin(
+            scope,
+            local_context,
+            dispatch_scope,
+            access_policy,
+        );
         if !crate::native_bridge::set_window_security_token(
             scope,
             local_context,

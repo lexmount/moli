@@ -60,7 +60,7 @@ pub(super) struct ChildBrowsingContextEntry {
     performance_time_origin: ChildPerformanceTimeOrigin,
     pending_document_load_id: Option<u64>,
     classic_script_document_state: classic_scripts::ChildClassicScriptDocumentState,
-    document_domain_override: Option<String>,
+    document_domain_override: super::DocumentDomainState,
     credentialless: bool,
     service_worker_client_id: Option<ServiceWorkerClientId>,
     pending_service_worker_client_id: Option<ServiceWorkerClientId>,
@@ -127,16 +127,18 @@ impl ChildBrowsingContextEntry {
         self.clear_document_domain_override();
     }
 
-    pub(super) fn document_domain_override(&self) -> Option<String> {
+    pub(super) fn document_domain_state(&self) -> super::DocumentDomainState {
         self.document_domain_override.clone()
     }
 
     pub(super) fn set_document_domain_override(&mut self, domain: String) {
-        self.document_domain_override = Some(domain);
+        self.document_domain_override.set(domain);
     }
 
     pub(super) fn clear_document_domain_override(&mut self) {
-        self.document_domain_override = None;
+        // A new Document gets its own mutable domain. Retained realms keep
+        // the previous origin, including any inherited references to it.
+        self.document_domain_override = super::DocumentDomainState::default();
     }
 
     pub(super) fn window_name(&self) -> &str {

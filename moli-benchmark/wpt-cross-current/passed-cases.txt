@@ -6511,6 +6511,7 @@ html/browsers/windows/browsing-context-names/choose-default-002.html
 html/browsers/windows/browsing-context-names/choose-existing-001.html
 html/browsers/windows/browsing-context-window.html
 html/browsers/windows/browsing-context.html
+html/browsers/windows/document-domain-removed-iframe.html
 html/browsers/windows/embedded-opener-a-form.html
 html/browsers/windows/embedded-opener-remove-frame.html
 html/browsers/windows/embedded-opener.html

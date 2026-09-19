@@ -402,6 +402,14 @@ impl JsContextHost {
             ),
             resource_authority,
         );
+        if matches!(
+            owner_transition.local_window_owner_transition(),
+            FrameLocalWindowOwnerTransition::Preserved { .. }
+        ) {
+            // Reusing the initial inner global still gives it the newly
+            // committed Document's origin and mutable domain state.
+            self.refresh_child_default_world_security_token(scope, handle);
+        }
         Some(owner_transition)
     }
 
