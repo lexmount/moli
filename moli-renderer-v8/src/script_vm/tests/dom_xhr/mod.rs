@@ -5,6 +5,7 @@ mod cssom;
 mod dom;
 mod forms;
 mod misc;
+mod send_body;
 mod shadow_dom;
 mod style_invalidation;
 mod xhr;
