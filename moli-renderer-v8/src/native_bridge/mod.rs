@@ -9,7 +9,7 @@ mod current_input;
 #[cfg(feature = "devtools")]
 pub use context_host::RendererScreencastPaintSession;
 pub(crate) use context_host::{
-    ChildDocumentFetch, LayoutPublicationRequest, PageScriptHost, PageScriptHostTaskCapabilities,
+    ChildDocumentFetch, DocumentDomainState, LayoutPublicationRequest, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry, caller_can_access_window,
     contexts_can_script_access as window_contexts_allow_access,
