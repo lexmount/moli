@@ -167,6 +167,7 @@ mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
 mod workers;
+use window_security_tokens::DocumentDomainState;
 pub(crate) use window_security_tokens::set_window_security_token;
 
 #[cfg(test)]
@@ -872,7 +873,7 @@ pub(crate) struct JsContextHost {
     #[cfg(test)]
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
-    document_domain_override: Option<String>,
+    document_domain_override: DocumentDomainState,
     next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,

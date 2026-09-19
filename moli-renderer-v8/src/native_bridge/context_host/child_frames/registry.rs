@@ -470,11 +470,12 @@ impl JsContextHost {
                             .map(|entry| entry.classic_script_document_state.clone())
                             .unwrap_or_default(),
                         document_domain_override: if attribute_bootstrap_changed {
-                            None
+                            Default::default()
                         } else {
                             existing
                                 .as_ref()
-                                .and_then(|entry| entry.document_domain_override())
+                                .map(|entry| entry.document_domain_override.clone())
+                                .unwrap_or_default()
                         },
                         credentialless,
                         service_worker_client_id: existing

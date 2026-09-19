@@ -107,6 +107,13 @@ pub(in crate::native_bridge::context_host::child_frame_runtime) fn rebind_child_
     };
     validate_registered_realm(host, scope, init)?;
     let snapshot = capture_child_window_realm_snapshot(host, init)?;
+    let context = scope.get_current_context();
+    host.install_window_context_security_origin(
+        scope,
+        context,
+        OwnerDispatchScope::Child(init.handle),
+        init.world.access_policy(),
+    );
 
     rebind_child_window_document_environment(scope, global, rebind.handle)?;
     bind_window_name(scope, global, &snapshot.window_name);

@@ -402,6 +402,14 @@ impl JsContextHost {
             ),
             resource_authority,
         );
+        if matches!(
+            owner_transition.local_window_owner_transition(),
+            FrameLocalWindowOwnerTransition::Preserved { .. }
+        ) {
+            // Reusing the initial inner global still gives it the newly
+            // committed Document's origin and mutable domain state.
+            self.refresh_child_default_world_security_token(scope, handle);
+        }
         // A preserved initial LocalWindow may already have a history surface
         // without running realm bootstrap again. Commit its Document seed here;
         // subsequent view refreshes must never replay this history transition.
