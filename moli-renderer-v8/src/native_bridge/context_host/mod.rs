@@ -1396,6 +1396,10 @@ impl JsContextHost {
         self.deferred_context_host_release_queue = queue;
     }
 
+    pub(crate) fn page_context_resources_closed(&self) -> bool {
+        self.page_context_resources_closed
+    }
+
     pub(crate) fn close_page_context_resources_for_teardown(&mut self) {
         self.mark_page_context_detached();
         if self.page_context_resources_closed {
