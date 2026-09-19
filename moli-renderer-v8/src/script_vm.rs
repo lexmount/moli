@@ -2007,7 +2007,7 @@ impl ScriptVm {
 
 pub(crate) struct ScriptVmInitialDocumentEnvironment {
     security_token: Option<v8::Global<v8::Value>>,
-    document_domain_override: Rc<RefCell<Option<String>>>,
+    document_domain_override: crate::native_bridge::DocumentDomainState,
     origin: String,
     pub(crate) policy_container: crate::document_runtime::DocumentPolicyContainer,
     fallback_base_url: Option<url::Url>,
