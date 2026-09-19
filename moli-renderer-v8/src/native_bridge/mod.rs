@@ -9,7 +9,7 @@ mod current_input;
 #[cfg(feature = "devtools")]
 pub(crate) use context_host::MouseReleaseFollowUp;
 pub(crate) use context_host::{
-    ChildDocumentFetch, PageScriptHost, PageScriptHostTaskCapabilities,
+    ChildDocumentFetch, DocumentDomainState, PageScriptHost, PageScriptHostTaskCapabilities,
     PendingScrollObservableEffects, PostParseAutofocusAdmission, ServiceWorkerWindowOwner,
     SharedResourceTimingBufferRegistry,
 };
