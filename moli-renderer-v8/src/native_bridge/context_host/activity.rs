@@ -3,8 +3,11 @@ use super::*;
 
 impl JsContextHost {
     pub(crate) fn document_has_browsing_context(&self, document: DomHandle) -> bool {
-        // A detached iframe compatibility window can be a document's defaultView
-        // without registering a browsing context. Check the native association.
+        if self.page_context_resources_closed() {
+            return false;
+        }
+        // Retained or synthetic Window associations do not establish a live
+        // browsing context. Consult the actual document owners instead.
         self.dom_host().document_handle() == document
             || self
                 .child_browsing_context_host_for_document_handle(document)

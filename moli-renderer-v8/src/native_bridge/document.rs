@@ -16,7 +16,7 @@ use super::super::{
 };
 use super::element::{canonical_dir_value, element_attribute, set_reflected_attribute};
 use super::node::{
-    node_is_document, node_runtime_and_handle_from_object,
+    node_is_document, node_relevant_context, node_runtime_and_handle_from_object,
     node_runtime_and_handle_from_object_or_detached,
 };
 use super::{
@@ -1568,12 +1568,10 @@ fn document_html_collection_getter<'s>(
         );
         return;
     };
-    // A child Document wrapper can precede its Window realm. Follow the
-    // associated Window once available, including through a borrowed getter.
-    let context = document_associated_window_for_object(scope, runtime_ptr, handle, receiver)
-        .and_then(|window| window.get_creation_context(scope))
-        .or_else(|| receiver.get_creation_context(scope))
-        .expect("Document must have a creation context");
+    // A WindowProxy can already target a newer realm after navigation. The
+    // collection still belongs to the retained Document's own realm.
+    let context =
+        node_relevant_context(scope, receiver).expect("Document must have a creation context");
     let scope = &mut v8::ContextScope::new(scope, context);
     let collection = collections::build_live_collection_for_node(
         scope,
@@ -1598,6 +1596,10 @@ fn document_default_view_getter_function<'s>(
         rv.set_null();
         return;
     };
+    if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
+        rv.set_null();
+        return;
+    }
     match document_associated_window_for_object(scope, runtime_ptr, handle, args.this()) {
         Some(window) => rv.set(window.into()),
         None => rv.set_null(),
