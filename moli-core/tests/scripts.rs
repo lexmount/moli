@@ -1,5 +1,7 @@
 #[path = "scripts/child_script_text.rs"]
 mod child_script_text;
+#[path = "scripts/document_default_view.rs"]
+mod document_default_view;
 #[path = "scripts/integrity.rs"]
 mod integrity;
 #[path = "scripts/worker_fetch_metadata.rs"]
