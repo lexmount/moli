@@ -528,7 +528,8 @@ impl JsContextHost {
                         // Document keeps its mutable origin until replacement commits.
                         document_domain_override: existing
                             .as_ref()
-                            .and_then(|entry| entry.document_domain_override()),
+                            .map(|entry| entry.document_domain_override.clone())
+                            .unwrap_or_default(),
                         credentialless,
                         service_worker_client_id: existing
                             .as_ref()
