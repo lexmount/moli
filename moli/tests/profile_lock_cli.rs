@@ -83,8 +83,8 @@ fn cli_profile_dir_refuses_when_profile_lock_is_held() -> Result<()> {
         "stderr start: {stderr} stderr end"
     );
     assert!(
-        stderr.contains("pid=") && stderr.contains("created_unix_ms="),
-        "stderr should include lock owner metadata: {stderr}"
+        stderr.contains(&profile_dir_arg),
+        "stderr should identify the locked profile: {stderr}"
     );
     Ok(())
 }
@@ -114,8 +114,8 @@ fn cli_serve_profile_dir_refuses_when_profile_lock_is_held() -> Result<()> {
         "stderr start: {stderr} stderr end"
     );
     assert!(
-        stderr.contains("pid=") && stderr.contains("created_unix_ms="),
-        "stderr should include lock owner metadata: {stderr}"
+        stderr.contains(&profile_dir_arg),
+        "stderr should identify the locked profile: {stderr}"
     );
     Ok(())
 }
