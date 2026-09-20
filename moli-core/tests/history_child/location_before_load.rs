@@ -221,3 +221,95 @@ async fn main_location_navigation_pushes_after_load_and_document_open() -> Resul
     server.shutdown().await;
     Ok(())
 }
+
+async fn popup_navigation_history(phase: &str, api: &str, replaces: bool) -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let destination = markup_url(
+        &server,
+        "<!doctype html><script>opener.finish({before:opener.beforePopupNavigation,after:history.length});</script>",
+    );
+    let source = format!(
+        r#"<!doctype html><body><script>
+          function go() {{
+            opener.beforePopupNavigation = history.length;
+            const target = {};
+            const api = {};
+            if (api === 'href') location.href = target;
+            else if (api === 'document') document.location = target;
+            else if (api === 'window-open') window.open(target, '_self');
+            else location.assign(target);
+          }}
+          const phase = {};
+          if (phase === 'parser') go();
+          else if (phase === 'load') addEventListener('load', go, {{once:true}});
+          else addEventListener('load', () => setTimeout(() => {{
+            if (phase === 'reopen') document.open();
+            go();
+          }}, 0), {{once:true}});
+        </script>"#,
+        serde_json::to_string(&destination)?.replace("</script>", "<\\/script>"),
+        serde_json::to_string(api)?,
+        serde_json::to_string(phase)?
+    );
+    let parent = format!(
+        r#"<!doctype html><script>
+          window.finished = new Promise(resolve => window.finish = resolve);
+          window.popup = open({});
+        </script>"#,
+        serde_json::to_string(&markup_url(&server, &source))?.replace("</script>", "<\\/script>")
+    );
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut page = browser.fetch(&markup_url(&server, &parent)).await?;
+        let result = page
+            .evaluate_runtime_expression_with_await_async(
+                "finished.then(value => JSON.stringify(value))",
+                true,
+            )
+            .await?;
+        page.evaluate_runtime_expression_with_await_async("popup.close()", false)
+            .await?;
+        Ok::<_, anyhow::Error>(result)
+    })
+    .await??;
+    let result: serde_json::Value = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .expect("popup navigation history result"),
+    )?;
+    assert_eq!(
+        result["after"].as_u64().unwrap() - result["before"].as_u64().unwrap(),
+        u64::from(!replaces),
+        "phase={phase}, api={api}, {result}"
+    );
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_location_navigation_replaces_until_load_callbacks_finish() -> Result<()> {
+    for phase in ["parser", "load"] {
+        for api in ["href", "assign", "document"] {
+            popup_navigation_history(phase, api, true).await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_location_navigation_pushes_after_complete_even_after_document_open() -> Result<()> {
+    for phase in ["after-load", "reopen"] {
+        for api in ["href", "assign", "document"] {
+            popup_navigation_history(phase, api, false).await?;
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_window_open_self_before_load_keeps_push_history() -> Result<()> {
+    for phase in ["parser", "load"] {
+        popup_navigation_history(phase, "window-open", false).await?;
+    }
+    Ok(())
+}
