@@ -88,11 +88,47 @@ pub(crate) fn filter_headers_for_guard(
     entries: &[(String, String)],
     guard: HeadersGuard,
 ) -> Vec<(String, String)> {
-    entries
+    let mut filtered = Vec::with_capacity(entries.len());
+    for (name, value) in entries {
+        if header_append_allowed_by_guard(guard, name, value, &filtered) {
+            filtered.push((name.clone(), value.clone()));
+        }
+    }
+    filtered
+}
+
+pub(in crate::network_host::headers) fn header_append_allowed_by_guard(
+    guard: HeadersGuard,
+    name: &str,
+    value: &str,
+    entries: &[(String, String)],
+) -> bool {
+    if guard != HeadersGuard::RequestNoCors {
+        return header_allowed_by_guard(guard, name, value);
+    }
+    // Filling Headers runs append for each entry. The no-cors check applies
+    // to the resulting combined value, including separators and empty values;
+    // a rejected append must leave previously accepted entries intact.
+    let mut combined = None::<String>;
+    for (_, existing) in entries
         .iter()
-        .filter(|(name, value)| header_allowed_by_guard(guard, name, value))
-        .cloned()
-        .collect()
+        .filter(|(field, _)| field.eq_ignore_ascii_case(name))
+    {
+        if let Some(combined) = &mut combined {
+            combined.push_str(", ");
+            combined.push_str(existing);
+        } else {
+            combined = Some(existing.clone());
+        }
+    }
+    match combined {
+        Some(mut combined) => {
+            combined.push_str(", ");
+            combined.push_str(value);
+            header_allowed_by_guard(guard, name, &combined)
+        }
+        None => header_allowed_by_guard(guard, name, value),
+    }
 }
 
 pub(in crate::network_host) fn set_headers_entries(

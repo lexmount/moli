@@ -15209,6 +15209,7 @@ mod indexed_db;
 mod inspector_unwrap;
 mod lazy_storage;
 mod lazy_window_surfaces;
+mod no_cors_header_fill;
 mod observer_callbacks;
 mod post_parse;
 mod queue_microtask;
