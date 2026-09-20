@@ -1653,6 +1653,13 @@ impl RuntimeOwner {
             return;
         }
 
+        let result = result.and_then(|()| {
+            easy.get_mut()
+                .streaming_mut()
+                .expect("streaming request should use streaming collector")
+                .finish_headers_at_eof()
+        });
+
         if !job.cancel_handle.is_cancelled()
             && easy
                 .get_ref()
@@ -1963,6 +1970,13 @@ impl RuntimeOwner {
             );
             return;
         }
+
+        let result = result.and_then(|()| {
+            easy.get_mut()
+                .raw_streaming_mut()
+                .expect("raw streaming request should use raw streaming collector")
+                .finish_headers_at_eof()
+        });
 
         if !job.cancel_handle.is_cancelled()
             && easy
