@@ -163,6 +163,34 @@ pub(super) fn window_receiver<'s>(
     None
 }
 
+pub(super) fn same_origin_window_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let receiver = args.this();
+    // An extracted getter bypasses WindowProxy's property access check. Check
+    // the native global before looking up receiver slots, which can themselves
+    // trigger V8's cross-origin fallback in a different realm.
+    if let Some(context) = receiver.get_creation_context(scope)
+        && receiver.strict_equals(context.global(scope).into())
+        && context_host_ptr_from_context_slot(context).is_some()
+    {
+        if crate::native_bridge::window_contexts_allow_access(scope.get_current_context(), context)
+        {
+            return Some(receiver);
+        }
+    } else if !crate::native_bridge::is_cross_origin_top_window_proxy(scope, receiver) {
+        return window_receiver(scope, args);
+    }
+    crate::native_bridge::throw_dom_exception(
+        scope,
+        "SecurityError",
+        18,
+        "Blocked access to a cross-origin Window.",
+    );
+    None
+}
+
 pub(crate) fn current_window_style_viewport(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
