@@ -35,7 +35,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 &new_navigation_entry_key(),
             );
             copy_navigation_entry_document_id(scope, current_entry, next_entry);
-            copy_entry_serialized_states(scope, current_entry, next_entry);
+            copy_navigation_entry_serialized_state(scope, current_entry, next_entry);
             pruned_entries = push_history_entry(scope, history, next_entry);
             super::super::session_history::commit(
                 scope,
@@ -58,7 +58,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 &key,
             );
             copy_navigation_entry_document_id(scope, current_entry, entry);
-            copy_entry_serialized_states(scope, current_entry, entry);
+            copy_navigation_entry_serialized_state(scope, current_entry, entry);
             replace_history_entry(scope, history, entry);
             set_navigation_current_entry(scope, navigation, entry);
             super::super::session_history::commit(

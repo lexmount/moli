@@ -136,7 +136,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             host.record_same_document_navigation(&applied.parsed_url, "fragment");
         }
         if dispatch_popstate {
-            dispatch_popstate_event(scope, host_ptr, None, applied.state);
+            dispatch_popstate_event(scope, host_ptr, applied.owner, applied.state);
             perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
             queue_hash_change_for_runtime_owner(
                 scope,
@@ -147,12 +147,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
         }
     } else if dispatch_popstate && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         sync_local_document_front_from_window(scope, applied.owner);
-        let child_handle =
-            super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-                scope,
-                applied.owner,
-            );
-        dispatch_popstate_event(scope, host_ptr, child_handle, applied.state);
+        dispatch_popstate_event(scope, host_ptr, applied.owner, applied.state);
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         queue_hash_change_for_runtime_owner(
             scope,
@@ -171,7 +166,11 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
                 .is_some_and(|old_url| {
                     is_same_document_fragment_navigation(Some(&old_url), &applied.parsed_url)
                 });
-        if let Some(child_handle) = child_handle
+        if let Some(child_handle) =
+            super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
+                scope,
+                applied.owner,
+            )
             && !is_same_document_traversal
         {
             unsafe { &mut *host_ptr }.queue_child_browsing_context_navigation_without_seed_update(

@@ -13,8 +13,8 @@ use super::super::navigation_lifecycle::{
     settle_navigation_transition_finished_local,
 };
 use super::super::navigation_window::{
-    navigation_document_can_update_current_entry, navigation_document_is_active,
-    navigation_unload_event_active,
+    navigation_document_can_update_current_entry, navigation_document_has_disabled_entries,
+    navigation_document_is_active, navigation_unload_event_active,
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
@@ -55,7 +55,7 @@ pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_document_has_disabled_entries(scope, owner) {
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
@@ -723,14 +723,7 @@ fn commit_navigation_navigate_same_document<'s>(
         let popstate_state = navigation_current_entry(scope, owner)
             .and_then(|entry| clone_navigation_entry_state(scope, entry))
             .unwrap_or_else(|| v8::null(scope).into());
-        let child_handle = (!runtime_window_is_global(scope, owner))
-            .then(|| {
-                super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-                    scope, owner,
-                )
-            })
-            .flatten();
-        dispatch_popstate_event(scope, host_ptr, child_handle, popstate_state);
+        dispatch_popstate_event(scope, host_ptr, owner, popstate_state);
         queue_hash_change_for_runtime_owner(scope, owner, Some(current_href), effective_href);
         if runtime_window_is_global(scope, owner) {
             if let Ok(effective_url) = url::Url::parse(effective_href) {

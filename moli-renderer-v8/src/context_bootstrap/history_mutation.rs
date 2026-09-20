@@ -365,7 +365,8 @@ fn mutate_history_object<'s>(
         crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
-        let _ = unsafe { &mut *host_ptr }.set_lightweight_popup_same_document_url(popup_id, url);
+        let _ =
+            unsafe { &mut *host_ptr }.set_lightweight_popup_same_document_url(scope, popup_id, url);
     }
 }
 

@@ -598,6 +598,17 @@ impl JsContextHost {
             .is_some_and(|document| document.wrapper.is_some())
     }
 
+    fn lightweight_popup_document_wrapper<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.lightweight_popup_document_record(popup_id)?
+            .wrapper
+            .as_ref()
+            .map(|document| v8::Local::new(scope, document))
+    }
+
     fn set_lightweight_popup_document_wrapper(
         &mut self,
         popup_id: u64,
@@ -695,6 +706,7 @@ impl JsContextHost {
 
     pub(crate) fn set_lightweight_popup_same_document_url(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
         url: Url,
     ) -> bool {
@@ -710,7 +722,21 @@ impl JsContextHost {
             open.document.handle
         };
         if let Some(document_handle) = document_handle {
-            let _ = self.set_dom_document_url_for_handle(document_handle, url);
+            let _ = self.set_dom_document_url_for_handle(document_handle, url.clone());
+        }
+        let base_url = self
+            .lightweight_popup_base_url(scope, popup_id)
+            .unwrap_or_else(|| url.clone());
+        if let Some(document) = self.lightweight_popup_document_wrapper(scope, popup_id) {
+            // Keep the Document's exposed URL slots in sync before history
+            // events run, without reinstalling its author-visible methods.
+            if let Some(href) = v8_string(scope, url.as_str()) {
+                set_object_slot(scope, document, "URL", href.into());
+                set_object_slot(scope, document, "documentURI", href.into());
+            }
+            if let Some(base_uri) = v8_string(scope, base_url.as_str()) {
+                set_object_slot(scope, document, "baseURI", base_uri.into());
+            }
         }
         true
     }
@@ -1618,38 +1644,6 @@ impl JsContextHost {
         );
         let current_url = lightweight_popup_location_href(scope, window)
             .or_else(|| self.lightweight_popup_location_url(popup_id));
-        if !matches!(
-            kind,
-            crate::context_bootstrap::LocationNavigationKind::Reload
-        ) && urls_refer_to_same_document_except_fragment(current_url.as_ref(), &target_url)
-        {
-            let previous_url = current_url.clone();
-            let base_url = self
-                .lightweight_popup_base_url(scope, popup_id)
-                .unwrap_or_else(|| target_url.clone());
-            let document_referrer = self
-                .lightweight_popup_document_record(popup_id)
-                .map(|document| document.state.policy_container.document_referrer.clone())
-                .unwrap_or_default();
-            let _ = self.set_lightweight_popup_same_document_url(popup_id, target_url.clone());
-            sync_lightweight_popup_window_location(
-                scope,
-                window,
-                target_url.as_str(),
-                &base_url,
-                &document_referrer,
-            );
-            if let Some(previous_url) = previous_url {
-                self.dispatch_lightweight_popup_same_document_navigation_events(
-                    scope,
-                    popup_id,
-                    window,
-                    previous_url.as_str(),
-                    target_url.as_str(),
-                );
-            }
-            return true;
-        }
         if !matches!(
             kind,
             crate::context_bootstrap::LocationNavigationKind::Reload
@@ -4133,7 +4127,7 @@ impl JsContextHost {
         true
     }
 
-    fn dispatch_lightweight_popup_same_document_navigation_events<'s>(
+    pub(crate) fn dispatch_lightweight_popup_same_document_navigation_events<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         popup_id: u64,
@@ -4890,9 +4884,12 @@ fn sync_lightweight_popup_window_location<'s>(
     referrer: &str,
 ) {
     sync_window_location_runtime_state(scope, window, href);
-    if let Some(document) = window
-        .get(scope, v8str(scope, "document").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    // Before the popup has a Document projection, the inherited getter can
+    // resolve to the opener's Document. Only synchronize this popup's wrapper.
+    if let Some(popup_id) = lightweight_popup_id_from_window(scope, window)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && let Some(document) =
+            unsafe { &*host_ptr }.lightweight_popup_document_wrapper(scope, popup_id)
     {
         sync_lightweight_popup_document_window_slots(scope, document, window, base_url, referrer);
     }
