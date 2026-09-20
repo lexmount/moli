@@ -1,5 +1,7 @@
 use super::*;
 
+mod popup;
+
 #[test]
 fn event_attribute_handlers_use_html_scope_chain_and_report_compile_errors() {
     let mut vm = new_storage_test_vm("https://event-attribute-scopes.test/page.html");
