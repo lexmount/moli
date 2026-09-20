@@ -1,5 +1,7 @@
 use super::*;
 
+mod popup_network_navigation;
+
 const SESSION: &str = "SID-COMMIT-HISTORY";
 const FRAME: &str = "TID-COMMIT-HISTORY";
 
@@ -23,6 +25,10 @@ impl Drop for SameDocumentPage {
 
 impl SameDocumentPage {
     async fn new() -> Self {
+        Self::with_routes(axum::Router::new()).await
+    }
+
+    async fn with_routes(routes: axum::Router) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let download_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -43,7 +49,7 @@ impl SameDocumentPage {
                     }
                 }),
             );
-            axum::serve(listener, app).await.unwrap();
+            axum::serve(listener, app.merge(routes)).await.unwrap();
         });
         let mut ctx = TestContext::new();
         load_bc_with_session(

@@ -157,6 +157,13 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         rv.set(navigation_pending_result(scope).into());
         return;
     }
+    if super::super::navigation_cancellation::window_navigation_is_stopping(scope, owner) {
+        rv.set(
+            navigation_rejected_dom_exception_result(scope, "Navigation was stopped", "AbortError")
+                .into(),
+        );
+        return;
+    }
     if navigation_unload_event_active(scope, owner) {
         rv.set(
             navigation_rejected_invalid_state_result(

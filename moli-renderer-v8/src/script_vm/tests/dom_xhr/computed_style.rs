@@ -9096,7 +9096,7 @@ async fn popup_held_computed_style_wrapper_is_empty_after_loaded_navigation() {
         )
         .expect("popup loaded held computed style setup should evaluate");
 
-    assert_eq!(setup, "rgb(11, 22, 33)|true|false|true");
+    assert_eq!(setup, "rgb(11, 22, 33)|true|false|false");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
         &loader,

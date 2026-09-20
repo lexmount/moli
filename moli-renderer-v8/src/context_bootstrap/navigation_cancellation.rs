@@ -20,6 +20,13 @@ use crate::util::{context_host_ptr_from_global_bridge, get_private_value, set_pr
 
 const WINDOW_STOP_ACTIVE_SLOT: &str = "__lmWindowStopActive";
 
+pub(super) fn window_navigation_is_stopping<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, window, WINDOW_STOP_ACTIVE_SLOT).is_some_and(|value| value.is_true())
+}
+
 struct WindowNavigationStop {
     target: WindowDocumentTaskTarget,
     binding: Option<WindowExecutionContextBinding>,
@@ -85,8 +92,7 @@ impl WindowNavigationStop {
         binding.with_current_scope(scope, host_ptr, |scope, _| {
             let window = v8::Local::new(scope, window);
             if navigation_unload_event_active(scope, window)
-                || get_private_value(scope, window, WINDOW_STOP_ACTIVE_SLOT)
-                    .is_some_and(|value| value.is_true())
+                || window_navigation_is_stopping(scope, window)
             {
                 return;
             }
@@ -171,6 +177,13 @@ fn stop_navigation_for_window<'s>(
         // Window.stop() cannot cancel an ongoing cross-document history traversal.
         return;
     }
+    if let Some(OwnerDispatchScope::LightweightPopup(popup_id)) =
+        runtime_window_dispatch_scope(scope, window)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && unsafe { &*host_ptr }.lightweight_popup_has_pending_cross_document_traversal(popup_id)
+    {
+        return;
+    }
     inform_about_canceled_navigation_for_window(scope, window);
 }
 
@@ -204,6 +217,9 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
         }
         Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) => {
             host.cancel_pending_child_browsing_context_navigation(handle);
+        }
+        Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+            host.cancel_pending_lightweight_popup_navigation(popup_id);
         }
         _ => {}
     }

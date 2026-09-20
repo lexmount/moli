@@ -94,6 +94,35 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
             .into();
     }
 
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let entry_seed = cross_document_navigation_seed(
+            entries,
+            current_index,
+            current_navigation_index,
+            next_url,
+            mutation,
+        );
+        let result = navigation_signal
+            .map(|(navigation, signal)| {
+                navigation_cross_document_pending_result(
+                    scope,
+                    navigation,
+                    signal,
+                    next_url.as_str(),
+                )
+            })
+            .unwrap_or_else(|| navigation_pending_result(scope));
+        unsafe { &mut *host_ptr }.queue_lightweight_popup_cross_document_navigation(
+            scope,
+            popup_id,
+            next_url.as_str(),
+            entry_seed,
+        );
+        return result.into();
+    }
+
     let Some(child_handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return navigation_pending_result(scope).into();
     };

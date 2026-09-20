@@ -27107,7 +27107,7 @@ async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_trave
         .expect("named popup reopen should evaluate");
     assert_eq!(
         reopened,
-        r#"{"sameWindow":true,"hrefIsSecond":true,"historyLength":2,"eventCount":1}"#
+        r#"{"sameWindow":true,"hrefIsSecond":false,"historyLength":1,"eventCount":1}"#
     );
     advance_page_task_executor_until_eval_equals(
         &mut vm,
@@ -27117,6 +27117,11 @@ async fn window_open_named_lightweight_popup_reuse_pushes_history_and_back_trave
         "second named popup document should load",
     )
     .await;
+    assert_eq!(
+        vm.eval("[__namedPopup.history.length, __namedPopup.location.href === __namedPopupSecondUrl].join('|')")
+            .expect("named popup history should commit with its response"),
+        "2|true"
+    );
 
     vm.eval("__namedPopup.history.back()")
         .expect("named popup history.back should queue");
@@ -27146,7 +27151,7 @@ JSON.stringify({
 }
 
 #[test]
-fn window_open_named_reuse_before_first_commit_pushes_history() {
+fn window_open_named_reuse_before_first_commit_keeps_history_pending() {
     let mut vm = new_storage_test_vm("https://example.com/base/page.html");
 
     assert_eq!(
@@ -27174,7 +27179,7 @@ fn window_open_named_reuse_before_first_commit_pushes_history() {
 "#,
         )
         .expect("pending named popup reuse should evaluate"),
-        "true|true|2"
+        "true|false|1"
     );
 }
 
@@ -27234,7 +27239,7 @@ async fn lightweight_popup_cross_document_navigation_clears_old_onload_handler()
 "#,
         )
         .expect("popup onload clear reopen should evaluate");
-    assert_eq!(reopened, "true|2|first-script|first-load|first-listener");
+    assert_eq!(reopened, "true|1|first-script|first-load|first-listener");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
         &loader,
@@ -27243,6 +27248,11 @@ async fn lightweight_popup_cross_document_navigation_clears_old_onload_handler()
         "second popup document load listener should run",
     )
     .await;
+    assert_eq!(
+        vm.eval("String(__popupOnloadWindow.history.length)")
+            .expect("popup response should commit its history entry"),
+        "2"
+    );
 
     let result = vm
         .eval("globalThis.__popupOnloadEvents.join('|')")
@@ -27957,7 +27967,7 @@ async fn noopener_hyperlink_reuses_an_existing_named_popup_and_preserves_its_ope
   globalThis.__namedNoopenerPopup = popup;
   globalThis.__namedNoopenerTargetUrl = targetUrl;
   link.click();
-  return String(popup.location.href === targetUrl && popup.opener === window);
+  return String(popup.location.href === 'about:blank' && popup.opener === window);
 })()
 "#,
         )
@@ -28439,25 +28449,23 @@ async fn window_open_204_popup_ignores_navigation_and_preserves_initial_empty_hi
       window.opener.postMessage("loaded", "*")
     }
   `;
-  __popup204.location.href = "resources/code-injector.html?2&pipe=sub(none)&code=" + encodeURIComponent(code);
+  const target = "resources/code-injector.html?2&pipe=sub(none)&code=" + encodeURIComponent(code);
+  globalThis.__popup204RequestedUrl = new URL(target, document.URL).href;
+  __popup204.location.href = target;
   return [
     __popup204.location.href,
     __popup204.history.length,
     __popup204Messages.length
   ].join("|");
 })()
-"#
+"#,
         )
         .expect("204 popup follow-up navigation should evaluate");
     let expected_loaded_url_prefix =
         loaded_url.trim_end_matches("loaded.html").to_owned() + "resources/code-injector.html";
     let after_navigation_parts = after_navigation.split('|').collect::<Vec<_>>();
     assert_eq!(after_navigation_parts.len(), 3);
-    assert!(
-        after_navigation_parts[0].starts_with(&expected_loaded_url_prefix),
-        "unexpected popup loaded URL: {}",
-        after_navigation_parts[0]
-    );
+    assert_eq!(after_navigation_parts[0], "about:blank#foo");
     assert_eq!(after_navigation_parts[1], "1");
     assert_eq!(after_navigation_parts[2], "0");
 
@@ -28470,12 +28478,16 @@ async fn window_open_204_popup_ignores_navigation_and_preserves_initial_empty_hi
     )
     .await;
     server.await.expect("popup 204 server should finish");
+    let requested_url = vm
+        .eval("__popup204RequestedUrl")
+        .expect("popup requested URL should evaluate");
+    assert!(requested_url.starts_with(&expected_loaded_url_prefix));
     assert_eq!(
         vm.eval(
             "[__popup204.location.href, __popup204.history.length, __popup204Messages.join('|')].join('|')"
         )
         .expect("popup 204 loaded result should evaluate"),
-        format!("{}|1|loaded", after_navigation_parts[0])
+        format!("{requested_url}|1|loaded")
     );
 }
 
