@@ -269,6 +269,8 @@ def _chrome_command(binary: Path, port: int, tmp: Path | None) -> list[str]:
         "--no-sandbox",
         "--disable-gpu",
         "--disable-dev-shm-usage",
+        # WPT opens auxiliary test windows without user activation.
+        "--disable-popup-blocking",
         "--no-first-run",
         f"--user-data-dir={tmp}",
         f"--remote-debugging-port={port}",
