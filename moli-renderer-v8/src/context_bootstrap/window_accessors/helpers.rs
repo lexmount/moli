@@ -138,9 +138,9 @@ pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<
         return true;
     };
     let host = unsafe { &*host_ptr };
-    if !host.child_browsing_context_is_live(handle) {
-        return true;
-    }
+    // Container removal disconnects the DOM node before its unload callbacks.
+    // The captured LocalWindow remains current until those callbacks finish;
+    // checking its identity also keeps reattachment from reviving an old realm.
     let Some(context) = receiver.get_creation_context(scope) else {
         return true;
     };
