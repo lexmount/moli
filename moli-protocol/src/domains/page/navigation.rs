@@ -2723,6 +2723,8 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
     let mut navigation_state = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: command_id,
         owner: owner.clone(),
         result_projection,

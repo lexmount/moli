@@ -4,8 +4,6 @@ use std::sync::{
 };
 
 use anyhow::{Result, anyhow};
-use http::HeaderName;
-use indexmap::IndexMap;
 use moli_fetch::{Request, RequestCacheMode, url_pattern_matches};
 use parking_lot::Mutex;
 
@@ -21,7 +19,7 @@ fn next_memory_cache_partition_id() -> u64 {
         .expect("Page memory-cache partition id exhausted")
 }
 
-type SharedHeaderList = Arc<[(Box<str>, Box<str>)]>;
+type SharedHeaderList = Arc<[(Box<str>, Box<[u8]>)]>;
 type SharedPatternList = Arc<[Box<str>]>;
 
 #[derive(Debug, Clone)]
@@ -237,13 +235,13 @@ impl PageNetworkPolicy {
         self.snapshot().revision()
     }
 
-    pub fn set_extra_http_headers(&self, headers: &[(String, String)]) {
+    pub fn set_extra_http_headers(&self, headers: &moli_fetch::RequestHeaders) {
         let headers = headers
             .iter()
             .map(|(name, value)| {
                 (
                     name.clone().into_boxed_str(),
-                    value.clone().into_boxed_str(),
+                    value.clone().into_boxed_slice(),
                 )
             })
             .collect::<Vec<_>>();
@@ -478,27 +476,17 @@ impl PageNetworkPolicySnapshot {
 }
 
 fn merge_page_network_policy_headers(
-    context_headers: &[(Box<str>, Box<str>)],
+    context_headers: &[(Box<str>, Box<[u8]>)],
     request_headers: &moli_fetch::RequestHeaders,
 ) -> moli_fetch::RequestHeaders {
-    let mut merged = IndexMap::<String, (String, Vec<u8>)>::new();
-    for (name, value) in context_headers {
-        merged
-            .entry(header_name_key(name))
-            .or_insert_with(|| (name.to_string(), value.as_bytes().to_vec()));
-    }
-    for (name, value) in request_headers.iter() {
-        let key = header_name_key(name);
-        merged.shift_remove(&key);
-        merged.insert(key, (name.clone(), value.clone()));
-    }
-    moli_fetch::RequestHeaders::from_bytes(merged.into_values().collect())
-}
-
-fn header_name_key(name: &str) -> String {
-    HeaderName::from_bytes(name.as_bytes())
-        .map(|name| name.as_str().to_owned())
-        .unwrap_or_else(|_| name.to_ascii_lowercase())
+    let mut headers = moli_fetch::RequestHeaders::from_bytes(
+        context_headers
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_vec()))
+            .collect(),
+    );
+    headers.overlay(request_headers.clone());
+    headers
 }
 
 #[cfg(test)]
@@ -508,7 +496,7 @@ mod tests {
     #[test]
     fn isolated_policy_copy_preserves_values_without_sharing_mutations() {
         let policy = PageNetworkPolicy::new(OptionalResourceFetchMask::IMAGE, false, true);
-        policy.set_extra_http_headers(&[("x-owner".to_owned(), "first".to_owned())]);
+        policy.set_extra_http_headers(&vec![("x-owner".to_owned(), "first".to_owned())].into());
         let isolated = policy.isolated_copy();
 
         assert!(!policy.shares_state_with(&isolated));
@@ -520,7 +508,7 @@ mod tests {
         assert!(isolated.author_styles_disabled());
 
         isolated.set_network_offline(true);
-        isolated.set_extra_http_headers(&[("x-owner".to_owned(), "second".to_owned())]);
+        isolated.set_extra_http_headers(&vec![("x-owner".to_owned(), "second".to_owned())].into());
 
         assert!(!policy.snapshot().network_offline());
         let original = policy
@@ -575,10 +563,14 @@ mod tests {
     #[test]
     fn request_snapshot_does_not_observe_later_policy_mutation() {
         let policy = PageNetworkPolicy::default();
-        policy.set_extra_http_headers(&[("x-policy-revision".to_owned(), "one".to_owned())]);
+        policy.set_extra_http_headers(
+            &vec![("x-policy-revision".to_owned(), "one".to_owned())].into(),
+        );
         let snapshot = policy.snapshot();
 
-        policy.set_extra_http_headers(&[("x-policy-revision".to_owned(), "two".to_owned())]);
+        policy.set_extra_http_headers(
+            &vec![("x-policy-revision".to_owned(), "two".to_owned())].into(),
+        );
         policy.set_network_offline(true);
 
         let request = snapshot
@@ -619,10 +611,14 @@ mod tests {
     #[test]
     fn frozen_request_view_keeps_configuration_but_observes_live_network_conditions() {
         let policy = PageNetworkPolicy::default();
-        policy.set_extra_http_headers(&[("x-policy-revision".to_owned(), "one".to_owned())]);
+        policy.set_extra_http_headers(
+            &vec![("x-policy-revision".to_owned(), "one".to_owned())].into(),
+        );
         let request_view = policy.frozen_request_view();
 
-        policy.set_extra_http_headers(&[("x-policy-revision".to_owned(), "two".to_owned())]);
+        policy.set_extra_http_headers(
+            &vec![("x-policy-revision".to_owned(), "two".to_owned())].into(),
+        );
         let request = request_view
             .snapshot()
             .apply_to_request(

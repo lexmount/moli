@@ -549,6 +549,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
         continuation.headers.clone(),
     ) {
         Ok(request) => request
+            .with_redirect_headers(continuation.redirect_headers)
             .with_initiator_url(&pending.document_url)
             .with_request_origin(moli_url::WebOrigin::from_url(&pending.document_url))
             .with_resource_type(RequestResourceType::CspReport)

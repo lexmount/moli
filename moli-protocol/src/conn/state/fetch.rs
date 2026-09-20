@@ -2374,6 +2374,8 @@ mod tests {
             response_stage_request_id: request_id.to_owned(),
             document_navigation_token: None,
             navigation: NavigationDispatchState {
+                redirect_chain: Vec::new(),
+                redirect_headers: None,
                 navigate_id: Some(1),
                 owner: owner_session_id
                     .map(crate::conn::CommandOwnerScope::for_session)
@@ -2423,6 +2425,7 @@ mod tests {
 
         let mut pending_b = pending_subresource_fetch(2, Some("SID-B"));
         pending_b.request_stage_chain = Some(Box::new(PendingSubresourceFetchRequestStageChain {
+            header_override: None,
             url: test_url("api"),
             method: "GET".to_owned(),
             headers: Vec::new().into(),
@@ -2593,6 +2596,7 @@ mod tests {
         );
         network_owned_pending.request_stage_chain =
             Some(Box::new(PendingSubresourceFetchRequestStageChain {
+                header_override: None,
                 url: test_url("api"),
                 method: "GET".to_owned(),
                 headers: Vec::new().into(),

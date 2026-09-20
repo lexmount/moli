@@ -3884,7 +3884,7 @@ async fn worker_fetch_applies_network_policy_extra_http_headers() {
         format!("http://{addr}/worker/main.js"),
         loader,
         WorkerNetworkPolicy {
-            extra_http_headers: vec![("x-cdp-test".to_owned(), "works-worker".to_owned())],
+            extra_http_headers: vec![("x-cdp-test".to_owned(), "works-worker".to_owned())].into(),
             ..WorkerNetworkPolicy::default()
         },
     );
@@ -4527,7 +4527,8 @@ async fn worker_importscripts_applies_loader_network_policy_extra_http_headers()
             extra_http_headers: vec![(
                 "x-cdp-test".to_owned(),
                 "works-worker-importscripts".to_owned(),
-            )],
+            )]
+            .into(),
             ..WorkerNetworkPolicy::default()
         },
     );
@@ -4594,7 +4595,8 @@ async fn module_worker_dependency_applies_loader_network_policy_extra_http_heade
             extra_http_headers: vec![(
                 "x-cdp-test".to_owned(),
                 "works-module-worker-dependency".to_owned(),
-            )],
+            )]
+            .into(),
             ..WorkerNetworkPolicy::default()
         },
     );
@@ -6018,7 +6020,7 @@ async fn worker_classic_websocket_applies_network_policy_extra_http_headers() {
         "http://127.0.0.1/worker/main.js".into(),
         loader,
         WorkerNetworkPolicy {
-            extra_http_headers: vec![("x-cdp-test".to_owned(), "worker-ws".to_owned())],
+            extra_http_headers: vec![("x-cdp-test".to_owned(), "worker-ws".to_owned())].into(),
             ..WorkerNetworkPolicy::default()
         },
     );

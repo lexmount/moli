@@ -154,7 +154,7 @@ pub(crate) enum WorkerMessage {
         response_tx: oneshot::Sender<Result<WorkerResourceOwnerSlotDiagnostics, String>>,
     },
     /// Update the Network.setExtraHTTPHeaders state visible to worker-owned fetch/XHR.
-    SetExtraHttpHeaders(Vec<(String, String)>),
+    SetExtraHttpHeaders(moli_fetch::RequestHeaders),
     /// Update the Network.emulateNetworkConditions offline state visible to worker-owned fetch/XHR.
     SetNetworkOffline(bool),
     /// Update the effective Network.setCacheDisabled state visible to worker-owned fetch/XHR.
@@ -561,6 +561,7 @@ pub(crate) struct WorkerPendingSubresourceFetch {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkerPendingFetchContinue {
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(crate) fetch_id: u32,
     pub(crate) internal_id: u64,
     pub(crate) network_request_handle: Option<SubresourceNetworkRequestHandle>,
@@ -575,6 +576,7 @@ pub(crate) struct WorkerPendingFetchContinue {
 
 #[derive(Debug, Clone)]
 pub(crate) struct WorkerPendingXhrContinue {
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(crate) xhr_id: u32,
     pub(crate) internal_id: u64,
     pub(crate) network_request_handle: Option<SubresourceNetworkRequestHandle>,
@@ -644,7 +646,7 @@ pub(crate) struct WorkerNetworkPolicy {
     /// blob/data workers inherit it from the creator context instead.
     pub(crate) secure_context: bool,
     pub(crate) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
-    pub(crate) extra_http_headers: Vec<(String, String)>,
+    pub(crate) extra_http_headers: moli_fetch::RequestHeaders,
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
     pub(crate) network_partition_key: Option<String>,
@@ -885,10 +887,10 @@ impl WorkerHandle {
         self.devtools.clone()
     }
 
-    pub(crate) fn set_extra_http_headers(&self, headers: &[(String, String)]) {
+    pub(crate) fn set_extra_http_headers(&self, headers: &moli_fetch::RequestHeaders) {
         let _ = self
             .tx
-            .send(WorkerMessage::SetExtraHttpHeaders(headers.to_vec()));
+            .send(WorkerMessage::SetExtraHttpHeaders(headers.clone()));
     }
 
     pub(crate) fn set_network_offline(&self, offline: bool) {

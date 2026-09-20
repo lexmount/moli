@@ -1605,7 +1605,7 @@ async fn detach_from_target() {
                 network.network_enabled = true;
                 network.cache_disabled = true;
                 network.bypass_service_worker = true;
-                network.extra_headers = vec![("X-Test".into(), "1".into())];
+                network.extra_headers = vec![("X-Test".into(), "1".into())].into();
             },
         );
     bc.active_page_target_mut().css_enabled = true;
@@ -2039,7 +2039,8 @@ async fn detach_attached_page_session_removes_its_network_policy_contribution() 
             .unwrap()
             .active_page_target()
             .effective_policy()
-            .extra_headers(),
+            .extra_headers()
+            .to_byte_strings(),
         &[
             ("X-Primary".to_owned(), "primary".to_owned()),
             ("X-Attached".to_owned(), "attached".to_owned()),
@@ -2111,7 +2112,8 @@ async fn detach_attached_page_session_removes_its_network_policy_contribution() 
             .unwrap()
             .active_page_target()
             .effective_policy()
-            .extra_headers(),
+            .extra_headers()
+            .to_byte_strings(),
         &[("X-Primary".to_owned(), "primary".to_owned())]
     );
     assert_eq!(
@@ -2887,7 +2889,7 @@ async fn set_auto_attach_false_detaches_existing_target() {
                 network.network_enabled = true;
                 network.cache_disabled = true;
                 network.bypass_service_worker = true;
-                network.extra_headers = vec![("X-Test".into(), "1".into())];
+                network.extra_headers = vec![("X-Test".into(), "1".into())].into();
             },
         );
     bc.active_page_target_mut().css_enabled = true;

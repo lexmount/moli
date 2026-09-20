@@ -342,10 +342,8 @@ fn prepare_event_source_request<'s>(
     if !last_event_id.is_empty() {
         request_headers.push(("Last-Event-ID".to_owned(), last_event_id));
     }
-    let request_headers = moli_fetch::RequestHeaders::from_utf8(merge_subresource_request_headers(
-        host.extra_http_headers(),
-        &request_headers,
-    ));
+    let request_headers =
+        merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let credentials_mode = if event_source_with_credentials(scope, event_source) {
         RequestCredentialsMode::Include
     } else {
@@ -368,7 +366,7 @@ fn prepare_event_source_request<'s>(
         request_origin,
         resolved_url,
         request_headers,
-        cors_preflight_request_headers: host.extra_http_headers().to_vec(),
+        cors_preflight_request_headers: host.extra_http_headers().to_byte_strings(),
         credentials_mode,
         request_cookie_report,
         network_partition_key: active_subresource_network_partition_key(host, owner),

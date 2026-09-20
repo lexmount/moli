@@ -1263,7 +1263,7 @@ pub struct DevToolsSetExtraHeadersCommand {
     pub context: DevToolsCommandContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
-    pub headers: Vec<(String, String)>,
+    pub headers: moli_fetch::RequestHeaders,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

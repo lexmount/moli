@@ -1106,16 +1106,31 @@ impl ScriptVm {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
+        headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<AsyncSubresourceCommandExecution<PendingSubresourceContinueOutcome>> {
-        let pending = self
+        let mut pending = self
             ._context_host
             .borrow_mut()
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
+        let headers = headers.map(|override_headers| match override_headers {
+            moli_fetch::RequestHeaderOverride::CurrentRequest {
+                headers,
+                redirect_headers,
+            } => {
+                pending.redirect_headers =
+                    Some(redirect_headers.unwrap_or_else(|| pending.info.request_headers.clone()));
+                headers
+            }
+            moli_fetch::RequestHeaderOverride::RedirectChain(headers) => {
+                pending.redirect_headers = None;
+                headers
+            }
+        });
         let PendingSubresourceFetchState {
+            redirect_headers,
             request_origin,
             info,
             load,
@@ -1158,6 +1173,7 @@ impl ScriptVm {
                 let continued = self.continue_worker_owned_fetch(
                     target,
                     crate::worker::WorkerPendingFetchContinue {
+                        redirect_headers: redirect_headers.clone(),
                         fetch_id,
                         internal_id,
                         network_request_handle: info.network_request_handle,
@@ -1179,6 +1195,7 @@ impl ScriptVm {
                         .record_in_flight_worker_subresource_fetch(
                             crate::types::InFlightWorkerSubresourceFetchState {
                                 pending: PendingSubresourceFetchState {
+                                    redirect_headers: redirect_headers.clone(),
                                     request_origin,
                                     info,
                                     load,
@@ -1213,6 +1230,7 @@ impl ScriptVm {
                 let continued = self.continue_worker_owned_xhr(
                     target,
                     crate::worker::WorkerPendingXhrContinue {
+                        redirect_headers: redirect_headers.clone(),
                         xhr_id,
                         internal_id,
                         network_request_handle: info.network_request_handle,
@@ -1234,6 +1252,7 @@ impl ScriptVm {
                         .record_in_flight_worker_subresource_fetch(
                             crate::types::InFlightWorkerSubresourceFetchState {
                                 pending: PendingSubresourceFetchState {
+                                    redirect_headers: redirect_headers.clone(),
                                     request_origin,
                                     info,
                                     load,
@@ -1268,6 +1287,7 @@ impl ScriptVm {
                 let continued = self.continue_worker_owned_csp_report(
                     target,
                     crate::worker::WorkerPendingFetchContinue {
+                        redirect_headers: redirect_headers.clone(),
                         fetch_id: report_id,
                         internal_id,
                         network_request_handle: info.network_request_handle,
@@ -1298,6 +1318,7 @@ impl ScriptVm {
                 let request_body = body.unwrap_or_else(|| info.request_body.clone());
                 let request_headers = headers.unwrap_or_else(|| info.request_headers.clone());
                 let pending = PendingSubresourceFetchState {
+                    redirect_headers: redirect_headers.clone(),
                     request_origin,
                     info,
                     load,
@@ -1345,6 +1366,7 @@ impl ScriptVm {
                 );
             }
             continuation => PendingSubresourceFetchState {
+                redirect_headers: redirect_headers.clone(),
                 request_origin,
                 info,
                 load,
@@ -1415,6 +1437,7 @@ impl ScriptVm {
             request_body.clone(),
             request_headers.clone(),
         )?
+        .with_redirect_headers(pending.redirect_headers.clone())
         .with_initiator_url(&pending.info.document_url)
         .with_request_origin(pending.request_origin.clone())
         .with_request_mode(pending.request_mode)
@@ -1605,7 +1628,7 @@ impl ScriptVm {
             request_body,
             intercept_response,
             initial_network_request_headers,
-            response: _,
+            response,
         } = pending;
         if let Some(target) = WorkerOwnedFetchTarget::from_continuation(&pending_fetch.continuation)
         {
@@ -1613,6 +1636,7 @@ impl ScriptVm {
             let continued = self.continue_worker_owned_fetch(
                 target,
                 crate::worker::WorkerPendingFetchContinue {
+                    redirect_headers: pending_fetch.redirect_headers.clone(),
                     fetch_id: target.fetch_id(),
                     internal_id,
                     network_request_handle: pending_fetch.info.network_request_handle,
@@ -1648,6 +1672,7 @@ impl ScriptVm {
             let continued = self.continue_worker_owned_xhr(
                 target,
                 crate::worker::WorkerPendingXhrContinue {
+                    redirect_headers: pending_fetch.redirect_headers.clone(),
                     xhr_id: target.xhr_id(),
                     internal_id,
                     network_request_handle: pending_fetch.info.network_request_handle,
@@ -1685,12 +1710,24 @@ impl ScriptVm {
             request_body.clone(),
             original_request_headers.clone(),
         )?
+        .with_redirect_headers(pending_fetch.redirect_headers.clone())
         .with_initiator_url(&pending_fetch.info.document_url)
         .with_request_origin(pending_fetch.request_origin.clone())
         .with_request_mode(pending_fetch.request_mode)
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
         .with_subframe_context(pending_fetch.info.frame_id.is_some());
+        for redirect in &response.redirect_chain {
+            request.apply_redirect_status(redirect.status);
+        }
+        request.url = response.final_url.clone();
+        request = request.with_redirect_chain(
+            response
+                .redirect_chain
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        );
         request = match pending_fetch.info.resource_type {
             SubresourceResourceType::Script
             | SubresourceResourceType::Stylesheet
@@ -1796,6 +1833,7 @@ impl ScriptVm {
             let failed = self.fail_worker_owned_fetch_auth(
                 target,
                 crate::worker::WorkerPendingFetchContinue {
+                    redirect_headers: None,
                     fetch_id: target.fetch_id(),
                     internal_id,
                     network_request_handle: pending.pending.info.network_request_handle,
@@ -1828,6 +1866,7 @@ impl ScriptVm {
             let failed = self.fail_worker_owned_xhr_auth(
                 target,
                 crate::worker::WorkerPendingXhrContinue {
+                    redirect_headers: None,
                     xhr_id: target.xhr_id(),
                     internal_id,
                     network_request_handle: pending.pending.info.network_request_handle,
@@ -1933,6 +1972,7 @@ impl ScriptVm {
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
+            redirect_headers: _,
             request_origin,
             info,
             load,
@@ -1959,6 +1999,7 @@ impl ScriptVm {
                 let failed = self.fail_worker_owned_fetch(
                     target,
                     crate::worker::WorkerPendingFetchContinue {
+                        redirect_headers: None,
                         fetch_id: target.fetch_id(),
                         internal_id: 0,
                         network_request_handle: info.network_request_handle,
@@ -2003,6 +2044,7 @@ impl ScriptVm {
                 let failed = self.fail_worker_owned_xhr(
                     target,
                     crate::worker::WorkerPendingXhrContinue {
+                        redirect_headers: None,
                         xhr_id: target.xhr_id(),
                         internal_id: 0,
                         network_request_handle: info.network_request_handle,
@@ -2047,6 +2089,7 @@ impl ScriptVm {
                 let failed = self.fail_worker_owned_csp_report(
                     target,
                     crate::worker::WorkerPendingFetchContinue {
+                        redirect_headers: None,
                         fetch_id: target.report_id(),
                         internal_id: 0,
                         network_request_handle: info.network_request_handle,
@@ -2085,6 +2128,7 @@ impl ScriptVm {
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation => PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -2126,6 +2170,7 @@ impl ScriptVm {
             .take_pending_subresource_fetch(internal_id)
             .ok_or_else(|| anyhow!("unknown pending subresource fetch `{internal_id}`"))?;
         let PendingSubresourceFetchState {
+            redirect_headers: _,
             request_origin,
             info,
             load,
@@ -2201,6 +2246,7 @@ impl ScriptVm {
                         let fulfilled = self.fulfill_worker_owned_fetch(
                             target,
                             crate::worker::WorkerPendingFetchContinue {
+                                redirect_headers: None,
                                 fetch_id: target.fetch_id(),
                                 internal_id: 0,
                                 network_request_handle: info.network_request_handle,
@@ -2249,6 +2295,7 @@ impl ScriptVm {
                         let failed = self.fail_worker_owned_fetch(
                             target,
                             crate::worker::WorkerPendingFetchContinue {
+                                redirect_headers: None,
                                 fetch_id: target.fetch_id(),
                                 internal_id: 0,
                                 network_request_handle: info.network_request_handle,
@@ -2306,6 +2353,7 @@ impl ScriptVm {
                         let fulfilled = self.fulfill_worker_owned_xhr(
                             target,
                             crate::worker::WorkerPendingXhrContinue {
+                                redirect_headers: None,
                                 xhr_id: target.xhr_id(),
                                 internal_id: 0,
                                 network_request_handle: info.network_request_handle,
@@ -2354,6 +2402,7 @@ impl ScriptVm {
                         let failed = self.fail_worker_owned_xhr(
                             target,
                             crate::worker::WorkerPendingXhrContinue {
+                                redirect_headers: None,
                                 xhr_id: target.xhr_id(),
                                 internal_id: 0,
                                 network_request_handle: info.network_request_handle,
@@ -2404,6 +2453,7 @@ impl ScriptVm {
                 let fulfilled = self.fulfill_worker_owned_csp_report(
                     target,
                     crate::worker::WorkerPendingFetchContinue {
+                        redirect_headers: None,
                         fetch_id: target.report_id(),
                         internal_id: 0,
                         network_request_handle: info.network_request_handle,
@@ -2450,6 +2500,7 @@ impl ScriptVm {
                 return Ok(AsyncSubresourceCommandExecution::without_window_realm(()));
             }
             continuation => PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -2620,6 +2671,7 @@ impl ScriptVm {
                 &result,
             );
             let request = crate::worker::WorkerPendingFetchContinue {
+                redirect_headers: None,
                 fetch_id: target.fetch_id(),
                 internal_id,
                 network_request_handle: pending.pending.info.network_request_handle,
@@ -2680,6 +2732,7 @@ impl ScriptVm {
                 &result,
             );
             let request = crate::worker::WorkerPendingXhrContinue {
+                redirect_headers: None,
                 xhr_id: target.xhr_id(),
                 internal_id,
                 network_request_handle: pending.pending.info.network_request_handle,
@@ -2769,6 +2822,7 @@ impl ScriptVm {
             let failed = self.fail_worker_owned_fetch_response(
                 target,
                 crate::worker::WorkerPendingFetchContinue {
+                    redirect_headers: None,
                     fetch_id: target.fetch_id(),
                     internal_id,
                     network_request_handle: pending.pending.info.network_request_handle,
@@ -2799,6 +2853,7 @@ impl ScriptVm {
                 &result,
             );
             let request = crate::worker::WorkerPendingXhrContinue {
+                redirect_headers: None,
                 xhr_id: target.xhr_id(),
                 internal_id,
                 network_request_handle: pending.pending.info.network_request_handle,
@@ -2907,6 +2962,7 @@ impl ScriptVm {
                 &result,
             );
             let request = crate::worker::WorkerPendingFetchContinue {
+                redirect_headers: None,
                 fetch_id: target.fetch_id(),
                 internal_id,
                 network_request_handle: pending.pending.info.network_request_handle,
@@ -2969,6 +3025,7 @@ impl ScriptVm {
                 &result,
             );
             let request = crate::worker::WorkerPendingXhrContinue {
+                redirect_headers: None,
                 xhr_id: target.xhr_id(),
                 internal_id,
                 network_request_handle: pending.pending.info.network_request_handle,
@@ -3035,7 +3092,7 @@ impl ScriptVm {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
+        headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome> {
@@ -4082,12 +4139,26 @@ impl ScriptVm {
                     && let Some(challenge) =
                         crate::network_host::extract_subresource_auth_challenge(&response.headers)
                 {
+                    // Keep the original request for Network event replay; only the
+                    // challenged hop is used by Fetch.authRequired and auth retries.
+                    let mut challenged_request = moli_fetch::Request::new(
+                        &request_method,
+                        request_url.as_str(),
+                        request_body.clone(),
+                        request_headers.clone(),
+                    )?
+                    .with_redirect_headers(pending.redirect_headers.clone());
+                    for redirect in &response.redirect_chain {
+                        challenged_request.apply_redirect_status(redirect.status);
+                    }
+                    let challenged_body =
+                        challenged_request.body.as_ref().and(request_body.clone());
                     let info = PendingSubresourceAuthInfo {
                         internal_id,
-                        url: request_url.clone(),
-                        method: request_method.clone(),
-                        request_headers: request_headers.clone(),
-                        request_body: request_body.clone(),
+                        url: response.final_url.clone(),
+                        method: challenged_request.method,
+                        request_headers: challenged_request.request_headers,
+                        request_body: challenged_body,
                         resource_type,
                         request_cookie_report: response.request_cookie_report.clone(),
                         network_request_headers: response

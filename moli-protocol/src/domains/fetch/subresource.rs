@@ -314,6 +314,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
         if !remaining_sessions.is_empty() {
             pending.request_stage_chain =
                 Some(Box::new(PendingSubresourceFetchRequestStageChain {
+                    header_override: None,
                     url: info.url.clone(),
                     method: info.method.clone(),
                     headers: info.request_headers.clone(),

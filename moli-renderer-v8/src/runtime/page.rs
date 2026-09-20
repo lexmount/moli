@@ -32,7 +32,7 @@ pub struct RendererDocumentOptions {
     pub storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
-    pub extra_http_headers: Vec<(String, String)>,
+    pub extra_http_headers: moli_fetch::RequestHeaders,
     pub script_execution_disabled: bool,
     pub bypass_content_security_policy: bool,
     pub emulated_media: crate::protocol_types::EmulatedMediaOverrides,

@@ -791,7 +791,9 @@ async fn image_request_interception_fulfills_through_image_continuation() {
         "https://example.test/page.html",
         &loader,
     );
-    vm.set_extra_http_headers(&[("X-Image-Request".to_owned(), "intercepted".to_owned())]);
+    vm.set_extra_http_headers(
+        &vec![("X-Image-Request".to_owned(), "intercepted".to_owned())].into(),
+    );
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Image));
     vm.eval(
         r#"

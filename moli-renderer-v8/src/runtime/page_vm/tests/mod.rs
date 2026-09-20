@@ -1797,7 +1797,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
             runtime_inspector_session_restore_snapshots: vec![],
             runtime_isolated_worlds: vec![],
             permission_overrides: vec![],
-            extra_http_headers,
+            extra_http_headers: extra_http_headers.into(),
             navigator_identity: loader.browser_identity().clone(),
             document_policy_container: crate::document_runtime::DocumentPolicyContainer {
                 referrer_policy: response_referrer_policy,
@@ -3195,7 +3195,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             runtime_inspector_session_restore_snapshots: vec![],
             runtime_isolated_worlds: vec![],
             permission_overrides: vec![],
-            extra_http_headers: Vec::new(),
+            extra_http_headers: Default::default(),
             navigator_identity: loader.browser_identity().clone(),
             document_policy_container: Default::default(),
             document_default_language: None,

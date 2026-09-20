@@ -717,6 +717,8 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
             interception_session_id: Some("bidi-session-1".to_owned()),
             document_navigation_token: None,
             navigation: NavigationDispatchState {
+                redirect_chain: Vec::new(),
+                redirect_headers: None,
                 navigate_id: None,
                 owner: CommandOwnerScope::for_session("SID-background"),
                 result_projection: NavigationResultProjection::WebDriverBidi(json!({})),

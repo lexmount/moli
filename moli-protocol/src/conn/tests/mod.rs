@@ -1621,6 +1621,8 @@ fn materialized_navigation_test_state(
     requested_url: &str,
 ) -> NavigationDispatchState {
     NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id,
         owner: crate::conn::CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::Browser),
         result_projection: NavigationResultProjection::Cdp(

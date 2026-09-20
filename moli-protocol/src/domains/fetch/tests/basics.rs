@@ -1062,6 +1062,8 @@ async fn disable_clears_fetch_state() {
             interception_session_id: Some("SID-1".to_owned()),
             document_navigation_token: None,
             navigation: crate::conn::NavigationDispatchState {
+                redirect_chain: Vec::new(),
+                redirect_headers: None,
                 navigate_id: Some(1),
                 owner: crate::conn::CommandOwnerScope::for_route(
                     crate::conn::CdpSessionRoute::Browser,
@@ -1102,6 +1104,8 @@ async fn disable_clears_fetch_state() {
                 response_stage_request_id: "INT-1".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_route(
                         crate::conn::CdpSessionRoute::Browser,
@@ -1328,6 +1332,8 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 response_stage_request_id: "INT-8".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1403,6 +1409,8 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 response_stage_request_id: "INT-9".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1575,6 +1583,8 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
         interception_session_id: Some("SID-1".to_owned()),
         document_navigation_token: None,
         navigation: crate::conn::NavigationDispatchState {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
             result_projection: crate::conn::NavigationResultProjection::Cdp(

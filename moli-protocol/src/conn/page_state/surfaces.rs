@@ -334,16 +334,16 @@ impl BrowserContext {
 
     pub(crate) fn merged_extra_headers_for_target_policy(
         &self,
-        target_headers: &[(String, String)],
-    ) -> Vec<(String, String)> {
+        target_headers: &moli_fetch::RequestHeaders,
+    ) -> moli_fetch::RequestHeaders {
         merge_extra_header_layers(&[
-            self.global_extra_headers.as_slice(),
-            self.default_extra_headers.as_slice(),
+            &self.global_extra_headers,
+            &self.default_extra_headers,
             target_headers,
         ])
     }
 
-    pub fn effective_extra_headers(&self) -> Vec<(String, String)> {
+    pub fn effective_extra_headers(&self) -> moli_fetch::RequestHeaders {
         let target_headers = self
             .page_targets
             .active()
@@ -355,7 +355,7 @@ impl BrowserContext {
     pub(crate) fn effective_extra_headers_for_target(
         &self,
         target_id: &str,
-    ) -> Vec<(String, String)> {
+    ) -> moli_fetch::RequestHeaders {
         let target_headers = self
             .page_target(target_id)
             .map(PageTargetHost::effective_policy)
@@ -618,11 +618,11 @@ impl CdpConnection {
     }
 }
 
-fn merge_extra_header_layers(layers: &[&[(String, String)]]) -> Vec<(String, String)> {
-    let mut headers = Vec::new();
+fn merge_extra_header_layers(layers: &[&moli_fetch::RequestHeaders]) -> moli_fetch::RequestHeaders {
+    let mut headers = moli_fetch::RequestHeaders::default();
     for layer in layers {
         for (name, value) in *layer {
-            headers.retain(|(existing, _)| existing != name);
+            headers.retain(|(existing, _)| !existing.eq_ignore_ascii_case(name));
             headers.push((name.clone(), value.clone()));
         }
     }

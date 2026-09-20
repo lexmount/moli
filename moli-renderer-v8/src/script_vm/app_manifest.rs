@@ -62,7 +62,7 @@ impl ScriptVm {
         } else {
             RequestCredentialsMode::Omit
         };
-        let request_headers = host.extra_http_headers().to_vec();
+        let request_headers = host.extra_http_headers().clone();
         let cancel_handle = FetchCancelHandle::new();
         let Some(load) = resource_loader.register_load(
             ResourceLoadKind::Manifest,
@@ -92,7 +92,7 @@ impl ScriptVm {
             ),
             RendererAppManifestNetworkObservation::new(
                 self.root_frame_id.clone(),
-                moli_fetch::RequestHeaders::from_utf8(request_headers),
+                request_headers,
                 credentials_mode,
                 load,
                 cancel_handle,

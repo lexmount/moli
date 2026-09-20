@@ -507,6 +507,8 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
 
     let requested_url = Url::parse("http://127.0.0.1:1/post").unwrap();
     let navigation_state = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
         result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -596,6 +598,8 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
 
     let requested_url = Url::parse("http://127.0.0.1:1/upload").unwrap();
     let navigation_state = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
         result_projection: crate::conn::NavigationResultProjection::Cdp(

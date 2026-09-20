@@ -1076,7 +1076,7 @@ pub(crate) struct PageVmEnvConfig {
         Vec<RendererInspectorSessionRestoreSnapshot>,
     pub(crate) runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
     pub(crate) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
-    pub(crate) extra_http_headers: Vec<(String, String)>,
+    pub(crate) extra_http_headers: moli_fetch::RequestHeaders,
     pub(crate) navigator_identity: moli_browser_profile::BrowserIdentityProfile,
     pub(crate) document_policy_container: crate::document_runtime::DocumentPolicyContainer,
     pub(crate) document_default_language: Option<String>,
@@ -1602,7 +1602,7 @@ pub(crate) struct PageVm {
     pub(super) runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub(super) runtime_inspector_protocol_configurations:
         BTreeMap<DevToolsSessionKey, RendererInspectorProtocolConfiguration>,
-    pub(super) extra_http_headers: Vec<(String, String)>,
+    pub(super) extra_http_headers: moli_fetch::RequestHeaders,
     pub(super) bypass_content_security_policy: bool,
     pub(super) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     pub(super) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,

@@ -162,7 +162,9 @@ async fn registry_rejects_retired_generation_without_hiding_current_generation()
 #[tokio::test(flavor = "current_thread")]
 async fn registry_replaces_future_transport_without_rebinding_existing_loads() {
     let original = ResourceRequestClient::new(&FetchConfig::default()).expect("original transport");
-    original.set_extra_http_headers(&[("x-request-policy".to_owned(), "original".to_owned())]);
+    original.set_extra_http_headers(
+        &vec![("x-request-policy".to_owned(), "original".to_owned())].into(),
+    );
     let original_runtime = original.browser_resource_runtime();
     let authority = document_loader(original.handle(), 1, "https://example.test/one");
     let existing_load = authority
@@ -178,9 +180,9 @@ async fn registry_replaces_future_transport_without_rebinding_existing_loads() {
         ResourceRequestClient::new(&replacement_config).expect("replacement resource transport");
     let replacement_runtime = replacement.browser_resource_runtime();
     let replacement_view = authority.with_replacement_transport(replacement.handle());
-    replacement_view
-        .request_client()
-        .set_extra_http_headers(&[("x-request-policy".to_owned(), "replacement".to_owned())]);
+    replacement_view.request_client().set_extra_http_headers(
+        &vec![("x-request-policy".to_owned(), "replacement".to_owned())].into(),
+    );
     let registry = DocumentResourceLoaderRegistry::default();
     let document_owner = WindowDocumentOwner::Frame(owner(1));
     registry.register(document_owner, authority.clone());

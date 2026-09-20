@@ -70,20 +70,11 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     ) && pending.navigation.requested_url.scheme() != "data";
 
     if should_handle_auth {
-        let method = pending.navigation.request_method.clone();
-        let raw_url = pending.navigation.requested_url.to_string();
-        let body = pending.navigation.clone_request_body_bytes();
-        let request_headers = pending.navigation.request_headers.clone();
         let has_auth_credentials = auth.is_some();
         if pending.intercept_response && navigation_response_stage_auth_can_stream(auth.as_ref()) {
             match conn
-                .fetch_navigation_streaming_raw_response_for_owner_async(
-                    &navigate_owner,
-                    pending.navigation.request_load_policy,
-                    &method,
-                    &raw_url,
-                    body,
-                    request_headers,
+                .fetch_navigation_streaming_raw_response_for_navigation_async(
+                    &pending.navigation,
                     auth,
                 )
                 .await
@@ -134,25 +125,12 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
             // before libcurl has completed the credential retry, so keep
             // credential replay on the buffered path until the fetch runtime
             // can mark intermediate auth responses separately.
-            conn.fetch_navigation_auth_raw_response_for_owner_async(
-                &navigate_owner,
-                pending.navigation.request_load_policy,
-                &method,
-                &raw_url,
-                body,
-                request_headers,
-                auth,
-            )
-            .await
+            conn.fetch_navigation_auth_raw_response_for_navigation_async(&pending.navigation, auth)
+                .await
         } else {
             match conn
-                .fetch_navigation_streaming_raw_response_for_owner_async(
-                    &navigate_owner,
-                    pending.navigation.request_load_policy,
-                    &method,
-                    &raw_url,
-                    body,
-                    request_headers,
+                .fetch_navigation_streaming_raw_response_for_navigation_async(
+                    &pending.navigation,
                     auth,
                 )
                 .await
@@ -217,15 +195,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
 
     if pending.intercept_response && pending.navigation.requested_url.scheme() != "data" {
         match conn
-            .fetch_navigation_streaming_raw_response_for_owner_async(
-                &navigate_owner,
-                pending.navigation.request_load_policy,
-                &pending.navigation.request_method,
-                pending.navigation.requested_url.as_str(),
-                pending.navigation.clone_request_body_bytes(),
-                pending.navigation.request_headers.clone(),
-                None,
-            )
+            .fetch_navigation_streaming_raw_response_for_navigation_async(&pending.navigation, None)
             .await
         {
             Ok(response) => {
@@ -845,6 +815,26 @@ fn register_navigation_auth_required_event(
     request_cookie_report: Option<StoredCookieQueryReport>,
     response: NetworkFetchResult<RawResponse>,
 ) -> crate::conn::BackgroundProtocolEvent {
+    let mut navigation = pending.navigation.clone();
+    let head = response.response();
+    if !head.redirect_chain.is_empty() {
+        let mut request = moli_fetch::Request::get_with_url(navigation.requested_url.clone())
+            .with_redirect_headers(navigation.redirect_headers.take());
+        request.method = navigation.request_method.clone();
+        request.body = navigation.clone_request_body_bytes();
+        request.request_headers = navigation.request_headers.clone();
+        for redirect in &head.redirect_chain {
+            request.apply_redirect_status(redirect.status);
+        }
+        navigation.requested_url = head.final_url.clone();
+        navigation.request_method = request.method;
+        navigation.request_headers = request.request_headers;
+        navigation.request_body_bytes = request.body;
+        if navigation.request_body_bytes.is_none() {
+            navigation.request_body = None;
+        }
+    }
+    navigation.redirect_chain = head.redirect_chain.clone();
     let blocked_intercepts = navigation_auth_required_blocked_intercepts(conn, pending);
     let mut pending_auth = crate::conn::PendingFetchAuthNavigation {
         owner_session_id: pending.navigation.owner.session_id().map(str::to_owned),
@@ -854,7 +844,7 @@ fn register_navigation_auth_required_event(
         fetch_request_id: pending.fetch_request_id.clone(),
         response_stage_request_id: pending.fetch_request_id.clone(),
         document_navigation_token: pending.document_navigation_token.clone(),
-        navigation: pending.navigation.clone(),
+        navigation,
         request_cookie_report,
         auth_response: std::sync::Arc::new(response),
         challenge,

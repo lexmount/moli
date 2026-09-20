@@ -138,7 +138,10 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert_eq!(
-            bc.active_page_target().effective_policy().extra_headers(),
+            bc.active_page_target()
+                .effective_policy()
+                .extra_headers()
+                .to_byte_strings(),
             vec![("X-Target".into(), "A".into())]
         );
         assert_eq!(
@@ -202,7 +205,10 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert_eq!(
-            bc.active_page_target().effective_policy().extra_headers(),
+            bc.active_page_target()
+                .effective_policy()
+                .extra_headers()
+                .to_byte_strings(),
             vec![("X-Target".into(), "B".into())]
         );
         assert_eq!(

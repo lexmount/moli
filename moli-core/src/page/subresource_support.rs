@@ -30,7 +30,7 @@ impl Page {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
+        headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome> {
@@ -52,7 +52,7 @@ impl Page {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<moli_fetch::RequestHeaders>,
+        headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingPageCommand> {

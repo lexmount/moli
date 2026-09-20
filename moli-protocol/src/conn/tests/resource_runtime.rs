@@ -103,6 +103,8 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
 
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner,
         result_projection: NavigationResultProjection::Cdp(json!({
@@ -3344,7 +3346,8 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
         inactive
             .active_page_target()
             .effective_policy()
-            .extra_headers(),
+            .extra_headers()
+            .to_byte_strings(),
         vec![("X-Test".to_owned(), "direct".to_owned())]
     );
     assert_eq!(
@@ -3471,7 +3474,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         vec!["*://blocked-background.test/*".to_owned()]
     );
     assert_eq!(
-        staged.effective_policy().extra_headers(),
+        staged.effective_policy().extra_headers().to_byte_strings(),
         vec![("X-Background".to_owned(), "direct".to_owned())]
     );
     assert_eq!(

@@ -1193,6 +1193,7 @@ enum WorkerFetchResponseParts {
 
 #[derive(Clone)]
 pub(super) struct PendingWorkerFetchNetworkRecord {
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) internal_id: u64,
     pub(super) url: Url,
     pub(super) method: String,
@@ -1201,6 +1202,28 @@ pub(super) struct PendingWorkerFetchNetworkRecord {
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(super) intercept_response: bool,
     pub(super) handle_auth_requests: bool,
+}
+
+impl PendingWorkerFetchNetworkRecord {
+    fn follow_redirects(&mut self, head: &ResponseHead) {
+        if head.redirect_chain.is_empty() {
+            return;
+        }
+        let mut request = Request::get_with_url(self.url.clone())
+            .with_redirect_headers(self.redirect_headers.take());
+        request.method = std::mem::take(&mut self.method);
+        request.body = self.request_body.clone().map(String::into_bytes);
+        request.request_headers = std::mem::take(&mut self.request_headers);
+        for redirect in &head.redirect_chain {
+            request.apply_redirect_status(redirect.status);
+        }
+        self.url = head.final_url.clone();
+        self.method = request.method;
+        self.request_headers = request.request_headers;
+        if request.body.is_none() {
+            self.request_body = None;
+        }
+    }
 }
 
 pub(super) struct PendingWorkerXhr {
@@ -1519,7 +1542,7 @@ pub(crate) struct WorkerGlobalState {
     /// Whether this worker global is a secure context for `[SecureContext]` APIs.
     pub(super) secure_context: bool,
     /// Network.setExtraHTTPHeaders headers inherited from the owning page/CDP session.
-    pub(super) extra_http_headers: Vec<(String, String)>,
+    pub(super) extra_http_headers: moli_fetch::RequestHeaders,
     /// Permission overrides inherited from the owning page/CDP session.
     pub(super) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     /// Network.emulateNetworkConditions offline state inherited from the owning page/CDP session.
@@ -6583,10 +6606,10 @@ fn worker_url_blocked(patterns: &[String], url: &Url) -> bool {
 }
 
 fn merge_worker_request_headers(
-    context_headers: &[(String, String)],
+    context_headers: &moli_fetch::RequestHeaders,
     request_headers: &moli_fetch::RequestHeaders,
 ) -> moli_fetch::RequestHeaders {
-    let mut headers = moli_fetch::RequestHeaders::from_utf8(context_headers.to_vec());
+    let mut headers = context_headers.clone();
     headers.overlay(request_headers.clone());
     headers
 }

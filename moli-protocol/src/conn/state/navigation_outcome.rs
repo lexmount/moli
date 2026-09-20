@@ -294,6 +294,8 @@ impl NavigationResultProjection {
 
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
+    pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub navigate_id: Option<u64>,
     pub(crate) owner: CommandOwnerScope,
     pub(crate) result_projection: NavigationResultProjection,

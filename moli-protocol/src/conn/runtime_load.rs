@@ -1560,11 +1560,16 @@ impl CdpConnection {
         &self,
         navigation: &NavigationDispatchState,
     ) -> TargetNavigationLoadInputs {
-        apply_navigation_request_load_policy(
+        let mut inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(&navigation.owner),
             navigation.request_load_policy,
         )
-        .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(navigation))
+        .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(
+            navigation,
+        ));
+        inputs.redirect_headers = navigation.redirect_headers.clone();
+        inputs.redirect_chain = navigation.redirect_chain.clone();
+        inputs
     }
 
     pub(crate) fn prepared_document_commit_configuration_for_owner(
@@ -2215,8 +2220,7 @@ impl CdpConnection {
         raw_url: &str,
         load_inputs: TargetNavigationLoadInputs,
     ) -> anyhow::Result<LoadedNavigation> {
-        let request_headers =
-            moli_fetch::RequestHeaders::from(load_inputs.extra_http_headers.clone());
+        let request_headers = load_inputs.extra_http_headers.clone();
         let navigation = self
             .load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
                 owner,
@@ -3059,20 +3063,16 @@ impl CdpConnection {
             .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
-    pub(crate) async fn fetch_navigation_auth_raw_response_for_owner_async(
+    pub(crate) async fn fetch_navigation_auth_raw_response_for_navigation_async(
         &mut self,
-        owner: &CommandOwnerScope,
-        request_load_policy: NavigationRequestLoadPolicy,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        request_headers: moli_fetch::RequestHeaders,
+        navigation: &NavigationDispatchState,
         auth: SubresourceAuthCredentials,
     ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
-        let load_inputs = apply_navigation_request_load_policy(
-            self.navigation_load_inputs_for_owner(owner),
-            request_load_policy,
-        );
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
+        let method = &navigation.request_method;
+        let raw_url = navigation.requested_url.as_str();
+        let body = navigation.clone_request_body_bytes();
+        let request_headers = navigation.request_headers.clone();
         validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
 
         let mut request = Request::new_browser_bytes(
@@ -3086,6 +3086,8 @@ impl CdpConnection {
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
         .with_context(|| format!("failed to build request for `{raw_url}`"))?
+        .with_redirect_headers(load_inputs.redirect_headers.clone())
+        .with_redirect_chain(load_inputs.redirect_chain.clone())
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3128,26 +3130,18 @@ impl CdpConnection {
         .await
     }
 
-    pub(crate) async fn fetch_navigation_streaming_raw_response_for_owner_async(
+    pub(crate) async fn fetch_navigation_streaming_raw_response_for_navigation_async(
         &mut self,
-        owner: &CommandOwnerScope,
-        request_load_policy: NavigationRequestLoadPolicy,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        request_headers: moli_fetch::RequestHeaders,
+        navigation: &NavigationDispatchState,
         auth: Option<SubresourceAuthCredentials>,
     ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        let load_inputs = apply_navigation_request_load_policy(
-            self.navigation_load_inputs_for_owner(owner),
-            request_load_policy,
-        );
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.fetch_navigation_streaming_raw_response_with_load_inputs_async(
             &load_inputs,
-            method,
-            raw_url,
-            body,
-            request_headers,
+            &navigation.request_method,
+            navigation.requested_url.as_str(),
+            navigation.clone_request_body_bytes(),
+            navigation.request_headers.clone(),
             auth,
         )
         .await
@@ -3175,6 +3169,8 @@ impl CdpConnection {
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
         .with_context(|| format!("failed to build request for `{raw_url}`"))?
+        .with_redirect_headers(load_inputs.redirect_headers.clone())
+        .with_redirect_chain(load_inputs.redirect_chain.clone())
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);

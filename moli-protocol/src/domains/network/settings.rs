@@ -103,7 +103,7 @@ pub(super) fn network_offline_for_emulation_command(
 
 pub(super) fn extra_http_headers_for_command(
     cmd: &Cmd<'_>,
-) -> Result<Vec<(String, String)>, CommandOutputPlan> {
+) -> Result<moli_fetch::RequestHeaders, CommandOutputPlan> {
     let params: SetExtraHttpHeadersParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => return Err(CommandOutputPlan::error(-32602, "InvalidParams")),
@@ -134,11 +134,12 @@ pub(crate) fn user_agent_override_for_command(
 
 fn extra_http_headers_from_params(
     params: SetExtraHttpHeadersParams,
-) -> Option<Vec<(String, String)>> {
+) -> Option<moli_fetch::RequestHeaders> {
     params.headers.inner().as_object().map(|headers| {
         headers
             .iter()
             .filter_map(|(name, value)| value.as_str().map(|v| (name.clone(), v.to_owned())))
             .collect::<Vec<_>>()
+            .into()
     })
 }

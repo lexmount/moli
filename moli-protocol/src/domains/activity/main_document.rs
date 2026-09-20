@@ -933,6 +933,8 @@ mod tests {
 
     fn navigation_state() -> NavigationDispatchState {
         NavigationDispatchState {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             navigate_id: Some(77),
             owner: CommandOwnerScope::for_session("SID-nav"),
             result_projection: NavigationResultProjection::Cdp(

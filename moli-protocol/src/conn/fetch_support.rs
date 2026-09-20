@@ -1810,7 +1810,7 @@ impl PendingSubresourceFetchRequest {
         url: Option<Url>,
         method: Option<String>,
         body: Option<String>,
-        headers: Option<moli_fetch::RequestHeaders>,
+        headers: Option<moli_fetch::RequestHeaderOverride>,
     ) {
         let Some(chain) = self.request_stage_chain.as_mut() else {
             return;
@@ -1825,7 +1825,8 @@ impl PendingSubresourceFetchRequest {
             chain.body = Some(body);
         }
         if let Some(headers) = headers {
-            chain.headers = headers;
+            chain.headers = headers.headers().clone();
+            chain.header_override = Some(headers);
             chain.request_cookie_report = None;
         }
     }
@@ -1836,7 +1837,7 @@ impl PendingSubresourceFetchRequest {
         Option<Url>,
         Option<String>,
         Option<Option<String>>,
-        Option<moli_fetch::RequestHeaders>,
+        Option<moli_fetch::RequestHeaderOverride>,
     ) {
         let Some(chain) = self.request_stage_chain.as_ref() else {
             return (None, None, None, None);
@@ -1845,7 +1846,7 @@ impl PendingSubresourceFetchRequest {
             Some(chain.url.clone()),
             Some(chain.method.clone()),
             Some(chain.body.clone()),
-            Some(chain.headers.clone()),
+            chain.header_override.clone(),
         )
     }
 
@@ -1863,6 +1864,7 @@ impl PendingSubresourceFetchRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingSubresourceFetchRequestStageChain {
+    pub header_override: Option<moli_fetch::RequestHeaderOverride>,
     pub url: Url,
     pub method: String,
     pub headers: moli_fetch::RequestHeaders,
@@ -2094,7 +2096,7 @@ impl CdpConnection {
             url,
             method,
             body,
-            headers,
+            headers.map(Into::into),
             intercept_response,
             handle_auth_requests,
         )

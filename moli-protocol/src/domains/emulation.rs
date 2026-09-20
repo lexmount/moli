@@ -1465,7 +1465,7 @@ fn start_network_conditions_update_for_current_route(
 fn start_extra_headers_for_current_route(
     conn: &mut CdpConnection,
     route: &CdpSessionRoute,
-    headers: Vec<(String, String)>,
+    headers: moli_fetch::RequestHeaders,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let target = pending_emulation_target_for_route(conn, route)?;
     let owner = CommandOwnerScope::for_route(route.clone());

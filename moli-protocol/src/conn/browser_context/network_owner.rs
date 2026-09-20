@@ -197,12 +197,12 @@ impl TargetSessionOwnerMut<'_> {
 
     fn start_set_extra_http_headers(
         mut self,
-        extra_headers: Vec<(String, String)>,
+        extra_headers: moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingPageCommand>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.extra_headers = extra_headers;
         });
-        let headers = self.effective_policy().extra_headers().to_vec();
+        let headers = self.effective_policy().extra_headers().clone();
         let effective_headers = self.effective_extra_headers_for_target_policy(headers);
         let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
@@ -214,13 +214,13 @@ impl TargetSessionOwnerMut<'_> {
 
     fn start_set_target_extra_http_headers(
         mut self,
-        extra_headers: Vec<(String, String)>,
+        extra_headers: moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingPageCommand>, String> {
         let headers = self.mutate_page_state(|state, _session_key| {
             state
                 .network_policy
                 .replace_base_extra_headers(extra_headers);
-            state.effective_policy().extra_headers().to_vec()
+            state.effective_policy().extra_headers().clone()
         });
         let effective_headers = self.effective_extra_headers_for_target_policy(headers);
         let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
@@ -236,7 +236,7 @@ impl TargetSessionOwnerMut<'_> {
     ) -> Result<Option<PendingPageCommand>, String> {
         let policy = self.effective_policy();
         let effective_headers =
-            self.effective_extra_headers_for_target_policy(policy.extra_headers().to_vec());
+            self.effective_extra_headers_for_target_policy(policy.extra_headers().clone());
         let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
         };
@@ -570,7 +570,7 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn set_global_extra_headers(&mut self, extra_headers: Vec<(String, String)>) {
+    pub(crate) fn set_global_extra_headers(&mut self, extra_headers: moli_fetch::RequestHeaders) {
         self.global_extra_headers = extra_headers.clone();
         if let Some(browser_context) = self.browser_context.as_mut() {
             browser_context.global_extra_headers = extra_headers.clone();
@@ -642,7 +642,7 @@ impl CdpConnection {
     pub(crate) fn start_set_extra_http_headers_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-        extra_headers: Vec<(String, String)>,
+        extra_headers: moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingPageCommand>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
@@ -653,7 +653,7 @@ impl CdpConnection {
     pub(crate) fn start_set_target_extra_http_headers_for_owner(
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
-        extra_headers: Vec<(String, String)>,
+        extra_headers: moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingPageCommand>, String> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
@@ -912,7 +912,7 @@ mod tests {
             network.cache_disabled = true;
             network.bypass_service_worker = true;
             network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
-            network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())];
+            network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())].into();
         }
         let active_offline = active_session_state_mut(&mut active).set_network_offline(true);
 
@@ -939,7 +939,8 @@ mod tests {
             active
                 .active_page_target()
                 .effective_policy()
-                .extra_headers(),
+                .extra_headers()
+                .to_byte_strings(),
             vec![("X-Test".to_owned(), "active".to_owned())]
         );
         assert!(active_offline);
@@ -955,7 +956,7 @@ mod tests {
             network.cache_disabled = true;
             network.bypass_service_worker = true;
             network.blocked_url_patterns = vec!["*://background-blocked.test/*".to_owned()];
-            network.extra_headers = vec![("X-Test".to_owned(), "background".to_owned())];
+            network.extra_headers = vec![("X-Test".to_owned(), "background".to_owned())].into();
         }
         let background_offline =
             background_session_state_mut(&mut background).set_network_offline(true);
@@ -967,7 +968,10 @@ mod tests {
             vec!["*://background-blocked.test/*"]
         );
         assert_eq!(
-            background.effective_policy().extra_headers(),
+            background
+                .effective_policy()
+                .extra_headers()
+                .to_byte_strings(),
             vec![("X-Test".to_owned(), "background".to_owned())]
         );
         assert!(background_offline);

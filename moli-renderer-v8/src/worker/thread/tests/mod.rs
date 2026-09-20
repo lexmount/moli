@@ -63,9 +63,9 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 #[tokio::test(flavor = "current_thread")]
 async fn worker_loader_shares_backend_without_sharing_page_policy() {
     let creator = ResourceRequestClient::new(&FetchConfig::default()).expect("creator loader");
-    creator.set_extra_http_headers(&[("x-owner".to_owned(), "page".to_owned())]);
+    creator.set_extra_http_headers(&vec![("x-owner".to_owned(), "page".to_owned())].into());
     let policy = WorkerNetworkPolicy {
-        extra_http_headers: vec![("x-owner".to_owned(), "worker".to_owned())],
+        extra_http_headers: vec![("x-owner".to_owned(), "worker".to_owned())].into(),
         network_offline: true,
         ..WorkerNetworkPolicy::default()
     };
@@ -847,6 +847,7 @@ fn pending_worker_fetch_continue(
     intercept_response: bool,
 ) -> WorkerPendingFetchContinue {
     WorkerPendingFetchContinue {
+        redirect_headers: None,
         fetch_id,
         internal_id,
         network_request_handle: Some(owner_assigned_request_handle(internal_id)),
@@ -867,6 +868,7 @@ fn pending_worker_xhr_continue(
     intercept_response: bool,
 ) -> WorkerPendingXhrContinue {
     WorkerPendingXhrContinue {
+        redirect_headers: None,
         xhr_id,
         internal_id,
         network_request_handle: Some(owner_assigned_request_handle(internal_id)),

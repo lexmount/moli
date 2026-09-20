@@ -648,6 +648,8 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
         "INT-1".to_owned(),
         None,
         NavigationDispatchState {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
             result_projection: crate::conn::NavigationResultProjection::Cdp(

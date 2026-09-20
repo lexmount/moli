@@ -505,6 +505,7 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
     pub(super) load: crate::network::loads::ResourceLoadLease,

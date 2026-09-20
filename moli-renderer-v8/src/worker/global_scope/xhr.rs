@@ -549,6 +549,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         prepared.request_headers,
         prepared.credentials_mode,
         None,
+        None,
+        Vec::new(),
     );
 
     true
@@ -1008,12 +1010,13 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                 return;
             };
             let response_head = response.head();
-            pending.network_record.clone().and_then(|record| {
+            pending.network_record.clone().and_then(|mut record| {
                 if record.handle_auth_requests
                     && matches!(response_head.status, 401 | 407)
                     && let Some(challenge) =
                         extract_subresource_auth_challenge(&response_head.headers)
                 {
+                    record.follow_redirects(&response_head);
                     let response_body = response.subresource_response_body();
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         head: response_head.clone(),

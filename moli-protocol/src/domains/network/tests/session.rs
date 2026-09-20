@@ -134,7 +134,7 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
     assert!(configuration.bypass_service_worker);
     assert!(configuration.network_offline);
     assert_eq!(
-        configuration.extra_http_headers,
+        configuration.extra_http_headers.to_byte_strings(),
         [("X-During-Navigation".to_owned(), "current".to_owned())]
     );
     assert_eq!(
@@ -376,7 +376,7 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     assert!(policy.cache_disabled());
     assert!(policy.bypass_service_worker());
     assert_eq!(
-        policy.extra_headers(),
+        policy.extra_headers().to_byte_strings(),
         [
             ("X-Primary".to_owned(), "primary".to_owned()),
             ("x-shared".to_owned(), "aux".to_owned()),
@@ -411,7 +411,7 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
-        policy.extra_headers(),
+        policy.extra_headers().to_byte_strings(),
         [
             ("X-Aux".to_owned(), "aux".to_owned()),
             ("x-shared".to_owned(), "aux".to_owned()),
@@ -441,7 +441,7 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
-        policy.extra_headers(),
+        policy.extra_headers().to_byte_strings(),
         [
             ("X-Aux".to_owned(), "aux".to_owned()),
             ("x-shared".to_owned(), "aux".to_owned()),

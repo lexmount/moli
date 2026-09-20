@@ -641,7 +641,7 @@ impl CdpConnection {
         Some(PendingDownloadOwnerContext {
             browser_context_id,
             frame_id,
-            request_headers: request_headers.into(),
+            request_headers,
             initiator_url,
         })
     }
@@ -1542,9 +1542,9 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-download".to_owned());
         browser_context.set_active_target_id("TID-active");
         browser_context.default_extra_headers =
-            vec![("X-Context-Default".to_owned(), "default".to_owned())];
+            vec![("X-Context-Default".to_owned(), "default".to_owned())].into();
         browser_context.global_extra_headers =
-            vec![("X-Context-Global".to_owned(), "global".to_owned())];
+            vec![("X-Context-Global".to_owned(), "global".to_owned())].into();
 
         let mut background = PageTargetHost::with_url(
             "TID-background".to_owned(),

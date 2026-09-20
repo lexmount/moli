@@ -114,6 +114,8 @@ fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     let navigation = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner: CommandOwnerScope::for_session("SID-1"),
         result_projection: NavigationResultProjection::Cdp(json!({
@@ -174,13 +176,8 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
             .await
             .expect_err("offline streaming response fetch must fail"),
         ctx.conn
-            .fetch_navigation_auth_raw_response_for_owner_async(
-                &navigation.owner,
-                navigation.request_load_policy,
-                method,
-                url,
-                None,
-                headers.clone(),
+            .fetch_navigation_auth_raw_response_for_navigation_async(
+                &navigation,
                 SubresourceAuthCredentials {
                     target: SubresourceAuthTarget::Server,
                     scheme: SubresourceAuthScheme::Basic,

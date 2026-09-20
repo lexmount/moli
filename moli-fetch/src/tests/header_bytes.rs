@@ -227,3 +227,78 @@ async fn http_header_bytes_survive_disk_cache_reopen() -> Result<()> {
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn current_hop_headers_expire_before_redirect_method_rewrite_in_all_transports() -> Result<()>
+{
+    for status in [302, 307] {
+        for mode in ["buffered", "html", "raw"] {
+            let listener = TcpListener::bind("127.0.0.1:0").await?;
+            let url = format!("http://{}/start", listener.local_addr()?);
+            let redirect = format!(
+                "HTTP/1.1 {status} Redirect\r\nLocation: /final\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            ).into_bytes();
+            let server = tokio::spawn(serve_responses(listener, vec![redirect, response(b"")]));
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            let original = crate::RequestHeaders::from_bytes(vec![
+                ("X-Raw".into(), vec![0xe9, 0xff]),
+                ("Content-Type".into(), b"text/plain".to_vec()),
+            ]);
+            let request = Request::new(
+                "POST",
+                &url,
+                Some("body".into()),
+                vec![
+                    ("X-Raw".into(), "ÿ".into()),
+                    ("Content-Type".into(), "application/json".into()),
+                ],
+            )?
+            .with_redirect_headers(Some(original));
+            let (head, body) = match mode {
+                "buffered" => client.fetch(request).await?.into_body(),
+                "html" => client.fetch_html_stream(request).await?.into_body(),
+                "raw" => client
+                    .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+                    .await?
+                    .into_body(),
+                _ => unreachable!(),
+            };
+            body.into_materialized_bytes().await?;
+            assert!(head.redirected, "{mode} {status}");
+            let requests = server.await??;
+            assert_eq!(requests.len(), 2, "{mode} {status}");
+            assert!(
+                requests[0]
+                    .windows(b"X-Raw: \xc3\xbf\r\n".len())
+                    .any(|value| value == b"X-Raw: \xc3\xbf\r\n"),
+                "{mode} {status}"
+            );
+            assert!(
+                requests[1]
+                    .windows(b"X-Raw: \xe9\xff\r\n".len())
+                    .any(|value| value == b"X-Raw: \xe9\xff\r\n"),
+                "{mode} {status}"
+            );
+            if status == 302 {
+                assert!(requests[1].starts_with(b"GET /final "), "{mode}");
+                assert!(
+                    !requests[1]
+                        .windows(b"Content-Type:".len())
+                        .any(|value| value.eq_ignore_ascii_case(b"Content-Type:")),
+                    "{mode}"
+                );
+            } else {
+                assert!(requests[1].starts_with(b"POST /final "), "{mode}");
+                assert!(
+                    requests[1]
+                        .windows(b"Content-Type: text/plain\r\n".len())
+                        .any(|value| value.eq_ignore_ascii_case(b"Content-Type: text/plain\r\n")),
+                    "{mode}"
+                );
+            }
+            assert!(client.shutdown().is_clean());
+        }
+    }
+    Ok(())
+}

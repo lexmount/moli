@@ -31,6 +31,7 @@ pub struct Request {
     pub body: Option<Vec<u8>>,
     /// Wire bytes, with the source encoding resolved before header merging.
     pub request_headers: crate::RequestHeaders,
+    redirect_headers: Option<crate::RequestHeaders>,
     cache_mode: RequestCacheMode,
     pub resource_type: RequestResourceType,
     subresource_request_metadata: Option<SubresourceRequestMetadata>,
@@ -52,6 +53,47 @@ pub struct Request {
     timeout_policy: RequestTimeoutPolicy,
     network_observation_recorder: Option<NetworkObservationRecorder>,
     browser_identity: Option<std::sync::Arc<moli_browser_profile::BrowserIdentityProfile>>,
+}
+
+/// The lifetime of request headers supplied by an interception command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RequestHeaderOverride {
+    /// CDP overrides expire when the request follows a redirect.
+    CurrentRequest {
+        headers: crate::RequestHeaders,
+        /// A preceding persistent override, or the renderer's original headers when absent.
+        redirect_headers: Option<crate::RequestHeaders>,
+    },
+    /// BiDi modifies the underlying request header list.
+    RedirectChain(crate::RequestHeaders),
+}
+
+impl RequestHeaderOverride {
+    pub fn current_request(headers: crate::RequestHeaders, previous: Option<&Self>) -> Self {
+        let redirect_headers = match previous {
+            Some(Self::RedirectChain(headers)) => Some(headers.clone()),
+            Some(Self::CurrentRequest {
+                redirect_headers, ..
+            }) => redirect_headers.clone(),
+            None => None,
+        };
+        Self::CurrentRequest {
+            headers,
+            redirect_headers,
+        }
+    }
+
+    pub fn headers(&self) -> &crate::RequestHeaders {
+        match self {
+            Self::CurrentRequest { headers, .. } | Self::RedirectChain(headers) => headers,
+        }
+    }
+}
+
+impl From<crate::RequestHeaders> for RequestHeaderOverride {
+    fn from(headers: crate::RequestHeaders) -> Self {
+        Self::RedirectChain(headers)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,6 +429,7 @@ impl Request {
             method: "GET".to_owned(),
             body: None,
             request_headers: crate::RequestHeaders::default(),
+            redirect_headers: None,
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -418,6 +461,7 @@ impl Request {
             method: "GET".to_owned(),
             body: None,
             request_headers: crate::RequestHeaders::default(),
+            redirect_headers: None,
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -482,6 +526,7 @@ impl Request {
             method: method.to_owned(),
             body,
             request_headers: request_headers.into(),
+            redirect_headers: None,
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -727,13 +772,22 @@ impl Request {
             .context("browser fetch requires an explicit environment origin")
     }
 
+    /// Restore request-scoped interception headers before applying redirect rules.
     pub fn apply_redirect_status(&mut self, status: u16) {
+        if let Some(headers) = self.redirect_headers.take() {
+            self.request_headers = headers;
+        }
         if redirect_status_rewrites_to_get(status, &self.method) {
             self.method = "GET".to_owned();
             self.body = None;
             self.request_headers
                 .retain(|(name, _)| !is_request_body_header_name(name));
         }
+    }
+
+    pub fn with_redirect_headers(mut self, headers: Option<crate::RequestHeaders>) -> Self {
+        self.redirect_headers = headers;
+        self
     }
 
     pub fn with_credentials_mode(mut self, credentials_mode: RequestCredentialsMode) -> Self {

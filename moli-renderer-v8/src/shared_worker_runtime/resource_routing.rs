@@ -474,6 +474,7 @@ mod tests {
 
     fn pending_fetch(fetch_id: u32) -> WorkerPendingFetchContinue {
         WorkerPendingFetchContinue {
+            redirect_headers: None,
             fetch_id,
             internal_id: u64::from(fetch_id),
             network_request_handle: None,

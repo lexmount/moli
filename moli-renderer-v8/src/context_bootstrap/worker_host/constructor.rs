@@ -295,7 +295,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
             let network_policy = WorkerNetworkPolicy {
                 secure_context,
                 permission_overrides: host.permission_overrides().to_vec(),
-                extra_http_headers: host.extra_http_headers().to_vec(),
+                extra_http_headers: host.extra_http_headers().clone(),
                 network_offline: host.network_offline(),
                 blocked_url_patterns: host.blocked_url_patterns().to_vec(),
                 network_partition_key: network_partition_key.clone(),

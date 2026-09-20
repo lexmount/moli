@@ -56,7 +56,7 @@ impl JsContextHost {
             user_agent: loader
                 .map(|loader| loader.user_agent().to_owned())
                 .unwrap_or_else(|| moli_fetch::FetchConfig::DEFAULT_USER_AGENT.to_owned()),
-            extra_headers: moli_fetch::RequestHeaders::from_utf8(self.extra_http_headers.clone()),
+            extra_headers: self.extra_http_headers.clone(),
             http_proxy: loader.and_then(|loader| loader.http_proxy().map(ToOwned::to_owned)),
             http_no_proxy: loader.and_then(|loader| loader.http_no_proxy().map(ToOwned::to_owned)),
             http_host_resolve: loader
