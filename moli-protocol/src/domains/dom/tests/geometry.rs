@@ -1388,9 +1388,10 @@ async fn scroll_into_view_if_needed_accepts_element_node() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
-    let spacer = "<div style='height:200vh'></div>";
+    // Keep the text-row scenario while making its height independent of fonts.
+    let rows = "<div style='height:4vh'>row</div>".repeat(60);
     let url = format!(
-        "data:text/html,<!doctype html><html><body>{spacer}<div id='box'></div></body></html>"
+        "data:text/html,<!doctype html><html><body>{rows}<div id='box'></div></body></html>"
     );
 
     navigate_to_url_and_wait_for_load_async(&mut ctx, 1, url).await;
@@ -1542,9 +1543,10 @@ async fn scroll_into_view_if_needed_supports_object_id() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
 
-    let spacer = "<div style='height:200vh'></div>";
+    // Keep the text-row scenario while making its height independent of fonts.
+    let rows = "<div style='height:4vh'>row</div>".repeat(60);
     let url = format!(
-        "data:text/html,<!doctype html><html><body>{spacer}<div id='box'></div></body></html>"
+        "data:text/html,<!doctype html><html><body>{rows}<div id='box'></div></body></html>"
     );
 
     navigate_to_url_and_wait_for_load_async(&mut ctx, 1, url).await;
@@ -1591,9 +1593,10 @@ async fn scroll_into_view_if_needed_supports_object_id() {
 async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_contents() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    let spacer = "<div style='height:200vh'></div>";
+    // Keep the text-row scenario while making its height independent of fonts.
+    let rows = "<div style='height:4vh'>row</div>".repeat(60);
     let url = format!(
-        "data:text/html,<!doctype html><body>{spacer}<button id=contents style='display:contents'>target</button></body>"
+        "data:text/html,<!doctype html><body>{rows}<button id=contents style='display:contents'>target</button></body>"
     );
     navigate_to_url_and_wait_for_load_async(&mut ctx, 30, url).await;
 

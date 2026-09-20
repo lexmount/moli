@@ -465,7 +465,10 @@ impl<'a> Writer<'a> {
                     '&' => self.output.push_str("&amp;"),
                     '<' => self.output.push_str("&lt;"),
                     '>' => self.output.push_str("&gt;"),
-                    '\\' | '`' | '*' | '_' | '[' | ']' | '|' | '~' => {
+                    // CommonMark permits escaping every ASCII punctuation
+                    // character. Inline HTML content still parses Markdown,
+                    // so protect the whole syntax class rather than a subset.
+                    ch if ch.is_ascii_punctuation() => {
                         self.output.push('\\');
                         self.output.push(ch);
                     }

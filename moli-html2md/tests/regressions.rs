@@ -213,6 +213,48 @@ fn preformatted_block_children_keep_text_boundaries() {
 }
 
 #[test]
+fn adjacent_code_preserves_documentation_examples_as_literal_text() {
+    let code_values = |html: &str| {
+        let tree = Tree::parse(html);
+        tree.nodes
+            .iter()
+            .filter(|node| node.tag.as_deref() == Some("code"))
+            .map(|node| {
+                let mut text = String::new();
+                let mut child = node.first;
+                while let Some(id) = child {
+                    let node = &tree.nodes[id];
+                    assert!(node.tag.is_none(), "code gained formatting: {html}");
+                    text.push_str(node.text.as_deref().unwrap_or_default());
+                    child = node.next;
+                }
+                text
+            })
+            .collect::<Vec<_>>()
+    };
+    for value in [
+        r"curl https://example.com/a?x=1&amp;y=2",
+        r"![icon](image.png) **bold** _name_ ~~old~~",
+        r"&lt;T&gt; &amp;amp; &#96;value&#96; C:\work\file",
+        r"!&quot;#$%&amp;'()*+,-./:;&lt;=&gt;?@[\]^_&#96;{|}~",
+        "变量—café 🙂",
+    ] {
+        // The HTML source is the oracle: Markdown conversion must preserve
+        // each code value, including syntax, entities and Unicode characters.
+        let source = format!("<code>{value}</code><code>next</code>");
+        let expected = code_values(&source);
+        for preformatted in [false, true] {
+            let output = markdown(&source, preformatted);
+            assert_eq!(
+                code_values(&rendered_html(&output)),
+                expected,
+                "{source}: {output}"
+            );
+        }
+    }
+}
+
+#[test]
 fn attribute_newlines_remove_indentation_without_joining_words() {
     for separator in ["\n ", "\r\n\t", "\n  \n \t  "] {
         let html = format!("<a href='/a' title='first{separator}second'>link</a>");
