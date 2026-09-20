@@ -194,15 +194,11 @@ fn form_named_lookup_candidates_include_detached_shadow_and_child_documents() {
 }
 
 #[test]
-#[ignore = "known baseline detached-document named-property limitation, including adopted wrappers"]
 fn form_named_lookup_detached_document_and_adopted_wrappers() {
     let mut vm = new_parsed_test_vm(
         "https://form-lookup-detached-document.test/",
         "<!doctype html><html><body></body></html>",
     );
-    // These expectations pass in Chromium. Both cases already fail on the
-    // pre-optimization Moli binary; keep them visible without treating that
-    // separate compatibility defect as a performance regression or a pass.
     let result = vm.eval(r#"
       (() => {
         const results=[];
@@ -251,5 +247,55 @@ fn form_named_lookup_candidates_do_not_cache_custom_element_eligibility() {
         return 'ok';
       })()
     "#).expect("named candidates are not a cached form eligibility decision");
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn form_named_lookup_preserves_identity_and_live_properties_across_document_scopes() {
+    let mut vm = new_parsed_test_vm(
+        "https://form-document-properties.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    let result = vm.eval(r#"
+      (() => {
+        for (const mode of ['active', 'detached', 'adopted']) {
+          const doc = mode === 'active' ? document : document.implementation.createHTMLDocument('forms');
+          const f = doc.body.appendChild(doc.createElement('form'));
+          const input = f.appendChild(doc.createElement('input'));
+          input.name = 'originalKey';
+          if (f.originalKey !== input) throw Error(mode + ': initial identity');
+          if (mode === 'adopted') {
+            if (document.adoptNode(f) !== f) throw Error('adoption replaced wrapper');
+            document.body.appendChild(f);
+          }
+          if (f[0] !== input || !(0 in f) || Object.getOwnPropertyDescriptor(f, '0').value !== input)
+            throw Error(mode + ': indexed identity');
+          const d = Object.getOwnPropertyDescriptor(f, 'originalKey');
+          if (d.value !== input || d.writable || d.enumerable || !d.configurable)
+            throw Error(mode + ': named descriptor');
+          input.name = 'newKey';
+          if (f.newKey !== input || f.originalKey !== input) throw Error(mode + ': past name');
+          const second = f.appendChild(doc.createElement('input'));
+          second.name = 'newKey';
+          const list = f.newKey;
+          if (!(list instanceof RadioNodeList) || list.length !== 2 || list[0] !== input || list[1] !== second)
+            throw Error(mode + ': multiple matches');
+          second.remove();
+          if (list.length !== 1 || f.newKey !== input) throw Error(mode + ': live list');
+          input.name = 'submit';
+          if (f.submit !== input || Object.getOwnPropertyDescriptor(f, 'submit').value !== input)
+            throw Error(mode + ': native member override');
+          const symbol = Symbol('custom');
+          f[symbol] = 42;
+          if (f[symbol] !== 42 || !delete f[symbol]) throw Error(mode + ': ordinary symbol');
+          input.remove();
+          if (f.originalKey !== undefined || f.newKey !== undefined || 'originalKey' in f || f[0] !== undefined)
+            throw Error(mode + ': removed control');
+          if (typeof f.submit !== 'function') throw Error(mode + ': restored native member');
+          f.remove();
+        }
+        return 'ok';
+      })()
+    "#).expect("form property behavior must not depend on Document attachment or adoption");
     assert_eq!(result, "ok");
 }
