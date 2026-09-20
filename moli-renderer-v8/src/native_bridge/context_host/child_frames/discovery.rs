@@ -302,6 +302,11 @@ impl JsContextHost {
         if self.is_child_browsing_context_host_handle(root) {
             out.push(root);
         }
+        // Disconnected hosts no longer use the connected-tree candidate index.
+        // Their shadow trees still contain browsing contexts to unload and retire.
+        if let Some(shadow_root) = self.dom_host().shadow_root_handle(root) {
+            self.collect_child_browsing_context_host_handles(shadow_root, out);
+        }
         for child in self.dom_host().child_handles(root) {
             self.collect_child_browsing_context_host_handles(child, out);
         }
