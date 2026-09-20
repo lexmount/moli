@@ -157,8 +157,6 @@ fn apply_strip_options(dom: &mut NativeDom, strip: RendererPageDumpStripOptions)
                         | "dialog"
                         | "menu"
                         | "menuitem"
-                        | "details"
-                        | "summary"
                 ));
         if should_remove {
             remove.push(node_id);

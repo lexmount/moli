@@ -76,7 +76,10 @@ fn inline_code_breaks_keep_separation_at_code_span_edges() {
             ..Options::default()
         },
     );
-    assert_eq!(result, "before`git status`after");
+    assert_eq!(
+        rendered_html(&result),
+        "<p>before<code>git </code><code>status</code>after</p>\n"
+    );
 }
 
 #[test]
@@ -104,6 +107,55 @@ fn pre_keeps_raw_text_and_line_endings() {
         rendered_html(&result),
         "<pre><code>git\n  status\n</code></pre>\n"
     );
+}
+
+#[test]
+fn preformatted_examples_keep_inline_values_and_separate_display_lines() {
+    for (source, expected) in [
+        (
+            "<pre>const answer = <output>42</output>;</pre>",
+            "const answer = 42;",
+        ),
+        (
+            "<pre><h3>TypeScript</h3><code>function identity() {}</code></pre>",
+            "TypeScript\nfunction identity() {}",
+        ),
+        (
+            "<pre><ol><li>first()</li><li>second()</li></ol></pre>",
+            "first()\nsecond()",
+        ),
+        ("<pre>first<br>second</pre>", "first\nsecond"),
+    ] {
+        let result = markdown(source);
+        assert_eq!(
+            rendered_html(&result),
+            format!("<pre><code>{expected}\n</code></pre>\n"),
+            "{source}: {result}"
+        );
+    }
+}
+
+#[test]
+fn empty_wrappers_do_not_add_lines_to_preformatted_examples() {
+    for (source, expected) in [
+        ("<pre><div><!-- note --></div>print(42)</pre>", "print(42)"),
+        (
+            "<pre><section><div></div></section>print(42)</pre>",
+            "print(42)",
+        ),
+        (
+            "<pre>first<div>second</div>third</pre>",
+            "first\nsecond\nthird",
+        ),
+        ("<pre><span>\n</span>print(42)</pre>", "\nprint(42)"),
+    ] {
+        let result = markdown(source);
+        assert_eq!(
+            rendered_html(&result),
+            format!("<pre><code>{expected}\n</code></pre>\n"),
+            "{source}: {result}"
+        );
+    }
 }
 
 #[test]

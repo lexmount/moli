@@ -171,6 +171,16 @@ impl<'a> Writer<'a> {
     }
 
     pub(crate) fn code_with_edges(&mut self, text: &str, preformatted: bool) {
+        // An empty element has no visible edge. Keep the pending code until
+        // the next visible text or element decides whether it needs a gap.
+        if text.is_empty() {
+            return;
+        }
+        // Adjacent code elements have separate HTML nodes but no text between
+        // them. Markdown code spans would merge or need an invented space.
+        if self.code.is_some() {
+            self.flush_code_html();
+        }
         if preformatted {
             if !text.is_empty() {
                 if self.code.is_none() {
@@ -443,6 +453,29 @@ impl<'a> Writer<'a> {
                 self.output.push(' ');
             }
             self.output.push_str(&fence);
+            self.line_digits = None;
+        }
+    }
+
+    fn flush_code_html(&mut self) {
+        if let Some(code) = self.code.take() {
+            self.output.push_str("<code>");
+            for ch in code.chars() {
+                match ch {
+                    '&' => self.output.push_str("&amp;"),
+                    '<' => self.output.push_str("&lt;"),
+                    '>' => self.output.push_str("&gt;"),
+                    // CommonMark permits escaping every ASCII punctuation
+                    // character. Inline HTML content still parses Markdown,
+                    // so protect the whole syntax class rather than a subset.
+                    ch if ch.is_ascii_punctuation() => {
+                        self.output.push('\\');
+                        self.output.push(ch);
+                    }
+                    _ => self.output.push(ch),
+                }
+            }
+            self.output.push_str("</code>");
             self.line_digits = None;
         }
     }

@@ -14,6 +14,7 @@ enum Task<'a, Id> {
     EndList(usize),
     EndItem(String),
     RawChildren(Option<Id>, usize, bool),
+    EndRawBlock,
     EndCode,
     EndPre(Option<&'a str>),
     TableCell,
@@ -130,6 +131,11 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
                     self.writer().block(item.into(), separation, separation);
                 }
                 Task::RawChildren(Some(node), depth, inline) => self.raw_node(node, depth, inline),
+                Task::EndRawBlock => {
+                    if !self.raw.is_empty() && !self.raw.ends_with('\n') {
+                        self.raw.push('\n');
+                    }
+                }
                 Task::EndCode => {
                     let text = std::mem::take(&mut self.raw);
                     let preformatted = self.options.preformatted_code;
@@ -378,8 +384,16 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             NodeKind::Text(text) => self.raw.push_str(text),
             // Inline code normalizes line endings to spaces. Keep explicit
             // breaks without converting descendant formatting into Markdown.
-            NodeKind::Element("br") if inline => self.raw.push('\n'),
+            NodeKind::Element("br") => self.raw.push('\n'),
             NodeKind::Document | NodeKind::Element(_) if depth + 1 < self.options.max_depth => {
+                if !inline
+                    && matches!(self.dom.node_kind(node), NodeKind::Element(tag) if is_structural_block(tag))
+                {
+                    if !self.raw.is_empty() && !self.raw.ends_with('\n') {
+                        self.raw.push('\n');
+                    }
+                    self.tasks.push(Task::EndRawBlock);
+                }
                 self.tasks.push(Task::RawChildren(
                     self.dom.first_child(node),
                     depth + 1,
@@ -435,17 +449,20 @@ fn class_language(class: Option<&str>) -> Option<&str> {
 }
 
 fn is_block(tag: &str) -> bool {
+    is_structural_block(tag)
+        || matches!(
+            tag,
+            "audio" | "canvas" | "frameset" | "isindex" | "noframes" | "output"
+        )
+}
+
+fn is_structural_block(tag: &str) -> bool {
     matches!(
         tag,
         "address"
-            | "audio"
-            | "canvas"
-            | "frameset"
-            | "isindex"
-            | "noframes"
-            | "output"
             | "article"
             | "aside"
+            | "blockquote"
             | "body"
             | "caption"
             | "center"
@@ -461,14 +478,23 @@ fn is_block(tag: &str) -> bool {
             | "figure"
             | "footer"
             | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
             | "header"
             | "hgroup"
             | "html"
             | "legend"
+            | "li"
             | "main"
             | "menu"
             | "nav"
+            | "ol"
             | "p"
+            | "pre"
             | "section"
             | "summary"
             | "table"
@@ -478,5 +504,6 @@ fn is_block(tag: &str) -> bool {
             | "th"
             | "thead"
             | "tr"
+            | "ul"
     )
 }
