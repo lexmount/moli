@@ -46,6 +46,8 @@ impl ScriptVm {
                 binding.with_current_scope(scope, host_ptr, |scope, _| {
                     let window = v8::Local::new(scope, &window);
                     inform_about_canceled_navigation_for_window(scope, window);
+                    unsafe { &mut *host_ptr }
+                        .dispatch_lightweight_popup_document_unload(scope, popup_id);
                 });
             }
             assert!(
