@@ -996,15 +996,15 @@ pub(in crate::context_bootstrap) fn cancel_pending_precommit_same_document_navig
     if let Some(signal) = data.signal {
         crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
-    finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
     let receiver = v8::undefined(scope).into();
     if let Some(reject) = data.committed_reject {
         let _ = reject.call(scope, receiver, &[error]);
     }
-    reject_navigation_transition_committed(scope, data.navigation, error);
     if let Some(reject) = data.finished_reject {
         let _ = reject.call(scope, receiver, &[error]);
     }
+    finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
+    reject_navigation_transition_committed(scope, data.navigation, error);
     settle_navigation_transition_finished_local(
         scope,
         data.navigation,
@@ -1282,15 +1282,15 @@ fn precommit_commit_rejected_callback<'s>(
     if let Some(signal) = data.signal {
         crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
-    finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
     let receiver = v8::undefined(scope).into();
     if let Some(reject) = data.committed_reject {
         let _ = reject.call(scope, receiver, &[error]);
     }
-    reject_navigation_transition_committed(scope, data.navigation, error);
     if let Some(reject) = data.finished_reject {
         let _ = reject.call(scope, receiver, &[error]);
     }
+    finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
+    reject_navigation_transition_committed(scope, data.navigation, error);
     settle_navigation_transition_finished_local(
         scope,
         data.navigation,
