@@ -381,10 +381,10 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                 &effective_href,
                 effective_kind,
                 effective_state,
-                pending.committed_resolve,
-                pending.committed_reject,
-                pending.finished_resolve,
-                pending.finished_reject,
+                Some(pending.committed_resolve),
+                Some(pending.committed_reject),
+                Some(pending.finished_resolve),
+                Some(pending.finished_reject),
             )
         {
             rv.set(pending.object.into());
@@ -577,10 +577,10 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                     &effective_href,
                     effective_kind,
                     effective_state,
-                    pending.committed_resolve,
-                    pending.committed_reject,
-                    pending.finished_resolve,
-                    pending.finished_reject,
+                    Some(pending.committed_resolve),
+                    Some(pending.committed_reject),
+                    Some(pending.finished_resolve),
+                    Some(pending.finished_reject),
                 )
             {
                 rv.set(pending.object.into());
@@ -672,7 +672,7 @@ fn navigation_canceled_after_dispatch_result<'s>(
     navigation_rejected_value_result(scope, error)
 }
 
-fn commit_navigation_navigate_same_document<'s>(
+pub(in crate::context_bootstrap) fn commit_navigation_navigate_same_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     current_href: &str,
@@ -774,16 +774,16 @@ struct PrecommitCommitDataDeclaration<'scope> {
     state: Option<v8::Local<'scope, v8::Value>>,
 
     #[webapi(slot = PRECOMMIT_COMMIT_COMMITTED_RESOLVE_SLOT)]
-    committed_resolve: v8::Local<'scope, v8::Function>,
+    committed_resolve: Option<v8::Local<'scope, v8::Function>>,
 
     #[webapi(slot = PRECOMMIT_COMMIT_COMMITTED_REJECT_SLOT)]
-    committed_reject: v8::Local<'scope, v8::Function>,
+    committed_reject: Option<v8::Local<'scope, v8::Function>>,
 
     #[webapi(slot = PRECOMMIT_COMMIT_FINISHED_RESOLVE_SLOT)]
-    finished_resolve: v8::Local<'scope, v8::Function>,
+    finished_resolve: Option<v8::Local<'scope, v8::Function>>,
 
     #[webapi(slot = PRECOMMIT_COMMIT_FINISHED_REJECT_SLOT)]
-    finished_reject: v8::Local<'scope, v8::Function>,
+    finished_reject: Option<v8::Local<'scope, v8::Function>>,
 
     #[webapi(slot = PRECOMMIT_COMMIT_PROMISE_SLOT)]
     promise: Option<v8::Local<'scope, v8::Value>>,
@@ -835,10 +835,10 @@ pub(in crate::context_bootstrap) fn queue_pending_precommit_same_document_naviga
     effective_href: &str,
     effective_kind: LocationNavigationKind,
     effective_state: Option<v8::Local<'s, v8::Value>>,
-    committed_resolve: v8::Local<'s, v8::Function>,
-    committed_reject: v8::Local<'s, v8::Function>,
-    finished_resolve: v8::Local<'s, v8::Function>,
-    finished_reject: v8::Local<'s, v8::Function>,
+    committed_resolve: Option<v8::Local<'s, v8::Function>>,
+    committed_reject: Option<v8::Local<'s, v8::Function>>,
+    finished_resolve: Option<v8::Local<'s, v8::Function>>,
+    finished_reject: Option<v8::Local<'s, v8::Function>>,
 ) -> bool {
     let Some(precommit_result) = outcome.precommit_result else {
         return false;
@@ -964,9 +964,13 @@ pub(in crate::context_bootstrap) fn cancel_pending_precommit_same_document_navig
     }
     finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
     let receiver = v8::undefined(scope).into();
-    let _ = data.committed_reject.call(scope, receiver, &[error]);
+    if let Some(reject) = data.committed_reject {
+        let _ = reject.call(scope, receiver, &[error]);
+    }
     reject_navigation_transition_committed(scope, data.navigation, error);
-    let _ = data.finished_reject.call(scope, receiver, &[error]);
+    if let Some(reject) = data.finished_reject {
+        let _ = reject.call(scope, receiver, &[error]);
+    }
     settle_navigation_transition_finished_local(
         scope,
         data.navigation,
@@ -1071,10 +1075,10 @@ struct PendingPrecommitCommitData<'s> {
     effective_href: String,
     effective_kind: LocationNavigationKind,
     effective_state: Option<v8::Local<'s, v8::Value>>,
-    committed_resolve: v8::Local<'s, v8::Function>,
-    committed_reject: v8::Local<'s, v8::Function>,
-    finished_resolve: v8::Local<'s, v8::Function>,
-    finished_reject: v8::Local<'s, v8::Function>,
+    committed_resolve: Option<v8::Local<'s, v8::Function>>,
+    committed_reject: Option<v8::Local<'s, v8::Function>>,
+    finished_resolve: Option<v8::Local<'s, v8::Function>>,
+    finished_reject: Option<v8::Local<'s, v8::Function>>,
     promise: Option<v8::Local<'s, v8::Promise>>,
     transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
 }
@@ -1109,13 +1113,13 @@ fn pending_precommit_commit_data<'s>(
     let effective_state = get_private_value(scope, data, PRECOMMIT_COMMIT_STATE_SLOT)
         .filter(|value| !value.is_undefined());
     let committed_resolve = get_private_value(scope, data, PRECOMMIT_COMMIT_COMMITTED_RESOLVE_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
     let committed_reject = get_private_value(scope, data, PRECOMMIT_COMMIT_COMMITTED_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
     let finished_resolve = get_private_value(scope, data, PRECOMMIT_COMMIT_FINISHED_RESOLVE_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
     let finished_reject = get_private_value(scope, data, PRECOMMIT_COMMIT_FINISHED_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
     let promise = get_private_value(scope, data, PRECOMMIT_COMMIT_PROMISE_SLOT)
         .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok());
     let transition_resolver =
@@ -1174,10 +1178,10 @@ fn precommit_commit_fulfilled_callback<'s>(
         );
     }
     let receiver = v8::undefined(scope).into();
-    let _ = data
-        .committed_resolve
-        .call(scope, receiver, &[resolved_value]);
-    resolve_navigation_transition_committed(scope, data.navigation, resolved_value);
+    if let Some(resolve) = data.committed_resolve {
+        let _ = resolve.call(scope, receiver, &[resolved_value]);
+    }
+    resolve_navigation_transition_committed(scope, data.navigation);
     let outcome = NavigationDispatchOutcome {
         proceed: true,
         intercepted: true,
@@ -1232,9 +1236,13 @@ fn precommit_commit_rejected_callback<'s>(
     }
     finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
     let receiver = v8::undefined(scope).into();
-    let _ = data.committed_reject.call(scope, receiver, &[error]);
+    if let Some(reject) = data.committed_reject {
+        let _ = reject.call(scope, receiver, &[error]);
+    }
     reject_navigation_transition_committed(scope, data.navigation, error);
-    let _ = data.finished_reject.call(scope, receiver, &[error]);
+    if let Some(reject) = data.finished_reject {
+        let _ = reject.call(scope, receiver, &[error]);
+    }
     settle_navigation_transition_finished_local(
         scope,
         data.navigation,
@@ -1370,7 +1378,7 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
     if transition_resolver
         .is_some_and(|resolver| navigation_transition_matches_resolver(scope, navigation, resolver))
     {
-        resolve_navigation_transition_committed(scope, navigation, resolved_value);
+        resolve_navigation_transition_committed(scope, navigation);
     }
     if let Some(event) = outcome.precommit_event {
         let (error, result) = run_navigation_precommit_deferred_handlers(scope, event);
