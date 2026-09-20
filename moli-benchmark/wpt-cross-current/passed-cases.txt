@@ -6441,6 +6441,7 @@ html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/no-browsing-context.window.js?moli-wpt-script=window
 html/browsers/history/the-location-interface/reload_document_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
+html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
 html/browsers/history/the-location-interface/security_location_0.htm
 html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
@@ -8215,6 +8216,7 @@ html/webappapis/scripting/event-loops/update-the-rendering-resize-autofocus.html
 html/webappapis/scripting/events/body-onload.html
 html/webappapis/scripting/events/compile-event-handler-lexical-scopes-form-owner.html
 html/webappapis/scripting/events/compile-event-handler-lexical-scopes.html
+html/webappapis/scripting/events/compile-event-handler-settings-objects.html
 html/webappapis/scripting/events/compile-event-handler-symbol-unscopables.html
 html/webappapis/scripting/events/event-handler-all-global-events.html
 html/webappapis/scripting/events/event-handler-attributes-body-alt.html

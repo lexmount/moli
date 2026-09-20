@@ -91,8 +91,6 @@ html/browsers/history/the-history-interface/traverse_the_history_write_onload_1.
 html/browsers/history/the-history-interface/traverse_the_history_write_onload_2.html
 html/browsers/history/the-location-interface/location_replace_session_history.html
 html/browsers/history/the-location-interface/reload_document_open_write.html
-html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
-html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
 html/browsers/history/the-session-history-of-browsing-contexts/navigation-in-onload.html
 html/browsers/sandboxing/sandbox-document-open.html
 html/browsers/sandboxing/sandbox-window-open-srcdoc.html
@@ -153,7 +151,6 @@ html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
 html/webappapis/scripting/event-loops/new-scroll-event-dispatched-at-next-updating-rendering-time.html
-html/webappapis/scripting/events/compile-event-handler-settings-objects.html
 html/webappapis/scripting/events/onerroreventhandler.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.serviceworker.https.html
 import-maps/data-driven/resolving.html?data-url-prefix.json
