@@ -327,3 +327,86 @@ async fn same_document_commits_distinguish_interception_and_cancellation() {
     page.assert_history(&[""], 0).await;
     page.assert_commits(&[]);
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn intercepted_navigation_commits_do_not_dispatch_fragment_events() {
+    for history in ["push", "replace"] {
+        for suffix in ["#one", "?route#one"] {
+            for mode in ["empty", "handler", "precommit", "reject"] {
+                let mut page = SameDocumentPage::new().await;
+                page.run("history.replaceState({classic: 1}, '', '#seed')", "#seed")
+                    .await;
+                page.assert_commits(&[("#seed", "historyApi")]);
+                page.evaluate(
+                    r#"
+                    globalThis.legacyEvents = [];
+                    globalThis.handlerSnapshots = [];
+                    for (const type of ['popstate', 'hashchange']) {
+                        addEventListener(type, () => legacyEvents.push(type));
+                    }
+                    globalThis.expectedError = new Error('handler failed');
+                    globalThis.handler = () => {
+                        handlerSnapshots.push(legacyEvents.slice());
+                    };
+                    void 0;
+                "#,
+                )
+                .await;
+                let options = match mode {
+                    "empty" => "{}",
+                    "handler" => "{handler}",
+                    "precommit" => {
+                        "{precommitHandler: () => new Promise(resolve => setTimeout(resolve, 0)), handler}"
+                    }
+                    "reject" => "{handler() { handler(); throw expectedError; }}",
+                    _ => unreachable!(),
+                };
+                page.run(&format!(r#"
+                    navigation.addEventListener('navigate', event => event.intercept({options}), {{once: true}});
+                    navigation.navigate('{suffix}', {{history: '{history}', state: {{api: 1}}}}).finished.then(
+                        () => globalThis.outcome = 'fulfilled',
+                        error => {{
+                            if (error !== expectedError) throw error;
+                            globalThis.outcome = 'rejected';
+                        }}
+                    );
+                "#), suffix).await;
+                if history == "push" {
+                    page.assert_history(&["#seed", suffix], 1).await;
+                } else {
+                    page.assert_history(&[suffix], 0).await;
+                }
+                page.assert_commits(&[(suffix, "other")]);
+                let observed = page
+                    .evaluate(
+                        r#"({
+                    legacyEvents, handlerSnapshots, outcome,
+                    classicState: history.state,
+                    navigationState: navigation.currentEntry.getState(),
+                })"#,
+                    )
+                    .await;
+                assert_eq!(
+                    observed,
+                    json!({
+                        "legacyEvents": [],
+                        "handlerSnapshots": if mode == "empty" { json!([]) } else { json!([[]]) },
+                        "outcome": if mode == "reject" { "rejected" } else { "fulfilled" },
+                        "classicState": null,
+                        "navigationState": {"api": 1},
+                    }),
+                    "{history} {suffix} {mode}"
+                );
+            }
+        }
+    }
+
+    let mut page = SameDocumentPage::new().await;
+    page.evaluate("globalThis.legacyEvents = []; for (const type of ['popstate', 'hashchange']) addEventListener(type, () => legacyEvents.push(type));").await;
+    page.run("navigation.navigate('#one').finished", "#one")
+        .await;
+    assert_eq!(
+        page.evaluate("legacyEvents").await,
+        json!(["popstate", "hashchange"])
+    );
+}
