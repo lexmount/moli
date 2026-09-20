@@ -38,7 +38,7 @@ pub(super) fn clone_history_entry_state<'s>(
     history_entry_state_snapshot(scope, entry)
 }
 
-pub(super) fn copy_entry_serialized_states<'s>(
+pub(super) fn copy_navigation_entry_serialized_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     from: v8::Local<'s, v8::Object>,
     to: v8::Local<'s, v8::Object>,
@@ -49,13 +49,10 @@ pub(super) fn copy_entry_serialized_states<'s>(
     let Some(to) = native::entry(scope, to) else {
         return;
     };
-    let (history_state, navigation_state) = {
-        let from = from.borrow();
-        (from.history_state.clone(), from.navigation_state.clone())
-    };
-    let mut to = to.borrow_mut();
-    to.history_state = history_state;
-    to.navigation_state = navigation_state;
+    // Fragment entries retain Navigation API state without inheriting the
+    // previous entry's classic History API state.
+    let navigation_state = from.borrow().navigation_state.clone();
+    to.borrow_mut().navigation_state = navigation_state;
 }
 
 pub(super) fn set_navigation_entry_state<'s>(

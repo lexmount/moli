@@ -501,6 +501,16 @@ impl JsContextHost {
         self.lightweight_popup_access_origin(popup_id)
     }
 
+    pub(crate) fn window_scopes_have_same_origin(
+        &self,
+        source: OwnerDispatchScope,
+        target: OwnerDispatchScope,
+    ) -> bool {
+        self.window_access_origin_for_dispatch_scope(source)
+            .zip(self.window_access_origin_for_dispatch_scope(target))
+            .is_some_and(|(source, target)| source.has_same_origin(&target))
+    }
+
     pub(in crate::native_bridge::context_host) fn window_access_origin_for_dispatch_scope(
         &self,
         dispatch_scope: OwnerDispatchScope,

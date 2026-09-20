@@ -22,9 +22,9 @@ use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
-    runtime_window_is_global, runtime_window_owner, set_navigation_unload_event_active,
-    should_dispatch_hash_change, window_location_for_holder, window_navigation_for_holder,
-    window_task_target_for_runtime_owner,
+    runtime_window_dispatch_scope, runtime_window_is_global, runtime_window_owner,
+    set_navigation_unload_event_active, should_dispatch_hash_change, window_location_for_holder,
+    window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::document_runtime::EventTargetHandle;
@@ -585,7 +585,7 @@ pub(super) fn cancel_active_navigation_event<'s>(
 pub(super) fn dispatch_popstate_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
-    child_handle: Option<crate::document_runtime::DomHandle>,
+    owner: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Value>,
 ) {
     let Ok(event_ctor) =
@@ -603,16 +603,23 @@ pub(super) fn dispatch_popstate_event<'s>(
     };
     mark_event_trusted(scope, event);
     let runtime = unsafe { &mut *host_ptr };
-    if let Some(child_handle) = child_handle {
-        runtime.dispatch_child_window_event(scope, child_handle, "popstate", event);
-    } else {
-        let _ = runtime.dispatch_public_event_best_effort(
-            scope,
-            host_ptr,
-            EventTargetHandle::Window,
-            event,
-            "window popstate event",
-        );
+    match runtime_window_dispatch_scope(scope, owner) {
+        Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) => {
+            runtime.dispatch_child_window_event(scope, handle, "popstate", event);
+        }
+        Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+            runtime.dispatch_lightweight_popup_window_event(scope, popup_id, "popstate", event);
+        }
+        Some(crate::native_bridge::OwnerDispatchScope::Top) => {
+            let _ = runtime.dispatch_public_event_best_effort(
+                scope,
+                host_ptr,
+                EventTargetHandle::Window,
+                event,
+                "window popstate event",
+            );
+        }
+        None => {}
     }
 }
 

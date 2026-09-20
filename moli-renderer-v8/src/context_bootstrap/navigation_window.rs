@@ -156,6 +156,11 @@ pub(super) fn navigation_document_can_update_current_entry<'s>(
     if !navigation_document_is_live(scope, owner) {
         return false;
     }
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+            !unsafe { &*host_ptr }.lightweight_popup_current_document_is_initial_empty(popup_id)
+        });
+    }
     if runtime_window_is_global(scope, owner) {
         return true;
     }
@@ -170,6 +175,21 @@ pub(super) fn navigation_document_can_update_current_entry<'s>(
         .is_some_and(|url| !url_is_about_blank_document(&url))
 }
 
+pub(super) fn navigation_document_has_disabled_entries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    navigation_document_has_opaque_origin(scope, owner)
+        || crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some_and(
+            |popup_id| {
+                context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+                    unsafe { &*host_ptr }
+                        .lightweight_popup_current_document_is_initial_empty(popup_id)
+                })
+            },
+        )
+}
+
 pub(super) fn navigation_document_has_opaque_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -178,6 +198,11 @@ pub(super) fn navigation_document_has_opaque_origin<'s>(
         return false;
     };
     let host = unsafe { &*host_ptr };
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return host
+            .lightweight_popup_origin(popup_id)
+            .is_some_and(|origin| origin == "null");
+    }
     if runtime_window_is_global(scope, owner) {
         return top_level_navigation_document_has_opaque_origin(host.document_url());
     }
@@ -249,6 +274,10 @@ fn navigation_document_is_live<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return context_host_ptr_from_global_bridge(scope)
+            .is_some_and(|host_ptr| unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id));
+    }
     if runtime_window_is_global(scope, owner) {
         return true;
     }
