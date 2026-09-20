@@ -44,6 +44,7 @@ mod load_resource;
 mod main_document_progress;
 mod output;
 mod output_queue;
+mod redirect_request;
 mod response_body;
 pub(crate) mod settings;
 #[cfg(test)]

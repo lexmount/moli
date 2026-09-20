@@ -978,11 +978,23 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
         "alpha beta gamma delta epsilon zeta eta theta iota kappa ",
         "supercalifragilisticexpialidocious",
     );
+    assert_scrollbar_feedback_inline_geometry(TEXT, true);
+}
+
+#[test]
+fn collapsed_line_end_spaces_do_not_create_horizontal_scrollbar_after_feedback() {
+    assert_scrollbar_feedback_inline_geometry(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+        false,
+    );
+}
+
+fn assert_scrollbar_feedback_inline_geometry(text: &'static str, horizontal_overflow: bool) {
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("scroller", vec![2]),
         Node::element("fixed-font", vec![3]),
-        Node::text("text", TEXT),
+        Node::text("text", text),
     ]);
     let mut styles = Styles::default();
     styles
@@ -1020,13 +1032,13 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     assert_eq!(feedback.metrics.numeric_layout_pass_count, 2);
     assert_eq!(
         feedback.element_metrics_for_source(1).unwrap().client_size,
-        moli_layout::LayoutSize::new(85.0, 25.0),
+        moli_layout::LayoutSize::new(85.0, if horizontal_overflow { 25.0 } else { 40.0 }),
     );
     let scroller_box = feedback.source_output(1).unwrap().principal_box.unwrap();
     let extent = feedback.scroll_extent(scroller_box).unwrap();
     assert!(extent.vertical_scrollbar.is_some());
-    assert!(extent.horizontal_scrollbar.is_some());
-    let feedback_text = feedback.text_range_rects(3, 0..TEXT.encode_utf16().count());
+    assert_eq!(extent.horizontal_scrollbar.is_some(), horizontal_overflow);
+    let feedback_text = feedback.text_range_rects(3, 0..text.encode_utf16().count());
     assert!(
         !feedback_text.is_empty(),
         "compare real text fragments, not element-only client rects"
@@ -1057,13 +1069,14 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     .unwrap();
     assert_eq!(
         feedback_text,
-        direct.text_range_rects(3, 0..TEXT.encode_utf16().count())
+        direct.text_range_rects(3, 0..text.encode_utf16().count())
     );
-    assert!(
+    assert_eq!(
         feedback_text
             .iter()
             .any(|quad| quad.points.iter().any(|point| point.x > 85.0)),
-        "the unbreakable final word should retain horizontal overflow"
+        horizontal_overflow,
+        "only the unbreakable final word should retain horizontal overflow"
     );
 }
 

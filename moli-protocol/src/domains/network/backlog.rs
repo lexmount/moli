@@ -24,6 +24,7 @@ use super::output_queue::{
     TargetSubresourceRequestNetworkDeliveryOutput, TargetSubresourceResponseNetworkDeliveryOutput,
     TargetWebSocketDeliveryRecord, TargetWebSocketLifecycleDeliveryKind,
 };
+use super::redirect_request::RedirectRequest;
 
 pub(crate) struct NetworkBacklogProjectionContext<'a> {
     owner: CommandOwnerScope,
@@ -287,7 +288,13 @@ fn emit_complete_subresource_network_delivery_record(
             response_headers,
             response_body_len,
         } => {
+            let mut redirected_request = RedirectRequest::new(
+                output.method(),
+                output.request_body(),
+                output.request_headers(),
+            );
             for redirect in redirect_chain {
+                redirected_request.follow(redirect.status);
                 for event_session_id in event_session_ids {
                     emit_request_will_be_sent(
                         out,
@@ -298,9 +305,9 @@ fn emit_complete_subresource_network_delivery_record(
                         timestamp,
                         record_document_url,
                         &redirect.to_url,
-                        output.method(),
-                        output.request_body(),
-                        output.request_headers(),
+                        redirected_request.method,
+                        redirected_request.body,
+                        &redirected_request.headers,
                         resource_type,
                         output.request_initiator_type(),
                         Some((
@@ -508,7 +515,13 @@ fn emit_staged_subresource_response_started(
     let loader_id = request.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = request.resource_type().into();
+    let mut redirected_request = RedirectRequest::new(
+        request.method(),
+        request.request_body(),
+        request.request_headers(),
+    );
     for redirect in output.redirect_chain() {
+        redirected_request.follow(redirect.status);
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,
@@ -519,9 +532,9 @@ fn emit_staged_subresource_response_started(
                 timestamp,
                 request.document_url(),
                 &redirect.to_url,
-                request.method(),
-                request.request_body(),
-                request.request_headers(),
+                redirected_request.method,
+                redirected_request.body,
+                &redirected_request.headers,
                 resource_type,
                 request.request_initiator_type(),
                 Some((
