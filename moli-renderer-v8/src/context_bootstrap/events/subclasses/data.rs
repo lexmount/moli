@@ -1,16 +1,22 @@
 use super::*;
 use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
+use crate::context_bootstrap::history_mutation::document_can_have_url_rewritten;
+use crate::context_bootstrap::location_runtime::location_href_slot;
 use crate::context_bootstrap::navigation_activation::{
     NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition,
 };
-use crate::context_bootstrap::navigation_events::navigation_scroll_event_is_active;
+use crate::context_bootstrap::navigation_events::{
+    NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT, navigation_scroll_event_is_active,
+};
 use crate::context_bootstrap::navigation_handler_callbacks::{
     NAVIGATE_EVENT_ADDED_HANDLERS_SLOT, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT,
     NAVIGATE_EVENT_PRECOMMIT_HANDLERS_SLOT, navigation_handler_array_is_empty,
     push_navigation_handler, run_navigation_handler_array,
 };
 use crate::context_bootstrap::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, runtime_window_is_global, runtime_window_owner,
+    child_browsing_context_handle_for_runtime_owner, navigation_document_base_url,
+    navigation_document_is_active, runtime_window_is_global, runtime_window_owner,
+    window_location_for_holder,
 };
 use crate::native_bridge::element::scroll_to_url_fragment_or_top;
 use crate::native_bridge::throw_dom_exception;
@@ -1263,9 +1269,9 @@ fn navigate_event_intercept_callback<'s>(
 
 /// Runs precommit handlers only after the complete `navigate` event dispatch.
 ///
-/// The controller stays active for the synchronous callback invocations and is
-/// retired before any returned Promise reactions run. The navigation
-/// transaction, not this helper, owns waiting and commit.
+/// The navigation transaction retires the controller when interception commits.
+/// Aborting a precommit navigation prevents its commit; it does not change the
+/// old event's interception state or disable edits to that event.
 pub(in crate::context_bootstrap) fn run_navigate_event_precommit_handlers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -1279,14 +1285,12 @@ pub(in crate::context_bootstrap) fn run_navigate_event_precommit_handlers<'s>(
     install_navigate_event_precommit_transition(scope, event);
     let controller = create_precommit_controller(scope, event);
     let arguments = [controller.into()];
-    let result = run_navigation_handler_array(
+    run_navigation_handler_array(
         scope,
         event,
         NAVIGATE_EVENT_PRECOMMIT_HANDLERS_SLOT,
         &arguments,
-    );
-    set_precommit_controller_active(scope, controller, false);
-    result
+    )
 }
 
 fn install_navigate_event_precommit_transition<'s>(
@@ -1355,22 +1359,16 @@ fn create_precommit_controller<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
-    PrecommitControllerDeclaration::new(event, true)
+    let controller = PrecommitControllerDeclaration::new(event, true)
         .bind(scope)
-        .expect("precommit controller declaration should bind")
-}
-
-fn set_precommit_controller_active<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    controller: v8::Local<'s, v8::Object>,
-    active: bool,
-) {
+        .expect("precommit controller declaration should bind");
     set_private_value(
         scope,
-        controller,
-        PRECOMMIT_CONTROLLER_ACTIVE_SLOT,
-        v8::Boolean::new(scope, active).into(),
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT,
+        controller.into(),
     );
+    controller
 }
 
 fn precommit_controller_event<'s>(
@@ -1389,7 +1387,20 @@ fn precommit_controller_event<'s>(
     }
     let event = get_private_value(scope, controller, PRECOMMIT_CONTROLLER_EVENT_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    if !navigate_event_target_is_connected(scope, event) {
+    let owner_is_active = get_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_TRANSITION_NAVIGATION_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    .is_some_and(|navigation| {
+        let owner = runtime_window_owner(scope, navigation);
+        navigation_document_is_active(scope, owner)
+    });
+    if !owner_is_active
+        || !navigate_event_target_is_connected(scope, event)
+        || object_bool_property(scope, event, "defaultPrevented").unwrap_or(false)
+    {
         navigate_event_throw_invalid_state(scope);
         return None;
     }
@@ -1470,21 +1481,26 @@ fn precommit_controller_redirect_callback<'s>(
         navigate_event_throw_invalid_state(scope);
         return;
     };
-    let base = destination
-        .get(scope, v8str(scope, "url").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+    let Some(navigation) = get_private_value(
+        scope,
+        event,
+        NAVIGATE_EVENT_PRECOMMIT_TRANSITION_NAVIGATION_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok()) else {
+        navigate_event_throw_invalid_state(scope);
+        return;
+    };
+    let owner = runtime_window_owner(scope, navigation);
+    let current_href = window_location_for_holder(scope, owner)
+        .and_then(|location| location_href_slot(scope, location))
         .unwrap_or_default();
     let Some(raw_url) = args.get(0).to_string(scope) else {
         return;
     };
     let raw_url = raw_url.to_rust_string_lossy(scope);
-    let base_url = match Url::parse(&base) {
-        Ok(url) => url,
-        Err(_) => {
-            navigate_event_throw_invalid_state(scope);
-            return;
-        }
+    let Some(base_url) = navigation_document_base_url(scope, owner, &current_href) else {
+        navigate_event_throw_invalid_state(scope);
+        return;
     };
     let redirected = match base_url.join(&raw_url) {
         Ok(url) => url,
@@ -1498,7 +1514,9 @@ fn precommit_controller_redirect_callback<'s>(
             return;
         }
     };
-    if !moli_url::same_origin(&base_url, &redirected) {
+    if !Url::parse(&current_href)
+        .is_ok_and(|document_url| document_can_have_url_rewritten(&document_url, &redirected))
+    {
         throw_dom_exception(
             scope,
             "SecurityError",
@@ -1549,12 +1567,14 @@ fn apply_precommit_redirect_options<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .filter(|value| matches!(value.as_str(), "push" | "replace"))
     {
+        let history = v8_string(scope, &history).unwrap();
         crate::context_bootstrap::set_event_private_value(
             scope,
             event,
             NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT,
-            v8_string(scope, &history).unwrap().into(),
+            history.into(),
         );
+        define_event_property(scope, event, "navigationType", history.into());
     }
     true
 }
