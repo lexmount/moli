@@ -106,6 +106,8 @@
 //!   target. It assigns no identity and has no implicit prototype. Explicit
 //!   prototype or tag declarations are applied by `bind_into`; `initialize`
 //!   installs only the declared fields. Fragments never erase native identity.
+//!   Use `#[webapi(fragment = Interface)]` to derive the default receiver
+//!   predicate from an interface while keeping the target unbranded.
 //!
 //! Empty declarations need no special opt-in: creating an empty plain object,
 //! branding a native instance and installing prototype metadata all have defined roles.

@@ -309,7 +309,7 @@ pub(crate) fn expand_webapi_object(input: DeriveInput) -> Result<proc_macro2::To
         .or_else(|| match role {
             ObjectRole::Instance(interface) => Some(quote!(<#interface>::DESCRIPTOR.name())),
             ObjectRole::Plain => Some(quote!("Object")),
-            ObjectRole::Fragment => None,
+            ObjectRole::Fragment(_) => None,
         });
     let own_to_string_tag = match attrs.own_to_string_tag.as_ref() {
         Some(tag) => quote!(::std::option::Option::Some(#tag)),
@@ -1614,7 +1614,8 @@ fn expand_callback(
     is_setter: bool,
 ) -> proc_macro2::TokenStream {
     let returns_promise = attrs.returns_promise && !is_setter;
-    if attrs.receiver.is_none() && attrs.access_policy.is_none() && !returns_promise {
+    let access_policy = attrs.callback_access_policy(is_setter);
+    if attrs.receiver.is_none() && access_policy.is_none() && !returns_promise {
         return quote!(#callback);
     }
     let receiver_check = attrs.receiver.as_ref().map(|receiver| {
@@ -1626,7 +1627,7 @@ fn expand_callback(
             }
         }
     });
-    let access_check = attrs.access_policy.as_ref().map(|policy| {
+    let access_check = access_policy.map(|policy| {
         quote! {
             if !#policy(scope, args.this()) {
                 return;

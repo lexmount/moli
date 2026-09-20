@@ -21,8 +21,19 @@ struct PlainObject {
 }
 
 #[derive(WebApiObject)]
-#[webapi(fragment, prototype = <interfaces::TestBase>::DESCRIPTOR.name())]
-struct PrototypeMembers {}
+#[webapi(fragment = interfaces::TestBase, prototype = <interfaces::TestBase>::DESCRIPTOR.name())]
+struct PrototypeMembers {
+    #[webapi(method, callback = fragment_member, data = 7)]
+    member: (),
+}
+
+fn fragment_member<'s>(
+    _scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s>,
+) {
+    rv.set(args.data());
+}
 
 fn eval<'s>(scope: &mut v8::PinScope<'s, '_>, source: &str) -> v8::Local<'s, v8::Value> {
     let source = v8::String::new(scope, source).unwrap();
@@ -117,6 +128,29 @@ fn identity_is_own_private_and_never_invokes_author_code() {
     assert_eq!(web_api_object_type(scope, prototype), None);
     assert_eq!(web_api_object_target(scope, plain), None);
     assert_eq!(web_api_object_target(scope, prototype), None);
+
+    let key = v8::String::new(scope, "fragment").unwrap();
+    context
+        .global(scope)
+        .set(scope, key.into(), prototype.into())
+        .unwrap();
+    assert_eq!(
+        eval(scope, "fragment.member.call(real)").uint32_value(scope),
+        Some(7)
+    );
+    assert!(
+        eval(
+            scope,
+            r#"
+        (() => {
+            try { fragment.member(); }
+            catch (error) { return error instanceof TypeError; }
+            return false;
+        })()
+    "#
+        )
+        .is_true()
+    );
 }
 
 #[test]
@@ -215,6 +249,7 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
     moli_webapi_declare::register_web_api_proxy(scope, native).unwrap();
     assert!(implements_interface(scope, native_object, "TestBase"));
     assert_eq!(web_api_object_target(scope, native_object), Some(target));
+    assert_eq!(web_api_object_target(scope, target), Some(target));
     initialize_web_api_object(scope, native_object, "TestBase").unwrap();
     let impostor = v8::Proxy::new(scope, target, handler).unwrap();
     assert_eq!(web_api_object_type(scope, impostor.into()), None);
