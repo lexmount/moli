@@ -215,7 +215,7 @@ pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
     .bind(scope)
     .expect("traversal intercept settlement data should bind");
     set_navigation_active_traversal_intercept(scope, navigation, data);
-    resolve_navigation_transition_committed(scope, navigation, v8::undefined(scope).into());
+    resolve_navigation_transition_committed(scope, navigation);
     Some(data)
 }
 

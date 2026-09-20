@@ -120,7 +120,7 @@ pub(super) fn settle_navigation_committed<'s>(
     value: v8::Local<'s, v8::Value>,
 ) {
     settle_navigation_finished_resolved_immediately(scope, resolve, value);
-    resolve_navigation_transition_committed(scope, navigation, value);
+    resolve_navigation_transition_committed(scope, navigation);
 }
 
 pub(super) fn settle_navigation_finished_resolved_immediately<'s>(

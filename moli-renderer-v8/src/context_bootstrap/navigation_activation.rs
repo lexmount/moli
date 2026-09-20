@@ -248,15 +248,9 @@ pub(super) fn install_navigation_transition<'s>(
 pub(super) fn resolve_navigation_transition_committed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
-    value: v8::Local<'s, v8::Value>,
 ) {
     if let Some(resolver) = take_navigation_transition_committed_resolver(scope, navigation) {
-        let context = resolver
-            .get_promise(scope)
-            .get_creation_context(scope)
-            .unwrap_or_else(|| scope.get_current_context());
-        let value = super::history_runtime::native::entry_value_in_realm(scope, value, context);
-        let _ = resolver.resolve(scope, value);
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
     }
 }
 

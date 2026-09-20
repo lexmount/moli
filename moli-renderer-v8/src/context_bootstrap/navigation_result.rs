@@ -695,8 +695,8 @@ pub(crate) fn apply_pending_navigation_finished_result<'s>(
     if let (Some(resolve), Some(value)) = (result.finished_resolve, resolved_value) {
         let resolve = v8::Local::new(scope, resolve);
         settle_navigation_finished_resolved_after_reactions(scope, resolve, value);
-        settle_navigation_transition_finished(scope, navigation, result.transition_resolver, None);
     }
+    settle_navigation_transition_finished(scope, navigation, result.transition_resolver, None);
     complete_navigation_attempt(scope, result.attempt_id);
     NavigationFinishedResultApplication::Applied
 }
