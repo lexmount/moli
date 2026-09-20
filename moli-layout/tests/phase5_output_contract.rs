@@ -974,12 +974,27 @@ fn fixed_inline_font() -> (ResolvedLayoutStyle, DocumentLayoutServices) {
 
 #[test]
 fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
-    const TEXT: &str = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+    const TEXT: &str = concat!(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa ",
+        "supercalifragilisticexpialidocious",
+    );
+    assert_scrollbar_feedback_inline_geometry(TEXT, true);
+}
+
+#[test]
+fn collapsed_line_end_spaces_do_not_create_horizontal_scrollbar_after_feedback() {
+    assert_scrollbar_feedback_inline_geometry(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+        false,
+    );
+}
+
+fn assert_scrollbar_feedback_inline_geometry(text: &'static str, horizontal_overflow: bool) {
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("scroller", vec![2]),
         Node::element("fixed-font", vec![3]),
-        Node::text("text", TEXT),
+        Node::text("text", text),
     ]);
     let mut styles = Styles::default();
     styles
@@ -995,8 +1010,8 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
                     height: length(40.0),
                 },
                 overflow: Point {
-                    // Only vertical feedback is needed to narrow the text.
-                    // Horizontal overflow depends on platform font advances.
+                    // Only the vertical scrollbar narrows the text. A long
+                    // word may overflow horizontally without a scrollbar.
                     x: Overflow::Hidden,
                     y: Overflow::Scroll,
                 },
@@ -1025,7 +1040,8 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     let extent = feedback.scroll_extent(scroller_box).unwrap();
     assert!(extent.vertical_scrollbar.is_some());
     assert!(extent.horizontal_scrollbar.is_none());
-    let feedback_text = feedback.text_range_rects(3, 0..TEXT.encode_utf16().count());
+    assert!(!extent.allows_user_scroll_x);
+    let feedback_text = feedback.text_range_rects(3, 0..text.encode_utf16().count());
     assert!(
         !feedback_text.is_empty(),
         "compare real text fragments, not element-only client rects"
@@ -1056,12 +1072,14 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     .unwrap();
     assert_eq!(
         feedback_text,
-        direct.text_range_rects(3, 0..TEXT.encode_utf16().count())
+        direct.text_range_rects(3, 0..text.encode_utf16().count())
     );
-    assert!(
+    assert_eq!(
         feedback_text
             .iter()
-            .all(|quad| quad.points.iter().all(|point| point.x <= 85.0))
+            .any(|quad| quad.points.iter().any(|point| point.x > 85.0)),
+        horizontal_overflow,
+        "only the unbreakable final word should retain horizontal overflow"
     );
 }
 
