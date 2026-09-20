@@ -163,6 +163,7 @@ pub(crate) use location_navigation::{
     dispatch_top_level_navigation_event_with_source_element, is_native_location,
     meta_refresh_navigation_kind, navigate_borrowed_location,
     navigate_location_object_with_child_navigate_event,
+    history_entry_seed_for_cross_document_location,
     navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
@@ -183,6 +184,7 @@ pub(crate) use navigation_history_pruning::{
     NavigationHistoryPrunePlan, apply_navigation_history_prune_plan,
     finalize_navigation_history_prune, plan_navigation_history_prune,
 };
+pub(crate) use navigation_result::finish_cross_document_navigation_for_window;
 pub(crate) use navigation_result::{
     NavigationFinishedResultApplication, apply_pending_navigation_finished_result,
 };

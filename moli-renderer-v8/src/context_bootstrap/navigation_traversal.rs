@@ -25,6 +25,7 @@ use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_projection::visible_navigation_entries_len;
 use super::navigation_reload::{NavigationReloadAdmission, navigation_reload_admission};
 use super::navigation_result::{
+    cancel_active_cross_document_navigation, navigation_cross_document_pending_result,
     navigation_current_entry_result_with_pending_finished, navigation_dom_exception,
     navigation_immediate_current_entry_result, navigation_pending_result,
     navigation_rejected_dom_exception_result, navigation_rejected_invalid_state_result,
@@ -262,9 +263,19 @@ pub(super) fn navigation_reload_callback<'s>(
         rv.set(navigation_pending_result(scope).into());
         return;
     }
+    if super::navigation_cancellation::window_navigation_is_stopping(scope, owner) {
+        rv.set(
+            navigation_rejected_dom_exception_result(scope, "Navigation was stopped", "AbortError")
+                .into(),
+        );
+        return;
+    }
     if navigation_document_can_update_current_entry(scope, owner)
         && let Some(navigation) = window_navigation_for_holder(scope, owner)
     {
+        if crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some() {
+            cancel_active_cross_document_navigation(scope, navigation, None);
+        }
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_pending_precommit_same_document_navigation(scope, navigation);
         cancel_pending_precommit_history_traversal(scope, navigation);
@@ -372,6 +383,26 @@ pub(super) fn navigation_reload_callback<'s>(
                 &current_href,
             );
             rv.set(pending.object.into());
+            return;
+        }
+        if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
+            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            && let Some(entry_seed) =
+                super::navigation_seed::history_entry_seed_for_reload(scope, owner)
+        {
+            let result = navigation_cross_document_pending_result(
+                scope,
+                navigation,
+                outcome.signal,
+                &current_href,
+            );
+            unsafe { &mut *host_ptr }.queue_lightweight_popup_cross_document_navigation(
+                scope,
+                popup_id,
+                &current_href,
+                entry_seed,
+            );
+            rv.set(result.into());
             return;
         }
     }

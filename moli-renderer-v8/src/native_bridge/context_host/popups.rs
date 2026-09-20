@@ -9,6 +9,8 @@ use crate::{
     context_bootstrap::{
         SharedWebStorageStore, WINDOW_NAME_SLOT, apply_local_window_location_navigation,
         deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
+        finish_cross_document_navigation_for_window,
+        history_entry_seed_for_cross_document_location,
         install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
         install_simple_event_target_ordered_handlers, install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
@@ -217,8 +219,47 @@ pub(super) struct PendingLightweightPopupDocumentLoad {
     pub(super) previous_url: Url,
     pub(super) target: LightweightPopupDocumentFetchTarget,
     pub(super) document_state: LightweightPopupDocumentState,
+    history: PendingLightweightPopupHistory,
     pub(super) resource_loader: Option<crate::network::navigation::NavigationResourceLoader>,
-    history_traversal: bool,
+}
+
+#[derive(Debug, Clone)]
+enum PendingLightweightPopupHistory {
+    Initial,
+    Navigation(NavigationHistoryEntrySeed),
+    Traversal(NavigationHistoryEntrySeed),
+}
+
+impl PendingLightweightPopupHistory {
+    fn entry_seed(&self) -> Option<&NavigationHistoryEntrySeed> {
+        match self {
+            Self::Initial => None,
+            Self::Navigation(seed) | Self::Traversal(seed) => Some(seed),
+        }
+    }
+
+    fn install<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        window: v8::Local<'s, v8::Object>,
+        final_url: &Url,
+    ) {
+        let Some(seed) = self.entry_seed() else {
+            return;
+        };
+        let mut seed = seed.clone();
+        if let Some(entry) = seed
+            .entries
+            .iter_mut()
+            .find(|entry| entry.history_index == seed.current_index)
+        {
+            entry.url = final_url.as_str().to_owned();
+        }
+        if let Some(activation) = seed.activation.as_mut() {
+            activation.entry.url = final_url.as_str().to_owned();
+        }
+        install_navigation_bootstrap_entry_for_holder(scope, window, &seed);
+    }
 }
 
 struct LightweightPopupClassicScriptContinuation {
@@ -1139,6 +1180,7 @@ impl JsContextHost {
                 about_blank_url(),
                 initial_document_state,
                 response,
+                PendingLightweightPopupHistory::Initial,
             )
             .is_none()
         };
@@ -1192,13 +1234,14 @@ impl JsContextHost {
             return Some(window);
         }
         let document_owner = navigation_task.document_owner();
-        self.apply_lightweight_popup_location_navigation(
+        let history = history_entry_seed_for_cross_document_location(
             scope,
-            popup_id,
             window,
             &target_url,
             crate::context_bootstrap::LocationNavigationKind::Assign,
-        );
+        )
+        .map(PendingLightweightPopupHistory::Navigation)
+        .unwrap_or(PendingLightweightPopupHistory::Initial);
         let queue_synthetic_load = if moli_url::is_about_blank(&target_url) {
             let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
                 scope,
@@ -1240,6 +1283,7 @@ impl JsContextHost {
                 return Some(window);
             }
             self.unregister_service_worker_popup_client(popup_id);
+            history.install(scope, window, &target_url);
             self.install_lightweight_popup_empty_document(scope, popup_id, window, target_url);
             true
         } else {
@@ -1249,6 +1293,7 @@ impl JsContextHost {
                 previous_url,
                 navigation_state,
                 response,
+                history,
             )
             .is_none()
         };
@@ -1664,12 +1709,38 @@ impl JsContextHost {
             .any(|pending| pending.target.task().popup_id() == popup_id)
     }
 
-    pub(crate) fn lightweight_popup_has_pending_history_traversal(&self, popup_id: u64) -> bool {
+    pub(crate) fn lightweight_popup_has_pending_history_traversal(
+        &self,
+        popup_id: u64,
+    ) -> bool {
         self.pending_lightweight_popup_document_loads
             .values()
             .any(|pending| {
-                pending.target.task().popup_id() == popup_id && pending.history_traversal
+                pending.target.task().popup_id() == popup_id
+                    && matches!(
+                        pending.history,
+                        PendingLightweightPopupHistory::Traversal(_)
+                    )
             })
+    }
+
+    pub(crate) fn cancel_pending_lightweight_popup_navigation(&mut self, popup_id: u64) {
+        if !self.lightweight_popup_has_pending_document_load(popup_id) {
+            return;
+        }
+        self.cancel_lightweight_popup_document_loads(popup_id);
+        if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+            record.navigation_id = LightweightPopupNavigationId::new(
+                record
+                    .navigation_id
+                    .as_u64()
+                    .checked_add(1)
+                    .expect("lightweight popup navigation id space exhausted"),
+            );
+            if let LightweightPopupLifecycle::Open(open) = &record.lifecycle {
+                record.location_url = open.document.url.clone();
+            }
+        }
     }
 
     pub(crate) fn lightweight_popup_is_open(&self, popup_id: u64) -> bool {
@@ -1881,13 +1952,10 @@ impl JsContextHost {
             return true;
         }
 
-        self.apply_lightweight_popup_location_navigation(
-            scope,
-            popup_id,
-            window,
-            &target_url,
-            kind,
-        );
+        let history =
+            history_entry_seed_for_cross_document_location(scope, window, &target_url, kind)
+                .map(PendingLightweightPopupHistory::Navigation)
+                .unwrap_or(PendingLightweightPopupHistory::Initial);
         if self
             .start_lightweight_popup_document_load(
                 navigation_task,
@@ -1895,6 +1963,7 @@ impl JsContextHost {
                 previous_url,
                 navigation_state,
                 response,
+                history,
             )
             .is_none()
         {
@@ -1909,6 +1978,36 @@ impl JsContextHost {
         popup_id: u64,
         target_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
+    ) -> bool {
+        self.queue_lightweight_popup_entry_navigation(
+            scope,
+            popup_id,
+            target_url,
+            PendingLightweightPopupHistory::Traversal(entry_seed),
+        )
+    }
+
+    pub(crate) fn queue_lightweight_popup_cross_document_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        target_url: &str,
+        entry_seed: NavigationHistoryEntrySeed,
+    ) -> bool {
+        self.queue_lightweight_popup_entry_navigation(
+            scope,
+            popup_id,
+            target_url,
+            PendingLightweightPopupHistory::Navigation(entry_seed),
+        )
+    }
+
+    fn queue_lightweight_popup_entry_navigation(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        target_url: &str,
+        history: PendingLightweightPopupHistory,
     ) -> bool {
         if !self.lightweight_popup_is_open(popup_id) {
             return false;
@@ -1935,18 +2034,10 @@ impl JsContextHost {
             return false;
         };
         let document_owner = navigation_task.document_owner();
-        install_navigation_bootstrap_entry_for_holder(scope, window, &entry_seed);
         let base_url = self
             .lightweight_popup_base_url(scope, popup_id)
             .unwrap_or_else(|| target_url.clone());
         let document_referrer = navigation_state.policy_container.document_referrer.clone();
-        sync_lightweight_popup_window_location(
-            scope,
-            window,
-            target_url.as_str(),
-            &base_url,
-            &document_referrer,
-        );
         if moli_url::is_about_blank(&target_url) {
             navigation_state.reset_for_empty_document(target_url.clone());
             if !self.commit_lightweight_popup_document(
@@ -1969,25 +2060,31 @@ impl JsContextHost {
             if !self.lightweight_popup_committed_navigation_task_is_current(navigation_task) {
                 return true;
             }
+            finish_cross_document_navigation_for_window(scope, window, target_url.as_str());
+            history.install(scope, window, &target_url);
+            sync_lightweight_popup_window_location(
+                scope,
+                window,
+                target_url.as_str(),
+                &base_url,
+                &document_referrer,
+            );
             self.unregister_service_worker_popup_client(popup_id);
             self.install_lightweight_popup_empty_document(scope, popup_id, window, target_url);
             self.queue_lightweight_popup_load_event(navigation_task);
             return true;
         }
-        if let Some(load_id) = self.start_lightweight_popup_document_load(
-            navigation_task,
-            Request::get_with_url(target_url),
-            previous_url,
-            navigation_state,
-            None,
-        ) {
-            if let Some(pending) = self
-                .pending_lightweight_popup_document_loads
-                .get_mut(&load_id)
-            {
-                pending.history_traversal = true;
-            }
-        } else {
+        if self
+            .start_lightweight_popup_document_load(
+                navigation_task,
+                Request::get_with_url(target_url),
+                previous_url,
+                navigation_state,
+                None,
+                history,
+            )
+            .is_none()
+        {
             self.queue_lightweight_popup_load_event(navigation_task);
         }
         true
@@ -2374,8 +2471,13 @@ impl JsContextHost {
             })
             .collect::<Vec<_>>();
         for load_id in canceled_loads {
-            self.pending_lightweight_popup_document_loads
-                .remove(&load_id);
+            if let Some(pending) = self
+                .pending_lightweight_popup_document_loads
+                .remove(&load_id)
+                && let Some(loader) = pending.resource_loader
+            {
+                loader.cancel();
+            }
         }
     }
 
@@ -2484,6 +2586,7 @@ impl JsContextHost {
         previous_url: Url,
         document_state: LightweightPopupDocumentState,
         response: Option<crate::runtime::AuxiliaryDocumentResponseReceiver>,
+        history: PendingLightweightPopupHistory,
     ) -> Option<u64> {
         let popup_id = task.popup_id();
         if !self.lightweight_popup_navigation_attempt_is_current(task) {
@@ -2522,8 +2625,8 @@ impl JsContextHost {
                 previous_url,
                 target,
                 document_state: document_state.clone(),
+                history,
                 resource_loader: resource_loader.clone(),
-                history_traversal: false,
             },
         );
         if let Some(snapshot) = local_snapshot {
@@ -2785,6 +2888,12 @@ impl JsContextHost {
                 if !self.lightweight_popup_committed_navigation_task_is_current(task) {
                     return PopupDocumentLoadApplication::Applied { body_activity };
                 }
+                finish_cross_document_navigation_for_window(
+                    scope,
+                    window,
+                    pending.target_url.as_str(),
+                );
+                pending.history.install(scope, window, &final_url);
                 if matches!(final_url.scheme(), "http" | "https") {
                     let _ = self.register_or_update_service_worker_popup_client(
                         document_owner,
