@@ -492,8 +492,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 })
                 .flatten()
         });
+        let intercepted = navigate_outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.intercepted);
+        let protocol_navigation_type = if intercepted { "other" } else { "fragment" };
         sync_location_object(scope, location, resolved.as_str());
-        sync_local_document_front_from_window(scope, owner);
         if opaque_origin {
             apply_navigation_navigate_same_document(
                 scope,
@@ -501,6 +504,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 resolved.as_str(),
                 effective_kind,
                 None,
+                protocol_navigation_type,
             );
         } else {
             update_navigation_current_entry_for_same_document(
@@ -508,6 +512,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 owner,
                 resolved.as_str(),
                 effective_kind,
+                protocol_navigation_type,
             );
         }
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
@@ -543,15 +548,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 Some(&current_href),
                 resolved.as_str(),
             );
-        }
-        if runtime_window_is_global(scope, owner) {
-            if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-                let host = unsafe { &mut *host_ptr };
-                host.set_document_url(resolved.clone());
-                host.record_same_document_navigation(&resolved, "fragment");
-            }
-        } else {
-            sync_local_document_front_from_window(scope, owner);
         }
         if let Some(navigation) = navigation {
             if navigate_outcome
@@ -669,14 +665,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 owner,
                 &effective_href,
                 effective_kind,
+                "other",
             );
-            if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-                && let Ok(url) = url::Url::parse(&effective_href)
-            {
-                let host = unsafe { &mut *host_ptr };
-                host.set_document_url(url.clone());
-                host.record_same_document_navigation(&url, "fragment");
-            }
             settle_location_intercepted_same_document_navigation(
                 scope,
                 navigation,

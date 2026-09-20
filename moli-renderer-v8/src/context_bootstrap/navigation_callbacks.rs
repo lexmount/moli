@@ -13,9 +13,7 @@ use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_navigate_event_with_outcome,
     queue_hash_change_for_runtime_owner, run_navigation_precommit_deferred_handlers,
 };
-use super::navigation_mutation::{
-    apply_navigation_navigate_same_document, sync_local_document_front_from_window,
-};
+use super::navigation_mutation::apply_navigation_navigate_same_document;
 use super::navigation_projection::build_visible_navigation_entries_array;
 use super::navigation_result::{
     cancel_active_cross_document_navigation, cancel_pending_same_document_navigation_finishes,

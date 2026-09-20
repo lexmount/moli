@@ -17,6 +17,7 @@ use super::navigation_events::{
     run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
+use super::navigation_mutation::sync_same_document_navigation_commit;
 use super::navigation_result::{
     cancel_pending_same_document_navigation_finishes,
     cancel_pending_same_document_navigation_finishes_including_reentrant,
@@ -305,6 +306,13 @@ fn mutate_history_object<'s>(
         },
     );
     pruned.extend(super::session_history::prune_views(scope, owner));
+    sync_same_document_navigation_commit(
+        scope,
+        owner,
+        url.as_str(),
+        "historyApi",
+        true,
+    );
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         refresh_navigation_destination_indexes(scope, navigation, history);
         dispatch_navigation_currententrychange(
@@ -354,20 +362,6 @@ fn mutate_history_object<'s>(
         dispatch_navigation_entry_dispose(scope, entry);
     }
     sync_child_navigation_entry_seed_from_owner(scope, owner);
-    if runtime_window_is_global(scope, owner) {
-        let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-            return;
-        };
-        let host = unsafe { &mut *host_ptr };
-        host.set_document_url(url.clone());
-        host.record_same_document_navigation(&url, "historyApi");
-    } else if let Some(popup_id) =
-        crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let _ =
-            unsafe { &mut *host_ptr }.set_lightweight_popup_same_document_url(scope, popup_id, url);
-    }
 }
 
 fn resolve_history_state_url(base_url: &url::Url, target: &str) -> Option<url::Url> {
