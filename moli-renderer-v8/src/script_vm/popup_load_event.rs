@@ -33,6 +33,8 @@ impl ScriptVm {
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .dispatch_lightweight_popup_load_event(scope, target.popup_id());
+            unsafe { &mut *host_ptr }
+                .note_lightweight_popup_load_event_finished(target.document_owner());
             Ok(())
         })
     }
