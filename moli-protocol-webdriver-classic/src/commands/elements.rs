@@ -815,6 +815,10 @@ fn element_click_call_function(
                     select.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
                     HTMLElement.prototype.focus.call(select);
                 }
+            } else {
+                // DOM-first WebDriver activation still moves keyboard focus.
+                // Keep this at the automation boundary, not in script click().
+                HTMLElement.prototype.focus.call(this);
             }
             HTMLElement.prototype.click.call(this);
             let detachedFrame = false;

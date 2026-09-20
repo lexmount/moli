@@ -19,14 +19,15 @@ use moli_protocol::{
         DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsDomGeometryCommand,
         DevToolsDomGeometryOperation, DevToolsDomGeometryResult, DevToolsDomNodeReference,
         DevToolsDownloadBehaviorSetting, DevToolsError, DevToolsErrorKind, DevToolsFrameId,
-        DevToolsGetFrameOwnerCommand, DevToolsGetFrameOwnerResult, DevToolsGetRealmsCommand,
-        DevToolsGetRealmsResult, DevToolsGetServiceWorkerLogsCommand,
-        DevToolsGetServiceWorkerLogsResult, DevToolsGetTargetsCommand, DevToolsGetTargetsResult,
-        DevToolsLayoutMetricsResult, DevToolsLocateNodesResult, DevToolsProtocol,
-        DevToolsQuerySelectorResult, DevToolsRemoteHandleId, DevToolsRemoteValue,
-        DevToolsScriptException, DevToolsScriptResult, DevToolsSessionId,
-        DevToolsSetDownloadBehaviorCommand, DevToolsSetFileInputFilesCommand, DevToolsTargetId,
-        DevToolsTargetInfo, DevToolsTargetKind, RuntimeConsoleEvent, RuntimeExecutionContextEvent,
+        DevToolsGetFrameOwnerCommand, DevToolsGetFrameOwnerResult,
+        DevToolsGetNodeForLocationCommand, DevToolsGetRealmsCommand, DevToolsGetRealmsResult,
+        DevToolsGetServiceWorkerLogsCommand, DevToolsGetServiceWorkerLogsResult,
+        DevToolsGetTargetsCommand, DevToolsGetTargetsResult, DevToolsLayoutMetricsResult,
+        DevToolsLocateNodesResult, DevToolsProtocol, DevToolsQuerySelectorResult,
+        DevToolsRemoteHandleId, DevToolsRemoteValue, DevToolsScriptException, DevToolsScriptResult,
+        DevToolsSessionId, DevToolsSetDownloadBehaviorCommand, DevToolsSetFileInputFilesCommand,
+        DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind, RuntimeConsoleEvent,
+        RuntimeExecutionContextEvent,
     },
     version,
 };
@@ -4545,7 +4546,7 @@ async fn webdriver_classic_click_point(
                 reference: owner.reference,
                 operation: DevToolsDomGeometryOperation::GetBoxModel,
             }),
-            owner.page_residence,
+            owner.page_residence.clone(),
         )
         .await
         .map_err(classic_error_from_devtools_error)?;
@@ -4579,10 +4580,41 @@ async fn webdriver_classic_click_point(
     // the exact locally hit-tested point, retaining rotation/scale and borders.
     let u = point.x / viewport_width;
     let v = point.y / viewport_height;
-    ClassicViewportPoint::new(
+    let point = ClassicViewportPoint::new(
         x0 + u * (x1 - x0) + v * (x3 - x0),
         y0 + u * (y1 - y0) + v * (y3 - y0),
-    )
+    )?;
+    // Use the renderer's deep hit path, which enters a child document only
+    // when each ancestor frame owner is actually visible at this root point.
+    let hit = binding
+        .runtime
+        .execute_on_page(
+            DevToolsCommand::GetNodeForLocation(DevToolsGetNodeForLocationCommand {
+                context: classic_top_level_devtools_context(binding),
+                x: point.x,
+                y: point.y,
+                include_user_agent_shadow_dom: false,
+                ignore_pointer_events_none: false,
+            }),
+            owner.page_residence,
+        )
+        .await
+        .map_err(classic_error_from_devtools_error)?;
+    match hit {
+        DevToolsCommandResult::GetNodeForLocation(hit)
+            if hit.frame_id == DevToolsFrameId::from(frame_id.to_owned()) =>
+        {
+            Ok(point)
+        }
+        DevToolsCommandResult::GetNodeForLocation(_) => Err(ClassicError::new(
+            ClassicErrorCode::ElementClickIntercepted,
+            "an ancestor document obscures the target frame's click point",
+        )),
+        _ => Err(ClassicError::new(
+            ClassicErrorCode::UnknownError,
+            "frame hit test returned an unexpected result",
+        )),
+    }
 }
 
 async fn webdriver_classic_activate_element_by_handle(

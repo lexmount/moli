@@ -1402,18 +1402,12 @@ impl CapturedResponseBodyStore {
     fn revoke_retained_visibility(&mut self, session_id: Option<&str>) {
         // Revocation affects only old-document claims, not ordinary access to
         // responses from the current document.
-        for request_id in &self.retained_request_ids {
-            if let Some(body) = self.bodies.get_mut(request_id)
-                && !body.remove_session_visibility(session_id)
-            {
-                self.bodies.remove(request_id);
-            }
-            if let Some(body) = self.buffered_bodies.get_mut(request_id)
-                && !body.remove_session_visibility(session_id)
-            {
-                self.buffered_bodies.remove(request_id);
-            }
-        }
+        let keep = |request_id: &String, body: &mut CapturedResponseBody| {
+            !self.retained_request_ids.contains(request_id)
+                || body.remove_session_visibility(session_id)
+        };
+        self.bodies.retain(keep);
+        self.buffered_bodies.retain(keep);
     }
 
     fn effective_durable_limits(&self) -> ByteLimits {
@@ -1462,12 +1456,19 @@ impl CapturedResponseBodyStore {
     }
 
     fn trim_durable_entries(&mut self) {
+        let mut expired_payloads = HashSet::new();
         while self.durable_entry_order.len() > DURABLE_RESPONSE_BODY_MAX_ENTRIES {
             if let Some(id) = self.durable_entry_order.pop_front() {
                 self.bodies.remove(&id);
-                self.buffered_bodies.remove(&id);
                 self.retained_request_ids.remove(&id);
+                if self.buffered_bodies.contains_key(&id) {
+                    expired_payloads.insert(id);
+                }
             }
+        }
+        if !expired_payloads.is_empty() {
+            self.buffered_bodies
+                .retain(|id, _| !expired_payloads.contains(id));
         }
     }
 
@@ -1485,16 +1486,7 @@ impl CapturedResponseBodyStore {
                 && !matches!(body.state, CapturedResponseBodyState::Pending)
         };
         self.bodies.retain(|_, body| retain(body));
-        let ids = self
-            .buffered_bodies
-            .iter()
-            .map(|(id, _)| id.clone())
-            .collect::<Vec<_>>();
-        for id in ids {
-            if !self.buffered_bodies.get_mut(&id).is_some_and(retain) {
-                self.buffered_bodies.remove(&id);
-            }
-        }
+        self.buffered_bodies.retain(|_, body| retain(body));
         self.retained_request_ids = self
             .bodies
             .keys()
@@ -1638,20 +1630,8 @@ impl CapturedResponseBodyStore {
         self.bodies
             .retain(|_, body| body.remove_session_visibility(session_id));
 
-        let buffered_request_ids = self
-            .buffered_bodies
-            .iter()
-            .map(|(request_id, _)| request_id.clone())
-            .collect::<Vec<_>>();
-        for request_id in buffered_request_ids {
-            let retain = self
-                .buffered_bodies
-                .get_mut(request_id.as_str())
-                .is_some_and(|body| body.remove_session_visibility(session_id));
-            if !retain {
-                self.buffered_bodies.remove(request_id.as_str());
-            }
-        }
+        self.buffered_bodies
+            .retain(|_, body| body.remove_session_visibility(session_id));
     }
 
     #[cfg(test)]

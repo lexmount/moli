@@ -87,6 +87,16 @@ mod tests {
         check_wal_snapshot(Path::new("cookies-é.sqlite"))
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn snapshot_preserves_non_utf8_paths_when_finding_wal_files() -> Result<()> {
+        use std::os::unix::ffi::OsStrExt;
+
+        check_wal_snapshot(Path::new(std::ffi::OsStr::from_bytes(
+            b"cookies-\xff.sqlite",
+        )))
+    }
+
     fn check_wal_snapshot(name: &Path) -> Result<()> {
         let directory = tempfile::tempdir()?;
         let source = directory.path().join(name);

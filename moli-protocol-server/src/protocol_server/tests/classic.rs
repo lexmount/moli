@@ -11265,6 +11265,37 @@ async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
             LayoutPolicy::OnDemand => json!(["pointerdown", "mousedown", "mouseup", "click"]),
         };
         assert_eq!(observed["value"], expected, "{policy:?}");
+        classic_request_json_with_body(
+            app.clone(), Method::POST, &format!("/session/{session_id}/url"),
+            json!({"url": "data:text/html,<input id='origin'><input id='target'><script>document.getElementById('origin').focus();</script>"}),
+        ).await;
+        let target = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+        assert_eq!(
+            classic_request_json(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/element/{target}/click"),
+            )
+            .await,
+            json!({"value":null})
+        );
+        assert_eq!(
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/actions"),
+                json!({"actions":[{"type":"key","id":"keyboard","actions":[
+                    {"type":"keyDown","value":"x"},{"type":"keyUp","value":"x"}
+                ]}]}),
+            )
+            .await,
+            json!({"value":null})
+        );
+        let focused = classic_request_json_with_body(
+            app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+            json!({"script":"return [document.activeElement.id,document.getElementById('origin').value,document.getElementById('target').value];","args":[]}),
+        ).await;
+        assert_eq!(focused["value"], json!(["target", "", "x"]), "{policy:?}");
         classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
     }
 }
@@ -11523,6 +11554,81 @@ async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offse
     )
     .await;
         assert_eq!(observed, json!({"value":["target",1,true]}), "{transform}");
+        classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+    }
+}
+
+#[tokio::test]
+async fn webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatch() {
+    for (depth, blocked_level) in [(1, 0), (2, 0), (2, 1)] {
+        let app = build_router(test_state());
+        let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+        let session_id = session["value"]["sessionId"].as_str().unwrap();
+        let mut html = "<button id='target' onclick='window.clicks++'>go</button><script>window.clicks=0;</script>".to_owned();
+        for _ in 0..depth {
+            let child = html.replace('&', "&amp;").replace('"', "&quot;");
+            html = format!(
+                "<iframe style='width:600px;height:400px;border:0' srcdoc=\"{child}\"></iframe><div id='veil' style='display:none;position:fixed;inset:0;z-index:999' onclick='window.overlayClicks++'></div><script>window.overlayClicks=0;</script>"
+            );
+        }
+        classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/url"),
+            json!({"url":classic_data_url(&html)}),
+        )
+        .await;
+        for _ in 0..depth {
+            assert_eq!(
+                classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/frame"),
+                    json!({"id":0}),
+                )
+                .await,
+                json!({"value":null})
+            );
+        }
+        let target = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+        let overlay_script = format!(
+            "let w=window;for(let i=0;i<{};i++)w=w.parent;w.document.getElementById('veil').style.display=arguments[0];",
+            depth - blocked_level
+        );
+        let read_script = "let w=window,total=0;while(w!==w.parent){w=w.parent;total+=w.overlayClicks;}return [window.clicks,total];";
+        for blocked in [true, false] {
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/execute/sync"),
+                json!({"script":overlay_script,"args":[if blocked {"block"} else {"none"}]}),
+            )
+            .await;
+            let (status, clicked) = classic_request_status_and_json(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/element/{target}/click"),
+            )
+            .await;
+            if blocked {
+                assert_eq!(status, StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    clicked["value"]["error"], "element click intercepted",
+                    "depth={depth} level={blocked_level}: {clicked}"
+                );
+            } else {
+                assert_eq!(status, StatusCode::OK);
+                assert_eq!(clicked, json!({"value":null}));
+            }
+            let observed = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/execute/sync"),
+                json!({"script":read_script,"args":[]}),
+            )
+            .await;
+            assert_eq!(observed["value"], json!([if blocked { 0 } else { 1 }, 0]));
+        }
         classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
     }
 }
