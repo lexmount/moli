@@ -474,6 +474,156 @@ async fn navigation_transition_committed_resolves_without_a_history_entry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn precommit_rejections_preserve_promise_and_event_order() {
+    for (owner, operation, mode) in [
+        ("top", "navigate", "reject"),
+        ("top", "navigate", "stop"),
+        ("top", "navigate", "navigate"),
+        ("top", "reload", "reject"),
+        ("top", "reload", "navigate"),
+        ("top", "location", "reject"),
+        ("top", "location", "stop"),
+        ("top", "location", "navigate"),
+        ("top", "download", "reject"),
+        ("top", "download", "stop"),
+        ("top", "download", "navigate"),
+        ("top", "back", "reject"),
+        ("top", "back", "stop"),
+        ("top", "back", "navigate"),
+        ("top", "anchor", "reject"),
+        ("top", "anchor", "stop"),
+        ("top", "anchor", "navigate"),
+        ("top", "form", "reject"),
+        ("top", "form", "stop"),
+        ("top", "form", "navigate"),
+        ("child", "navigate", "reject"),
+        ("child", "navigate", "stop"),
+        ("child", "navigate", "navigate"),
+        ("child", "reload", "reject"),
+        ("child", "reload", "navigate"),
+        ("child", "download", "reject"),
+        ("child", "download", "stop"),
+        ("child", "download", "navigate"),
+        ("popup", "navigate", "reject"),
+        ("popup", "navigate", "navigate"),
+        ("popup", "reload", "reject"),
+        ("popup", "reload", "navigate"),
+        ("popup", "download", "reject"),
+        ("popup", "download", "navigate"),
+        ("top", "navigate", "primitive"),
+        ("top", "reload", "primitive"),
+        ("top", "back", "primitive"),
+        ("top", "location", "primitive"),
+        ("top", "download", "primitive"),
+    ] {
+        let mut page = SameDocumentPage::new().await;
+        page.allow_downloads().await;
+        let script = r###"(async () => {
+  const ownerKind=OWNER, operation=OPERATION, mode=MODE;
+  const parentURL=location.href;
+  let target=window, frame;
+  if(ownerKind==='child') {
+    frame=document.createElement('iframe');frame.src='history.html';document.body.appendChild(frame);
+    await new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));target=frame.contentWindow;
+  } else if(ownerKind==='popup') {
+    target=open('history.html');await new Promise(resolve=>target.addEventListener('load',resolve,{once:true}));
+  }
+  const nav=target.navigation, loc=target.location, doc=target.document;
+  const tick=()=>new Promise(resolve=>setTimeout(resolve,0));
+  if(operation==='back') target.history.pushState(null,'','#current');
+  await tick();
+  const before=loc.href, from=nav.currentEntry;
+  const order=[], checks={}, reasons=[], states={}, promises=[];
+  const error=mode==='primitive'?'precommit failure':new Error('precommit failure');
+  let event, transition, method, nested, rejectGate, releaseGate, handlerCalls=0;
+  const gate=new Promise((resolve,reject)=>{releaseGate=resolve;rejectGate=reject;});
+  const observe=(name,promise)=>promises.push(promise.then(
+    ()=>{states[name]='fulfilled';order.push(name+' fulfilled');},
+    reason=>{states[name]='rejected';reasons.push(reason);order.push(name+' rejected');}
+  ));
+  nav.addEventListener('navigateerror',e=>{
+    order.push('navigateerror');reasons.push(e.error);
+    checks['transition during error']=nav.transition===transition;
+    queueMicrotask(()=>order.push('error microtask'));
+  },{once:true});
+  nav.addEventListener('navigate',e=>{
+    event=e;
+    e.signal.addEventListener('abort',()=>{
+      order.push('abort');reasons.push(e.signal.reason);
+      checks['transition during abort']=nav.transition===transition;
+      queueMicrotask(()=>order.push('abort microtask'));
+    },{once:true});
+    e.intercept({precommitHandler(){
+      order.push('precommit');transition=nav.transition;
+      observe('transition committed',transition.committed);observe('transition finished',transition.finished);
+      return gate;
+    },handler(){handlerCalls++;}});
+  },{once:true});
+  if(operation==='navigate')method=nav.navigate('?requested=1');
+  else if(operation==='location')loc.assign('?requested=1');
+  else if(operation==='download'||operation==='anchor'){
+    const a=doc.createElement('a');a.href=operation==='download'?'?download=1':'?requested=1';
+    if(operation==='download')a.download='test.txt';doc.body.appendChild(a);a.click();
+  } else if(operation==='form'){
+    const form=doc.createElement('form');form.action='?requested=1';form.method='post';doc.body.appendChild(form);form.requestSubmit();
+  } else method=nav[operation]();
+  if(method){observe('method committed',method.committed);observe('method finished',method.finished);}
+  for(let i=0;i<60&&!transition;i++)await tick();
+  checks.started=transition!=null&&nav.currentEntry===from;
+  if(mode==='stop')target.stop();
+  else if(mode==='navigate')nested=nav.navigate('#next');
+  else rejectGate(error);
+  checks.settled=await Promise.race([Promise.all(promises).then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),700))]);
+  if(nested)await nested.finished;
+  releaseGate();await tick();
+  const methodOrder=method?['method committed rejected','method finished rejected']:[];
+  checks.order=JSON.stringify(order)===JSON.stringify(['precommit','abort','navigateerror','abort microtask',...methodOrder,'error microtask','transition committed rejected','transition finished rejected']);
+  checks['promise states']=Object.keys(states).length===(method?4:2)&&Object.values(states).every(v=>v==='rejected');
+  const canceled=mode==='stop'||mode==='navigate', expected=canceled?event.signal.reason:error;
+  checks['error identity']=reasons.length===(method?6:4)&&reasons.every(reason=>reason===expected);
+  checks['signal reason']=!canceled||event.signal.reason.name==='AbortError';
+  checks['handler suppressed']=handlerCalls===0;
+  checks['transition cleared']=nav.transition===null;
+  const expectedURL=mode==='navigate'?new URL('#next',before).href:before;
+  checks['final URL']=loc.href===expectedURL&&doc.URL===loc.href&&nav.currentEntry.url===loc.href;
+  const result={ownerKind,operation,mode,checks,order,states,href:loc.href,entries:nav.entries().map(e=>e.url)};
+  if(ownerKind!=='top') {
+    checks['parent unchanged']=location.href===parentURL&&navigation.transition===null;
+    if(frame)frame.remove();else target.close();
+  }
+  return result;
+})()
+"###
+            .replace("OWNER", &json!(owner).to_string())
+            .replace("OPERATION", &json!(operation).to_string())
+            .replace("MODE", &json!(mode).to_string());
+        let result = page.evaluate(&script).await;
+        assert!(
+            result["checks"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|value| value == true),
+            "{owner}/{operation}/{mode}: {result}"
+        );
+        assert_eq!(
+            page.download_requests
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a rejected intercepted download must not be fetched"
+        );
+        if owner == "top" {
+            match (operation, mode) {
+                ("back", "navigate") => page.assert_history(&["", "#current", "#next"], 2).await,
+                ("back", _) => page.assert_history(&["", "#current"], 1).await,
+                (_, "navigate") => page.assert_history(&["", "#next"], 1).await,
+                _ => page.assert_history(&[""], 0).await,
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn asynchronous_precommit_controllers_apply_final_redirects() {
     for (owner, operation, mode) in [
         ("top", "navigate", "push"),
