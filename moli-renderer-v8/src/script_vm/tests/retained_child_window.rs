@@ -1,5 +1,108 @@
 use super::*;
 
+#[test]
+fn current_child_isolated_world_can_post_messages_to_its_native_window() {
+    let mut vm = new_storage_test_vm("https://isolated-child-message.test/");
+    vm.eval(
+        r#"
+      globalThis.frame = document.createElement('iframe');
+      (document.body || document.documentElement || document).appendChild(frame);
+      void frame.contentWindow;
+    "#,
+    )
+    .expect("child Window should be exposed");
+    let context_id =
+        materialize_single_child_default_realm_for_test(&mut vm, "isolated child postMessage");
+    let frame_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .find(|realm| realm.context_id == context_id)
+        .and_then(|realm| realm.frame_id)
+        .expect("child frame id");
+    let isolated = vm
+        .create_isolated_world_for_frame(&frame_id, "child-post-message", false)
+        .expect("child isolated world should be created");
+    assert!(!vm._context_host.borrow().has_pending_window_messages());
+    vm.eval_in_isolated_context(
+        isolated,
+        "window.postMessage('isolated-self', '*'); 'posted'",
+    )
+    .expect("isolated child Window should accept postMessage");
+    assert!(
+        vm._context_host.borrow().has_pending_window_messages(),
+        "a current isolated global must resolve to the native child Window, despite having a distinct V8 proxy"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn removed_cross_origin_windows_keep_their_surface_without_targeting_replacements() {
+    for shadow in [false, true] {
+        for mode in ["remove", "ancestor", "replace"] {
+            let child = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/retained-cross-origin-child.html"
+            ));
+            let leaf = "<!doctype html><title>leaf</title>";
+            let server = StaticHttpServer::spawn_with_bodies(
+                [child, leaf, child, leaf].map(str::to_owned).to_vec(),
+            )
+            .await;
+            let loader = static_http_loader([
+                server.resolve_entry("www.example.test"),
+                server.resolve_entry("remote.example.test"),
+            ]);
+            let parent_url = server.url_for_host("www.example.test", "/page.html");
+            let child_url = server.url_for_host("remote.example.test", "/child.html");
+            let child_url = child_url.as_str();
+            let mut vm =
+                new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+            let script = include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/retained-cross-origin-window.js"
+            ));
+            vm.exec(
+                &format!(
+                    r#"
+if (!document.documentElement) document.appendChild(document.createElement('html'));
+if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+globalThis.__retainedCrossOriginResult = null;
+({script})({{childURL: {child_url:?}, mode: {mode:?}, shadow: {shadow}}}).then(
+  result => {{ __retainedCrossOriginResult = result; }},
+  error => {{ __retainedCrossOriginResult = {{error: String(error)}}; }}
+);
+"#
+                ),
+                None,
+            )
+            .expect("cross-origin Window removal probe should start");
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(__retainedCrossOriginResult !== null)",
+                "true",
+                "cross-origin Window removal probe should finish",
+            )
+            .await;
+            let result: serde_json::Value = serde_json::from_str(
+                &vm.eval("JSON.stringify(__retainedCrossOriginResult)")
+                    .expect("cross-origin Window observations"),
+            )
+            .unwrap();
+            assert_eq!(result["checks"], 103, "{mode}/shadow={shadow}: {result}");
+            assert_eq!(
+                result["failures"],
+                serde_json::json!([]),
+                "{mode}/shadow={shadow}: {result}"
+            );
+            assert_eq!(
+                server.finish_targets().await,
+                vec!["/child.html", "/leaf.html", "/child.html", "/leaf.html"],
+                "{mode}/shadow={shadow}"
+            );
+        }
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn removed_windows_retain_aliases_through_unload_without_reviving_on_reattachment() {
     for shadow in [false, true] {
