@@ -18,6 +18,7 @@ members = [
     "moli-crypto",
     "moli-curl",
     "moli-dns-resolver",
+    "moli-disk-pool",
     "moli-protocol",
     "moli-encoding",
     "moli-encoding-detector",

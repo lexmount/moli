@@ -2602,6 +2602,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-disk-pool"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "tempfile",
+]
+
+[[package]]
 name = "moli-dns-resolver"
 version = "0.1.0"
 dependencies = [
