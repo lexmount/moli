@@ -256,6 +256,9 @@ pub(super) fn navigation_document_base_url<'s>(
                 .unwrap_or_else(|| host.document_url().clone()),
         );
     }
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return host.lightweight_popup_request_base_url(scope, popup_id);
+    }
     let handle = child_browsing_context_handle_for_runtime_owner(scope, owner)?;
     let base = host
         .child_browsing_context_base_url(handle)

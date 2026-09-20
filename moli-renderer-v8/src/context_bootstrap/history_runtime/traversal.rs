@@ -8,8 +8,8 @@ use super::super::navigation_entry::{
 };
 use super::super::navigation_events::{
     NavigationDispatchOutcome, dispatch_navigation_success,
-    dispatch_navigation_traverse_event_with_outcome, mark_navigation_outcome_default_prevented,
-    run_navigation_precommit_deferred_handlers,
+    dispatch_navigation_traverse_event_with_outcome, finish_navigation_precommit,
+    mark_navigation_outcome_default_prevented, run_navigation_precommit_deferred_handlers,
 };
 use super::super::navigation_lifecycle::{
     finish_navigation_error_events, settle_navigation_transition_finished_local,
@@ -805,6 +805,9 @@ fn commit_intercepted_history_traversal<'s>(
     // HTML's "prepare to run script" keeps commit-time Promise reactions after
     // currententrychange listeners and intercept handlers, even on a native task.
     let execution = ScriptExecutionScope::enter(scope);
+    if let Some(event) = data.event {
+        finish_navigation_precommit(scope, event);
+    }
     let Some(applied) =
         apply_history_entry_commit(scope, data.history, data.target_index, Some("other"))
     else {

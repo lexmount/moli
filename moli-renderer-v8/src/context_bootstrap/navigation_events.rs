@@ -47,6 +47,8 @@ const NAVIGATION_ERROR_EVENT_ACTIVE_SLOT: &str = "__lmNavigationErrorEventActive
 const NAVIGATE_EVENT_INTERCEPT_ERROR_SLOT: &str = "__lmNavigateEventInterceptError";
 const NAVIGATE_EVENT_INTERCEPT_RESULT_SLOT: &str = "__lmNavigateEventInterceptResult";
 const NAVIGATE_EVENT_PRECOMMIT_SEEN_SLOT: &str = "__lmNavigateEventPrecommitSeen";
+pub(super) const NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT: &str =
+    "__lmNavigateEventPrecommitController";
 const NAVIGATE_EVENT_REDIRECTED_SLOT: &str = "__lmNavigateEventRedirected";
 const NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT: &str = "__lmNavigateEventRedirectHistory";
 const NAVIGATE_EVENT_ABORT_ERROR_SLOT: &str = "__lmNavigateEventAbortError";
@@ -1004,28 +1006,8 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
             .flatten(),
     );
     set_navigation_scroll_state(scope, navigation, event, href, intercepted);
-    let redirected =
-        navigate_event_private_bool(scope, event, NAVIGATE_EVENT_REDIRECTED_SLOT, false);
-    let redirected_url = redirected.then(|| {
-        destination
-            .get(scope, v8str(scope, "url").into())
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| href.to_owned())
-    });
-    let redirected_history = if redirected {
-        navigate_event_private_value(scope, event, NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT)
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| matches!(value.as_str(), "push" | "replace"))
-    } else {
-        None
-    };
-    let redirected_state = if redirected {
-        navigation_destination_state(scope, destination)
-    } else {
-        None
-    };
+    let (redirected_url, redirected_history, redirected_state) =
+        navigation_precommit_redirect(scope, event);
     let intercept_error =
         navigate_event_private_value(scope, event, NAVIGATE_EVENT_INTERCEPT_ERROR_SLOT);
     let intercept_result =
@@ -1046,6 +1028,56 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
         intercept_result,
         abort_error,
     }
+}
+
+pub(super) fn finish_navigation_precommit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    if let Some(controller) =
+        get_private_value(scope, event, NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
+        set_private_value(
+            scope,
+            controller,
+            "__lmPrecommitControllerActive",
+            v8::Boolean::new(scope, false).into(),
+        );
+        set_private_value(
+            scope,
+            event,
+            NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT,
+            v8::undefined(scope).into(),
+        );
+    }
+}
+
+pub(super) fn navigation_precommit_redirect<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<v8::Local<'s, v8::Value>>,
+) {
+    if !navigate_event_private_bool(scope, event, NAVIGATE_EVENT_REDIRECTED_SLOT, false) {
+        return (None, None, None);
+    }
+    let destination = event
+        .get(scope, v8str(scope, "destination").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
+    let url = destination
+        .and_then(|destination| destination.get(scope, v8str(scope, "url").into()))
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope));
+    let history = navigate_event_private_value(scope, event, NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT)
+        .and_then(|value| value.to_string(scope))
+        .map(|value| value.to_rust_string_lossy(scope))
+        .filter(|value| matches!(value.as_str(), "push" | "replace"));
+    let state =
+        destination.and_then(|destination| navigation_destination_state(scope, destination));
+    (url, history, state)
 }
 
 pub(super) fn run_navigation_precommit_deferred_handlers<'s>(

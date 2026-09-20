@@ -21,6 +21,7 @@ use super::navigation_entry_state::{
 use super::navigation_events::cancel_active_navigation_event;
 use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_navigate_event_with_outcome,
+    finish_navigation_precommit,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_projection::visible_navigation_entries_len;
@@ -346,6 +347,9 @@ pub(super) fn navigation_reload_callback<'s>(
             {
                 rv.set(pending.object.into());
                 return;
+            }
+            if let Some(event) = outcome.precommit_event {
+                finish_navigation_precommit(scope, event);
             }
             let transition_from = navigation_current_entry(scope, owner);
             let transition_to = outcome.destination;
