@@ -37,22 +37,56 @@ mod tests {
 
     #[test]
     fn redirect_status_method_matrix_matches_fetch_semantics() {
-        for status in [301, 302, 303, 307, 308] {
-            for method in ["GET", "HEAD", "POST", "PUT", "DELETE", "post"] {
-                let headers = vec![
-                    ("Content-Type".into(), "text/plain".into()),
-                    ("CONTENT-LENGTH".into(), "5".into()),
-                    ("Accept".into(), "*/*".into()),
-                ];
-                let mut request = RedirectRequest::new(method, Some("value"), &headers);
-                request.follow(status);
-                let changed = matches!(status, 301 | 302) && method.eq_ignore_ascii_case("POST")
-                    || status == 303 && !matches!(method, "GET" | "HEAD");
-                assert_eq!(request.method, if changed { "GET" } else { method });
-                assert_eq!(request.body, if changed { None } else { Some("value") });
-                assert_eq!(request.headers.len(), if changed { 1 } else { 3 });
-                assert_eq!(headers.len(), 3, "original metadata stays unchanged");
-            }
+        // Explicit HTTP expectations, independent of the implementation's
+        // classification formula. None means the redirect discards the body.
+        for (status, method, expected_method, expected_body) in [
+            (301, "GET", "GET", Some("value")),
+            (301, "HEAD", "HEAD", Some("value")),
+            (301, "POST", "GET", None),
+            (301, "PUT", "PUT", Some("value")),
+            (301, "DELETE", "DELETE", Some("value")),
+            (301, "post", "GET", None),
+            (302, "GET", "GET", Some("value")),
+            (302, "HEAD", "HEAD", Some("value")),
+            (302, "POST", "GET", None),
+            (302, "PUT", "PUT", Some("value")),
+            (302, "DELETE", "DELETE", Some("value")),
+            (302, "post", "GET", None),
+            (303, "GET", "GET", Some("value")),
+            (303, "HEAD", "HEAD", Some("value")),
+            (303, "POST", "GET", None),
+            (303, "PUT", "GET", None),
+            (303, "DELETE", "GET", None),
+            (303, "post", "GET", None),
+            (307, "GET", "GET", Some("value")),
+            (307, "HEAD", "HEAD", Some("value")),
+            (307, "POST", "POST", Some("value")),
+            (307, "PUT", "PUT", Some("value")),
+            (307, "DELETE", "DELETE", Some("value")),
+            (307, "post", "post", Some("value")),
+            (308, "GET", "GET", Some("value")),
+            (308, "HEAD", "HEAD", Some("value")),
+            (308, "POST", "POST", Some("value")),
+            (308, "PUT", "PUT", Some("value")),
+            (308, "DELETE", "DELETE", Some("value")),
+            (308, "post", "post", Some("value")),
+        ] {
+            let headers = vec![
+                ("Content-Type".into(), "text/plain".into()),
+                ("CONTENT-LENGTH".into(), "5".into()),
+                ("Accept".into(), "*/*".into()),
+            ];
+            let mut request = RedirectRequest::new(method, Some("value"), &headers);
+            request.follow(status);
+            assert_eq!(request.method, expected_method, "{status} {method}");
+            assert_eq!(request.body, expected_body, "{status} {method}");
+            let expected_headers = if expected_body.is_none() {
+                vec![("Accept".into(), "*/*".into())]
+            } else {
+                headers.clone()
+            };
+            assert_eq!(request.headers, expected_headers, "{status} {method}");
+            assert_eq!(headers.len(), 3, "original metadata stays unchanged");
         }
     }
 
