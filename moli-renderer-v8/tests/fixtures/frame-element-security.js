@@ -74,6 +74,8 @@ async ({sameURL, crossURL}) => {
   equal(get.call(child) === same, true, 'relaxed domain parent getter');
   equal(childGet.call(child) === same, true, 'relaxed domain child getter');
   same.remove();
+  equal(childGet.call(child), null, 'removed cached child getter');
+  equal(childRead(), null, 'removed child execution');
   for (const frame of frames) frame.remove();
   return {checks, failures};
 }
