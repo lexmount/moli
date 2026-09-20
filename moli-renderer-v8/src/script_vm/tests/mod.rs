@@ -15791,6 +15791,7 @@ mod element_click;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
+mod frame_element_security;
 mod headers_list;
 mod http_fixture;
 mod import_meta;
