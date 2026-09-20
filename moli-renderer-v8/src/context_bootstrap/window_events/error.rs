@@ -246,6 +246,10 @@ pub(crate) fn dispatch_window_error_event<'s>(
     mark_event_trusted(scope, event);
 
     let runtime = unsafe { &mut *host_ptr };
+    if let Some(popup_id) = popup_id {
+        runtime.dispatch_lightweight_popup_window_event(scope, popup_id, "error", event);
+        return Ok(Some(event));
+    }
     if let Some(child_handle) =
         crate::context_bootstrap::child_browsing_context_handle_for_current_realm_scope(scope)
     {
