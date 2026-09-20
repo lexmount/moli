@@ -146,29 +146,35 @@ async fn header_eof_processes_cookies_before_following_redirects() -> Result<()>
 
 #[tokio::test]
 async fn header_eof_keeps_manual_raw_redirects_unfollowed() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let url = format!("http://{}/start", listener.local_addr()?);
-    let server = tokio::spawn(serve_responses(
-        listener,
-        vec![
+    for headers_terminated in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/start", listener.local_addr()?);
+        let mut response =
             b"HTTP/1.1 302 Found\r\nLocation: /final\r\nSet-Cookie: redirect=one; Path=/\r\n"
-                .to_vec(),
-        ],
-    ));
-    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
-    let (head, body) = fetch_in_mode(
-        &client,
-        Request::get(&url)?.with_follow_redirects(false),
-        "raw",
-    )
-    .await?;
-    assert_eq!(head.status, 302);
-    assert_eq!(head.final_url.path(), "/start");
-    assert!(!head.redirected);
-    assert_eq!(head.cookie_set_reports.len(), 1);
-    assert!(body.is_empty());
-    assert_eq!(server.await??.len(), 1);
-    assert!(client.shutdown().is_clean());
+                .to_vec();
+        if headers_terminated {
+            response.extend_from_slice(b"\r\n");
+        }
+        let server = tokio::spawn(serve_responses(listener, vec![response]));
+        let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+        let (head, body) = fetch_in_mode(
+            &client,
+            Request::get(&url)?.with_follow_redirects(false),
+            "raw",
+        )
+        .await?;
+        assert_eq!(head.status, 302);
+        assert_eq!(head.final_url.path(), "/start");
+        assert!(!head.redirected);
+        assert_eq!(
+            head.cookie_set_reports.len(),
+            1,
+            "headers_terminated={headers_terminated}"
+        );
+        assert!(body.is_empty());
+        assert_eq!(server.await??.len(), 1);
+        assert!(client.shutdown().is_clean());
+    }
     Ok(())
 }
 
