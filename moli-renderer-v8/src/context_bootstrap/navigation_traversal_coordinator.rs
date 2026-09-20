@@ -3,7 +3,7 @@
 use super::history_runtime::{apply, results, traversal};
 use super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
-    reject_navigation_transition_committed,
+    take_navigation_transition_committed_resolver,
 };
 use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
 use super::navigation_events::{
@@ -342,42 +342,47 @@ fn settle_aborted_admission<'s>(
             let event = v8::Local::new(scope, event);
             precommit_transition_resolver_from_event(scope, event)
         });
-        if let Some(navigation) = navigation
-            && transition_resolver.is_some_and(|resolver| {
-                navigation_transition_matches_resolver(scope, navigation, resolver)
-            })
-        {
-            reject_navigation_transition_committed(scope, navigation, error);
-        }
-        let Some(signal) = participant
+        let committed_resolver = navigation.and_then(|navigation| {
+            transition_resolver
+                .filter(|resolver| {
+                    navigation_transition_matches_resolver(scope, navigation, *resolver)
+                })
+                .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation))
+        });
+        let signal = participant
             .outcome
             .signal
             .as_ref()
-            .map(|signal| v8::Local::new(scope, signal))
-        else {
-            continue;
-        };
+            .map(|signal| v8::Local::new(scope, signal));
         // An event aborted during dispatch already notified its listeners.
-        if context_host_ptr_from_global_bridge(scope)
-            .is_some_and(|host| unsafe { &mut *host }.abort_signal_aborted(scope, signal))
+        let report_abort = if let Some(signal) = signal
+            && !context_host_ptr_from_global_bridge(scope)
+                .is_some_and(|host| unsafe { &mut *host }.abort_signal_aborted(scope, signal))
         {
-            continue;
-        }
-        crate::native_bridge::abort::abort_signal(scope, signal, error);
+            crate::native_bridge::abort::abort_signal(scope, signal, error);
+            true
+        } else {
+            false
+        };
         if let Some(navigation) = navigation {
-            let filename = if canceled {
-                let owner = super::navigation_window::runtime_window_owner(scope, navigation);
-                window_location_for_holder(scope, owner)
-                    .and_then(|location| {
-                        super::location_runtime::location_href_slot(scope, location)
-                    })
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
-            super::navigation_lifecycle::finish_navigation_error_events(
-                scope, navigation, error, &filename,
-            );
+            if report_abort {
+                let filename = if canceled {
+                    let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+                    window_location_for_holder(scope, owner)
+                        .and_then(|location| {
+                            super::location_runtime::location_href_slot(scope, location)
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                super::navigation_lifecycle::finish_navigation_error_events(
+                    scope, navigation, error, &filename,
+                );
+            }
+            if let Some(resolver) = committed_resolver {
+                let _ = resolver.reject(scope, error);
+            }
             super::navigation_lifecycle::settle_navigation_transition_finished_local(
                 scope,
                 navigation,
