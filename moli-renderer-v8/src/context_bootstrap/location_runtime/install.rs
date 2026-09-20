@@ -285,7 +285,7 @@ fn location_attribute_getter<'s>(
     attribute: LocationAttribute,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(current_href) = require_location_href_slot(scope, holder) else {
+    let Some(current_href) = super::helpers::relevant_location_href(scope, holder) else {
         return;
     };
     match attribute {
@@ -308,8 +308,8 @@ fn location_attribute_getter<'s>(
             set_return_string(scope, rv, &search);
         }
         LocationAttribute::Pathname => {
-            let pathname = location_href_slot(scope, holder)
-                .and_then(|href| url::Url::parse(&href).ok())
+            let pathname = url::Url::parse(&current_href)
+                .ok()
                 .map(|url| url.path().to_owned())
                 .unwrap_or_default();
             set_return_string(scope, rv, &pathname);

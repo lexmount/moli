@@ -30,7 +30,34 @@ pub(super) fn parsed_location_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    location_href_slot(scope, object).and_then(|href| url::Url::parse(&href).ok())
+    relevant_location_href(scope, object).and_then(|href| url::Url::parse(&href).ok())
+}
+
+pub(super) fn relevant_location_href<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let href = require_location_href_slot(scope, object)?;
+    let owner = super::super::navigation_window::runtime_window_owner(scope, object);
+    let retired = owner.get_creation_context(scope).is_some_and(|context| {
+        crate::util::context_host_ptr_from_context_slot(context).is_some_and(|host_ptr| {
+            let host = unsafe { &*host_ptr };
+            if let Some(popup) =
+                crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
+            {
+                return host
+                    .current_lightweight_popup_document_owner(popup)
+                    .is_none();
+            }
+            host.window_execution_context_identity_for_access_check(context)
+                .is_none_or(|identity| !host.window_execution_context_identity_is_current(identity))
+        })
+    });
+    if retired {
+        Some("about:blank".to_owned())
+    } else {
+        Some(href)
+    }
 }
 
 pub(super) fn require_location_href_slot<'s>(

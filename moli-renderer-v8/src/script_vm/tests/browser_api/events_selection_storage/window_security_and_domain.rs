@@ -2249,3 +2249,25 @@ async fn csp_sandbox_top_origin_blocks_tuple_documents_and_preserves_allow_same_
         assert_eq!(server.finish_targets().await, vec!["/common/blank.html"]);
     }
 }
+
+#[test]
+fn detached_child_location_reads_about_blank_without_erasing_document_url() {
+    let mut vm = new_parsed_test_vm("https://retained-location.test/", "<!doctype html><body>");
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+      const frame = document.body.appendChild(document.createElement('iframe'));
+      const w = frame.contentWindow, doc = w.document, location = w.location;
+      w.history.replaceState(null, '', '/previous?kept=true#fragment');
+      const before = doc.URL;
+      if (!before.endsWith('/previous?kept=true#fragment')) return 'history setup';
+      frame.remove();
+      return JSON.stringify([String(location), location.href, location.protocol,
+                            location.pathname, location.search, location.hash,
+                            location.origin, doc.URL === before]);
+    })()"#
+        )
+        .unwrap(),
+        r#"["about:blank","about:blank","about:","blank","","","null",true]"#
+    );
+}
