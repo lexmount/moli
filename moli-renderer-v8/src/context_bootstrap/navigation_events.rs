@@ -11,7 +11,6 @@ use super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
     take_navigation_transition_committed_resolver,
 };
-use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
 use super::navigation_entry::{
     history_entries, navigation_current_entry, navigation_entries_share_document,
     navigation_entry_id_value, navigation_entry_key_value, navigation_entry_url_value,
@@ -1148,6 +1147,16 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
     form_data: Option<v8::Local<'s, v8::Value>>,
     can_intercept: bool,
 ) -> bool {
+    if let Some(filename) = download_request {
+        return super::navigation_download::dispatch_download_navigation_event(
+            scope,
+            owner,
+            href,
+            source_element,
+            user_initiated,
+            filename,
+        );
+    }
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return true;
     };
@@ -1155,10 +1164,6 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
-    if download_request.is_some() {
-        let _ = cancel_active_navigation_event(scope, navigation);
-        cancel_active_intercepted_same_document_navigation(scope, navigation);
-    }
     let Ok(event_ctor) =
         super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
     else {

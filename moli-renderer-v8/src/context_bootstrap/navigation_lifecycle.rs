@@ -121,7 +121,7 @@ pub(super) fn settle_navigation_committed<'s>(
 ) {
     let receiver = v8::undefined(scope).into();
     let _ = resolve.call(scope, receiver, &[value]);
-    resolve_navigation_transition_committed(scope, navigation, value);
+    resolve_navigation_transition_committed(scope, navigation);
 }
 
 pub(super) fn settle_navigation_finished_resolved_immediately<'s>(

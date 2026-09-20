@@ -840,7 +840,7 @@ fn commit_intercepted_history_traversal<'s>(
     .expect("traversal intercept settlement data should bind");
     set_navigation_active_traversal_intercept(scope, data.navigation, active_intercept);
     resolve_resolver_array(scope, data.committed_resolvers, applied.resolved_entry);
-    resolve_navigation_transition_committed(scope, data.navigation, v8::undefined(scope).into());
+    resolve_navigation_transition_committed(scope, data.navigation);
     dispatch_history_entry_currententrychange(scope, &applied);
     let (intercept_error, intercept_result) = if let Some(event) = data.event {
         run_navigation_precommit_deferred_handlers(scope, event)

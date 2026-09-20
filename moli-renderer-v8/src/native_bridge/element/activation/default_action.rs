@@ -1941,7 +1941,8 @@ fn anchor_download_activation(
     user_initiated: bool,
     suggested_filename: Option<String>,
 ) -> Option<RendererPendingDownloadActivation> {
-    let source_element = node_wrapper_from_handle(scope, handle);
+    let source_element = crate::native_bridge::wrapped_handle_value(scope, runtime_ptr, handle)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
     let download_request = suggested_filename.as_deref().unwrap_or("");
     let proceed =
         navigation_owner_window_for_handle(scope, runtime_ptr, handle).is_none_or(|owner| {
