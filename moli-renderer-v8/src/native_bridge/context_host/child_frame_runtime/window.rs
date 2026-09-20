@@ -1240,6 +1240,41 @@ impl JsContextHost {
         (Some(wrapper), ready_work)
     }
 
+    pub(crate) fn child_window_proxy_is_current<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        window: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        // Isolated worlds have their own global proxy for the same native
+        // LocalWindow. Accept them through the registered owner/realm identity.
+        if let Some(context) = window.get_creation_context(scope)
+            && window.strict_equals(context.global(scope).into())
+            && self
+                .window_execution_context_identity_for_access_check(context)
+                .is_some_and(|identity| {
+                    identity.dispatch_scope() == super::super::OwnerDispatchScope::Child(handle)
+                        && self.window_execution_context_identity_is_current(identity)
+                })
+        {
+            return true;
+        }
+        // A facade parked between LocalWindow generations has no registered
+        // execution realm, but still represents the current browsing context.
+        self.child_window_proxy_records
+            .records
+            .get(&handle)
+            .is_some_and(|record| {
+                [
+                    record.live_window_wrapper.as_ref(),
+                    record.cross_origin_window_proxy.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                .any(|current| v8::Local::new(scope, current).strict_equals(window.into()))
+            })
+    }
+
     pub(crate) fn existing_child_browsing_context_window_wrapper<'s>(
         &self,
         scope: &mut v8::PinScope<'s, '_>,
