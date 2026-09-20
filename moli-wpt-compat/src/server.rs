@@ -1362,7 +1362,7 @@ fn wpt_fixture_content_type(path: &StdPath, fixture_path: &str) -> Option<&'stat
         Some("css") => Some("text/css; charset=utf-8"),
         Some("htm") => Some("text/html; charset=utf-8"),
         Some("html") => Some("text/html; charset=utf-8"),
-        Some("js") => Some("application/javascript"),
+        Some("js" | "mjs") => Some("application/javascript"),
         Some("json") => Some("application/json"),
         Some("txt") => Some("text/plain; charset=utf-8"),
         Some("xml") => Some("application/xml"),

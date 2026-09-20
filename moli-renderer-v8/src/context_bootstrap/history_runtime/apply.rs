@@ -29,7 +29,7 @@ pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
     previous_history_index: u32,
     history_index: u32,
     entry: v8::Local<'s, v8::Object>,
-    previous_entry: Option<v8::Local<'s, v8::Object>>,
+    pub(in crate::context_bootstrap) previous_entry: Option<v8::Local<'s, v8::Object>>,
 }
 
 pub(in crate::context_bootstrap) struct PreparedHistoryEntry<'s> {
