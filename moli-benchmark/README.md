@@ -151,6 +151,9 @@ only the fixture server public key, following upstream wptrunner's SPKI setup.
 No system trust store is modified. Engines without a fixture trust configuration
 report a setup error rather than silently substituting HTTP for HTTPS.
 
+The Chrome CDP driver disables popup blocking so WPT cases can open auxiliary
+test windows without user activation, as they do under ChromeDriver.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its
