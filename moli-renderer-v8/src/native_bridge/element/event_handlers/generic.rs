@@ -1,6 +1,7 @@
 use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     document_runtime::EventTargetHandle,
+    native_bridge::OwnerDispatchScope,
     util::{
         context_host_ptr_from_global_bridge, node_wrapper_from_handle, throw_type_error, v8_string,
         v8str,
@@ -409,7 +410,9 @@ fn node_event_handler_getter_function<'s>(
         rv.set(v8::null(scope).into());
         return;
     };
-    let Some(target_context) = node_event_handler_target_context(scope, runtime_ptr, handle) else {
+    let Some((target_context, dispatch_scope)) =
+        node_event_handler_target_context(scope, runtime_ptr, handle)
+    else {
         rv.set(v8::null(scope).into());
         return;
     };
@@ -427,29 +430,23 @@ fn node_event_handler_getter_function<'s>(
         return;
     }
 
-    let handler = if target_context == scope.get_current_context() {
-        compile_node_event_attribute_handler(
-            scope,
-            runtime_ptr,
-            handle,
-            object,
-            &handler_name,
-            &source,
-        )
-        .map(|handler| v8::Global::new(scope, handler))
-    } else {
+    let handler = {
         let object = v8::Global::new(scope, object);
         let target_scope = &mut v8::ContextScope::new(scope, target_context);
+        let previous = dispatch_scope.enter(target_scope);
         let object = v8::Local::new(target_scope, &object);
-        compile_node_event_attribute_handler(
+        let handler = compile_node_event_attribute_handler(
             target_scope,
             runtime_ptr,
+            dispatch_scope,
             handle,
             object,
             &handler_name,
             &source,
         )
-        .map(|handler| v8::Global::new(target_scope, handler))
+        .map(|handler| v8::Global::new(target_scope, handler));
+        dispatch_scope.restore(target_scope, previous);
+        handler
     };
     match handler {
         Some(handler) => rv.set(v8::Local::new(scope, &handler).into()),
@@ -461,25 +458,24 @@ fn node_event_handler_target_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
     handle: crate::document_runtime::DomHandle,
-) -> Option<v8::Local<'s, v8::Context>> {
-    let runtime = unsafe { &*runtime_ptr };
-    let owner_document = runtime.dom_host().owner_document_handle(handle)?;
-    let dispatch_scope = if owner_document == runtime.dom_host().document_handle() {
-        crate::native_bridge::OwnerDispatchScope::Top
-    } else {
-        crate::native_bridge::OwnerDispatchScope::Child(
-            runtime.child_browsing_context_host_for_document_handle(owner_document)?,
-        )
-    };
+) -> Option<(v8::Local<'s, v8::Context>, OwnerDispatchScope)> {
+    let runtime = unsafe { &mut *runtime_ptr };
+    let dispatch_scope = runtime.owner_dispatch_scope_for_node(handle)?;
+    if let OwnerDispatchScope::LightweightPopup(popup_id) = dispatch_scope
+        && !runtime.ensure_lightweight_popup_execution_context(scope, popup_id)
+    {
+        return None;
+    }
     let owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
     runtime
         .window_execution_context(scope, owner, dispatch_scope)
-        .map(|(_, context)| context)
+        .map(|(_, context)| (context, dispatch_scope))
 }
 
 fn compile_node_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::JsContextHost,
+    dispatch_scope: OwnerDispatchScope,
     handle: crate::document_runtime::DomHandle,
     object: v8::Local<'s, v8::Object>,
     handler_name: &str,
@@ -498,9 +494,20 @@ fn compile_node_event_attribute_handler<'s>(
         target_context,
     );
     let event_argument = v8_string(scope, "event")?;
-    let global = scope.get_current_context().global(scope);
-    let mut context_extensions = Vec::with_capacity(3);
-    if let Some(document) = global
+    let mut context_extensions = Vec::with_capacity(4);
+    let window = match dispatch_scope {
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            let window = unsafe { &*runtime_ptr }.lightweight_popup_window(scope, popup_id)?;
+            // Popup Windows currently share a concrete V8 realm with their
+            // opener. Their own global bindings must precede that realm's globals.
+            context_extensions.push(window);
+            window
+        }
+        OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => {
+            scope.get_current_context().global(scope)
+        }
+    };
+    if let Some(document) = window
         .get(scope, v8str(scope, "document").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
