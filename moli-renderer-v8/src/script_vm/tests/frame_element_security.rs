@@ -49,7 +49,7 @@ globalThis.__frameElementResult = null;
             .expect("frameElement observations"),
     )
     .unwrap();
-    assert_eq!(result["checks"], 27, "{result}");
+    assert_eq!(result["checks"], 28, "{result}");
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
     assert_eq!(server.finish_targets().await, vec!["/child.html"; 6]);
 }
