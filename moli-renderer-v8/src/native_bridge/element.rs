@@ -676,7 +676,8 @@ use stylesheets::{
     style_blocking_setter_function, style_disabled_getter_function, style_disabled_setter_function,
 };
 pub(super) use template_install::{
-    install_specialized_instance_properties, install_specialized_template,
+    install_form_property_handlers, install_specialized_instance_properties,
+    install_specialized_template,
 };
 pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
