@@ -1,5 +1,6 @@
 use crate::{
     document_runtime::EventTargetHandle,
+    native_bridge::OwnerDispatchScope,
     util::{
         context_host_ptr_from_global_bridge, get_private_value, node_wrapper_from_handle,
         set_private_value, throw_type_error, v8_string, v8str,
@@ -328,33 +329,29 @@ pub(crate) fn node_event_handler_getter_function<'s>(
         return;
     }
 
-    let Some(target_context) = node_event_handler_target_context(scope, runtime_ptr, handle) else {
-        rv.set(v8::null(scope).into());
+    let Some((target_context, owner)) =
+        node_event_handler_target_context(scope, runtime_ptr, handle)
+    else {
+        rv.set_null();
         return;
     };
-    let handler = if target_context == scope.get_current_context() {
-        compile_node_event_attribute_handler(
-            scope,
-            runtime_ptr,
-            handle,
-            object,
-            &handler_name,
-            &source,
-        )
-        .map(|handler| v8::Global::new(scope, handler))
-    } else {
+    let handler = {
         let object = v8::Global::new(scope, object);
         let target_scope = &mut v8::ContextScope::new(scope, target_context);
+        let previous = owner.enter(target_scope);
         let object = v8::Local::new(target_scope, &object);
-        compile_node_event_attribute_handler(
+        let handler = compile_node_event_attribute_handler(
             target_scope,
             runtime_ptr,
+            owner,
             handle,
             object,
             &handler_name,
             &source,
         )
-        .map(|handler| v8::Global::new(target_scope, handler))
+        .map(|handler| v8::Global::new(target_scope, handler));
+        owner.restore(target_scope, previous);
+        handler
     };
     match handler {
         Some(handler) => rv.set(v8::Local::new(scope, &handler).into()),
@@ -366,26 +363,23 @@ fn node_event_handler_target_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
     handle: crate::document_runtime::DomHandle,
-) -> Option<v8::Local<'s, v8::Context>> {
+) -> Option<(v8::Local<'s, v8::Context>, OwnerDispatchScope)> {
     let runtime = unsafe { &mut *runtime_ptr };
-    let owner_document = runtime.dom_host().owner_document_handle(handle)?;
-    let dispatch_scope = if owner_document == runtime.dom_host().document_handle() {
-        crate::native_bridge::OwnerDispatchScope::Top
-    } else {
-        crate::native_bridge::OwnerDispatchScope::Child(
-            runtime.child_browsing_context_host_for_document_handle(owner_document)?,
-        )
-    };
-    let owner = runtime.current_window_execution_context_owner(dispatch_scope)?;
-    if let Some((_, context)) = runtime.window_execution_context(scope, owner, dispatch_scope) {
-        return Some(context);
-    }
-    let crate::native_bridge::OwnerDispatchScope::Child(child_handle) = dispatch_scope else {
+    let owner = runtime.owner_dispatch_scope_for_node(handle)?;
+    if let OwnerDispatchScope::LightweightPopup(popup_id) = owner
+        && !runtime.ensure_lightweight_popup_execution_context(scope, popup_id)
+    {
         return None;
-    };
+    }
+    let execution_owner = runtime.current_window_execution_context_owner(owner)?;
+    if let Some((_, context)) = runtime.window_execution_context(scope, execution_owner, owner) {
+        return Some((context, owner));
+    }
+    let child_handle = owner.child_window()?;
     runtime
         .ensure_prebootstrapped_child_default_context(scope, child_handle)
         .ok()
+        .map(|context| (context, owner))
 }
 
 pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
@@ -401,19 +395,25 @@ pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
     let source_node = unsafe { &*host_ptr }
         .event_handler_content_attribute_node(EventTargetHandle::Node(handle), event_type)?;
     let source = element_attribute(unsafe { &*host_ptr }, source_node, &name)?;
-    let context = node_event_handler_target_context(scope, host_ptr, source_node)?;
+    let (context, owner) = node_event_handler_target_context(scope, host_ptr, source_node)?;
     let handler = {
         let target_scope = &mut v8::ContextScope::new(scope, context);
-        let object = node_wrapper_from_handle(target_scope, source_node)?;
-        compile_node_event_attribute_handler(
-            target_scope,
-            host_ptr,
-            source_node,
-            object,
-            &name,
-            &source,
-        )
-        .map(|handler| v8::Global::new(target_scope, handler))
+        let previous = owner.enter(target_scope);
+        let handler = node_wrapper_from_handle(target_scope, source_node)
+            .and_then(|object| {
+                compile_node_event_attribute_handler(
+                    target_scope,
+                    host_ptr,
+                    owner,
+                    source_node,
+                    object,
+                    &name,
+                    &source,
+                )
+            })
+            .map(|handler| v8::Global::new(target_scope, handler));
+        owner.restore(target_scope, previous);
+        handler
     }?;
     Some(v8::Local::new(scope, &handler))
 }
@@ -421,15 +421,26 @@ pub(crate) fn compile_node_content_attribute_for_dispatch<'s>(
 fn compile_node_event_attribute_handler<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut crate::native_bridge::PageScriptHost,
+    owner: OwnerDispatchScope,
     handle: crate::document_runtime::DomHandle,
     object: v8::Local<'s, v8::Object>,
     handler_name: &str,
     source: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
     let event_argument = v8_string(scope, "event")?;
-    let global = scope.get_current_context().global(scope);
-    let mut context_extensions = Vec::with_capacity(3);
-    if let Some(document) = global
+    let mut context_extensions = Vec::with_capacity(4);
+    let window = match owner {
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            let popup = unsafe { &*runtime_ptr }.lightweight_popup_window(scope, popup_id)?;
+            // Popup Windows currently share a concrete V8 realm with their opener.
+            context_extensions.push(popup);
+            popup
+        }
+        OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => {
+            scope.get_current_context().global(scope)
+        }
+    };
+    if let Some(document) = window
         .get(scope, v8str(scope, "document").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     {
@@ -442,6 +453,18 @@ fn compile_node_event_attribute_handler<'s>(
     }
     context_extensions.push(object);
 
+    let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, handler_name);
+    let target_context = scope.get_current_context();
+    let event_type = event_handler_event_type(handler_name)?;
+    // A syntax error can invoke script which reads or changes the handler.
+    // Set its in-progress value before compilation so a nested getter sees null.
+    unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+        scope,
+        target,
+        event_type,
+        None,
+        target_context,
+    );
     let handler = compile_event_attribute_handler(
         scope,
         runtime_ptr,
@@ -449,40 +472,21 @@ fn compile_node_event_attribute_handler<'s>(
         source,
         &[event_argument],
         &context_extensions,
-    );
-    let target = unsafe { &*runtime_ptr }.event_handler_attribute_target(handle, handler_name);
-    if let Some(handler) = handler {
-        if let Some(name) = v8_string(scope, handler_name) {
-            handler.set_name(name);
-        }
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                target,
-                event_type,
-                Some(handler),
-                target_context,
-            );
-        }
-        Some(handler)
-    } else {
-        if let Some(event_type) = event_handler_event_type(handler_name)
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            let target_context = scope.get_current_context();
-            unsafe { &mut *host_ptr }.set_registered_content_attribute_event_handler_property(
-                scope,
-                target,
-                event_type,
-                None,
-                target_context,
-            );
-        }
-        None
+    )?;
+    if let Some(name) = v8_string(scope, handler_name) {
+        handler.set_name(name);
     }
+    if unsafe { &*runtime_ptr }.event_handler_property_callback_id(target, event_type) == Some(None)
+    {
+        unsafe { &mut *runtime_ptr }.set_registered_content_attribute_event_handler_property(
+            scope,
+            target,
+            event_type,
+            Some(handler),
+            target_context,
+        );
+    }
+    Some(handler)
 }
 
 pub(crate) fn node_event_handler_setter_function<'s>(
