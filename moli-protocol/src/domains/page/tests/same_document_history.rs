@@ -183,6 +183,130 @@ impl SameDocumentPage {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn active_precommit_cancellation_rejects_owned_transition() {
+    for operation in ["back", "navigate", "reload"] {
+        for action in ["stop", "navigate", "intercept"] {
+            let mut page = SameDocumentPage::new().await;
+            page.run(
+                "history.pushState(null, '', '#current'); void 0",
+                "#current",
+            )
+            .await;
+            page.ctx.sent.clear();
+            let script = r#"(async () => {
+  const operation = OPERATION;
+  const action = ACTION;
+  const from = navigation.currentEntry;
+  const checks = [];
+  const states = {};
+  const reasons = [];
+  const order = [];
+  let transition, signal, nested, nestedTransition, releaseNested;
+  let handlerRan = false;
+  let nestedFinished = false;
+  const rejected = (name, promise) => promise.then(
+    () => { states[name] = 'fulfilled'; },
+    reason => { states[name] = 'rejected'; reasons.push(reason); }
+  );
+  navigation.addEventListener('navigateerror', event => {
+    order.push('navigateerror');
+    checks.push(event.error === signal.reason);
+  }, {once: true});
+  navigation.addEventListener('navigate', event => {
+    signal = event.signal;
+    signal.addEventListener('abort', () => {
+      order.push('abort');
+      checks.push(signal.reason instanceof DOMException && signal.reason.name === 'AbortError');
+    }, {once: true});
+    event.intercept({
+      precommitHandler() {
+        order.push('precommit');
+        transition = navigation.transition;
+        checks.push(transition !== null && transition.from === from && transition.to === event.destination);
+        checks.push(transition?.navigationType === (operation === 'back' ? 'traverse' : operation === 'navigate' ? 'push' : 'reload'));
+        rejected('transition committed', transition.committed);
+        rejected('transition finished', transition.finished);
+        if (action === 'stop') {
+          window.stop();
+        } else {
+          if (action === 'intercept') {
+            navigation.addEventListener('navigate', event => event.intercept({handler() {
+              nestedTransition = navigation.transition;
+              return new Promise(resolve => releaseNested = resolve);
+            }}), {once: true});
+          }
+          nested = navigation.navigate('#nested');
+          nested.finished.then(() => nestedFinished = true);
+        }
+        checks.push(signal.aborted);
+      },
+      handler() { handlerRan = true; }
+    });
+  }, {once: true});
+  const result = operation === 'navigate' ? navigation.navigate('#outer') : navigation[operation]();
+  await Promise.all([
+    rejected('method committed', result.committed),
+    rejected('method finished', result.finished)
+  ]);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  checks.push(!handlerRan, reasons.length === 4 && reasons.every(reason => reason === signal.reason));
+  if (action === 'intercept') {
+    checks.push(navigation.transition === nestedTransition && nestedTransition !== null && nestedTransition !== transition);
+    checks.push(!nestedFinished);
+    releaseNested();
+  } else {
+    checks.push(navigation.transition === null);
+  }
+  if (nested) await nested.finished;
+  checks.push(navigation.transition === null);
+  return {states, checks, order};
+})()
+"#
+                .replace("OPERATION", &json!(operation).to_string())
+                .replace("ACTION", &json!(action).to_string());
+            let result = page.evaluate(&script).await;
+            assert_eq!(
+                result["states"],
+                json!({
+                    "transition committed": "rejected",
+                    "transition finished": "rejected",
+                    "method committed": "rejected",
+                    "method finished": "rejected",
+                }),
+                "{operation}/{action}: {result}"
+            );
+            assert!(
+                result["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|check| check == true),
+                "{operation}/{action}: {result}"
+            );
+            assert_eq!(
+                result["order"],
+                json!(["precommit", "abort", "navigateerror"]),
+                "{operation}/{action}"
+            );
+            if action == "stop" {
+                page.assert_history(&["", "#current"], 1).await;
+                page.assert_commits(&[]);
+            } else {
+                page.assert_history(&["", "#current", "#nested"], 2).await;
+                page.assert_commits(&[(
+                    "#nested",
+                    if action == "intercept" {
+                        "other"
+                    } else {
+                        "fragment"
+                    },
+                )]);
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn intercepted_traversal_transitions_track_commit_and_completion() {
     for precommit in [false, true] {
         for mode in ["empty", "sync", "async", "reject", "undefined"] {
