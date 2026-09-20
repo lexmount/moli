@@ -1,3 +1,4 @@
+use anyhow::Context;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -692,11 +693,11 @@ pub struct PendingFetchResponseOpenedBodyStream {
     pub transfer: PausedDocumentTransfer,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum PendingFetchResponseBodyStreamRead {
     NotFound,
     Read { bytes: Vec<u8>, eof: bool },
-    Failed(String),
+    Failed(anyhow::Error),
 }
 
 #[derive(Debug)]
@@ -718,8 +719,10 @@ pub(crate) struct PendingFetchResponseBodyStreamReadDispatch {
 pub(crate) struct CompletedFetchResponseBodyStreamReadDispatch {
     request_id: String,
     handle: String,
-    completed:
-        Result<(Vec<u8>, bool, PausedDocumentTransfer), Box<(PausedDocumentTransfer, String)>>,
+    completed: Result<
+        (Vec<u8>, bool, PausedDocumentTransfer),
+        Box<(PausedDocumentTransfer, anyhow::Error)>,
+    >,
 }
 
 impl PendingFetchResponseBodyStreamReadDispatch {
@@ -766,7 +769,7 @@ impl CompletedFetchResponseBodyStreamReadDispatch {
 
     pub(crate) fn into_completed(
         self,
-    ) -> Result<(Vec<u8>, bool, PausedDocumentTransfer), Box<(PausedDocumentTransfer, String)>>
+    ) -> Result<(Vec<u8>, bool, PausedDocumentTransfer), Box<(PausedDocumentTransfer, anyhow::Error)>>
     {
         self.completed
     }
@@ -777,7 +780,7 @@ pub(crate) enum OpenBodyStreamError {
     NotOpenable(Box<PausedDocumentTransfer>),
     Failed {
         transfer: Box<PausedDocumentTransfer>,
-        message: String,
+        error: anyhow::Error,
     },
 }
 
@@ -953,9 +956,7 @@ impl PausedDocumentTransfer {
                                     },
                                 },
                             }),
-                            message: format!(
-                                "failed to materialize captured response body: {error}"
-                            ),
+                            error: error.context("failed to materialize captured response body"),
                         });
                     }
                 };
@@ -1049,7 +1050,7 @@ impl PausedDocumentTransfer {
     pub(crate) async fn read_body_stream_async(
         self,
         size: Option<usize>,
-    ) -> Result<(Vec<u8>, bool, Self), (Self, String)> {
+    ) -> Result<(Vec<u8>, bool, Self), (Self, anyhow::Error)> {
         let Self {
             fetch_request_id,
             state,
@@ -1060,7 +1061,7 @@ impl PausedDocumentTransfer {
                     fetch_request_id,
                     state,
                 },
-                "StreamHandleNotFound".to_owned(),
+                anyhow::anyhow!("StreamHandleNotFound"),
             ));
         };
         match stream.read_async(size).await {
@@ -1111,7 +1112,7 @@ impl PausedDocumentTransfer {
     pub(crate) async fn materialize_body_limited_async(
         self,
         limit: usize,
-    ) -> Result<(Option<Vec<u8>>, Self), (String, Self)> {
+    ) -> Result<(Option<Vec<u8>>, Self), (anyhow::Error, Self)> {
         let Self {
             fetch_request_id,
             state,
@@ -1161,7 +1162,7 @@ impl PausedDocumentTransfer {
         (
             Option<DocumentNavigationToken>,
             NavigationDispatchState,
-            Result<NavigationLoadOutcome, String>,
+            anyhow::Result<NavigationLoadOutcome>,
         ),
         Self,
     > {
@@ -1193,7 +1194,7 @@ impl PausedDocumentTransfer {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
+        anyhow::Result<NavigationLoadOutcome>,
     ) {
         match self.state {
             PausedDocumentTransferState::Pending {
@@ -1232,7 +1233,7 @@ impl PausedDocumentTransfer {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
+        anyhow::Result<NavigationLoadOutcome>,
     ) {
         match self.state {
             PausedDocumentTransferState::Pending {
@@ -1241,7 +1242,11 @@ impl PausedDocumentTransfer {
                 body,
             } => {
                 let _ = body;
-                (document_navigation_token, navigation, Err(error_text))
+                (
+                    document_navigation_token,
+                    navigation,
+                    Err(anyhow::Error::msg(error_text)),
+                )
             }
             PausedDocumentTransferState::ActiveBodyStream { stream, .. } => stream.fail(error_text),
         }
@@ -1279,7 +1284,7 @@ impl ActiveDocumentBodyStreamState {
         self.offset
     }
 
-    async fn read_async(&mut self, size: Option<usize>) -> Result<(Vec<u8>, bool), String> {
+    async fn read_async(&mut self, size: Option<usize>) -> anyhow::Result<(Vec<u8>, bool)> {
         read_active_body_stream_async(
             &mut self.response,
             &mut self.captured_body,
@@ -1291,7 +1296,7 @@ impl ActiveDocumentBodyStreamState {
         .await
     }
 
-    fn finish_pending_body_source(&mut self) -> Result<DocumentBodySource, String> {
+    fn finish_pending_body_source(&mut self) -> anyhow::Result<DocumentBodySource> {
         let head = ResponseHead {
             final_url: self.response.final_url.clone(),
             status: self.response.status,
@@ -1306,7 +1311,7 @@ impl ActiveDocumentBodyStreamState {
         let body = self
             .captured_body
             .finish_in_place()
-            .map_err(|error| format!("failed to finish captured response body: {error}"))?;
+            .context("failed to finish captured response body")?;
         Ok(DocumentBodySource::CapturedRaw {
             requested_url: self.requested_url.clone(),
             request_method: self.request_method.clone(),
@@ -1327,7 +1332,7 @@ impl ActiveDocumentBodyStreamState {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
+        anyhow::Result<NavigationLoadOutcome>,
     ) {
         let navigation_state = self.navigation.clone();
         let final_url = self.response.final_url.clone();
@@ -1352,12 +1357,12 @@ impl ActiveDocumentBodyStreamState {
     ) -> (
         Option<DocumentNavigationToken>,
         NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
+        anyhow::Result<NavigationLoadOutcome>,
     ) {
         (
             self.document_navigation_token,
             self.navigation,
-            Err(error_text),
+            Err(anyhow::Error::msg(error_text)),
         )
     }
 }
@@ -1398,7 +1403,7 @@ async fn read_active_body_stream_async(
     offset: &mut usize,
     finished: &mut bool,
     size: Option<usize>,
-) -> Result<(Vec<u8>, bool), String> {
+) -> anyhow::Result<(Vec<u8>, bool)> {
     let mut bytes = Vec::new();
     match size {
         Some(limit) => {
@@ -1455,21 +1460,21 @@ async fn read_next_active_body_stream_chunk_async(
     captured_body: &mut CapturedBodyWriter,
     unread_body: &mut Vec<u8>,
     finished: &mut bool,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     if *finished {
         return Ok(());
     }
     if let Some(chunk) = response.next_chunk().await {
         captured_body
             .append(&chunk)
-            .map_err(|error| format!("failed to capture response body stream: {error}"))?;
+            .context("failed to capture response body stream")?;
         unread_body.extend(chunk);
         return Ok(());
     }
     response
         .finish()
         .await
-        .map_err(|error| format!("failed to read page body from stream: {error}"))?;
+        .context("failed to read page body from stream")?;
     *finished = true;
     Ok(())
 }
@@ -1511,7 +1516,7 @@ impl DocumentBodySource {
         navigation: &NavigationDispatchState,
         response_code: Option<u16>,
         response_headers: Vec<(String, String)>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let has_response_override = response_code.is_some() || !response_headers.is_empty();
         match self {
             Self::BufferedRaw {
@@ -1621,7 +1626,7 @@ impl DocumentBodySource {
     pub(crate) async fn materialize_body_limited_async(
         self,
         limit: usize,
-    ) -> Result<(Vec<u8>, Self), (String, Self)> {
+    ) -> Result<(Vec<u8>, Self), (anyhow::Error, Self)> {
         match self {
             Self::BufferedRaw {
                 requested_url,
@@ -1632,7 +1637,7 @@ impl DocumentBodySource {
             } => {
                 if let Err(error) = ensure_materialize_limit(response.body_bytes().len(), limit) {
                     return Err((
-                        error.to_string(),
+                        error,
                         Self::BufferedRaw {
                             requested_url,
                             request_method,
@@ -1681,9 +1686,9 @@ impl DocumentBodySource {
                         ));
                     }
                 };
-                let result = body.materialize_bytes_limited(limit).map_err(|error| {
-                    format!("failed to materialize captured response body: {error}")
-                });
+                let result = body
+                    .materialize_bytes_limited(limit)
+                    .context("failed to materialize captured response body");
                 let source = Self::CapturedRaw {
                     requested_url,
                     request_method,
@@ -1707,9 +1712,9 @@ impl DocumentBodySource {
                 network_observation_journal,
                 body_progress_source,
             } => {
-                let result = body.materialize_bytes_limited(limit).map_err(|error| {
-                    format!("failed to materialize captured response body: {error}")
-                });
+                let result = body
+                    .materialize_bytes_limited(limit)
+                    .context("failed to materialize captured response body");
                 let source = Self::CapturedRaw {
                     requested_url,
                     request_method,
@@ -1730,20 +1735,20 @@ impl DocumentBodySource {
 
 async fn capture_streaming_raw_response(
     mut response: StreamingRawResponse,
-) -> Result<(ResponseHead, CapturedBody), String> {
+) -> anyhow::Result<(ResponseHead, CapturedBody)> {
     let head = response.head();
     let mut body = CapturedBodyWriter::default();
     while let Some(chunk) = response.next_chunk().await {
         body.append(&chunk)
-            .map_err(|error| format!("failed to capture response body stream: {error}"))?;
+            .context("failed to capture response body stream")?;
     }
     response
         .finish()
         .await
-        .map_err(|error| format!("failed to read page body from stream: {error}"))?;
+        .context("failed to read page body from stream")?;
     let body = body
         .finish()
-        .map_err(|error| format!("failed to finish captured response body: {error}"))?;
+        .context("failed to finish captured response body")?;
     Ok((head, body))
 }
 

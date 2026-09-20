@@ -202,7 +202,7 @@ enum CompletedFetchCommandOperation {
         result: Box<
             Result<
                 (Option<Vec<u8>>, crate::conn::PausedDocumentTransfer),
-                (String, crate::conn::PausedDocumentTransfer),
+                (anyhow::Error, crate::conn::PausedDocumentTransfer),
             >,
         >,
     },
@@ -978,7 +978,7 @@ async fn complete_disable_command_async(
         let navigation = network::materialize_navigation_load_result(
             conn,
             &navigation_state,
-            Err("Fetch interception disabled".to_owned()),
+            Err(anyhow::anyhow!("Fetch interception disabled")),
         );
         navigation::complete_tokened_materialized_navigation_as_background_events_async(
             conn,
@@ -995,7 +995,7 @@ async fn complete_disable_command_async(
         let navigation = network::materialize_navigation_load_result(
             conn,
             &navigation_state,
-            Err("Fetch interception disabled".to_owned()),
+            Err(anyhow::anyhow!("Fetch interception disabled")),
         );
         navigation::complete_tokened_materialized_navigation_as_background_events_async(
             conn,

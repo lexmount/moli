@@ -6,6 +6,102 @@ use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, Subreso
 
 const OFFLINE_ERROR_TEXT: &str = "net::ERR_INTERNET_DISCONNECTED";
 
+fn failing_streamed_document(
+    navigation: &NavigationDispatchState,
+) -> crate::conn::DocumentBodySource {
+    let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
+    chunks_tx.send(b"partial document".to_vec()).unwrap();
+    drop(chunks_tx);
+    let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+    completion_tx
+        .send(Err(anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "typed response body failure",
+        ))
+        .context("response transport failed")))
+        .unwrap();
+    let response = moli_fetch::StreamingRawResponse::new(
+        navigation.requested_url.clone(),
+        200,
+        Vec::new(),
+        None,
+        Vec::new(),
+        false,
+        Vec::new(),
+        chunks_rx,
+        moli_fetch::FetchCancelHandle::new(),
+        completion_rx,
+    );
+    crate::conn::DocumentBodySource::StreamingRaw {
+        requested_url: navigation.requested_url.clone(),
+        request_method: navigation.request_method.clone(),
+        request_headers: navigation.request_headers.clone(),
+        response,
+        network_observation_journal: Default::default(),
+        body_progress_source: Default::default(),
+        prepared_document: None,
+    }
+}
+
+#[tokio::test]
+async fn fetch_body_materialization_preserves_error_type_and_request_identity() {
+    let (_ctx, navigation) = navigation_fixture();
+    let (error, body) = failing_streamed_document(&navigation)
+        .materialize_body_limited_async(1024)
+        .await
+        .expect_err("partial transport failure must fail body materialization");
+    assert_eq!(
+        error
+            .downcast_ref::<std::io::Error>()
+            .expect("materialization must preserve the I/O cause")
+            .kind(),
+        std::io::ErrorKind::UnexpectedEof
+    );
+    assert!(format!("{error:#}").contains("response transport failed"));
+    assert!(format!("{error:#}").contains("failed to read page body from stream"));
+    let crate::conn::DocumentBodySource::CapturedRaw {
+        requested_url,
+        request_method,
+        request_headers,
+        ..
+    } = body
+    else {
+        panic!("failed streamed materialization must return its captured source");
+    };
+    assert_eq!(requested_url, navigation.requested_url);
+    assert_eq!(request_method, navigation.request_method);
+    assert_eq!(request_headers, navigation.request_headers);
+}
+
+#[tokio::test]
+async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
+    let (_ctx, navigation) = navigation_fixture();
+    let body = failing_streamed_document(&navigation);
+    let transfer = crate::conn::PausedDocumentTransfer::pending(
+        "fetch-typed-error".to_owned(),
+        None,
+        navigation,
+        body,
+    )
+    .open_body_stream("stream-typed-error".to_owned())
+    .expect("streamed response should open")
+    .transfer;
+    let (transfer, error) = transfer
+        .read_body_stream_async(None)
+        .await
+        .expect_err("partial transport failure must fail the stream read");
+    assert_eq!(transfer.fetch_request_id(), "fetch-typed-error");
+    assert_eq!(
+        error
+            .downcast_ref::<std::io::Error>()
+            .expect("stream read must preserve the I/O cause")
+            .kind(),
+        std::io::ErrorKind::UnexpectedEof
+    );
+    assert!(format!("{error:#}").contains("response transport failed"));
+    assert!(format!("{error:#}").contains("failed to read page body from stream"));
+}
+
 fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-1".to_owned());

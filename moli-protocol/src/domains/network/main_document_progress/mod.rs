@@ -364,15 +364,20 @@ fn materialize_navigation_load_outcome(
 pub(crate) fn materialize_navigation_load_result(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
-    navigation: Result<NavigationLoadOutcome, String>,
+    navigation: anyhow::Result<NavigationLoadOutcome>,
 ) -> MaterializedNavigationLoadOutcome {
     match navigation {
         Ok(navigation) => materialize_navigation_load_outcome(conn, state, navigation),
-        Err(error_text) => {
+        Err(error) => {
+            tracing::debug!(
+                error = ?error,
+                session_id = state.owner.session_id(),
+                "navigation load failed"
+            );
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,
-                error_text,
+                error.root_cause().to_string(),
                 FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
                 FailedNavigationResponseMode::ProtocolError,
             ))

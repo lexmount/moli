@@ -551,7 +551,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
             let navigation = network::materialize_navigation_load_result(
                 conn,
                 &navigation_state,
-                Err("Fetch auth challenge aborted".to_owned()),
+                Err(anyhow::anyhow!("Fetch auth challenge aborted")),
             );
             complete_tokened_materialized_navigation_as_background_events_async(
                 conn,

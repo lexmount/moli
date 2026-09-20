@@ -195,8 +195,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
                             &pending.navigation,
                             response,
                         )
-                        .await
-                        .map_err(anyhow::Error::msg);
+                        .await;
                     complete_or_pause_response_stage_into_buffer_async(
                         conn, out, pending, navigation,
                     )
@@ -358,8 +357,7 @@ pub(super) async fn cancel_navigation_auth_as_background_events_async(
                 &pending.navigation,
                 response,
             )
-            .await
-            .map_err(anyhow::Error::msg);
+            .await;
         complete_or_pause_response_stage_into_buffer_async(conn, &mut output, pending, navigation)
             .await;
     }
@@ -449,18 +447,8 @@ async fn complete_pending_fetch_navigation_result_into_buffer_async(
         }
         navigation => navigation,
     };
-    let navigation = network::materialize_navigation_load_result(
-        conn,
-        &navigation_state,
-        navigation.map_err(|error| {
-            tracing::debug!(
-                error = ?error,
-                session_id = navigation_state.owner.session_id(),
-                "intercepted navigation failed"
-            );
-            error.root_cause().to_string()
-        }),
-    );
+    let navigation =
+        network::materialize_navigation_load_result(conn, &navigation_state, navigation);
     complete_tokened_materialized_navigation_into_buffer_async(
         conn,
         out,
@@ -528,8 +516,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
                 response,
                 network::MainDocumentBodyProgressSource::default(),
             )
-            .await
-            .map_err(anyhow::Error::msg);
+            .await;
         complete_pending_fetch_navigation_result_into_buffer_async(conn, out, pending, navigation)
             .await;
         return;
@@ -542,8 +529,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
                 response,
                 network::MainDocumentBodyProgressSource::default(),
             )
-            .await
-            .map_err(anyhow::Error::msg);
+            .await;
         complete_pending_fetch_navigation_result_into_buffer_async(conn, out, pending, navigation)
             .await;
         return;
@@ -589,7 +575,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
                 conn,
                 out,
                 pending,
-                Err(anyhow::Error::msg(error)),
+                Err(error),
             )
             .await;
             return;

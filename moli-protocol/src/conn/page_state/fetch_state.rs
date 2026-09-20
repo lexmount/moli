@@ -76,7 +76,7 @@ impl BrowserContext {
     pub(crate) fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> anyhow::Result<Option<String>> {
         let handle = self
             .active_page_target_mut()
             .runtime_slot

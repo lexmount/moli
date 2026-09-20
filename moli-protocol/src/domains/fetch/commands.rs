@@ -672,7 +672,7 @@ pub(super) async fn complete_fail_request_command_async(
             let navigation = network::materialize_navigation_load_result(
                 conn,
                 &navigation_state,
-                Err(error_text),
+                Err(anyhow::Error::msg(error_text)),
             );
             complete_tokened_materialized_navigation_as_background_events_async(
                 conn,

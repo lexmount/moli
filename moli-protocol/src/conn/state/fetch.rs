@@ -581,7 +581,7 @@ impl TargetFetchState {
         runtime_slot: &mut TargetRuntimeSlot,
         request_id: &str,
         handle: String,
-    ) -> Result<Option<String>, String> {
+    ) -> anyhow::Result<Option<String>> {
         let Some(transfer) = self.take_pending_fetch_response_transfer(request_id) else {
             return Ok(None);
         };
@@ -591,9 +591,9 @@ impl TargetFetchState {
                 self.register_pending_fetch_response_transfer(request_id.to_owned(), *transfer);
                 return Ok(None);
             }
-            Err(OpenBodyStreamError::Failed { transfer, message }) => {
+            Err(OpenBodyStreamError::Failed { transfer, error }) => {
                 self.register_pending_fetch_response_transfer(request_id.to_owned(), *transfer);
-                return Err(message);
+                return Err(error);
             }
         };
 
@@ -2077,7 +2077,7 @@ impl TargetFetchOwner {
         runtime_slot: &mut TargetRuntimeSlot,
         request_id: &str,
         handle: String,
-    ) -> Result<Option<String>, String> {
+    ) -> anyhow::Result<Option<String>> {
         self.pending
             .open_pending_fetch_response_body_stream(runtime_slot, request_id, handle)
     }

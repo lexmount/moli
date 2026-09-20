@@ -125,7 +125,7 @@ pub(super) fn complete_get_response_body_from_transfer(
         }
         Err((message, transfer)) => {
             conn.register_pending_fetch_response_transfer_for_owner(owner, request_id, transfer);
-            CommandOutputPlan::error(-32000, message)
+            CommandOutputPlan::error(-32000, format!("{message:#}"))
         }
     };
     out.extend_plan_as_command_response(plan);
@@ -148,7 +148,7 @@ pub(super) fn take_response_body_as_stream_command(
         }
         Ok(None) => {}
         Err(message) => {
-            return CommandOutputPlan::error(-32000, message);
+            return CommandOutputPlan::error(-32000, format!("{message:#}"));
         }
     }
     if let Some(pending) = pending_subresource_response_request_for_action_session(
@@ -176,7 +176,7 @@ pub(super) fn take_response_body_as_stream_command(
                 return CommandOutputPlan::result(json!({ "stream": handle }));
             }
             Err(message) => {
-                return CommandOutputPlan::error(-32000, message);
+                return CommandOutputPlan::error(-32000, format!("{message:#}"));
             }
         }
     }
@@ -187,7 +187,7 @@ fn open_pending_response_navigation_body_stream(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
     request_id: &str,
-) -> Result<Option<String>, String> {
+) -> anyhow::Result<Option<String>> {
     conn.open_pending_fetch_response_body_stream_for_session_owner(session_id, request_id)
 }
 

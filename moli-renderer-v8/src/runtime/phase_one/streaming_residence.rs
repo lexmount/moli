@@ -102,8 +102,8 @@ impl PendingStreamingPhaseOneContinuation {
                         }
                     }
                     StreamingDocumentInputEvent::Finished(result) => {
-                        if let Err(message) = result {
-                            deferred_main_resource_failure = Some(anyhow!(message));
+                        if let Err(error) = result {
+                            deferred_main_resource_failure = Some(error);
                             break;
                         }
                         if let Some(tail) = decoder.finish() {
