@@ -1338,7 +1338,7 @@ pub(super) fn node_runtime_and_handle_from_args_or_detached(
     node_runtime_and_handle_from_object_or_detached(scope, this)
 }
 
-pub(super) fn node_owner_document_relevant_context<'s>(
+pub(crate) fn node_owner_document_relevant_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
