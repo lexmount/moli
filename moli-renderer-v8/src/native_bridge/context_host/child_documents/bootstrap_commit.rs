@@ -95,7 +95,9 @@ impl JsContextHost {
             );
             let window_commit_preflight =
                 self.capture_child_document_window_commit_preflight(handle);
-            self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
+            self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
+                scope, handle, initiator,
+            );
             if !self
                 .child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
             {
@@ -140,7 +142,7 @@ impl JsContextHost {
 
         let sandbox = self.child_browsing_context_sandbox_policy_from_owner(handle);
         let window_commit_preflight = self.capture_child_document_window_commit_preflight(handle);
-        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
+        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle, initiator);
         if !self.child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
         {
             let _ =

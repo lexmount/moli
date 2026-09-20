@@ -166,7 +166,13 @@ pub(super) fn execute<'s>(
         )
         .is_some()
         {
-            dispatch_beforeunload_for_runtime_owner(scope, target.owner);
+            if let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, target.owner)
+                && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            {
+                unsafe { &mut *host_ptr }.dispatch_child_document_tree_beforeunload_for_traversal(scope, handle);
+            } else {
+                dispatch_beforeunload_for_runtime_owner(scope, target.owner);
+            }
         }
         if validate(scope, &admission).is_none() {
             abort(scope, &admission, None);
@@ -492,16 +498,6 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
                 url,
                 seed,
             });
-        }
-    }
-    for participant in &cross_document {
-        unsafe { &mut *host_ptr }.dispatch_child_document_unload_after_traversal_check(
-            scope,
-            participant.handle,
-        );
-        if validate(scope, admission).is_none() {
-            abort(scope, admission, None);
-            return;
         }
     }
     let mut prepared = Vec::new();

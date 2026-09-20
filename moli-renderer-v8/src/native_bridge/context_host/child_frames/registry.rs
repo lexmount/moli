@@ -722,6 +722,11 @@ impl JsContextHost {
                     crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
                 );
             }
+            if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
+                Self::dispatch_child_document_tree_unload_without_beforeunload(
+                    scope, host_ptr, retirement.handle, false,
+                );
+            }
             let host = unsafe { &mut *host_ptr };
             if host.child_window_retirement_is_current(&retirement) {
                 host.drop_child_browsing_context_handles(vec![retirement.handle]);
