@@ -8832,12 +8832,14 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
       descriptor.configurable
     ].join(",");
   };
-  const valueShape = (object, name, expected) => {
+  const locationShape = object => {
+    const name = 'location';
     const descriptor = Object.getOwnPropertyDescriptor(object, name);
     return [
-      descriptor.value === expected,
+      object.location === null,
+      typeof descriptor.get,
+      typeof descriptor.set,
       descriptor.enumerable,
-      descriptor.writable,
       descriptor.configurable
     ].join(",");
   };
@@ -8851,8 +8853,8 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
   const xmlFontsShape = shape(xmlProto, "fonts");
   const htmlImplementationShape = shape(htmlProto, "implementation");
   const xmlImplementationShape = shape(xmlProto, "implementation");
-  const htmlLocationShape = valueShape(html, "location", null);
-  const xmlLocationShape = valueShape(xml, "location", null);
+  const htmlLocationShape = locationShape(html);
+  const xmlLocationShape = locationShape(xml);
   const htmlImplementationCacheBefore = Object.getOwnPropertyDescriptor(html, "implementation") === undefined;
   const xmlImplementationCacheBefore = Object.getOwnPropertyDescriptor(xml, "implementation") === undefined;
   const htmlImplementation = html.implementation;
@@ -8866,8 +8868,14 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
   xml.implementation = { marker: "xml" };
   html.fonts = { marker: "html-fonts" };
   xml.fonts = { marker: "xml-fonts" };
-  html.location = { marker: "html-location" };
-  xml.location = { marker: "xml-location" };
+  const locationAssignmentErrors = [html, xml].map(doc => {
+    try {
+      doc.location = { marker: 'location' };
+      return 'no error';
+    } catch (error) {
+      return error.name;
+    }
+  });
   const prototypeSurface = [
     Object.prototype.hasOwnProperty.call(html, "createElement"),
     Object.prototype.hasOwnProperty.call(html, "querySelector"),
@@ -8906,7 +8914,8 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
     xmlImplementation.createDocumentType("html", "", "").ownerDocument === xml,
     Object.prototype.toString.call(htmlFonts),
     Object.prototype.toString.call(xmlFonts),
-    prototypeSurface
+    prototypeSurface,
+    locationAssignmentErrors.join(',')
   ].join("|");
 })()
 "#,
@@ -8915,7 +8924,7 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
 
     assert_eq!(
         result,
-        "function,get fonts,true,true,true|function,get fonts,true,true,true|function,get implementation,true,true,true|function,get implementation,true,true,true|true,false,false,true|true,false,false,true|||true|true|true|true|true|true|true|true|true|true|true|true|[object FontFaceSet]|[object FontFaceSet]|false,false,false,false,false,false,false,false,true,true,true,true"
+        "function,get fonts,true,true,true|function,get fonts,true,true,true|function,get implementation,true,true,true|function,get implementation,true,true,true|true,function,function,true,false|true,function,function,true,false|location|location|true|true|true|true|true|true|true|true|true|true|true|true|[object FontFaceSet]|[object FontFaceSet]|false,false,false,false,false,false,false,false,true,true,true,true|TypeError,TypeError"
     );
 }
 
