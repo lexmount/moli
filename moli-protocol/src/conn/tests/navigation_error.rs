@@ -1,6 +1,7 @@
 use super::*;
 use crate::conn::{
-    CommandOwnerScope, NavigationLoadOutcome, NavigationNetworkError, NavigationRequestLoadPolicy,
+    CommandOwnerScope, NavigationLoadOutcome, NavigationNetworkError, NavigationNetworkErrorKind,
+    NavigationRequestLoadPolicy,
 };
 use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget};
 
@@ -196,7 +197,11 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
         let network_error = error
             .downcast_ref::<NavigationNetworkError>()
             .expect("navigation request identity must survive diagnostic context");
-        assert_eq!(network_error.error_text, OFFLINE_ERROR_TEXT);
+        assert_eq!(
+            network_error.kind,
+            NavigationNetworkErrorKind::InternetDisconnected
+        );
+        assert_eq!(network_error.to_string(), OFFLINE_ERROR_TEXT);
         assert_eq!(network_error.unreachable_url, navigation.requested_url);
         assert_eq!(network_error.request_method, *method);
         assert_eq!(network_error.request_headers, *headers);
@@ -210,10 +215,10 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_error_document_uses_typed_failure_request_after_context() {
     let (mut ctx, navigation) = navigation_fixture();
-    let unreachable_url = Url::parse("https://redirect.example/unreachable").unwrap();
-    let request_headers = vec![("x-request".to_owned(), "failed-hop".to_owned())];
+    let unreachable_url = Url::parse("https://overridden.example/unreachable").unwrap();
+    let request_headers = vec![("x-request".to_owned(), "overridden-request".to_owned())];
     let error = anyhow::Error::new(NavigationNetworkError {
-        error_text: OFFLINE_ERROR_TEXT.to_owned(),
+        kind: NavigationNetworkErrorKind::InternetDisconnected,
         unreachable_url: unreachable_url.clone(),
         request_method: "POST".to_owned(),
         request_headers: request_headers.clone(),

@@ -499,7 +499,9 @@ impl CommandDispatchContext {
 }
 
 pub(crate) use moli_protocol_cdp::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
-pub use navigation_error::NavigationNetworkError;
+pub(crate) use navigation_error::{
+    NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
+};
 pub(crate) use output::NavigationBackgroundEvent;
 pub use output::{
     BackgroundCommandResponsePayload, BackgroundEventSender, BackgroundProtocolEvent,

@@ -302,6 +302,76 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     ctx.expect_error(304, -32000, "net::ERR_BLOCKED_BY_CLIENT");
 }
 
+#[tokio::test]
+async fn request_paused_then_continue_request_preserves_blocked_url_error_text() {
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.process_async(json!({
+        "id": 16640,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(16640, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 16641,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(16641, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 16642,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": "http://example.test/blocked/document" }
+    }))
+    .await;
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    let network_id = paused["params"]["networkId"].clone();
+    assert!(network_id.is_string());
+
+    ctx.process_async(json!({
+        "id": 16643,
+        "method": "Network.setBlockedURLs",
+        "sessionId": "SID-1",
+        "params": { "urls": ["http://example.test/blocked/*"] }
+    }))
+    .await;
+    ctx.expect_result(16643, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 16644,
+        "method": "Fetch.continueRequest",
+        "sessionId": "SID-1",
+        "params": { "requestId": paused["params"]["requestId"] }
+    }))
+    .await;
+    ctx.expect_result(16644, json!({}), Some("SID-1"));
+
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "continued blocked navigation result",
+        |message| message["id"] == json!(16642),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 16642);
+    assert_eq!(response["sessionId"], "SID-1");
+    assert_eq!(response["error"]["code"], -32000);
+    assert_eq!(response["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT");
+    let failed = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["requestId"] == network_id
+        })
+        .expect("continued blocked document must emit loadingFailed");
+    assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn request_paused_then_continue_request_commits_offline_error_document() {
     assert_continued_offline_navigation_commits_error_document(false).await;

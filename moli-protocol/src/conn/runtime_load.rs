@@ -29,9 +29,7 @@ use crate::domains::network::{
     MainDocumentBodyProgressSource,
 };
 
-const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 const HTTP_RESPONSE_CODE_FAILURE_ERROR_TEXT: &str = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
-const NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT: &str = "net::ERR_INTERNET_DISCONNECTED";
 const CAPTURED_RAW_REPLAY_CHUNK_SIZE: usize = 64 * 1024;
 
 fn apply_navigation_request_load_policy(
@@ -898,7 +896,7 @@ impl BackgroundNavigationLoadJob {
                     .with_context(|| format!("failed to parse request url `{}`", self.raw_url))?;
                 tracing::debug!(
                     url = %self.raw_url,
-                    network_error_text = NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT,
+                    network_error_text = NavigationNetworkErrorKind::InternetDisconnected.error_text(),
                     "main document blocked by emulated offline conditions"
                 );
                 return prepare_network_error_page_navigation_with_engine_async(
@@ -908,7 +906,7 @@ impl BackgroundNavigationLoadJob {
                     requested_url,
                     self.method,
                     self.request_headers,
-                    NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned(),
+                    NavigationNetworkErrorKind::InternetDisconnected.error_text().to_owned(),
                     RendererReplyBoundary::DocumentCommit,
                 )
                 .await;
@@ -2345,7 +2343,7 @@ impl CdpConnection {
             network_error.unreachable_url.clone(),
             network_error.request_method.clone(),
             network_error.request_headers.clone(),
-            network_error.error_text.clone(),
+            network_error.kind.error_text().to_owned(),
             RendererReplyBoundary::Stage,
         )
         .await
@@ -3952,7 +3950,7 @@ fn validate_navigation_network_request(
         let requested_url = Url::parse(raw_url)
             .with_context(|| format!("failed to parse request url `{raw_url}`"))?;
         return Err(NavigationNetworkError {
-            error_text: NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned(),
+            kind: NavigationNetworkErrorKind::InternetDisconnected,
             unreachable_url: requested_url,
             request_method: method.to_owned(),
             request_headers: request_headers.to_vec(),
@@ -3971,7 +3969,7 @@ fn ensure_url_not_blocked_for_load_inputs(
         .iter()
         .any(|pattern| url_pattern_matches(pattern, raw_url))
     {
-        Err(anyhow::anyhow!(BLOCKED_BY_CLIENT_ERROR_TEXT))
+        Err(NavigationRequestBlocked.into())
     } else {
         Ok(())
     }
