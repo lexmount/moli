@@ -12,9 +12,7 @@ use super::navigation_entry::{
     set_navigation_entry_joint_top_index, stringify_history_state,
     sync_navigation_current_entry_from_history_entry,
 };
-use super::navigation_entry_state::{
-    clone_history_entry_state, clone_navigation_entry_state, set_navigation_entry_state,
-};
+use super::navigation_entry_state::{clone_navigation_entry_state, set_navigation_entry_state};
 use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_entry_dispose,
     refresh_navigation_destination_indexes,

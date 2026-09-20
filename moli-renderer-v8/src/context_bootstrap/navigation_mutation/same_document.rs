@@ -21,16 +21,10 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
         .unwrap_or(0)
         .max(0) as u32;
     let current_index = history_index(scope, history);
-    let history_state = history_entries(scope, history)
-        .and_then(|entries| {
-            entries
-                .get_index(scope, current_index)
-                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        })
-        .and_then(|entry| clone_history_entry_state(scope, entry))
-        .unwrap_or_else(|| v8::null(scope).into());
+    // Fragment entries share the Document and Navigation API state, but do
+    // not inherit classic History API state from the previous entry.
+    let history_state = v8::null(scope).into();
     let navigation_state = clone_navigation_entry_state(scope, current_entry);
-    let history_state_json = stringify_history_state(scope, history_state);
     let navigation_state_json =
         navigation_state.and_then(|state| stringify_history_state(scope, state));
     let entries = history_entries(scope, history).unwrap_or_else(|| v8::Array::new(scope, 0));
@@ -45,7 +39,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 scope,
                 owner,
                 href,
-                history_state_json.as_deref(),
+                None,
                 navigation_state_json.as_deref(),
                 None,
                 next_navigation_index,
@@ -53,6 +47,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 &new_navigation_entry_key(),
             );
             copy_navigation_entry_document_id(scope, current_entry, next_entry);
+            bind_navigation_entry_runtime_owner(scope, next_entry, owner);
             set_child_joint_top_index_for_entry(scope, owner, Some(next_entry));
             let next_entries = v8::Array::new(scope, (next_index + 1) as i32);
             for index in 0..next_index {
@@ -74,7 +69,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 scope,
                 owner,
                 href,
-                history_state_json.as_deref(),
+                None,
                 navigation_state_json.as_deref(),
                 None,
                 current_navigation_index,
@@ -82,6 +77,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 &key,
             );
             copy_navigation_entry_document_id(scope, current_entry, entry);
+            bind_navigation_entry_runtime_owner(scope, entry, owner);
             let _ = entries.set_index(scope, current_index, entry.into());
             set_history_entries(scope, history, entries);
             set_history_state(scope, history, history_state);

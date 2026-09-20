@@ -100,7 +100,7 @@ fn navigation_can_go_back_getter_function<'s>(
         rv.set_bool(false);
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_document_has_disabled_entries(scope, owner) {
         rv.set_bool(false);
         return;
     }
@@ -123,7 +123,7 @@ fn navigation_can_go_forward_getter_function<'s>(
         rv.set_bool(false);
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_document_has_disabled_entries(scope, owner) {
         rv.set_bool(false);
         return;
     }
@@ -184,7 +184,7 @@ fn navigation_current_entry_getter_function<'s>(
         rv.set(v8::null(scope).into());
         return;
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_document_has_disabled_entries(scope, owner) {
         rv.set(v8::null(scope).into());
         return;
     }

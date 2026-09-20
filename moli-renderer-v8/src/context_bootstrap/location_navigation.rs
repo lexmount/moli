@@ -31,9 +31,10 @@ use super::navigation_seed::history_entry_seed_for_reload;
 use super::navigation_serialize::serialize_history_entries;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_can_update_current_entry,
-    navigation_document_has_opaque_origin, navigation_unload_event_active,
-    runtime_window_is_global, runtime_window_owner, runtime_window_uses_top_level_history_model,
-    url_is_about_blank_document, window_history_for_holder, window_location_for_holder,
+    navigation_document_has_opaque_origin, navigation_document_is_active,
+    navigation_unload_event_active, runtime_window_is_global, runtime_window_owner,
+    runtime_window_uses_top_level_history_model, url_is_about_blank_document,
+    window_history_for_holder, window_location_for_holder,
 };
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
@@ -336,22 +337,34 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     {
         return;
     }
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && unsafe { &mut *host_ptr }.navigate_lightweight_popup_window_to_url(
-            scope,
-            popup_id,
-            resolved.clone(),
-            kind,
-        )
-    {
-        return;
-    }
-
+    let popup_id = crate::native_bridge::lightweight_popup_id_from_window(scope, owner);
+    let kind = if kind == LocationNavigationKind::Assign
+        && exact_same_href
+        && popup_id.is_some_and(|popup_id| {
+            context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+                let host = unsafe { &*host_ptr };
+                host.window_scopes_have_same_origin(
+                    location_navigation_initiator_scope(scope, host),
+                    crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id),
+                )
+            })
+        }) {
+        LocationNavigationKind::Replace
+    } else {
+        kind
+    };
     if !matches!(kind, LocationNavigationKind::Reload)
-        && (!exact_same_href || force_exact_same_document_navigation)
+        && (popup_id.is_none() || resolved.fragment().is_some())
+        && (!exact_same_href
+            || force_exact_same_document_navigation
+            || (popup_id.is_some() && resolved.fragment().is_some()))
         && is_same_document_fragment_navigation(current_url.as_ref(), &resolved)
     {
+        let popup_document_owner = popup_id.and_then(|popup_id| {
+            context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+                unsafe { &*host_ptr }.current_lightweight_popup_document_owner(popup_id)
+            })
+        });
         let opaque_origin = navigation_document_has_opaque_origin(scope, owner);
         if !opaque_origin
             && !runtime_window_is_global(scope, owner)
@@ -362,6 +375,18 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             sync_location_object(scope, location, resolved.as_str());
             sync_local_document_front_from_window(scope, owner);
+            if let Some(popup_id) = popup_id
+                && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+            {
+                unsafe { &mut *host_ptr }
+                    .dispatch_lightweight_popup_same_document_navigation_events(
+                        scope,
+                        popup_id,
+                        owner,
+                        &current_href,
+                        resolved.as_str(),
+                    );
+            }
             return;
         }
         let navigation = if opaque_origin {
@@ -377,6 +402,10 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         let replaces_initial_about_blank = child_handle.is_some_and(|handle| {
             context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
                 unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+            })
+        }) || popup_id.is_some_and(|popup_id| {
+            context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
+                unsafe { &*host_ptr }.lightweight_popup_current_document_is_initial_empty(popup_id)
             })
         });
         let effective_kind = match kind {
@@ -423,6 +452,18 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             return;
         }
+        if !location_has_relevant_document(scope, location)
+            || !navigation_document_is_active(scope, owner)
+        {
+            return;
+        }
+        if let Some(document_owner) = popup_document_owner
+            && !context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
+                unsafe { &*host_ptr }.lightweight_popup_document_owner_is_current(document_owner)
+            })
+        {
+            return;
+        }
         if navigate_outcome
             .as_ref()
             .is_some_and(|outcome| !outcome.proceed)
@@ -452,6 +493,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 .flatten()
         });
         sync_location_object(scope, location, resolved.as_str());
+        sync_local_document_front_from_window(scope, owner);
         if opaque_origin {
             apply_navigation_navigate_same_document(
                 scope,
@@ -469,10 +511,32 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             );
         }
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            if !location_has_relevant_document(scope, location)
+                || !navigation_document_is_active(scope, owner)
+            {
+                return;
+            }
+            if let Some(document_owner) = popup_document_owner
+                && !unsafe { &*host_ptr }
+                    .lightweight_popup_document_owner_is_current(document_owner)
+            {
+                return;
+            }
             let state = window_history_for_holder(scope, owner)
                 .map(|history| history_state_value(scope, history))
                 .unwrap_or_else(|| v8::null(scope).into());
-            dispatch_popstate_event(scope, host_ptr, child_handle, state);
+            dispatch_popstate_event(scope, host_ptr, owner, state);
+            if !location_has_relevant_document(scope, location)
+                || !navigation_document_is_active(scope, owner)
+            {
+                return;
+            }
+            if let Some(document_owner) = popup_document_owner
+                && !unsafe { &*host_ptr }
+                    .lightweight_popup_document_owner_is_current(document_owner)
+            {
+                return;
+            }
             queue_hash_change_for_runtime_owner(
                 scope,
                 owner,
@@ -480,7 +544,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 resolved.as_str(),
             );
         }
-        if child_handle.is_none() {
+        if runtime_window_is_global(scope, owner) {
             if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
                 let host = unsafe { &mut *host_ptr };
                 host.set_document_url(resolved.clone());
@@ -518,6 +582,14 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     resolved.as_str(),
                 );
             }
+        }
+        return;
+    }
+
+    if let Some(popup_id) = popup_id {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let _ = unsafe { &mut *host_ptr }
+                .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
         }
         return;
     }
