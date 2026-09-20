@@ -293,7 +293,7 @@ const NAVIGATION_TRANSITION_SETTLE_REJECTED_SLOT: &str = "__lmNavigationTransiti
 const NAVIGATION_TRANSITION_COMMITTED_RESOLVER_SLOT: &str =
     "__lmNavigationTransitionCommittedResolver";
 
-fn take_navigation_transition_committed_resolver<'s>(
+pub(super) fn take_navigation_transition_committed_resolver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
