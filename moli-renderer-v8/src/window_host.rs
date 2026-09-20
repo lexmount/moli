@@ -892,6 +892,15 @@ pub(crate) fn window_post_message_callback<'s>(
         );
         return;
     }
+    // Reusing an iframe element does not reuse its discarded WindowProxy.
+    // A retained method called on the old Window must not target the new
+    // LocalWindow merely because both have the same DOM handle.
+    if let PendingWindowMessageEndpoint::ChildWindow(handle) = target_endpoint
+        && !host.child_window_proxy_is_current(scope, handle, args.this())
+    {
+        rv.set_undefined();
+        return;
+    }
     // Blink captures the incumbent DOMWindow at API acceptance. Lightweight
     // popups still share the top-level V8 context, so their active execution
     // scope is the one necessary override; the ambient source marker is only
