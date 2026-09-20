@@ -40,7 +40,7 @@ impl RendererPageHistoryTraversalTaskId {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageHistoryTraversalTaskKind {
     SameDocument,
-    ChildCrossDocument,
+    CrossDocument,
 }
 
 /// Exact authority captured when a history traversal becomes pending.

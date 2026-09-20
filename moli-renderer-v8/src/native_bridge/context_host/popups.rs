@@ -9,8 +9,10 @@ use crate::{
         SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
         apply_local_window_location_navigation, clear_simple_window_event_handler_values,
         deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
-        finish_cross_document_navigation_for_window, history_entry_seed_for_cross_document_location,
-        initialize_simple_event_target, install_navigation_bootstrap_entry_for_holder,
+        construct_original_page_transition_event, dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
+        finish_cross_document_navigation_for_window,
+        history_entry_seed_for_cross_document_location,
+        install_navigation_bootstrap_entry_for_holder, initialize_simple_event_target,
         install_simple_window_event_handlers, install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
         scoped_indexed_db_factory, simple_object_event_set_ordered_handler,
@@ -445,6 +447,7 @@ struct LightweightPopupDocumentRecord {
     pending_load_event: Option<LightweightPopupNavigationTaskToken>,
     queued_load_event: Option<LightweightPopupNavigationTaskToken>,
     load_event_dispatched: bool,
+    unload_events_dispatched: bool,
     // Location replacement remains in effect while load callbacks run, and
     // document.open() does not make a previously loaded Document incomplete.
     completely_loaded: bool,
@@ -1097,6 +1100,7 @@ impl JsContextHost {
                         pending_load_event: None,
                         queued_load_event: None,
                         load_event_dispatched: false,
+                        unload_events_dispatched: false,
                         completely_loaded: true,
                     },
                     session_storage_store,
@@ -2052,6 +2056,13 @@ impl JsContextHost {
             .unwrap_or_else(|| target_url.clone());
         let document_referrer = navigation_state.policy_container.document_referrer.clone();
         if moli_url::is_about_blank(&target_url) {
+            if matches!(history, PendingLightweightPopupHistory::Traversal(_)) {
+                finish_cross_document_navigation_for_window(scope, window, target_url.as_str());
+                self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+                if !self.lightweight_popup_navigation_attempt_is_current(navigation_task) {
+                    return false;
+                }
+            }
             navigation_state.reset_for_empty_document(target_url.clone());
             if !self.commit_lightweight_popup_document(
                 scope,
@@ -2259,6 +2270,7 @@ impl JsContextHost {
                     pending_load_event: None,
                     queued_load_event: None,
                     load_event_dispatched: false,
+                    unload_events_dispatched: false,
                     completely_loaded: false,
                 },
             );
@@ -2868,6 +2880,20 @@ impl JsContextHost {
                 return PopupDocumentLoadApplication::Applied { body_activity };
             }
             Ok(PopupDocumentLoadOutcome::Loaded(loaded)) => {
+                if matches!(
+                    pending.history,
+                    PendingLightweightPopupHistory::Traversal(_)
+                ) {
+                    finish_cross_document_navigation_for_window(
+                        scope,
+                        window,
+                        pending.target_url.as_str(),
+                    );
+                    self.dispatch_lightweight_popup_document_unload(scope, popup_id);
+                    if !self.lightweight_popup_navigation_attempt_is_current(task) {
+                        return PopupDocumentLoadApplication::NotApplied;
+                    }
+                }
                 let mut loaded = *loaded;
                 let opener_sandbox = self
                     .lightweight_popup_record(popup_id)
@@ -3272,6 +3298,30 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn dispatch_lightweight_popup_document_unload(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+    ) {
+        let Some(document) = self.lightweight_popup_document_record_mut(popup_id) else {
+            return;
+        };
+        if document.unload_events_dispatched {
+            return;
+        }
+        // Mark before entering author callbacks: pagehide can call close(),
+        // whose queued destruction must not unload this Document a second time.
+        document.unload_events_dispatched = true;
+        let owner = document.owner;
+        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
+            return;
+        };
+        dispatch_pagehide_for_runtime_owner(scope, window);
+        if self.lightweight_popup_document_owner_is_current(owner) {
+            dispatch_unload_for_runtime_owner(scope, window);
+        }
+    }
+
     pub(crate) fn dispatch_lightweight_popup_load_event(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
@@ -3280,9 +3330,22 @@ impl JsContextHost {
         let window = self
             .lightweight_popup_window(scope, popup_id)
             .expect("authorized popup load event must retain its WindowProxy");
+        let document_owner = self.current_lightweight_popup_document_owner(popup_id);
         let event = lightweight_popup_event(scope, window, "load")
             .expect("authorized popup load event must materialize its Event");
         self.dispatch_lightweight_popup_window_event(scope, popup_id, "load", event);
+        if !self.lightweight_popup_is_open(popup_id)
+            || self.current_lightweight_popup_document_owner(popup_id) != document_owner
+        {
+            return;
+        }
+        let context = window
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        if let Some(event) = construct_original_page_transition_event(scope, "pageshow", false) {
+            self.dispatch_lightweight_popup_window_event(scope, popup_id, "pageshow", event);
+        }
     }
 
     fn install_lightweight_popup_document_projection<'s>(
@@ -4899,6 +4962,7 @@ fn lightweight_popup_close_callback<'s>(
     if !host.begin_lightweight_popup_close(popup_id) {
         return;
     }
+    dispatch_beforeunload_for_runtime_owner(scope, window);
     set_object_slot(
         scope,
         window,
