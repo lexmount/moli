@@ -1832,3 +1832,155 @@ async fn intercepted_navigation_commits_do_not_dispatch_fragment_events() {
         json!(["popstate", "hashchange"])
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_close_cancels_intercepted_navigations_before_retiring_the_window() {
+    for operation in ["query", "fragment", "reload"] {
+        for phase in ["precommit", "handler"] {
+            for late in ["resolve", "reject"] {
+                let mut page = SameDocumentPage::new().await;
+                let script = r###"(async () => {
+ const operation=OPERATION, phase=PHASE, late=LATE;
+ const tick=()=>new Promise(r=>setTimeout(r,0));
+ const w=open('history.html?popup-close','closing-window');
+ await new Promise(r=>w.addEventListener('load',r,{once:true}));await tick();
+ const nav=w.navigation, Ctor=w.DOMException, events=[],states={},reasons=[],checks={};
+ let signal,transition,release,reject,handlers=0;
+ const observe=(name,p)=>p.then(()=>states[name]='fulfilled',e=>{states[name]=e.name;reasons.push(e);});
+ nav.addEventListener('navigateerror',e=>{events.push('error:'+e.error.name);reasons.push(e.error);});
+ nav.addEventListener('navigatesuccess',()=>events.push('success'));
+ nav.addEventListener('navigate',e=>{
+  signal=e.signal;e.signal.addEventListener('abort',()=>events.push('abort'));
+  const hold=()=>{transition=nav.transition;observe('transitionCommitted',transition.committed);observe('transitionFinished',transition.finished);return new Promise((resolve,fail)=>{release=resolve;reject=fail;});};
+  e.intercept(phase==='precommit'?{precommitHandler:hold,handler(){handlers++;}}:{handler(){handlers++;return hold();}});
+ },{once:true});
+ const result=operation==='reload'?nav.reload():nav.navigate(operation==='fragment'?'#pending':'?pending');
+ observe('committed',result.committed);observe('finished',result.finished);
+ w.close();w.close();
+ await new Promise(r=>setTimeout(r,100));
+ const afterClose={closed:w.closed,aborted:signal.aborted,events:[...events],states:{...states},transitionCleared:nav.transition===null};
+ if(late==='resolve')release();else reject(new Error('late rejection'));
+ await new Promise(r=>setTimeout(r,50));
+ const afterRelease={closed:w.closed,aborted:signal.aborted,events:[...events],states:{...states},transitionCleared:nav.transition===null};
+ checks.closed=w.closed;checks.aborted=signal.aborted;checks.noLateCompletion=JSON.stringify(afterClose)===JSON.stringify(afterRelease);
+ checks.events=events.join(',')==='abort,error:AbortError';checks.transitionCleared=nav.transition===null;
+ checks.promises=Object.keys(states).length===4&&Object.entries(states).every(([name,value])=>value===(phase==='handler'&&name.toLowerCase().endsWith('committed')?'fulfilled':'AbortError'));
+ checks.errorIdentity=reasons.length===(phase==='precommit'?5:3)&&reasons.every(e=>e===signal.reason&&e instanceof Ctor);
+ checks.handlers=handlers===(phase==='precommit'?0:1);
+ return {checks,afterClose,afterRelease,handlers,reasons:reasons.map(e=>e.name)};
+})()"###
+                    .replace("OPERATION", &json!(operation).to_string())
+                    .replace("PHASE", &json!(phase).to_string())
+                    .replace("LATE", &json!(late).to_string());
+                let result = page.evaluate(&script).await;
+                assert!(
+                    result["checks"]
+                        .as_object()
+                        .unwrap()
+                        .values()
+                        .all(|value| value == true),
+                    "{operation}/{phase}/{late}: {result}"
+                );
+                page.assert_history(&[""], 0).await;
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_close_preserves_other_window_owners_during_cancellation_callbacks() {
+    for phase in ["precommit", "handler"] {
+        for action in [
+            "repeat-close",
+            "navigate",
+            "open-same-name",
+            "close-sibling",
+            "detach-opener",
+            "retired-opener",
+        ] {
+            let mut page = SameDocumentPage::new().await;
+            let script = r###"(async () => {
+ const action=ACTION, phase=PHASE;
+ const tick=()=>new Promise(r=>setTimeout(r,0));
+ let openerFrame;
+ let opener=window;
+ if(['detach-opener','retired-opener'].includes(action)){
+  openerFrame=document.createElement('iframe');openerFrame.src='history.html?opener';
+  const loaded=new Promise(r=>openerFrame.onload=r);document.body.appendChild(openerFrame);await loaded;
+  opener=openerFrame.contentWindow;
+ }
+ async function popup(owner,url,name){const w=owner.open(url,name);await new Promise(r=>w.addEventListener('load',r,{once:true}));await tick();return w;}
+ const closing=await popup(opener,'history.html?closing','closing-window');
+ const sibling=await popup(window,'history.html?sibling','sibling-window');
+ const records={},events=[],checks={},extra={};let replacement,replacementLoaded;
+ function arm(name,w,stage){
+  const nav=w.navigation,record=records[name]={w,nav,Ctor:w.DOMException,states:{},reasons:[],handlers:0};
+  const observe=(key,p)=>p.then(()=>record.states[key]='fulfilled',e=>{record.states[key]=e.name;record.reasons.push(e);});
+  nav.addEventListener('navigateerror',e=>{events.push('error:'+name);record.reasons.push(e.error);});
+  nav.addEventListener('navigatesuccess',()=>events.push('success:'+name));
+  nav.addEventListener('navigate',e=>{
+   record.signal=e.signal;
+   e.signal.addEventListener('abort',()=>{
+    events.push('abort:'+name);
+    if(name!=='closing')return;
+    extra.callbackClosed=closing.closed;
+    if(action==='repeat-close'){closing.close();closing.stop();}
+    if(action==='navigate'){
+     const result=nav.navigate('#reentrant');
+     result.committed.then(()=>extra.committed='fulfilled',e=>extra.committed=e.name);
+     result.finished.then(()=>extra.finished='fulfilled',e=>extra.finished=e.name);
+    }
+    if(action==='open-same-name'){
+     replacement=open('history.html?replacement','closing-window');
+     extra.distinct=replacement!==closing;
+     replacementLoaded=new Promise(r=>replacement.addEventListener('load',r,{once:true}));
+    }
+    if(action==='close-sibling')sibling.close();
+    if(action==='detach-opener')openerFrame.remove();
+   });
+   const hold=()=>{record.transition=nav.transition;observe('transitionCommitted',nav.transition.committed);observe('transitionFinished',nav.transition.finished);return new Promise(r=>record.release=r);};
+   e.intercept(stage==='precommit'?{precommitHandler:hold,handler(){record.handlers++;}}:{handler(){record.handlers++;return hold();}});
+  },{once:true});
+  const result=nav.navigate('#pending-'+name);observe('committed',result.committed);observe('finished',result.finished);
+ }
+ arm('opener',window,'precommit');arm('closing',closing,phase);arm('sibling',sibling,'precommit');
+ await tick();if(action==='retired-opener')openerFrame.remove();closing.close();
+ await new Promise(r=>setTimeout(r,150));
+ checks.closed=closing.closed;
+ for(const [name,r]of Object.entries(records)){
+  const canceled=name==='closing'||name==='sibling'&&action==='close-sibling';
+  checks[name+' abort scope']=r.signal.aborted===canceled;
+  checks[name+' pending control']=canceled||Object.keys(r.states).length===0;
+ }
+ if(replacement){
+  checks.replacementLoaded=await Promise.race([replacementLoaded.then(()=>true),new Promise(r=>setTimeout(()=>r(false),1000))]);
+  checks.replacementOpen=!replacement.closed&&replacement!==closing;
+  if(checks.replacementLoaded){arm('replacement',replacement,'precommit');await tick();}
+ }
+ for(const r of Object.values(records))r.release();
+ await new Promise(r=>setTimeout(r,50));
+ for(const [name,r]of Object.entries(records)){
+  const canceled=name==='closing'||name==='sibling'&&action==='close-sibling';
+  checks[name+' states']=Object.keys(r.states).length===4&&Object.entries(r.states).every(([key,value])=>value===(canceled&&!(name==='closing'&&phase==='handler'&&key.toLowerCase().endsWith('committed'))?'AbortError':'fulfilled'));
+  checks[name+' transition']=r.nav.transition===null;
+  checks[name+' terminal events']=events.filter(e=>e==='success:'+name).length===(canceled?0:1)&&events.filter(e=>e==='error:'+name).length===(canceled?1:0)&&events.filter(e=>e==='abort:'+name).length===(canceled?1:0);
+  checks[name+' identity']=!canceled||r.reasons.length===(name==='closing'&&phase==='handler'?3:5)&&r.reasons.every(e=>e===r.signal.reason&&e instanceof r.Ctor);
+ }
+ if(action==='navigate')checks.reentrantNavigation=extra.committed===extra.finished&&['AbortError','InvalidStateError'].includes(extra.committed);
+ sibling.close();if(replacement)replacement.close();if(openerFrame)openerFrame.remove();
+ return {checks,events,extra,states:Object.fromEntries(Object.entries(records).map(([name,r])=>[name,r.states]))};
+})()"###
+                .replace("PHASE", &json!(phase).to_string())
+                .replace("ACTION", &json!(action).to_string());
+            let result = page.evaluate(&script).await;
+            assert!(
+                result["checks"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .all(|value| value == true),
+                "{phase}/{action}: {result}"
+            );
+        }
+    }
+}
