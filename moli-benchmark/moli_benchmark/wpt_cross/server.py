@@ -171,6 +171,10 @@ JSON_THEN_JS_PATH = "/html/semantics/scripting-1/the-script-element/serve-json-t
 JSON_LOAD_ERROR_PATH = (
     "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
 )
+NAVIGATION_SECOND_VISIT_PATH = (
+    "/navigation-api/navigation-methods/return-value/resources/"
+    "204-205-download-on-second-visit.py"
+)
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 FORM_SUBMISSION_PATH = (
@@ -1686,6 +1690,8 @@ def _make_handler(
                     return self._serve_navigation_second_visit
                 if path == FETCH_EMPTY_LOCATION_PATH:
                     return self._serve_empty_location_resource
+                if path == NAVIGATION_SECOND_VISIT_PATH:
+                    return self._serve_navigation_second_visit
                 if path in SERVICE_WORKER_SCRIPT_RESOURCE_PATHS:
                     return self._serve_service_worker_script_resource
                 if path in XHR_RESOURCE_PATHS:
@@ -3316,6 +3322,37 @@ def _make_handler(
                         break
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
+
+        def _serve_navigation_second_visit(self) -> None:
+            if not self._consume_request_body():
+                return
+            params = parse_qs(urlsplit(self.path).query, keep_blank_values=True, encoding="latin-1")
+            stash_path = NAVIGATION_SECOND_VISIT_PATH.rsplit("/", 1)[0] + "/"
+            status, content_type, body = 400, None, b""
+            headers: list[tuple[str, str]] = []
+            cache_control = None
+            try:
+                key = params["id"][0]
+                if self.command == "POST":
+                    fetch_stash.put(key, params["action"][0], path=stash_path)
+                    status = 204
+                elif self.command == "GET":
+                    action = fetch_stash.take(key, path=stash_path)
+                    if action is None:
+                        status, content_type, body = 200, "text/html", b"initial page"
+                        cache_control = "no-store"
+                    elif action in ("204", "205"):
+                        status = int(action)
+                    elif action == "download":
+                        status, content_type, body = 200, "text/plain", b"some text to download"
+                        headers.append(("Content-Disposition", "attachment"))
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return
+            self._send_bytes(
+                content_type, body, emit_body=self.command != "HEAD",
+                status_code=status, extra_headers=headers, cache_control=cache_control,
+            )
 
         def _serve_fetch_abort_resource(
             self, path: str, query: str, *, emit_body: bool
