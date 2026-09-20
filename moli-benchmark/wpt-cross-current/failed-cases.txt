@@ -2729,11 +2729,10 @@ html/browsers/history/the-history-interface/traverse_the_history_2.html
 html/browsers/history/the-history-interface/traverse_the_history_3.html
 html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
-html/browsers/history/the-location-interface/assign_before_load.html
 html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
 html/browsers/history/the-location-interface/same-hash.html
-html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
+html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
 html/browsers/origin/cross-origin-objects/window-location-and-location-href-cross-realm-set.html
 html/browsers/origin/relaxing-the-same-origin-restriction/document_domain_setter.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html

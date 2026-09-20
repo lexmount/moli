@@ -398,6 +398,9 @@ struct LightweightPopupDocumentRecord {
     pending_load_event: Option<LightweightPopupNavigationTaskToken>,
     queued_load_event: Option<LightweightPopupNavigationTaskToken>,
     load_event_dispatched: bool,
+    // Location replacement remains in effect while load callbacks run, and
+    // document.open() does not make a previously loaded Document incomplete.
+    completely_loaded: bool,
 }
 
 struct LightweightPopupDocumentCommit {
@@ -963,6 +966,7 @@ impl JsContextHost {
                         pending_load_event: None,
                         queued_load_event: None,
                         load_event_dispatched: false,
+                        completely_loaded: true,
                     },
                     session_storage_store,
                 })),
@@ -1253,6 +1257,14 @@ impl JsContextHost {
     ) -> bool {
         self.lightweight_popup_document_record(popup_id)
             .is_some_and(|document| document.is_initial_empty_document)
+    }
+
+    pub(in crate::native_bridge::context_host) fn lightweight_popup_document_is_completely_loaded(
+        &self,
+        popup_id: u64,
+    ) -> Option<bool> {
+        self.lightweight_popup_document_record(popup_id)
+            .map(|document| document.completely_loaded)
     }
 
     pub(crate) fn lightweight_popup_session_storage_store(
@@ -1990,6 +2002,7 @@ impl JsContextHost {
                     pending_load_event: None,
                     queued_load_event: None,
                     load_event_dispatched: false,
+                    completely_loaded: false,
                 },
             );
             record.location_url = commit.location_url;
@@ -4075,6 +4088,18 @@ impl JsContextHost {
         document.pending_load_event = None;
         document.queued_load_event = None;
         document.load_event_dispatched = true;
+    }
+
+    pub(crate) fn note_lightweight_popup_load_event_finished(
+        &mut self,
+        owner: LightweightPopupDocumentOwner,
+    ) {
+        if !self.lightweight_popup_document_owner_is_current(owner) {
+            return;
+        }
+        self.lightweight_popup_document_record_mut(owner.popup_id())
+            .expect("current popup load delivery must retain its Document record")
+            .completely_loaded = true;
     }
 
     pub(crate) fn discard_stale_lightweight_popup_load_event_task(

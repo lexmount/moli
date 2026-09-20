@@ -77,8 +77,13 @@ pub(crate) fn navigate_location_object<'s>(
     let owner = runtime_window_owner(scope, location);
     let replaces_unloaded_document = kind == LocationNavigationKind::Assign
         && location_document_is_before_load_complete(scope, owner)
-        && !context_host_ptr_for_navigation_owner(scope, owner)
-            .is_some_and(|host| unsafe { &*host }.protocol_user_gesture_activation());
+        && !context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host| {
+            let host = unsafe { &*host };
+            host.protocol_user_gesture_activation()
+                || host.window_has_transient_user_activation(location_navigation_initiator_scope(
+                    scope, host,
+                ))
+        });
     let kind = if replaces_unloaded_document {
         LocationNavigationKind::Replace
     } else {
@@ -873,14 +878,7 @@ fn location_document_is_before_load_complete<'s>(
         return false;
     };
     let host = unsafe { &*host_ptr };
-    let document_handle = if runtime_window_is_global(scope, owner) {
-        Some(host.document_handle())
-    } else {
-        child_browsing_context_handle_for_runtime_owner(scope, owner)
-            .and_then(|handle| host.frame_owner_current_child_snapshot(handle))
-            .map(|snapshot| snapshot.document_handle)
-    };
-    document_handle
+    super::window_accessors::window_document_handle(scope, owner, host)
         .is_some_and(|document| host.document_is_completely_loaded(document) == Some(false))
 }
 
@@ -964,19 +962,7 @@ fn location_navigation_initiator_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &JsContextHost,
 ) -> Option<url::Url> {
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
-        return host.lightweight_popup_document_url(popup_id);
-    }
-    let dispatch_scope = scope
-        .get_incumbent_context()
-        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
-        .map(|identity| identity.dispatch_scope())
-        .or_else(|| {
-            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
-                .map(crate::native_bridge::OwnerDispatchScope::Child)
-        })
-        .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
-    match dispatch_scope {
+    match location_navigation_initiator_scope(scope, host) {
         crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_url().clone()),
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.child_browsing_context_current_url(handle)
@@ -985,6 +971,24 @@ fn location_navigation_initiator_url(
             host.lightweight_popup_document_url(popup_id)
         }
     }
+}
+
+fn location_navigation_initiator_scope(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+) -> crate::native_bridge::OwnerDispatchScope {
+    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
+        return crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id);
+    }
+    scope
+        .get_incumbent_context()
+        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
+        .map(|identity| identity.dispatch_scope())
+        .or_else(|| {
+            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
+                .map(crate::native_bridge::OwnerDispatchScope::Child)
+        })
+        .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top)
 }
 
 #[cfg(test)]

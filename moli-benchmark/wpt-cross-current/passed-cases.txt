@@ -6403,6 +6403,7 @@ html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
+html/browsers/history/the-location-interface/assign_before_load.html
 html/browsers/history/the-location-interface/cross-origin-location-stringify-crash.sub.html
 html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
@@ -6441,7 +6442,7 @@ html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/no-browsing-context.window.js?moli-wpt-script=window
 html/browsers/history/the-location-interface/reload_document_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
-html/browsers/history/the-location-interface/scripted_click_location_assign_during_load.html
+html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
 html/browsers/history/the-location-interface/security_location_0.htm
 html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
