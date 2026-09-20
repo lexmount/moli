@@ -27,7 +27,7 @@ use super::live_target::{
     ParserDomMutationConsumer, ParserDomReadConsumer, ParserElementCreationConsumer,
     ParserMutationEffectConsumer, ParserMutationEffectDelivery, ParserRuntimeDomSinks,
     ParserStreamHtmlTreeSinkTarget, new_live_document_root_html_tree_sink_stream,
-    new_parser_stream_html_tree_sink_stream,
+    new_parser_stream_html_tree_sink_stream, new_parser_stream_html_tree_sink_target,
 };
 use super::{
     ParserSourcePosition, html_chunks,
@@ -441,8 +441,41 @@ impl HtmlParser {
     /// Start a text document using the HTML tokenizer's plaintext state.
     /// Subsequent chunks remain literal text inside the browser-owned `pre`.
     pub fn start_text_document(&self, final_url: Url, content_type: &str) -> DocumentStream {
-        let mut stream = DocumentStream::new_parser_stream(final_url, self.scripting_enabled);
-        stream.inner.initialize_text_document(content_type);
+        let stream =
+            DocumentStream::new_text_document(new_parser_stream_html_tree_sink_target(final_url));
+        stream.inner.initialize_text_document();
+        let mut host = stream.inner.take_parser_stream_dom_host();
+        let document_handle = host.document_handle();
+        host.set_document_content_type_for_handle(document_handle, content_type);
+        stream.inner.restore_parser_stream_dom_host(host);
+        stream
+    }
+
+    /// Initialize the same literal-text shell in an existing document. The
+    /// embedder owns that document's MIME metadata and live DOM callbacks.
+    pub fn start_live_text_document_root<T>(
+        &self,
+        final_url: Url,
+        document_handle: NativeNodeId,
+        consumer: &mut T,
+    ) -> DocumentStream
+    where
+        T: ParserDomReadConsumer
+            + ParserDomMutationConsumer
+            + ParserMutationEffectConsumer
+            + ParserElementCreationConsumer,
+    {
+        let stream = DocumentStream::new_text_document(
+            ParserStreamHtmlTreeSinkTarget::new_live_document_root(final_url, document_handle),
+        );
+        // SAFETY: the consumer is exclusively borrowed until the step guard
+        // removes the erased callbacks, including when initialization unwinds.
+        let sinks = unsafe { ParserRuntimeDomSinks::from_consumer(consumer) };
+        stream.inner.enter_runtime_dom_sinks_parse_step(sinks);
+        {
+            let step = RuntimeDomSinksParserStep { stream: &stream };
+            step.stream.inner.initialize_text_document();
+        }
         stream
     }
 
@@ -559,6 +592,17 @@ impl Default for ParserInputQueue {
 }
 
 impl DocumentStream {
+    fn new_text_document(target: ParserStreamHtmlTreeSinkTarget) -> Self {
+        let mut options = html_parse_opts_with_scripting(false);
+        // The byte decoder has already consumed the transport BOM. In plaintext
+        // every remaining U+FEFF is content, including at a chunk boundary.
+        options.tokenizer.discard_bom = false;
+        Self {
+            inner: HtmlTreeSinkStream::from_target_with_options(target, options),
+            input: RefCell::default(),
+        }
+    }
+
     fn new_parser_stream(final_url: Url, scripting_enabled: bool) -> Self {
         Self {
             inner: new_parser_stream_html_tree_sink_stream(final_url, scripting_enabled),
@@ -1853,7 +1897,8 @@ mod tests {
 
     #[test]
     fn text_document_stream_preserves_literal_markup_and_leading_newline() {
-        let payload = "\n<b>Gülçek</b>&amp;<script>window.executed=1</script></pre>";
+        let payload =
+            "\u{feff}\n<b>Gülçek</b>&amp;<script>window.executed=1</script></pre>\u{feff}";
         for content_type in ["text/plain", "application/json", "application/problem+json"] {
             let stream = HtmlParser::SCRIPTING_ENABLED.start_text_document(
                 Url::parse("https://example.test/data").unwrap(),

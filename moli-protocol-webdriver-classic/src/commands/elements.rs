@@ -737,17 +737,15 @@ pub fn clear_element_command(
     })
 }
 
-/// Read-only activation preflight (apart from scrolling). Ordinary elements
-/// must subsequently use shared pointer input, not HTMLElement.click().
+/// Validate activation without dispatching it. Real-layout sessions use pointer
+/// input; DOM-first sessions retain semantic activation without hit testing.
 pub fn element_click_preflight_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
+    use_real_layout: bool,
 ) -> DevToolsCommand {
-    let DevToolsCommand::CallFunction(mut command) = element_click_command(context, object_id)
-    else {
-        unreachable!("element click is a call-function command")
-    };
-    command.function_declaration = r#"function() {
+    let mut command = element_click_call_function(context, object_id);
+    command.function_declaration = r#"function(useRealLayout) {
         if (!this || this.nodeType !== Node.ELEMENT_NODE || !this.isConnected)
             throw new Error('__moli_webdriver_classic_stale_element_reference__');
         if (this.localName === 'input' && this.type === 'file')
@@ -755,23 +753,30 @@ pub fn element_click_preflight_command(
         // Options have a separate selection algorithm, not a pointer target
         // in the page's rendered select popup.
         if (this.localName === 'option') return {status: 'option'};
+        if (!useRealLayout) return {status: 'dom'};
         this.scrollIntoView({block: 'center', inline: 'center', behavior: 'instant'});
-        const rect = this.getBoundingClientRect();
+        const rect = this.getClientRects()[0];
         if (!rect || rect.width <= 0 || rect.height <= 0)
             return {status: 'not interactable'};
-        // Match the shared geometry helper's center. Do not silently test a
-        // clipped point and then dispatch input at a different position.
-        const x = (rect.left + rect.right) / 2, y = (rect.top + rect.bottom) / 2;
-        if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight)
+        // WebDriver's in-view center is the clipped first client rectangle,
+        // not the bounding box of every fragment. Return the tested point so
+        // dispatch cannot recompute a different center.
+        const view = this.ownerDocument.defaultView;
+        const width = view.innerWidth, height = view.innerHeight;
+        const left = Math.max(0, rect.left), right = Math.min(width, rect.right);
+        const top = Math.max(0, rect.top), bottom = Math.min(height, rect.bottom);
+        if (right <= left || bottom <= top)
             return {status: 'not interactable'};
+        const x = Math.floor((left + right) / 2), y = Math.floor((top + bottom) / 2);
         const root = this.getRootNode();
         const hit = (typeof root.elementFromPoint === 'function' ? root : this.ownerDocument)
             .elementFromPoint(x, y);
         if (!hit || !(hit === this || this.contains(hit)))
             return {status: 'intercepted'};
-        return {status: 'pointer'};
+        return {status: 'pointer', x, y, viewport_width: width, viewport_height: height};
     }"#
     .to_owned();
+    command.arguments = vec![json!(use_real_layout)];
     command.await_promise = false;
     command.user_gesture = false;
     DevToolsCommand::CallFunction(command)
@@ -781,7 +786,14 @@ pub fn element_click_command(
     context: &ClassicDevToolsCommandContext,
     object_id: impl Into<String>,
 ) -> DevToolsCommand {
-    DevToolsCommand::CallFunction(DevToolsCallFunctionCommand {
+    DevToolsCommand::CallFunction(element_click_call_function(context, object_id))
+}
+
+fn element_click_call_function(
+    context: &ClassicDevToolsCommandContext,
+    object_id: impl Into<String>,
+) -> DevToolsCallFunctionCommand {
+    DevToolsCallFunctionCommand {
         context: context.command_context(),
         realm_id: None,
         world_name: None,
@@ -828,7 +840,7 @@ pub fn element_click_command(
         preserve_remote_metadata: false,
         materialize_bidi_script_result: false,
         serialization_options: None,
-    })
+    }
 }
 
 pub fn element_click_prepare_commands(

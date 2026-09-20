@@ -16,17 +16,17 @@ use moli_html_input_type::InputType;
 use moli_protocol::{
     DevToolsPageResidenceIdentity,
     devtools_runtime::{
-        DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsDomGeometryResult,
-        DevToolsDomNodeReference, DevToolsDownloadBehaviorSetting, DevToolsError,
-        DevToolsErrorKind, DevToolsFrameId, DevToolsGetFrameOwnerCommand,
-        DevToolsGetFrameOwnerResult, DevToolsGetRealmsCommand, DevToolsGetRealmsResult,
-        DevToolsGetServiceWorkerLogsCommand, DevToolsGetServiceWorkerLogsResult,
-        DevToolsGetTargetsCommand, DevToolsGetTargetsResult, DevToolsLayoutMetricsResult,
-        DevToolsLocateNodesResult, DevToolsProtocol, DevToolsQuerySelectorResult,
-        DevToolsRemoteHandleId, DevToolsRemoteValue, DevToolsScriptException, DevToolsScriptResult,
-        DevToolsSessionId, DevToolsSetDownloadBehaviorCommand, DevToolsSetFileInputFilesCommand,
-        DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind, RuntimeConsoleEvent,
-        RuntimeExecutionContextEvent,
+        DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult, DevToolsDomGeometryCommand,
+        DevToolsDomGeometryOperation, DevToolsDomGeometryResult, DevToolsDomNodeReference,
+        DevToolsDownloadBehaviorSetting, DevToolsError, DevToolsErrorKind, DevToolsFrameId,
+        DevToolsGetFrameOwnerCommand, DevToolsGetFrameOwnerResult, DevToolsGetRealmsCommand,
+        DevToolsGetRealmsResult, DevToolsGetServiceWorkerLogsCommand,
+        DevToolsGetServiceWorkerLogsResult, DevToolsGetTargetsCommand, DevToolsGetTargetsResult,
+        DevToolsLayoutMetricsResult, DevToolsLocateNodesResult, DevToolsProtocol,
+        DevToolsQuerySelectorResult, DevToolsRemoteHandleId, DevToolsRemoteValue,
+        DevToolsScriptException, DevToolsScriptResult, DevToolsSessionId,
+        DevToolsSetDownloadBehaviorCommand, DevToolsSetFileInputFilesCommand, DevToolsTargetId,
+        DevToolsTargetInfo, DevToolsTargetKind, RuntimeConsoleEvent, RuntimeExecutionContextEvent,
     },
     version,
 };
@@ -35,10 +35,10 @@ use moli_protocol_webdriver_classic::{
     CLASSIC_WINDOW_REFERENCE_KEY, ClassicDevToolsCommandContext,
     ClassicElementOriginViewportPoints, ClassicError, ClassicErrorCode, ClassicPageLoadStrategy,
     ClassicPromptHandler, ClassicUnhandledPromptBehavior, ClassicViewportBounds,
-    action_element_origin_ids, active_element_command, alert_handle_command, alert_text_command,
-    classic_attribute_value, classic_error_from_devtools_error, classic_property_value,
-    classic_rect_from_geometry, classic_shadow_root_reference, classic_text_value,
-    clear_element_command, create_initial_target_command, current_url_command,
+    ClassicViewportPoint, action_element_origin_ids, active_element_command, alert_handle_command,
+    alert_text_command, classic_attribute_value, classic_error_from_devtools_error,
+    classic_property_value, classic_rect_from_geometry, classic_shadow_root_reference,
+    classic_text_value, clear_element_command, create_initial_target_command, current_url_command,
     delete_session_response, describe_node_command, describe_node_reference_command,
     element_center_from_geometry, element_click_command, element_click_input_commands,
     element_click_preflight_command, element_click_prepare_reference_commands,
@@ -4431,10 +4431,11 @@ pub(super) async fn webdriver_classic_send_keys_to_element(
         ClassicSendKeysPreflight::NotTextControl
     ) {
         let input_context = classic_top_level_context(&binding);
-        let commands = match element_click_input_commands(&input_context, &geometry) {
-            Ok(commands) => commands,
+        let point = match element_center_from_geometry(&geometry) {
+            Ok(point) => point,
             Err(error) => return classic_error_into_response(error),
         };
+        let commands = element_click_input_commands(&input_context, point);
         if let Err(error) = webdriver_classic_execute_empty_commands(
             &binding,
             commands,
@@ -4516,6 +4517,74 @@ async fn webdriver_classic_prepare_text_control_for_send_keys(
     }
 }
 
+async fn webdriver_classic_click_point(
+    binding: &ClassicSessionBinding,
+    preparation: Value,
+) -> Result<ClassicViewportPoint, ClassicError> {
+    let coordinate = |name: &str| {
+        preparation
+            .get(name)
+            .and_then(Value::as_f64)
+            .ok_or_else(|| {
+                ClassicError::new(
+                    ClassicErrorCode::UnknownError,
+                    format!("click preflight omitted {name}"),
+                )
+            })
+    };
+    let point = ClassicViewportPoint::new(coordinate("x")?, coordinate("y")?)?;
+    let Some(frame_id) = binding.current_frame_id.as_deref() else {
+        return ClassicViewportPoint::new(point.x, point.y);
+    };
+    let owner = classic_frame_owner_dom_reference(binding, frame_id).await?;
+    let result = binding
+        .runtime
+        .execute_on_page(
+            DevToolsCommand::DomGeometry(DevToolsDomGeometryCommand {
+                context: classic_top_level_devtools_context(binding),
+                reference: owner.reference,
+                operation: DevToolsDomGeometryOperation::GetBoxModel,
+            }),
+            owner.page_residence,
+        )
+        .await
+        .map_err(classic_error_from_devtools_error)?;
+    let DevToolsCommandResult::DomGeometry(geometry) = result else {
+        return Err(ClassicError::new(
+            ClassicErrorCode::UnknownError,
+            "frame geometry returned an unexpected result",
+        ));
+    };
+    let model = geometry.box_model.ok_or_else(|| {
+        ClassicError::new(
+            ClassicErrorCode::ElementNotInteractable,
+            "frame has no content geometry",
+        )
+    })?;
+    let [x0, y0, x1, y1, _, _, x3, y3] = model.content.points.as_slice() else {
+        return Err(ClassicError::new(
+            ClassicErrorCode::UnknownError,
+            "frame has invalid content geometry",
+        ));
+    };
+    let viewport_width = coordinate("viewport_width")?;
+    let viewport_height = coordinate("viewport_height")?;
+    if viewport_width <= 0.0 || viewport_height <= 0.0 {
+        return Err(ClassicError::new(
+            ClassicErrorCode::ElementNotInteractable,
+            "frame has an empty viewport",
+        ));
+    }
+    // The content quad already includes every ancestor-frame transform. Map
+    // the exact locally hit-tested point, retaining rotation/scale and borders.
+    let u = point.x / viewport_width;
+    let v = point.y / viewport_height;
+    ClassicViewportPoint::new(
+        x0 + u * (x1 - x0) + v * (x3 - x0),
+        y0 + u * (y1 - y0) + v * (y3 - y0),
+    )
+}
+
 async fn webdriver_classic_activate_element_by_handle(
     state: &AppState,
     binding: &ClassicSessionBinding,
@@ -4536,7 +4605,11 @@ async fn webdriver_classic_activate_element_by_handle(
     let prepared = binding
         .runtime
         .execute_on_page(
-            element_click_preflight_command(context, object_id.object_id.clone()),
+            element_click_preflight_command(
+                context,
+                object_id.object_id.clone(),
+                state.layout_policy.uses_real_layout(),
+            ),
             object_id.page_residence.clone(),
         )
         .await;
@@ -4558,7 +4631,7 @@ async fn webdriver_classic_activate_element_by_handle(
     let operation = async {
         let preparation = preparation?;
         match preparation.get("status").and_then(Value::as_str) {
-            Some("option") => {
+            Some("option" | "dom") => {
                 activation_dispatched = true;
                 Ok(binding
                     .runtime
@@ -4581,12 +4654,10 @@ async fn webdriver_classic_activate_element_by_handle(
                 "another element obscures the element's in-view center",
             )),
             Some("pointer") => {
-                let geometry =
-                    webdriver_classic_element_geometry(state, binding, context, element_id).await?;
-                // Geometry already includes ancestor-frame transforms. Pointer
-                // input is routed through the top-level browsing context.
+                let point = webdriver_classic_click_point(binding, preparation).await?;
+                // The preflight point has been mapped into the root viewport.
                 let pointer_context = classic_top_level_context(binding);
-                let commands = element_click_input_commands(&pointer_context, &geometry)?;
+                let commands = element_click_input_commands(&pointer_context, point);
                 let mut result = Ok(DevToolsCommandResult::Empty);
                 for (phase, command) in commands.into_iter().enumerate() {
                     activation_dispatched = phase == 2;

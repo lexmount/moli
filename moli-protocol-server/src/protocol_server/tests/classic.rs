@@ -4,6 +4,99 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value};
 
 #[tokio::test]
+async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents() {
+    const PAYLOAD: &str =
+        "<meta charset='gbk'><script>window.executed=42;</script><b>literal&amp;Gülçek</b>";
+    let cases = [
+        (
+            "plain",
+            "text/plain; charset=utf-8",
+            "text/plain",
+            true,
+            PAYLOAD,
+        ),
+        (
+            "plain-bom",
+            "text/plain; charset=utf-8",
+            "text/plain",
+            true,
+            "\u{feff}\u{feff}",
+        ),
+        (
+            "json",
+            "application/json",
+            "application/json",
+            true,
+            PAYLOAD,
+        ),
+        (
+            "javascript",
+            "text/javascript; charset=utf-8",
+            "text/javascript",
+            true,
+            PAYLOAD,
+        ),
+        (
+            "html",
+            "text/html; charset=utf-8",
+            "text/html",
+            false,
+            PAYLOAD,
+        ),
+    ];
+    let mut fixture = axum::Router::new();
+    for (name, mime, _, _, payload) in cases {
+        fixture = fixture.route(
+            &format!("/{name}"),
+            axum::routing::get(move || async move { ([(header::CONTENT_TYPE, mime)], payload) }),
+        );
+    }
+    fixture = fixture.route(
+        "/frame/{kind}",
+        axum::routing::get(
+            |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                (
+                    [(header::CONTENT_TYPE, "text/html")],
+                    format!("<iframe src='/{kind}'></iframe>"),
+                )
+            },
+        ),
+    );
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "document-mime");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (name, _, content_type, literal, payload) in cases {
+        for prefix in ["", "frame/"] {
+            let navigated = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/url"),
+                json!({"url":format!("http://{addr}/{prefix}{name}")}),
+            )
+            .await;
+            assert_eq!(navigated, json!({"value":null}), "{prefix}{name}");
+            let observed = classic_request_json_with_body(
+                app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+                json!({"script": "const w=document.querySelector('iframe')?.contentWindow ?? window; return [w.document.body.textContent,w.executed??null,w.document.querySelectorAll('script').length,w.document.contentType];", "args": []}),
+            ).await;
+            let expected = if literal {
+                json!([
+                    payload.strip_prefix('\u{feff}').unwrap_or(payload),
+                    null,
+                    0,
+                    content_type
+                ])
+            } else {
+                json!(["literal&Gülçek", 42, 1, content_type])
+            };
+            assert_eq!(observed["value"], expected, "{prefix}{name}");
+        }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
 async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope() {
     let app = build_router(test_state());
 
@@ -11130,6 +11223,53 @@ async fn webdriver_classic_execute_async_honors_script_timeout() {
 }
 
 #[tokio::test]
+async fn webdriver_classic_click_respects_dom_first_and_real_layout_policies() {
+    for policy in [LayoutPolicy::Mock, LayoutPolicy::OnDemand] {
+        let state = AppState::new_with_storage_partition_and_runtime_config(
+            "127.0.0.1:9222".parse().unwrap(),
+            Arc::new(StoragePartitionState::open(None).unwrap()),
+            NavigationRuntimeConfig::new(
+                protocol_server_test_fetch_config(FetchConfig::default()),
+                OptionalResourceFetchMask::NONE,
+                true,
+                policy,
+            ),
+            crate::config::DEFAULT_SCREENCAST_INTERVAL_MS,
+        )
+        .unwrap();
+        let app = build_router(state);
+        let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+        let session_id = session["value"]["sessionId"].as_str().unwrap();
+        let navigated = classic_request_json_with_body(
+            app.clone(), Method::POST, &format!("/session/{session_id}/url"),
+            json!({"url": "data:text/html,<button id='target'>go</button><script>window.events=[];for(const type of ['pointerdown','mousedown','mouseup','click'])target.addEventListener(type,e=>events.push(e.type));</script>"}),
+        ).await;
+        assert_eq!(navigated, json!({"value": null}));
+        let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+        let clicked = classic_request_json(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/element/{element_id}/click"),
+        )
+        .await;
+        assert_eq!(clicked, json!({"value": null}), "{policy:?}");
+        let observed = classic_request_json_with_body(
+            app.clone(),
+            Method::POST,
+            &format!("/session/{session_id}/execute/sync"),
+            json!({"script": "return window.events;", "args": []}),
+        )
+        .await;
+        let expected = match policy {
+            LayoutPolicy::Mock => json!(["click"]),
+            LayoutPolicy::OnDemand => json!(["pointerdown", "mousedown", "mouseup", "click"]),
+        };
+        assert_eq!(observed["value"], expected, "{policy:?}");
+        classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+    }
+}
+
+#[tokio::test]
 async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {
     let app = build_router(test_state());
 
@@ -11203,6 +11343,22 @@ async fn webdriver_classic_click_pointer_focus_and_interactability_controls() {
     let session_id = session["value"]["sessionId"].as_str().expect("session id");
     for (name, target, setup, expected_focus, expected_clicks, expected_error) in [
         ("ordinary", "<input id='target'>", "", "target", 1, None),
+        (
+            "clipped fixed button",
+            "<button id='target' style='position:fixed;left:-150px;top:20px;width:200px;height:50px'>go</button>",
+            "",
+            "target",
+            1,
+            None,
+        ),
+        (
+            "entirely outside viewport",
+            "<button id='target' style='position:fixed;left:-250px;top:20px;width:200px;height:50px'>go</button>",
+            "",
+            "origin",
+            0,
+            Some("element not interactable"),
+        ),
         (
             "cancel mousedown",
             "<button id='target'>go</button>",
@@ -11323,38 +11479,41 @@ async fn webdriver_classic_click_pointer_focus_and_interactability_controls() {
 
 #[tokio::test]
 async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offset_frame() {
-    let app = build_router(test_state());
-    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
-    let session_id = session["value"]["sessionId"].as_str().expect("session id");
-    let html = "<iframe style='position:absolute;left:200px;top:180px;width:400px;height:200px' srcdoc=\"<input id='target' style='margin:40px'><script>window.clicks=0;target.onclick=e=>{clicks++;window.trusted=e.isTrusted;};</script>\"></iframe>";
-    classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/url"),
-        json!({"url":format!("data:text/html,{html}")}),
-    )
-    .await;
-    assert_eq!(
+    for transform in ["none", "scale(0.75)", "rotate(12deg)"] {
+        let app = build_router(test_state());
+        let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+        let session_id = session["value"]["sessionId"].as_str().expect("session id");
+        let html = format!(
+            "<iframe style='position:absolute;left:200px;top:180px;width:400px;height:200px;transform:{transform}' srcdoc=\"<input id='target' style='margin:40px'><script>window.clicks=0;target.onclick=e=>{{clicks++;window.trusted=e.isTrusted;}};</script>\"></iframe>"
+        );
         classic_request_json_with_body(
             app.clone(),
             Method::POST,
-            &format!("/session/{session_id}/frame"),
-            json!({"id":0})
+            &format!("/session/{session_id}/url"),
+            json!({"url":format!("data:text/html,{html}")}),
         )
-        .await,
-        json!({"value":null})
-    );
-    let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
-    assert_eq!(
-        classic_request_json(
-            app.clone(),
-            Method::POST,
-            &format!("/session/{session_id}/element/{element_id}/click")
-        )
-        .await,
-        json!({"value":null})
-    );
-    let observed = classic_request_json_with_body(
+        .await;
+        assert_eq!(
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/frame"),
+                json!({"id":0})
+            )
+            .await,
+            json!({"value":null})
+        );
+        let element_id = classic_find_css_element_id(app.clone(), session_id, "#target").await;
+        assert_eq!(
+            classic_request_json(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/element/{element_id}/click")
+            )
+            .await,
+            json!({"value":null})
+        );
+        let observed = classic_request_json_with_body(
         app.clone(),
         Method::POST,
         &format!("/session/{session_id}/execute/sync"),
@@ -11363,8 +11522,9 @@ async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offse
         }),
     )
     .await;
-    assert_eq!(observed, json!({"value":["target",1,true]}));
-    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+        assert_eq!(observed, json!({"value":["target",1,true]}), "{transform}");
+        classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+    }
 }
 
 #[tokio::test]
@@ -12251,6 +12411,71 @@ async fn webdriver_classic_option_click_edges_ported_from_chromium_wpt() {
         &format!("/session/{session_id}"),
     )
     .await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_enter_inserts_newline_and_submits_through_both_key_routes() {
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for key in ["\u{E006}", "\u{E007}"] {
+        for use_actions in [false, true] {
+            for (target, expected) in [
+                ("<textarea id='field'></textarea>", json!(["a\nb", 0])),
+                ("<input id='field'>", json!(["ab", 1])),
+            ] {
+                let html = format!(
+                    "<form onsubmit='window.submits++;event.preventDefault()'>{target}<button>submit</button></form><script>window.submits=0;field.focus();</script>"
+                );
+                let navigated = classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/url"),
+                    json!({"url": format!("data:text/html,{html}")}),
+                )
+                .await;
+                assert_eq!(navigated, json!({"value": null}));
+                let element_id =
+                    classic_find_css_element_id(app.clone(), session_id, "#field").await;
+                let (route, body) = if use_actions {
+                    (
+                        format!("/session/{session_id}/actions"),
+                        json!({"actions": [{
+                            "type": "key", "id": "keyboard", "actions": [
+                                {"type":"keyDown", "value":"a"}, {"type":"keyUp", "value":"a"},
+                                {"type":"keyDown", "value":key}, {"type":"keyUp", "value":key},
+                                {"type":"keyDown", "value":"b"}, {"type":"keyUp", "value":"b"}
+                            ]
+                        }]}),
+                    )
+                } else {
+                    (
+                        format!("/session/{session_id}/element/{element_id}/value"),
+                        json!({"text": format!("a{key}b")}),
+                    )
+                };
+                let sent =
+                    classic_request_json_with_body(app.clone(), Method::POST, &route, body).await;
+                assert_eq!(
+                    sent,
+                    json!({"value": null}),
+                    "{key:?}, actions={use_actions}"
+                );
+                let observed = classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/execute/sync"),
+                    json!({"script": "return [field.value,window.submits];", "args": []}),
+                )
+                .await;
+                assert_eq!(
+                    observed["value"], expected,
+                    "{target}, {key:?}, actions={use_actions}"
+                );
+            }
+        }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
 }
 
 #[tokio::test]
