@@ -1399,7 +1399,7 @@ fn current_script_belongs_to_document(
         .is_some_and(|owner_document| owner_document == document_handle)
 }
 
-fn document_has_browsing_context(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(crate) fn document_has_browsing_context(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime.document_has_browsing_context(handle)
 }
 

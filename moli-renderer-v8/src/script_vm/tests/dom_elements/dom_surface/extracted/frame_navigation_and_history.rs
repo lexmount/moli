@@ -2927,6 +2927,8 @@ fn constructed_documents_share_legacy_unforgeable_location_accessors() {
                 }),
                 badGet: throwsName(() => firstDescriptor.get.call({})),
                 badSet: throwsName(() => firstDescriptor.set.call({}, "x")),
+                windowGet: throwsName(() => firstDescriptor.get.call(window)),
+                windowSet: throwsName(() => firstDescriptor.set.call(window, '#wrong')),
               });
             })()
             "#,
@@ -2935,7 +2937,7 @@ fn constructed_documents_share_legacy_unforgeable_location_accessors() {
 
     assert_eq!(
         result,
-        r#"{"firstValue":null,"secondValue":null,"own":true,"getType":"function","setType":"function","getName":"get location","getLength":0,"setName":"set location","setLength":1,"getSame":true,"setSame":true,"enumerable":true,"configurable":false,"assign":"TypeError","badGet":"TypeError","badSet":"TypeError"}"#
+        r#"{"firstValue":null,"secondValue":null,"own":true,"getType":"function","setType":"function","getName":"get location","getLength":0,"setName":"set location","setLength":1,"getSame":true,"setSame":true,"enumerable":true,"configurable":false,"assign":"TypeError","badGet":"TypeError","badSet":"TypeError","windowGet":"TypeError","windowSet":"TypeError"}"#
     );
 }
 
@@ -3883,5 +3885,48 @@ fn main_window_indexed_set_and_define_reject_every_array_index() {
     assert_eq!(
         result,
         r#"{"existingChildPreserved":true,"existingStrictSetThrows":true,"existingReflectSet":false,"existingReflectDefine":false,"existingDefineThrows":true,"missingRemainsAbsent":true,"missingStrictSetThrows":true,"missingReflectSet":false,"missingReflectDefine":false,"missingDefineThrows":true,"maxIndexRemainsAbsent":true,"maxIndexStrictSetThrows":true,"maxIndexReflectSet":false,"maxIndexReflectDefine":false,"nonIndexSet":1,"nonIndexReflectSet":true,"nonIndexAfterReflectSet":2,"nonIndexReflectDefine":true,"nonIndexAfterDefine":3}"#
+    );
+}
+
+#[tokio::test]
+async fn popup_document_location_tracks_its_active_browsing_context() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        "https://popup-document-location.test/",
+        &loader,
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popup = open();
+  const d = globalThis.__retainedPopupLocationDocument = popup.document;
+  const descriptor = Object.getOwnPropertyDescriptor(d, 'location');
+  const initial = [d.location === popup.location, typeof descriptor.get,
+    typeof descriptor.set, descriptor.enumerable, descriptor.configurable];
+  d.location.hash = 'document';
+  const hash = popup.location.hash;
+  popup.close();
+  return JSON.stringify({initial, hash, openerHash:location.hash});
+})()
+"#,
+        )
+        .expect("popup document Location should forward to its Window");
+    assert_eq!(
+        result,
+        r##"{"initial":[true,"function","function",true,false],"hash":"#document","openerHash":""}"##
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__retainedPopupLocationDocument.defaultView === null)",
+        "true",
+        "popup browsing context destruction",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__retainedPopupLocationDocument.location === null)")
+            .unwrap(),
+        "true"
     );
 }
