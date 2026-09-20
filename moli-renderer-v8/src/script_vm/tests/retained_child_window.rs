@@ -1,6 +1,60 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn inactive_locations_have_blank_urls_and_cannot_navigate() {
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        "<!doctype html><body>Location lifecycle target</body>".to_owned(); 4
+    ])
+    .await;
+    let loader = static_http_loader([server.resolve_entry("www.example.test")]);
+    let parent_url = server.url_for_host("www.example.test", "/page.html");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    let script = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/inactive-location.js"
+    ));
+    vm.exec(
+        &format!(
+            r#"
+if (!document.documentElement) document.appendChild(document.createElement('html'));
+if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+globalThis.__inactiveLocationResult = null;
+({script})().then(
+  result => {{ globalThis.__inactiveLocationResult = result; }},
+  error => {{ globalThis.__inactiveLocationResult = {{error: String(error)}}; }}
+);
+"#,
+        ),
+        None,
+    )
+    .expect("inactive Location probe should start");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__inactiveLocationResult !== null)",
+        "true",
+        "inactive Location probe should finish",
+    )
+    .await;
+    let result: serde_json::Value = serde_json::from_str(
+        &vm.eval("JSON.stringify(__inactiveLocationResult)")
+            .expect("inactive Location observations"),
+    )
+    .unwrap();
+    assert_eq!(result["checks"], 295, "{result}");
+    assert_eq!(result["failures"], serde_json::json!([]), "{result}");
+    assert_eq!(
+        server.finish_targets().await,
+        vec![
+            "/removed.html?query=one",
+            "/removed.html?query=one",
+            "/before.html",
+            "/after.html"
+        ]
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retained_location_rechecks_origin_domain_access() {
     for parent_first in [false, true] {
         let server = StaticHttpServer::spawn_with_bodies(vec![
