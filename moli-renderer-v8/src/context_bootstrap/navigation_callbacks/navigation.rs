@@ -721,7 +721,9 @@ fn commit_navigation_navigate_same_document<'s>(
         effective_state,
         if intercepted { "other" } else { "fragment" },
     );
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+    // Intercepted pushes and replacements use the URL/history update steps,
+    // which do not dispatch legacy fragment-navigation events.
+    if !intercepted && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let popstate_state = navigation_current_entry(scope, owner)
             .and_then(|entry| clone_navigation_entry_state(scope, entry))
             .unwrap_or_else(|| v8::null(scope).into());
