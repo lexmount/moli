@@ -199,6 +199,7 @@ pub(crate) struct FieldAttrs {
     pub(crate) receiver: Option<ReceiverAttr>,
     pub(crate) receiver_access_check: Option<ReceiverAccessCheck>,
     pub(crate) access_policy: Option<Path>,
+    pub(crate) getter_access_policy: Option<Path>,
     pub(crate) returns_promise: bool,
     pub(crate) kind: FieldKind,
     pub(crate) enumerable: bool,
@@ -220,6 +221,20 @@ pub(crate) struct FieldAttrs {
 }
 
 impl FieldAttrs {
+    pub(crate) fn has_access_policy(&self) -> bool {
+        self.access_policy.is_some() || self.getter_access_policy.is_some()
+    }
+
+    pub(crate) fn callback_access_policy(&self, is_setter: bool) -> Option<&Path> {
+        if is_setter {
+            self.access_policy.as_ref()
+        } else {
+            self.getter_access_policy
+                .as_ref()
+                .or(self.access_policy.as_ref())
+        }
+    }
+
     pub(crate) fn has_installation_kind(&self) -> bool {
         !matches!(self.kind, FieldKind::Input)
     }
@@ -254,7 +269,7 @@ impl FieldAttrs {
     pub(crate) fn has_installation_attribute(&self) -> bool {
         self.receiver.is_some()
             || self.receiver_access_check.is_some()
-            || self.access_policy.is_some()
+            || self.has_access_policy()
             || self.returns_promise
             || self.enumerable
             || self.readonly
@@ -500,6 +515,16 @@ pub(crate) fn parse_field_attrs_with_defaults(
                 }
                 return Ok(());
             }
+            if meta.path.is_ident("getter_access_policy") {
+                if parsed
+                    .getter_access_policy
+                    .replace(meta.value()?.parse()?)
+                    .is_some()
+                {
+                    return Err(meta.error("field getter_access_policy can only be specified once"));
+                }
+                return Ok(());
+            }
             if meta.path.is_ident("returns_promise") {
                 parsed.returns_promise = true;
                 return Ok(());
@@ -735,7 +760,17 @@ pub(crate) fn parse_field_attrs_with_defaults(
             "receiver and returns_promise require a Rust callback, not getter_value",
         ));
     }
-    if parsed.access_policy.is_some() {
+    if parsed.getter_access_policy.is_some()
+        && (!matches!(parsed.kind, FieldKind::AccessorProperty)
+            || parsed.access_policy.is_some()
+            || parsed.getter.is_none())
+    {
+        return Err(Error::new(
+            field.span(),
+            "getter_access_policy requires a getter callback and cannot be combined with access_policy",
+        ));
+    }
+    if parsed.has_access_policy() {
         if !matches!(parsed.kind, FieldKind::Method | FieldKind::AccessorProperty)
             || parsed.getter_value.is_some()
         {

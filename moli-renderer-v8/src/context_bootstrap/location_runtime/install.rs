@@ -46,6 +46,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_readonly_attribute_getter_callback,
         data = callback_data_index_value(scope, 0),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -54,6 +55,7 @@ struct LocationOwnSurfaceDeclaration {
         accessor_property,
         getter = location_readonly_attribute_getter_callback,
         data = callback_data_index_value(scope, 1),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -63,6 +65,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 0),
+        getter_access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -72,6 +75,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 1),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -81,6 +85,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 2),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -90,6 +95,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 3),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -99,6 +105,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 4),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -108,6 +115,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 5),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -117,6 +125,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 6),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -126,6 +135,7 @@ struct LocationOwnSurfaceDeclaration {
         getter = location_writable_attribute_getter_callback,
         setter = location_writable_attribute_setter_callback,
         data = callback_data_index_value(scope, 7),
+        access_policy = super::access::require_same_origin,
         enumerable,
         dont_delete
     )]
@@ -133,6 +143,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         method,
         callback = location_assign_callback,
+        access_policy = super::access::require_same_origin,
         length = 1,
         enumerable,
         readonly,
@@ -151,6 +162,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         method,
         callback = location_reload_callback,
+        access_policy = super::access::require_same_origin,
         length = 0,
         enumerable,
         readonly,
@@ -160,6 +172,7 @@ struct LocationOwnSurfaceDeclaration {
     #[webapi(
         method,
         callback = location_to_string_callback,
+        access_policy = super::access::require_same_origin,
         length = 0,
         enumerable,
         readonly,
@@ -209,6 +222,7 @@ fn configure_location_instance_template(
             .flags(v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS),
     );
     template.set_immutable_proto();
+    super::access::install_access_check(template);
 }
 
 pub(in crate::context_bootstrap) fn build_location_runtime_object<'s>(
@@ -231,6 +245,7 @@ pub(in crate::context_bootstrap) fn install_location_runtime_state<'s>(
     location: v8::Local<'s, v8::Object>,
     href: &str,
 ) -> Result<()> {
+    let location = super::access::location_target(scope, location);
     sync_location_object_fields(scope, location, href);
     // Location's legacy-unforgeable own properties are non-configurable.
     // Window resets refresh the backing slots on the existing object without
@@ -439,6 +454,9 @@ fn location_attribute_getter<'s>(
     attribute: LocationAttribute,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !super::access::require_entry_origin(scope, holder) {
+        return;
+    }
     let Some(current_href) = require_location_href_slot(scope, holder) else {
         return;
     };
@@ -522,10 +540,15 @@ fn location_writable_attribute_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    let holder = args.this();
     let Some(value) = v8_value_to_string(scope, args.get(0)) else {
         return;
     };
-    let holder = args.this();
+    if !matches!(attribute, LocationAttribute::Href)
+        && !super::access::require_entry_origin(scope, holder)
+    {
+        return;
+    }
     if require_location_href_slot(scope, holder).is_none() {
         return;
     }

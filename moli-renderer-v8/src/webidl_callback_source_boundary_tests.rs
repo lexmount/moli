@@ -173,6 +173,12 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
+        // Native Location Proxy forwarding to captured intrinsics/generated setter.
+        "context_bootstrap/location_runtime/access.rs",
+        2,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
+    allowed(
         "context_bootstrap/web_storage/interceptors.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,
