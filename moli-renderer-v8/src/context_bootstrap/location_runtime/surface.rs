@@ -55,13 +55,32 @@ struct DocumentLocationAccessorDeclaration {
 const CONSTRUCTED_DOCUMENT_LOCATION_GETTER_SLOT: &str = "__moliConstructedDocumentLocationGetter";
 const CONSTRUCTED_DOCUMENT_LOCATION_SETTER_SLOT: &str = "__moliConstructedDocumentLocationSetter";
 
+fn constructed_document_location_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    if !crate::web_api_interfaces::Document::is_instance(scope, receiver) {
+        return None;
+    }
+    let (runtime_ptr, handle) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
+            .ok()?;
+    if !crate::native_bridge::document::document_has_browsing_context(
+        unsafe { &*runtime_ptr },
+        handle,
+    ) {
+        return Some(v8::null(scope).into());
+    }
+    get_private_value(scope, receiver, WINDOW_LOCATION_SLOT)
+}
+
 fn constructed_document_location_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let Some(location) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT) else {
+    let Some(location) = constructed_document_location_value(scope, receiver) else {
         webidl::throw_type_error(
             scope,
             "Document.location getter called on incompatible receiver.",
@@ -77,7 +96,7 @@ fn constructed_document_location_setter_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let Some(location) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT) else {
+    let Some(location) = constructed_document_location_value(scope, receiver) else {
         webidl::throw_type_error(
             scope,
             "Document.location setter called on incompatible receiver.",
