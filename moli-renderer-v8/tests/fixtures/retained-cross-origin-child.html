@@ -1,0 +1,7 @@
+<!doctype html><title>child</title><iframe name="nested" src="/leaf.html"></iframe><script>
+const messages=[];
+addEventListener('message', event => {
+ if (typeof event.data === 'string') messages.push(event.data);
+ if (event.data && event.data.token) event.source.postMessage({token:event.data.token,messages,hash:location.hash}, '*');
+});
+</script>
