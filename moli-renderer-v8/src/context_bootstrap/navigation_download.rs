@@ -17,7 +17,8 @@ use super::navigation_callbacks::{
 use super::navigation_entry::navigation_current_entry;
 use super::navigation_events::{
     NavigationDispatchOutcome, cancel_active_navigation_event,
-    dispatch_navigation_navigate_event_with_outcome, run_navigation_precommit_deferred_handlers,
+    dispatch_navigation_navigate_event_with_outcome, finish_navigation_precommit,
+    run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::{
     finish_navigation_error_events, settle_navigation_transition_finished_local,
@@ -125,6 +126,9 @@ pub(super) fn dispatch_download_navigation_event<'s>(
         )
     {
         return false;
+    }
+    if let Some(event) = outcome.precommit_event {
+        finish_navigation_precommit(scope, event);
     }
     let transition_resolver = outcome
         .precommit_event
