@@ -13,6 +13,16 @@ use taffy::{
 
 use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
 
+/// Which margins the caller has already removed from the available space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AvailableSpaceMargins {
+    Included,
+    /// Block and float parents remove physical horizontal margins only.
+    HorizontalExcluded,
+    /// Grid's final item layout removes margins in both physical axes.
+    Excluded,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
     inherent_size: Size<f32>,
@@ -236,6 +246,7 @@ pub(crate) fn measure_replaced(
     known_dimensions: Size<Option<f32>>,
     parent_size: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
+    available_space_margins: AvailableSpaceMargins,
     context: &ReplacedContext,
     resolved_aspect_ratio: Option<ResolvedAspectRatio>,
     style: &taffy::Style<Atom>,
@@ -381,29 +392,34 @@ pub(crate) fn measure_replaced(
             .resolve_or_zero(parent_size.width, resolve_stylo_calc_value)
             .sum_axes()
             .get_abs(inline_axis);
-        let available_inline_size =
-            available_space
-                .get_abs(inline_axis)
-                .into_option()
-                .or_else(|| {
-                    // Absolute layout asks for min/max-content sizes before its final
-                    // fit-content pass. A ratio-only SVG still stretches against its
-                    // definite containing block in these probes (unlike an in-flow
-                    // SVG inside a shrink-to-fit container, which contributes zero).
-                    if style.position != taffy::Position::Absolute {
-                        return None;
-                    }
-                    let insets = style
-                        .inset
-                        .resolve_or_zero(parent_size, resolve_stylo_calc_value);
-                    parent_size
-                        .get_abs(inline_axis)
-                        .map(|size| size - insets.sum_axes().get_abs(inline_axis))
-                });
+        let available_margin = match available_space_margins {
+            AvailableSpaceMargins::Excluded => 0.0,
+            AvailableSpaceMargins::HorizontalExcluded if writing_mode.is_horizontal() => 0.0,
+            _ => margin,
+        };
+        let available_inline_size = available_space
+            .get_abs(inline_axis)
+            .into_option()
+            .map(|size| size - available_margin)
+            .or_else(|| {
+                // Absolute layout asks for min/max-content sizes before its final
+                // fit-content pass. A ratio-only SVG still stretches against its
+                // definite containing block in these probes (unlike an in-flow
+                // SVG inside a shrink-to-fit container, which contributes zero).
+                if style.position != taffy::Position::Absolute {
+                    return None;
+                }
+                let insets = style
+                    .inset
+                    .resolve_or_zero(parent_size, resolve_stylo_calc_value);
+                parent_size
+                    .get_abs(inline_axis)
+                    // This fallback starts from the containing block, so
+                    // it still owns both the insets and the SVG's margins.
+                    .map(|size| size - insets.sum_axes().get_abs(inline_axis) - margin)
+            });
         let inline_size = match available_inline_size {
-            Some(available) => {
-                (available - margin - padding_border_sum.get_abs(inline_axis)).max(0.0)
-            }
+            Some(available) => (available - padding_border_sum.get_abs(inline_axis)).max(0.0),
             // An unresolved percentage uses the default dimension for an
             // intrinsic contribution; an auto inline size contributes zero.
             None if style
@@ -605,6 +621,7 @@ mod tests {
                 width: AvailableSpace::MaxContent,
                 height: AvailableSpace::MaxContent,
             },
+            AvailableSpaceMargins::Included,
             &image_context(),
             style
                 .aspect_ratio
@@ -661,6 +678,7 @@ mod tests {
                         width: AvailableSpace::Definite(24.0),
                         height: AvailableSpace::Definite(48.0)
                     },
+                    AvailableSpaceMargins::Included,
                     &context,
                     ResolvedAspectRatio::new(2.0, BoxSizing::ContentBox),
                     &taffy::Style::default(),
@@ -699,6 +717,7 @@ mod tests {
                     width: AvailableSpace::MaxContent,
                     height: AvailableSpace::MaxContent,
                 },
+                AvailableSpaceMargins::Included,
                 &image_context(),
                 ResolvedAspectRatio::new(2.0, box_sizing),
                 &style,

@@ -48,6 +48,17 @@ async fn screenshot_sizes_viewbox_only_svg_from_available_inline_space() {
             ("absolute-margin", [48, 48]),
             ("shrink", [0, 0]),
             ("shrink-percent", [300, 300]),
+            ("block-margin", [80, 80]),
+            ("block-padding-margin", [80, 43]),
+            ("block-percent-margin", [80, 80]),
+            ("block-negative-margin", [120, 120]),
+            ("block-auto-margin", [100, 100]),
+            ("block-visible-margin", [80, 80]),
+            ("float-margin", [80, 80]),
+            ("block-float-margin", [80, 80]),
+            ("inline-float-margin", [80, 80]),
+            ("flex-margin", [80, 80]),
+            ("grid-margin", [80, 80]),
         ] {
             assert_eq!(
                 geometry[id],
