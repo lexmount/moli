@@ -44,9 +44,8 @@ pub(super) use accessors::{
 };
 pub(super) use navigation::{
     cancel_active_intercepted_same_document_navigation,
-    cancel_pending_precommit_same_document_navigation,
-    cancel_pending_precommit_same_document_navigation_for_window_stop,
-    commit_navigation_navigate_same_document, navigation_entries_callback,
-    navigation_navigate_callback, navigation_update_current_entry_callback,
-    queue_pending_precommit_same_document_navigation, settle_intercepted_same_document_navigation,
+    cancel_pending_precommit_same_document_navigation, commit_navigation_navigate_same_document,
+    navigation_entries_callback, navigation_navigate_callback,
+    navigation_update_current_entry_callback, queue_pending_precommit_same_document_navigation,
+    settle_intercepted_same_document_navigation,
 };

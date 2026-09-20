@@ -99,6 +99,7 @@ wpt_compat_cases! {
     wpt_compat_case_history_go_nan_reload_basic => "history-go-nan-reload-basic",
     wpt_compat_case_navigation_currententrychange_hash_navigation => "navigation-currententrychange-hash-navigation",
     wpt_compat_case_navigation_reload_basic => "navigation-reload-basic",
+    wpt_compat_case_upstream_navigation_api_precommit_handler_precommithandler_window_stop_before_commit => "upstream-navigation-api-precommit-handler-precommithandler-window-stop-before-commit",
     wpt_compat_case_upstream_navigation_api_precommit_handler_precommithandler_push => "upstream-navigation-api-precommit-handler-precommithandler-push",
     wpt_compat_case_upstream_navigation_api_precommit_handler_precommithandler_reload => "upstream-navigation-api-precommit-handler-precommithandler-reload",
     wpt_compat_case_upstream_navigation_api_precommit_handler_precommithandler_replace => "upstream-navigation-api-precommit-handler-precommithandler-replace",

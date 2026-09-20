@@ -1013,33 +1013,6 @@ pub(in crate::context_bootstrap) fn cancel_pending_precommit_same_document_navig
     );
 }
 
-pub(in crate::context_bootstrap) fn cancel_pending_precommit_same_document_navigation_for_window_stop<
-    's,
->(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(data) = navigation_pending_precommit_commit(scope, navigation) else {
-        return false;
-    };
-    if !precommit_commit_active(scope, data) {
-        return false;
-    }
-    let Some(data) = pending_precommit_commit_data(scope, data.into()) else {
-        return false;
-    };
-    let current = url::Url::parse(&data.current_href).ok();
-    let target = url::Url::parse(&data.effective_href).ok();
-    if target
-        .as_ref()
-        .is_some_and(|target| is_same_document_fragment_navigation(current.as_ref(), target))
-    {
-        return false;
-    }
-    cancel_pending_precommit_same_document_navigation(scope, navigation);
-    true
-}
-
 fn pending_precommit_commit_is_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     data: v8::Local<'s, v8::Value>,
