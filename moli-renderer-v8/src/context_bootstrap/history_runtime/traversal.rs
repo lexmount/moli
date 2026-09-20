@@ -1,9 +1,15 @@
-use super::super::navigation_entry::history_entries;
+use super::super::navigation_activation::{
+    install_navigation_transition, precommit_transition_resolver_from_event,
+    resolve_navigation_transition_committed,
+};
+use super::super::navigation_entry::{history_entries};
 use super::super::navigation_events::{
     NavigationDispatchOutcome, dispatch_navigation_success,
     run_navigation_precommit_deferred_handlers,
 };
-use super::super::navigation_lifecycle::finish_navigation_error_events;
+use super::super::navigation_lifecycle::{
+    finish_navigation_error_events, settle_navigation_transition_finished_local,
+};
 use super::super::navigation_result::{
     navigation_dom_exception, perform_navigation_scroll_if_needed, suppress_unhandled_rejection,
 };
@@ -16,6 +22,7 @@ use super::super::*;
 use super::apply::dispatch_history_entry_post_commit_events;
 use super::results::reject_pending_navigation_results;
 use crate::native_bridge::PendingHistoryTraversal;
+use crate::script_cleanup::ScriptExecutionScope;
 use crate::util::{get_private_value, set_private_value};
 use moli_webapi_declare::WebApiObject;
 
@@ -27,6 +34,7 @@ const TRAVERSAL_INTERCEPT_VALUE_SLOT: &str = "__lmTraversalInterceptValue";
 const TRAVERSAL_INTERCEPT_URL_SLOT: &str = "__lmTraversalInterceptUrl";
 const TRAVERSAL_INTERCEPT_PROMISE_SLOT: &str = "__lmTraversalInterceptPromise";
 const NAVIGATION_ACTIVE_TRAVERSAL_INTERCEPT_SLOT: &str = "__lmNavigationActiveTraversalIntercept";
+const TRAVERSAL_TRANSITION_RESOLVER_SLOT: &str = "__lmTraversalTransitionResolver";
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -48,6 +56,19 @@ struct TraversalInterceptSettlementDataDeclaration<'scope> {
 
     #[webapi(slot = TRAVERSAL_INTERCEPT_URL_SLOT)]
     url: v8::Local<'scope, v8::String>,
+
+    #[webapi(slot = TRAVERSAL_TRANSITION_RESOLVER_SLOT)]
+    transition_resolver: Option<v8::Local<'scope, v8::PromiseResolver>>,
+}
+
+fn traversal_transition_resolver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: v8::Local<'s, v8::Value>,
+) -> Option<v8::Local<'s, v8::PromiseResolver>> {
+    let data = v8::Local::<v8::Object>::try_from(data).ok()?;
+    get_private_value(scope, data, TRAVERSAL_TRANSITION_RESOLVER_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) })
 }
 
 fn navigation_active_traversal_intercept<'s>(
@@ -173,14 +194,29 @@ pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
         return None;
     }
     let navigation = window_navigation_for_holder(scope, applied.owner)?;
-    Some(set_active_traversal_intercept_settlement(
-        scope,
+    let transition_resolver = outcome
+        .precommit_event
+        .and_then(|event| precommit_transition_resolver_from_event(scope, event))
+        .or_else(|| {
+            applied.previous_entry.and_then(|from| {
+                install_navigation_transition(scope, navigation, from, outcome.destination, "traverse")
+            })
+        });
+    let url = v8::String::new(scope, &applied.url)?;
+    let data = TraversalInterceptSettlementDataDeclaration {
+        active: true,
         navigation,
-        outcome.signal,
+        signal: outcome.signal,
         finished_resolvers,
-        applied.resolved_entry,
-        &applied.url,
-    ))
+        value: applied.resolved_entry,
+        url,
+        transition_resolver,
+    }
+    .bind(scope)
+    .expect("traversal intercept settlement data should bind");
+    set_navigation_active_traversal_intercept(scope, navigation, data);
+    resolve_navigation_transition_committed(scope, navigation, v8::undefined(scope).into());
+    Some(data)
 }
 
 pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
@@ -216,7 +252,7 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         dispatch_history_entry_post_commit_events(scope, applied, true);
         return;
     }
-    let Some(navigation) = window_navigation_for_holder(scope, applied.owner) else {
+    let Some(_navigation) = window_navigation_for_holder(scope, applied.owner) else {
         dispatch_history_entry_post_commit_events(scope, applied, true);
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;
@@ -232,36 +268,28 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
     };
     suppress_intercept_result_unhandled_rejection(scope, result);
     dispatch_history_entry_post_commit_events(scope, applied, true);
-    if let Some(data) = settlement {
-        if !traversal_intercept_is_active(scope, data.into()) {
-            return;
-        }
-        set_traversal_intercept_inactive(scope, navigation, data.into());
+    let Some(data) = settlement else {
+        resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
+        return;
+    };
+    if !traversal_intercept_is_active(scope, data.into()) {
+        return;
     }
     if let Some(error) = error {
-        finish_navigation_error_events(scope, navigation, error, &applied.url);
-        reject_resolver_array(scope, finished_resolvers, error, true);
-        if let Some(signal) = outcome.signal {
-            crate::native_bridge::abort::abort_signal(scope, signal, error);
+        finish_traversal_intercept(scope, data.into(), Some(error));
+    } else {
+        // Even an empty handler list settles asynchronously after committed reactions.
+        let result = result.or_else(|| {
+            let resolver = v8::PromiseResolver::new(scope)?;
+            resolver.resolve(scope, v8::undefined(scope).into())?;
+            Some(resolver.get_promise(scope).into())
+        });
+        if result.is_none_or(|result| {
+            !queue_pending_traversal_intercept_settlement(scope, data, result)
+        }) {
+            finish_traversal_intercept(scope, data.into(), None);
         }
-        return;
     }
-    if let Some(result) = result
-        && queue_pending_traversal_intercept_settlement(
-            scope,
-            navigation,
-            outcome.signal,
-            finished_resolvers,
-            applied.resolved_entry,
-            &applied.url,
-            result,
-        )
-    {
-        return;
-    }
-    perform_navigation_scroll_if_needed(scope, navigation, &applied.url, true);
-    dispatch_navigation_success(scope, navigation);
-    resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
 }
 
 fn history_traversal_target_window<'s>(
@@ -313,11 +341,7 @@ fn suppress_intercept_result_unhandled_rejection<'s>(
 
 fn queue_pending_traversal_intercept_settlement<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    signal: Option<v8::Local<'s, v8::Object>>,
-    finished_resolvers: v8::Local<'s, v8::Array>,
-    resolved_value: v8::Local<'s, v8::Value>,
-    url: &str,
+    data: v8::Local<'s, v8::Object>,
     result: v8::Local<'s, v8::Value>,
 ) -> bool {
     let Some(result_object) = v8::Local::<v8::Object>::try_from(result).ok() else {
@@ -329,14 +353,6 @@ fn queue_pending_traversal_intercept_settlement<'s>(
     else {
         return false;
     };
-    let data = set_active_traversal_intercept_settlement(
-        scope,
-        navigation,
-        signal,
-        finished_resolvers,
-        resolved_value,
-        url,
-    );
     if let Ok(promise) = v8::Local::<v8::Promise>::try_from(result) {
         suppress_unhandled_rejection(scope, promise);
         set_private_value(scope, data, TRAVERSAL_INTERCEPT_PROMISE_SLOT, result);
@@ -355,29 +371,6 @@ fn queue_pending_traversal_intercept_settlement<'s>(
     };
     then.call(scope, result, &[on_fulfilled.into(), on_rejected.into()])
         .is_some()
-}
-
-fn set_active_traversal_intercept_settlement<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    signal: Option<v8::Local<'s, v8::Object>>,
-    finished_resolvers: v8::Local<'s, v8::Array>,
-    resolved_value: v8::Local<'s, v8::Value>,
-    url: &str,
-) -> v8::Local<'s, v8::Object> {
-    let url = v8_string(scope, url).unwrap_or_else(|| v8::String::empty(scope));
-    let data = TraversalInterceptSettlementDataDeclaration {
-        active: true,
-        navigation,
-        signal,
-        finished_resolvers,
-        value: resolved_value,
-        url,
-    }
-    .bind(scope)
-    .expect("traversal intercept settlement data should bind");
-    set_navigation_active_traversal_intercept(scope, navigation, data);
-    data
 }
 
 fn traversal_intercept_data<'s>(
@@ -462,18 +455,8 @@ pub(in crate::context_bootstrap) fn cancel_active_history_traversal_intercept_se
     else {
         return false;
     };
-    let Some((navigation, signal, finished_resolvers, _, url, _)) =
-        traversal_intercept_data(scope, data.into())
-    else {
-        return false;
-    };
-    set_traversal_intercept_inactive(scope, navigation, data.into());
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if let Some(signal) = signal {
-        crate::native_bridge::abort::abort_signal(scope, signal, error);
-    }
-    finish_navigation_error_events(scope, navigation, error, &url);
-    reject_resolver_array(scope, finished_resolvers, error, true);
+    finish_traversal_intercept(scope, data.into(), Some(error));
     true
 }
 
@@ -482,31 +465,7 @@ fn traversal_intercept_fulfilled_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((navigation, signal, finished_resolvers, resolved_value, url, _)) =
-        traversal_intercept_data(scope, args.data())
-    else {
-        return;
-    };
-    set_traversal_intercept_inactive(scope, navigation, args.data());
-    let owner = runtime_window_owner(scope, navigation);
-    if !navigation_document_is_active(scope, owner) {
-        let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-        if let Some(signal) = signal {
-            crate::native_bridge::abort::abort_signal(scope, signal, error);
-        }
-        let top_owner = runtime_top_window_owner(scope, owner);
-        let filename = window_location_for_holder(scope, top_owner)
-            .and_then(|location| {
-                super::super::location_runtime::location_href_slot(scope, location)
-            })
-            .unwrap_or(url);
-        finish_navigation_error_events(scope, navigation, error, &filename);
-        reject_resolver_array(scope, finished_resolvers, error, true);
-        return;
-    }
-    perform_navigation_scroll_if_needed(scope, navigation, &url, true);
-    dispatch_navigation_success(scope, navigation);
-    resolve_resolver_array(scope, finished_resolvers, resolved_value);
+    finish_traversal_intercept(scope, args.data(), None);
 }
 
 fn traversal_intercept_rejected_callback<'s>(
@@ -514,21 +473,56 @@ fn traversal_intercept_rejected_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some((navigation, signal, finished_resolvers, _, url, promise)) =
-        traversal_intercept_data(scope, args.data())
-    else {
+    let Some((_, _, _, _, _, promise)) = traversal_intercept_data(scope, args.data()) else {
         return;
     };
-    set_traversal_intercept_inactive(scope, navigation, args.data());
     let error = promise
         .filter(|promise| promise.state() == v8::PromiseState::Rejected)
         .map(|promise| promise.result(scope))
         .unwrap_or_else(|| args.get(0));
-    if let Some(signal) = signal {
-        crate::native_bridge::abort::abort_signal(scope, signal, error);
+    finish_traversal_intercept(scope, args.data(), Some(error));
+}
+
+fn finish_traversal_intercept<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: v8::Local<'s, v8::Value>,
+    error: Option<v8::Local<'s, v8::Value>>,
+) {
+    let Some((navigation, signal, finished_resolvers, resolved_value, url, _)) =
+        traversal_intercept_data(scope, data)
+    else {
+        return;
+    };
+    let _execution = ScriptExecutionScope::enter(scope);
+    let transition_resolver = traversal_transition_resolver(scope, data);
+    set_traversal_intercept_inactive(scope, navigation, data);
+    let owner = runtime_window_owner(scope, navigation);
+    let active = navigation_document_is_active(scope, owner);
+    let error = error.or_else(|| {
+        (!active).then(|| navigation_dom_exception(scope, "Navigation was canceled", "AbortError"))
+    });
+    if let Some(error) = error {
+        if let Some(signal) = signal {
+            crate::native_bridge::abort::abort_signal(scope, signal, error);
+        }
+        let filename = if active {
+            url
+        } else {
+            let top_owner = runtime_top_window_owner(scope, owner);
+            window_location_for_holder(scope, top_owner)
+                .and_then(|location| {
+                    super::super::location_runtime::location_href_slot(scope, location)
+                })
+                .unwrap_or(url)
+        };
+        finish_navigation_error_events(scope, navigation, error, &filename);
+        reject_resolver_array(scope, finished_resolvers, error, true);
+    } else {
+        perform_navigation_scroll_if_needed(scope, navigation, &url, true);
+        dispatch_navigation_success(scope, navigation);
+        resolve_resolver_array(scope, finished_resolvers, resolved_value);
     }
-    finish_navigation_error_events(scope, navigation, error, &url);
-    reject_resolver_array(scope, finished_resolvers, error, true);
+    settle_navigation_transition_finished_local(scope, navigation, transition_resolver, error);
 }
 
 pub(in crate::context_bootstrap) fn resolve_resolver_array<'s>(

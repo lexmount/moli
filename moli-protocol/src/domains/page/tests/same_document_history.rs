@@ -183,6 +183,322 @@ impl SameDocumentPage {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn intercepted_traversal_transitions_track_commit_and_completion() {
+    for precommit in [false, true] {
+        for mode in ["empty", "sync", "async", "reject", "undefined"] {
+            let mut page = SameDocumentPage::new().await;
+            page.run(
+                "history.pushState(null, '', '#back'); history.pushState(null, '', '#current'); void 0",
+                "#current",
+            ).await;
+            page.ctx.sent.clear();
+            let script = r#"
+                (async () => {
+                    const mode = MODE;
+                    const precommit = PRECOMMIT;
+                    const order = [];
+                    const checks = [];
+                    const from = navigation.currentEntry;
+                    const error = mode === 'undefined' ? undefined : new Error('traversal failure');
+                    const fails = mode === 'reject' || mode === 'undefined';
+                    let transition;
+                    let event;
+                    let transitionCommitted;
+                    let transitionFinished;
+                    const capture = phase => {
+                        order.push(phase);
+                        const current = navigation.transition;
+                        checks.push(current !== null && current.from === from &&
+                            current.navigationType === 'traverse' && current.to === event.destination);
+                        if (!transition) {
+                            transition = current;
+                            transitionCommitted = transition?.committed.then(value => value === undefined);
+                            transitionFinished = transition?.finished.then(
+                                value => { order.push('transition finished'); return !fails && value === undefined; },
+                                reason => { order.push('transition finished'); return fails && reason === error; }
+                            );
+                        }
+                        checks.push(current === transition);
+                    };
+                    navigation.addEventListener('navigate', e => {
+                        event = e;
+                        order.push('navigate');
+                        checks.push(navigation.transition === null);
+                        const options = {};
+                        if (precommit) options.precommitHandler = () => {
+                            capture('precommit');
+                            checks.push(location.hash === '#current');
+                            return new Promise(resolve => setTimeout(resolve, 0));
+                        };
+                        if (mode !== 'empty') options.handler = () => {
+                            capture('handler');
+                            checks.push(location.hash === '#back');
+                            if (fails) return Promise.reject(error);
+                            if (mode === 'async') return new Promise(resolve => setTimeout(resolve, 0));
+                        };
+                        e.intercept(options);
+                        e.signal.addEventListener('abort', () => checks.push(fails && e.signal.reason === error));
+                    }, {once: true});
+                    navigation.addEventListener('currententrychange', () => capture('currententrychange'), {once: true});
+                    navigation.addEventListener('navigatesuccess', () => capture('success'), {once: true});
+                    navigation.addEventListener('navigateerror', e => {
+                        capture('error');
+                        checks.push(fails && e.error === error);
+                    }, {once: true});
+                    const result = navigation.back();
+                    const committed = result.committed.then(entry => {
+                        capture('committed');
+                        return entry === navigation.currentEntry;
+                    });
+                    const finished = result.finished.then(
+                        entry => { order.push('finished'); return !fails && entry === navigation.currentEntry && navigation.transition === null; },
+                        reason => { order.push('finished'); return fails && reason === error && navigation.transition === null; }
+                    );
+                    checks.push(await committed, await finished);
+                    checks.push(await transitionCommitted, await transitionFinished);
+                    return {order, checks};
+                })()
+            "#.replace("MODE", &json!(mode).to_string())
+                .replace("PRECOMMIT", if precommit { "true" } else { "false" });
+            let result = page.evaluate(&script).await;
+            let mut expected = vec!["navigate"];
+            if precommit {
+                expected.push("precommit");
+            }
+            expected.push("currententrychange");
+            if mode != "empty" {
+                expected.push("handler");
+            }
+            expected.extend([
+                "committed",
+                if matches!(mode, "reject" | "undefined") {
+                    "error"
+                } else {
+                    "success"
+                },
+                "finished",
+                "transition finished",
+            ]);
+            assert_eq!(
+                result["order"],
+                json!(expected),
+                "{mode}, precommit={precommit}"
+            );
+            assert!(
+                result["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|value| value == true),
+                "{mode}, precommit={precommit}: {result}"
+            );
+            page.assert_history(&["", "#back", "#current"], 1).await;
+            page.assert_commits(&[("#back", "other")]);
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn intercepted_traversal_transitions_settle_when_canceled() {
+    for phase in ["precommit", "handler"] {
+        for action in ["stop", "navigate"] {
+            let mut page = SameDocumentPage::new().await;
+            let script = r#"(async () => {
+  const phase = PHASE;
+  const action = ACTION;
+  history.pushState(null, '', '#back');
+  history.pushState(null, '', '#current');
+  await new Promise(resolve=>setTimeout(resolve,0));
+  const from = navigation.currentEntry;
+  let ready;
+  const started = new Promise(resolve => ready = resolve);
+  let transition, signal, release;
+  const observed = {committed: 'pending', finished: 'pending', transitionCommitted: 'pending', transitionFinished: 'pending'};
+  navigation.addEventListener('navigate', event => {
+    signal = event.signal;
+    const handler = () => {
+      transition = navigation.transition;
+      observed.transitionPresent = transition !== null;
+      observed.from = transition?.from === from;
+      transition?.committed?.then(() => observed.transitionCommitted = 'resolved', reason => observed.transitionCommitted = reason.name);
+      transition?.finished.then(() => observed.transitionFinished = 'resolved', reason => observed.transitionFinished = reason.name);
+      ready();
+      return new Promise(resolve => release = resolve);
+    };
+    event.intercept(phase === 'precommit' ? {precommitHandler: handler} : {handler});
+  }, {once: true});
+  const result = navigation.back();
+  result.committed.then(() => observed.committed = 'resolved', reason => observed.committed = reason.name);
+  result.finished.then(() => observed.finished = 'resolved', reason => observed.finished = reason.name);
+  await started;
+  if (action === 'stop') window.stop();
+  else await navigation.navigate('#nested').finished;
+  await result.finished.catch(() => {});
+  release();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  observed.currentTransition = navigation.transition;
+  observed.hash = location.hash;
+  observed.aborted = signal.aborted;
+  return observed;
+})()
+"#
+                .replace("PHASE", &json!(phase).to_string())
+                .replace("ACTION", &json!(action).to_string());
+            let result = page.evaluate(&script).await;
+            let committed = if phase == "precommit" {
+                "AbortError"
+            } else {
+                "resolved"
+            };
+            let hash = if action == "navigate" {
+                "#nested"
+            } else if phase == "precommit" {
+                "#current"
+            } else {
+                "#back"
+            };
+            assert_eq!(
+                result,
+                json!({
+                    "committed": committed,
+                    "finished": "AbortError",
+                    "transitionCommitted": committed,
+                    "transitionFinished": "AbortError",
+                    "transitionPresent": true,
+                    "from": true,
+                    "currentTransition": null,
+                    "hash": hash,
+                    "aborted": true,
+                }),
+                "phase={phase}, action={action}"
+            );
+            if action == "stop" {
+                page.assert_history(
+                    &["", "#back", "#current"],
+                    if phase == "precommit" { 2 } else { 1 },
+                )
+                .await;
+            } else if phase == "precommit" {
+                page.assert_history(&["", "#back", "#current", "#nested"], 3)
+                    .await;
+            } else {
+                page.assert_history(&["", "#back", "#nested"], 2).await;
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn intercepted_traversal_transitions_reject_before_commit() {
+    for undefined in [false, true] {
+        let mut page = SameDocumentPage::new().await;
+        page.run(
+            "history.pushState(null, '', '#current'); void 0",
+            "#current",
+        )
+        .await;
+        page.ctx.sent.clear();
+        let script = r#"(async () => {
+  const expected = UNDEFINED ? undefined : new Error('precommit failure');
+  const from = navigation.currentEntry;
+  const checks = [];
+  let transition;
+  let handlerRan = false;
+  navigation.addEventListener('navigate', event => {
+    event.signal.addEventListener('abort', () => checks.push(event.signal.reason === expected));
+    event.intercept({
+      precommitHandler() {
+        transition = navigation.transition;
+        return new Promise((_, reject) => setTimeout(() => reject(expected), 0));
+      },
+      handler() { handlerRan = true; }
+    });
+  }, {once: true});
+  const result = navigation.back();
+  const rejectedWithExpected = promise => promise.then(() => false, reason => reason === expected);
+  checks.push(...await Promise.all([result.committed, result.finished].map(rejectedWithExpected)));
+  checks.push(...await Promise.all([transition.committed, transition.finished].map(rejectedWithExpected)));
+  checks.push(!handlerRan, navigation.currentEntry === from, navigation.transition === null);
+  return checks;
+})()
+"#.replace("UNDEFINED", if undefined { "true" } else { "false" });
+        let result = page.evaluate(&script).await;
+        assert_eq!(
+            result,
+            json!([true, true, true, true, true, true, true, true]),
+            "undefined={undefined}"
+        );
+        page.assert_history(&["", "#current"], 1).await;
+        page.assert_commits(&[]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn intercepted_traversal_transitions_preserve_navigation_started_during_completion() {
+    for trigger in ["success", "error", "abort"] {
+        let mut page = SameDocumentPage::new().await;
+        page.run(
+            "history.pushState(null, '', '#back'); history.pushState(null, '', '#current'); void 0",
+            "#current",
+        )
+        .await;
+        page.ctx.sent.clear();
+        let script = r#"(async () => {
+  const trigger = TRIGGER;
+  const error = new Error('expected');
+  const observed = {};
+  let transition, nestedTransition, nested, release;
+  navigation.addEventListener('currententrychange', () => {
+    transition = navigation.transition;
+    transition?.finished.then(() => observed.oldFinished = 'resolved', reason => observed.oldFinished = reason === error ? 'expected' : reason.name);
+  }, {once: true});
+  const startNested = () => {
+    navigation.addEventListener('navigate', e => e.intercept({handler() {
+      nestedTransition = navigation.transition;
+      return new Promise(resolve => release = resolve);
+    }}), {once: true});
+    nested = navigation.navigate('#nested');
+    nested.finished.then(() => observed.nestedFinished = true, reason => observed.nestedError = reason.name);
+  };
+  navigation.addEventListener('navigate', e => {
+    if (trigger === 'abort') e.signal.addEventListener('abort', startNested, {once: true});
+    e.intercept({handler() {
+      if (trigger !== 'success') return Promise.reject(error);
+    }});
+  }, {once: true});
+  if (trigger !== 'abort') navigation.addEventListener(trigger === 'success' ? 'navigatesuccess' : 'navigateerror', startNested, {once: true});
+  const result = navigation.back();
+  await result.finished.catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  observed.preservedNewTransition = navigation.transition === nestedTransition && nestedTransition !== null;
+  observed.distinct = nestedTransition !== transition;
+  observed.newPending = !observed.nestedFinished;
+  release();
+  await nested.finished.catch(() => {});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  observed.cleared = navigation.transition === null;
+  return observed;
+})()
+"#.replace("TRIGGER", &json!(trigger).to_string());
+        let result = page.evaluate(&script).await;
+        assert_eq!(
+            result,
+            json!({
+                "oldFinished": if trigger == "success" { "resolved" } else { "expected" },
+                "preservedNewTransition": true,
+                "distinct": true,
+                "newPending": true,
+                "nestedFinished": true,
+                "cleared": true,
+            }),
+            "trigger={trigger}"
+        );
+        page.assert_history(&["", "#back", "#nested"], 2).await;
+        page.assert_commits(&[("#back", "other"), ("#nested", "other")]);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn same_document_commits_keep_navigation_api_and_browser_history_in_sync() {
     let mut page = SameDocumentPage::new().await;
     page.run("navigation.navigate('#one').finished", "#one")
