@@ -71,6 +71,9 @@ them. The runner waits for load, fonts, two animation frames, and removal of
 `crashtest` with zero subtests. An outstanding wait remains a timeout, and a
 renderer crash is reported even when the browser process stays alive.
 
+The Chrome CDP driver disables popup blocking so WPT cases can open auxiliary
+test windows without user activation, as they do under ChromeDriver.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its
