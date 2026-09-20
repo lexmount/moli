@@ -370,7 +370,8 @@ fn merge_loader_network_policy_headers_uses_header_name_keys_and_request_order()
     request.request_headers = vec![
         ("x-test".to_owned(), "request".to_owned()),
         ("X-New".to_owned(), "new".to_owned()),
-    ];
+    ]
+    .into();
     let merged = policy
         .snapshot()
         .apply_to_request(request)
@@ -378,7 +379,7 @@ fn merge_loader_network_policy_headers_uses_header_name_keys_and_request_order()
         .request_headers;
 
     assert_eq!(
-        merged,
+        merged.to_byte_strings(),
         vec![
             ("Accept".to_owned(), "text/html".to_owned()),
             ("x-test".to_owned(), "request".to_owned()),

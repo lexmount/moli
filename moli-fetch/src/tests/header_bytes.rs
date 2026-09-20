@@ -69,11 +69,18 @@ async fn http_header_bytes_survive_all_transports_and_observation() -> Result<()
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}/bytes", listener.local_addr()?);
     let server = tokio::spawn(serve_responses(listener, vec![response(&headers); 3]));
-    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    let mut config = FetchConfig::default();
+    config.set_default_request_headers(vec![("X-Config".into(), "é中".into())]);
+    let client = FetchClient::new(&config, new_shared_browser_cookie_store());
     for mode in ["buffered", "html", "raw"] {
         let recorder = NetworkObservationRecorder::default();
-        let request = Request::new("GET", &url, None, vec![("X-Bytes".into(), value.clone())])?
-            .with_network_observation_recorder(recorder.clone());
+        let request = Request::new(
+            "GET",
+            &url,
+            None,
+            crate::RequestHeaders::from_bytes(vec![("X-Bytes".into(), bytes.clone())]),
+        )?
+        .with_network_observation_recorder(recorder.clone());
         let (head, body) = fetch_in_mode(&client, request, mode).await?;
         // The HTML stream intentionally decodes the body as text, independently
         // of header ByteStrings. The raw and buffered paths preserve its bytes.
@@ -121,8 +128,34 @@ async fn http_header_bytes_survive_all_transports_and_observation() -> Result<()
     for request in server.await?? {
         assert!(
             request
+                .windows("X-Config: é中\r\n".len())
+                .any(|part| part == "X-Config: é中\r\n".as_bytes())
+        );
+        assert!(
+            request
                 .windows(expected_line.len())
                 .any(|part| part == expected_line)
+        );
+    }
+    assert!(client.shutdown().is_clean());
+    Ok(())
+}
+
+#[tokio::test]
+async fn ordinary_request_header_strings_keep_utf8_encoding() -> Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let url = format!("http://{}/utf8", listener.local_addr()?);
+    let server = tokio::spawn(serve_responses(listener, vec![response(b""); 3]));
+    let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+    for mode in ["buffered", "html", "raw"] {
+        let request = Request::new("GET", &url, None, vec![("X-Utf8".into(), "é中".into())])?;
+        fetch_in_mode(&client, request, mode).await?;
+    }
+    for request in server.await?? {
+        assert!(
+            request
+                .windows("X-Utf8: é中\r\n".len())
+                .any(|part| part == "X-Utf8: é中\r\n".as_bytes())
         );
     }
     assert!(client.shutdown().is_clean());
@@ -139,7 +172,9 @@ async fn http_header_bytes_survive_redirect_handle_reuse() -> Result<()> {
         vec![redirect, response(b"X-Bytes: \xff\r\n")],
     ));
     let client = FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
-    let request = Request::new("GET", &url, None, vec![("X-Bytes".into(), "\u{ff}".into())])?;
+    let mut headers = crate::RequestHeaders::from(vec![("X-Utf8".into(), "é中".into())]);
+    headers.push(("X-Bytes".into(), vec![0xff]));
+    let request = Request::new("GET", &url, None, headers)?;
     let (head, body) = fetch_in_mode(&client, request, "raw").await?;
     assert!(head.redirected);
     assert_eq!(head.final_url.path(), "/final");
@@ -148,6 +183,11 @@ async fn http_header_bytes_survive_redirect_handle_reuse() -> Result<()> {
     let requests = server.await??;
     assert_eq!(requests.len(), 2);
     for request in requests {
+        assert!(
+            request
+                .windows("X-Utf8: é中\r\n".len())
+                .any(|part| part == "X-Utf8: é中\r\n".as_bytes())
+        );
         assert!(
             request
                 .windows(b"X-Bytes: \xff\r\n".len())

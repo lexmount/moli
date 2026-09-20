@@ -23,7 +23,7 @@ pub(super) fn cache_store_and_key_for_request(
         || !config.default_request_headers().is_empty()
         || !subresource_validation_allows_http_cache(request)
         || cookie_header.is_some()
-        || !request_headers_allow_http_cache(&request.request_headers)
+        || !request_headers_allow_http_cache(&request.request_headers.to_byte_strings())
         || !matches!(request_url.scheme(), "http" | "https")
         || !request_url.username().is_empty()
         || request_url.password().is_some()

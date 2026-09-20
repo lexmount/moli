@@ -225,6 +225,18 @@ fn start_devtools_continue_intercepted_request_command(
         &request_id,
     ) {
         let mut pending = pending;
+        // Resolve protocol Unicode strings before mixing them with the saved
+        // Fetch/XHR ByteStrings, including across multiple interception stages.
+        let command_headers = command.headers.clone().map(|headers| {
+            if matches!(
+                pending.resource_type,
+                SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
+            ) {
+                moli_fetch::RequestHeaders::from(headers).to_byte_strings()
+            } else {
+                headers
+            }
+        });
         if pending
             .request_stage_pause_state()
             .is_some_and(|chain| !chain.remaining_sessions.is_empty())
@@ -233,7 +245,7 @@ fn start_devtools_continue_intercepted_request_command(
                 parsed_url,
                 command.method.clone(),
                 command.post_data.clone(),
-                command.headers.clone(),
+                command_headers,
             );
             let Some(event) =
                 super::subresource::next_chained_subresource_request_pause_event(conn, pending)
@@ -257,7 +269,7 @@ fn start_devtools_continue_intercepted_request_command(
         } else {
             chain_body
         };
-        let headers = command.headers.clone().or(chain_headers);
+        let headers = command_headers.or(chain_headers);
         pending.request_stage_chain = None;
         let configured_response_stage = conn
             .target_fetch_subresource_interception_snapshot_for_owner(owner)

@@ -3,7 +3,7 @@ use std::ffi::CString;
 use anyhow::{Context, Result};
 
 // curl::easy::List only accepts UTF-8 strings. Own a libcurl list here so the
-// transport can send ByteString header values without re-encoding them.
+// transport can send already encoded header values without re-encoding them.
 #[derive(Default)]
 pub(crate) struct RequestHeaderList {
     raw: *mut curl_sys::curl_slist,
@@ -14,18 +14,8 @@ pub(crate) struct RequestHeaderList {
 unsafe impl Send for RequestHeaderList {}
 
 impl RequestHeaderList {
-    pub(crate) fn append(&mut self, line: &str) -> Result<()> {
-        let line = if line.is_ascii() {
-            CString::new(line.as_bytes())
-        } else {
-            let bytes = line
-                .chars()
-                .map(|ch| u8::try_from(u32::from(ch)))
-                .collect::<std::result::Result<Vec<_>, _>>()
-                .context("HTTP request header contains a non-byte character")?;
-            CString::new(bytes)
-        }
-        .context("HTTP request header contains NUL")?;
+    pub(crate) fn append(&mut self, line: &[u8]) -> Result<()> {
+        let line = CString::new(line).context("HTTP request header contains NUL")?;
         // SAFETY: self.raw is null or a live list owned by self. libcurl copies
         // the NUL-terminated string; failure leaves the existing list intact.
         let raw = unsafe { curl_sys::curl_slist_append(self.raw, line.as_ptr()) };
@@ -54,11 +44,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejects_non_byte_characters_and_nul() {
+    fn rejects_nul_without_discarding_the_list() {
         let mut headers = RequestHeaderList::default();
-        headers.append("X-Valid: \u{ff}").unwrap();
-        assert!(headers.append("X-Invalid: \u{100}").is_err());
-        assert!(headers.append("X-Invalid: before\0after").is_err());
-        headers.append("X-Valid: after").unwrap();
+        headers.append(b"X-Valid: \xff").unwrap();
+        assert!(headers.append(b"X-Invalid: before\0after").is_err());
+        headers.append(b"X-Valid: after").unwrap();
     }
 }

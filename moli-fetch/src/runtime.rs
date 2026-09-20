@@ -3709,7 +3709,7 @@ fn network_fetch_failure_for_request(
             current_url.clone(),
             request.method.clone(),
             request.body.clone(),
-            request.request_headers.clone(),
+            request.request_headers.to_byte_strings(),
             redirect_chain.to_vec(),
         ),
     )
@@ -3718,7 +3718,7 @@ fn network_fetch_failure_for_request(
 #[cfg(test)]
 fn request_panics_for_testing(request: &Request) -> bool {
     request.request_headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("x-moli-test-panic") && value == "runtime-worker"
+        name.eq_ignore_ascii_case("x-moli-test-panic") && value == b"runtime-worker"
     })
 }
 

@@ -479,20 +479,20 @@ impl PageNetworkPolicySnapshot {
 
 fn merge_page_network_policy_headers(
     context_headers: &[(Box<str>, Box<str>)],
-    request_headers: &[(String, String)],
-) -> Vec<(String, String)> {
-    let mut merged = IndexMap::<String, (String, String)>::new();
+    request_headers: &moli_fetch::RequestHeaders,
+) -> moli_fetch::RequestHeaders {
+    let mut merged = IndexMap::<String, (String, Vec<u8>)>::new();
     for (name, value) in context_headers {
         merged
             .entry(header_name_key(name))
-            .or_insert_with(|| (name.to_string(), value.to_string()));
+            .or_insert_with(|| (name.to_string(), value.as_bytes().to_vec()));
     }
-    for (name, value) in request_headers {
+    for (name, value) in request_headers.iter() {
         let key = header_name_key(name);
         merged.shift_remove(&key);
         merged.insert(key, (name.clone(), value.clone()));
     }
-    merged.into_values().collect()
+    moli_fetch::RequestHeaders::from_bytes(merged.into_values().collect())
 }
 
 fn header_name_key(name: &str) -> String {
@@ -532,7 +532,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            original.request_headers,
+            original.request_headers.to_byte_strings(),
             vec![("x-owner".to_owned(), "first".to_owned())]
         );
     }
@@ -589,7 +589,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            request.request_headers,
+            request.request_headers.to_byte_strings(),
             vec![("x-policy-revision".to_owned(), "one".to_owned())]
         );
         assert!(policy.snapshot().network_offline());
@@ -632,7 +632,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            request.request_headers,
+            request.request_headers.to_byte_strings(),
             vec![("x-policy-revision".to_owned(), "one".to_owned())],
             "request configuration must remain the one captured at registration"
         );

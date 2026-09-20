@@ -160,26 +160,38 @@ pub fn outgoing_request_headers(
     outgoing_request_headers_for_url(config, request, &request.url, cookie_header)
 }
 
+// String views used by observation and cache metadata are isomorphic byte
+// projections. The transport itself keeps the encoded representation below.
 pub(crate) fn outgoing_request_headers_for_url(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
     cookie_header: Option<&str>,
 ) -> Vec<(String, String)> {
-    let mut outgoing = Vec::new();
+    outgoing_request_header_bytes_for_url(config, request, request_url, cookie_header)
+        .to_byte_strings()
+}
+
+fn outgoing_request_header_bytes_for_url(
+    config: &FetchConfig,
+    request: &Request,
+    request_url: &Url,
+    cookie_header: Option<&str>,
+) -> crate::RequestHeaders {
+    let mut outgoing = crate::RequestHeaders::default();
 
     if let Some(cookie_header) = cookie_header {
-        outgoing.push(("Cookie".to_owned(), cookie_header.to_owned()));
+        outgoing.push(("Cookie".to_owned(), cookie_header.as_bytes().to_vec()));
     }
 
     for (name, value) in config.default_request_headers() {
         if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
             continue;
         }
-        outgoing.push((name.clone(), value.clone()));
+        outgoing.push((name.clone(), value.as_bytes().to_vec()));
     }
 
-    for (name, value) in &request.request_headers {
+    for (name, value) in request.request_headers.iter() {
         if cookie_header.is_some() && name.eq_ignore_ascii_case("cookie") {
             continue;
         }
@@ -187,7 +199,7 @@ pub(crate) fn outgoing_request_headers_for_url(
     }
 
     if request.has_browser_identity_override() {
-        append_header_if_missing(
+        append_encoded_header_if_missing(
             &mut outgoing,
             "User-Agent",
             request.browser_identity(config).user_agent().to_owned(),
@@ -199,13 +211,13 @@ pub(crate) fn outgoing_request_headers_for_url(
     append_browser_storage_access_header(&mut outgoing, request, request_url);
 
     if let Some(origin) = request_origin_header_value(request, request_url) {
-        append_header_if_missing(&mut outgoing, "Origin", origin);
+        append_encoded_header_if_missing(&mut outgoing, "Origin", origin);
     }
 
     if !header_present(&outgoing, "referer")
         && let Some(referer) = referrer_header_value_for_request(request, request_url)
     {
-        outgoing.push(("Referer".to_owned(), referer));
+        outgoing.push(("Referer".to_owned(), referer.into_bytes()));
     }
 
     if !header_present(&outgoing, "authorization")
@@ -217,7 +229,7 @@ pub(crate) fn outgoing_request_headers_for_url(
         // 401 retry body while Digest/NTLM/Negotiate stay on the buffered path.
         outgoing.push((
             "Authorization".to_owned(),
-            format!("Basic {}", encode_basic_auth(username, password)),
+            format!("Basic {}", encode_basic_auth(username, password)).into_bytes(),
         ));
     }
 
@@ -231,7 +243,8 @@ pub(crate) fn outgoing_request_headers_for_url(
             format!(
                 "Basic {}",
                 encode_basic_auth(&auth.username, &auth.password)
-            ),
+            )
+            .into_bytes(),
         ));
     }
 
@@ -251,20 +264,34 @@ pub(crate) fn network_request_extra_info_from_headers(
     }
 }
 
-fn header_present(headers: &[(String, String)], name: &str) -> bool {
+fn header_present<V>(headers: &[(String, V)], name: &str) -> bool {
     headers
         .iter()
         .any(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
 }
 
+fn header_utf8_byte_string(value: &str) -> String {
+    crate::headers::decode_http_header_bytes(value.as_bytes()).into_owned()
+}
+
 fn append_header_if_missing(headers: &mut Vec<(String, String)>, name: &str, value: String) {
     if !header_present(headers, name) {
-        headers.push((name.to_owned(), value));
+        headers.push((name.to_owned(), header_utf8_byte_string(&value)));
+    }
+}
+
+fn append_encoded_header_if_missing(
+    headers: &mut crate::RequestHeaders,
+    name: &str,
+    value: String,
+) {
+    if !header_present(headers, name) {
+        headers.push((name.to_owned(), value.into_bytes()));
     }
 }
 
 fn append_browser_navigation_headers(
-    outgoing: &mut Vec<(String, String)>,
+    outgoing: &mut crate::RequestHeaders,
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
@@ -273,12 +300,12 @@ fn append_browser_navigation_headers(
         return;
     }
 
-    append_header_if_missing(
+    append_encoded_header_if_missing(
         outgoing,
         "Accept",
         "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7".to_owned(),
     );
-    append_header_if_missing(
+    append_encoded_header_if_missing(
         outgoing,
         "Accept-Language",
         request
@@ -286,9 +313,9 @@ fn append_browser_navigation_headers(
             .accept_language()
             .to_owned(),
     );
-    append_header_if_missing(outgoing, "Upgrade-Insecure-Requests", "1".to_owned());
-    append_header_if_missing(outgoing, "Sec-Fetch-Mode", "navigate".to_owned());
-    append_header_if_missing(
+    append_encoded_header_if_missing(outgoing, "Upgrade-Insecure-Requests", "1".to_owned());
+    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Mode", "navigate".to_owned());
+    append_encoded_header_if_missing(
         outgoing,
         "Sec-Fetch-Dest",
         if request.is_subframe_navigation_request() {
@@ -298,25 +325,25 @@ fn append_browser_navigation_headers(
         }
         .to_owned(),
     );
-    append_header_if_missing(
+    append_encoded_header_if_missing(
         outgoing,
         "Sec-Fetch-Site",
         request_sec_fetch_site(request, request_url),
     );
 
     if request.is_top_level_navigation_request() && request.cookie_context.initiator_url.is_none() {
-        append_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
+        append_encoded_header_if_missing(outgoing, "Sec-Fetch-User", "?1".to_owned());
     }
 
     if request.browser_navigation_kind() == crate::BrowserNavigationRequestKind::Reload {
-        append_header_if_missing(outgoing, "Cache-Control", "max-age=0".to_owned());
+        append_encoded_header_if_missing(outgoing, "Cache-Control", "max-age=0".to_owned());
     }
 
     append_browser_client_hints(outgoing, request.browser_identity(config));
 }
 
 fn append_browser_subresource_headers(
-    outgoing: &mut Vec<(String, String)>,
+    outgoing: &mut crate::RequestHeaders,
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
@@ -354,8 +381,8 @@ fn append_browser_subresource_headers(
                 BrowserRequestMetadata::TextTrack => "text/vtt,*/*;q=0.1",
                 _ => "*/*",
             };
-            append_header_if_missing(outgoing, "Accept", accept.to_owned());
-            append_header_if_missing(
+            append_encoded_header_if_missing(outgoing, "Accept", accept.to_owned());
+            append_encoded_header_if_missing(
                 outgoing,
                 "Accept-Language",
                 request
@@ -363,12 +390,12 @@ fn append_browser_subresource_headers(
                     .accept_language()
                     .to_owned(),
             );
-            append_header_if_missing(
+            append_encoded_header_if_missing(
                 outgoing,
                 "Sec-Fetch-Site",
                 request_sec_fetch_site(request, request_url),
             );
-            append_header_if_missing(
+            append_encoded_header_if_missing(
                 outgoing,
                 "Sec-Fetch-Mode",
                 request.request_mode.as_ref().to_owned(),
@@ -390,7 +417,7 @@ fn append_browser_subresource_headers(
                 | BrowserRequestMetadata::Ping
                 | BrowserRequestMetadata::Xhr => "empty",
             };
-            append_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
+            append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", destination.to_owned());
             append_browser_client_hints(outgoing, request.browser_identity(config));
         }
     }
@@ -413,19 +440,19 @@ fn request_origin_header_value(request: &Request, request_url: &Url) -> Option<S
 }
 
 fn append_browser_client_hints(
-    outgoing: &mut Vec<(String, String)>,
+    outgoing: &mut crate::RequestHeaders,
     identity: &moli_browser_profile::BrowserIdentityProfile,
 ) {
     let Some(sec_ch_ua) = identity.sec_ch_ua_value() else {
         return;
     };
-    append_header_if_missing(outgoing, "Sec-CH-UA", sec_ch_ua);
-    append_header_if_missing(
+    append_encoded_header_if_missing(outgoing, "Sec-CH-UA", sec_ch_ua);
+    append_encoded_header_if_missing(
         outgoing,
         "Sec-CH-UA-Mobile",
         if identity.mobile() { "?1" } else { "?0" }.to_owned(),
     );
-    append_header_if_missing(
+    append_encoded_header_if_missing(
         outgoing,
         "Sec-CH-UA-Platform",
         format!("\"{}\"", identity.platform()),
@@ -433,7 +460,7 @@ fn append_browser_client_hints(
 }
 
 fn append_browser_storage_access_header(
-    outgoing: &mut Vec<(String, String)>,
+    outgoing: &mut crate::RequestHeaders,
     request: &Request,
     request_url: &Url,
 ) {
@@ -457,7 +484,7 @@ fn append_browser_storage_access_header(
     // Moli does not currently expose a third-party-cookie blocking mode,
     // so its network cookie policy has the same effective state. If such a
     // blocker is added, this value must be derived from that policy instead.
-    append_header_if_missing(outgoing, "Sec-Fetch-Storage-Access", "active".to_owned());
+    append_encoded_header_if_missing(outgoing, "Sec-Fetch-Storage-Access", "active".to_owned());
 }
 
 fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
@@ -653,7 +680,7 @@ pub(crate) fn configure_easy(
 
     let mut headers = RequestHeaderList::default();
     let mut outgoing_headers =
-        outgoing_request_headers_for_url(config, request, request_url, cookie_header);
+        outgoing_request_header_bytes_for_url(config, request, request_url, cookie_header);
     // A 407 can come from a transparent proxy even when no explicit proxy
     // route is configured. In that case the connected endpoint receives the
     // challenge response as a normal request header. Explicit proxies use the
@@ -662,31 +689,37 @@ pub(crate) fn configure_easy(
         && let Some(authorization) = proxy_header_authorization(request)
         && !header_present(&outgoing_headers, "proxy-authorization")
     {
-        outgoing_headers.push(("Proxy-Authorization".to_owned(), authorization));
+        outgoing_headers.push(("Proxy-Authorization".to_owned(), authorization.into_bytes()));
     }
     if let Some(web_bot_auth) = config.web_bot_auth() {
+        let mut signed_headers = outgoing_headers.to_byte_strings();
         web_bot_auth
-            .append_request_headers(&mut outgoing_headers, &request.method, request_url)
+            .append_request_headers(&mut signed_headers, &request.method, request_url)
             .with_context(|| anyhow!("failed to sign web bot auth request for {request_url}"))?;
+        outgoing_headers = crate::RequestHeaders::from_byte_strings(&signed_headers)?;
     }
 
     let mut has_content_type_header = false;
-    for (name, value) in &outgoing_headers {
+    for (name, value) in outgoing_headers.iter() {
         has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-        let header_line = if value.is_empty() {
-            format!("{name}:")
-        } else {
-            format!("{name}: {value}")
-        };
+        let mut header_line = format!("{name}:").into_bytes();
+        if !value.is_empty() {
+            header_line.push(b' ');
+            header_line.extend_from_slice(value);
+        }
         headers
             .append(&header_line)
             .context("failed to build request header")?;
     }
     if let Some(validation_headers) = validation_headers {
-        for (name, value) in validation_headers {
+        // Validators were read from response headers and are ByteStrings.
+        let validation_headers = crate::RequestHeaders::from_byte_strings(&validation_headers)?;
+        for (name, value) in validation_headers.iter() {
             has_content_type_header |= name.eq_ignore_ascii_case("content-type");
+            let mut line = format!("{name}: ").into_bytes();
+            line.extend_from_slice(value);
             headers
-                .append(&format!("{name}: {value}"))
+                .append(&line)
                 .context("failed to build cache validation request header")?;
         }
     }
@@ -698,7 +731,7 @@ pub(crate) fn configure_easy(
         // for POST bodies and bodyless PUT requests. Browser requests only send Content-Type when
         // BodyInit or caller headers produce one, so suppress curl's transport default.
         headers
-            .append("Content-Type:")
+            .append(b"Content-Type:")
             .context("failed to suppress curl default content-type")?;
     }
 
@@ -742,7 +775,7 @@ pub(crate) fn configure_easy(
     }
 
     crate::runtime::FetchTransferHandler::set_request_headers(easy, headers)?;
-    Ok(outgoing_headers)
+    Ok(outgoing_headers.to_byte_strings())
 }
 
 fn configure_proxy_headers<H: Handler>(

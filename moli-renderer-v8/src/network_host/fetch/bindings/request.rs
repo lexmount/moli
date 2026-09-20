@@ -76,7 +76,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         request_headers.push(("Content-Type".to_owned(), String::new()));
     }
     let request_headers =
-        merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
+        merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
     let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
 
     Ok(PreparedWindowFetchRequest {

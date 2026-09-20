@@ -184,7 +184,8 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 &method,
                 resolved_url.as_str(),
                 body,
-                headers,
+                moli_fetch::RequestHeaders::from_byte_strings(&headers)
+                    .expect("prepared worker Fetch headers are ByteStrings"),
                 moli_url::WebOrigin::from_url(&document_url),
             ) {
                 Ok(request) => {
@@ -519,7 +520,8 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
             &method,
             resolved_url.as_str(),
             body,
-            headers,
+            moli_fetch::RequestHeaders::from_byte_strings(&headers)
+                .expect("prepared worker XHR headers are ByteStrings"),
             moli_url::WebOrigin::from_url(&document_url),
         )
         .map(|request| {

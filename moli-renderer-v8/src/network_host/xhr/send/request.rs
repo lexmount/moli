@@ -208,7 +208,7 @@ fn xhr_request_headers(
         default_content_type,
         suppress_default_content_type,
     );
-    let merged = merge_subresource_request_headers(host.extra_http_headers(), &author_headers);
+    let merged = merge_byte_string_request_headers(host.extra_http_headers(), &author_headers);
     (merged, author_headers)
 }
 

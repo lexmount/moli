@@ -1873,6 +1873,40 @@ fn cli_fetch_repeats_custom_request_headers() -> Result<()> {
 }
 
 #[test]
+fn cli_fetch_keeps_unicode_header_values_as_utf8_bytes() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;
+    let url = format!("http://{}/", listener.local_addr()?);
+    let server = runtime.spawn(async move {
+        let (mut stream, _) = listener.accept().await?;
+        let mut request = Vec::new();
+        while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+            let mut chunk = [0; 1024];
+            let count = stream.read(&mut chunk).await?;
+            anyhow::ensure!(count != 0 && request.len() < 64 * 1024, "incomplete request");
+            request.extend_from_slice(&chunk[..count]);
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok").await?;
+        Ok::<_, anyhow::Error>(request)
+    });
+    let output = run_fetch_cli_with_args(&url, &["-H", "X-Utf8: é中"])?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = runtime.block_on(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), server).await
+    })???;
+    assert!(
+        request
+            .windows("X-Utf8: é中\r\n".len())
+            .any(|part| part == "X-Utf8: é中\r\n".as_bytes())
+    );
+    Ok(())
+}
+
+#[test]
 fn cli_fetch_preserves_header_values_with_embedded_colons_and_empty_values() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;

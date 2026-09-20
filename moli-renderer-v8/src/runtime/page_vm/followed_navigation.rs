@@ -1361,7 +1361,7 @@ mod tests {
         assert_eq!(request.method, "POST");
         assert_eq!(request.body, Some(body));
         assert_eq!(
-            request.request_headers,
+            request.request_headers.to_byte_strings(),
             vec![(
                 "Content-Type".to_owned(),
                 "application/x-www-form-urlencoded".to_owned(),

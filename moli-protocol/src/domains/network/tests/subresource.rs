@@ -3597,3 +3597,164 @@ xhr.send();
 
     server.abort();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_utf8_headers_coexist_with_fetch_and_xhr_byte_strings() {
+    const PROBE: &str = r#"
+        const headers = { 'x-web': '\u00e9\u00ff', 'x-override': '\u00e9' };
+        function xhrProbe(async) {
+            return new Promise((resolve, reject) => {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', '/echo', async);
+                for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+                xhr.onload = () => resolve(JSON.parse(xhr.responseText));
+                xhr.onerror = () => reject(new Error('XHR failed'));
+                xhr.send();
+            });
+        }
+        const results = await Promise.all([
+            fetch('/redirect', { headers }).then(response => response.json()),
+            xhrProbe(true),
+            xhrProbe(false)
+        ]);
+    "#;
+    async fn echo(headers: axum::http::HeaderMap) -> impl IntoResponse {
+        axum::Json(json!({
+            "cdp": headers.get("x-cdp").map(|value| value.as_bytes()),
+            "web": headers.get("x-web").map(|value| value.as_bytes()),
+            "override": headers.get("x-override").map(|value| value.as_bytes()),
+        }))
+    }
+    let worker_script = format!("(async () => {{ {PROBE} postMessage(results); }})()");
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(plain_page))
+                .route("/echo", get(echo))
+                .route(
+                    "/redirect",
+                    get(|| async { axum::response::Redirect::temporary("/echo") }),
+                )
+                .route(
+                    "/worker.js",
+                    get(move || async move {
+                        ([(CONTENT_TYPE.as_str(), "text/javascript")], worker_script)
+                    }),
+                ),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.process_async(json!({
+        "id": 0, "method": "Network.enable", "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(0, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 1, "method": "Network.setExtraHTTPHeaders", "sessionId": "SID-1",
+        "params": { "headers": { "x-cdp": "é中", "X-Override": "中" } }
+    }))
+    .await;
+    ctx.expect_result(1, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 2, "method": "Page.navigate", "sessionId": "SID-1",
+        "params": { "url": format!("http://{addr}/page") }
+    }))
+    .await;
+    ctx.process_async(json!({
+        "id": 3, "method": "Runtime.evaluate", "sessionId": "SID-1",
+        "params": {
+            "expression": format!(r#"(async () => {{
+                {PROBE}
+                const workerResults = await new Promise((resolve, reject) => {{
+                    const worker = new Worker('/worker.js');
+                    worker.onmessage = event => {{ worker.terminate(); resolve(event.data); }};
+                    worker.onerror = () => reject(new Error('Worker failed'));
+                }});
+                return JSON.stringify(results.concat(workerResults));
+            }})()"#),
+            "awaitPromise": true, "returnByValue": true
+        }
+    }))
+    .await;
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "mixed header encoding probe",
+        |messages| messages.iter().any(|message| message["id"] == json!(3)),
+    )
+    .await;
+    let expected =
+        json!({ "cdp": [0xc3, 0xa9, 0xe4, 0xb8, 0xad], "web": [0xe9, 0xff], "override": [0xe9] });
+    ctx.expect_result(3, json!({ "result": { "type": "string", "value": serde_json::to_string(&vec![expected; 6]).unwrap() } }), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 4, "method": "Fetch.enable", "sessionId": "SID-1",
+        "params": { "patterns": [{ "urlPattern": "*/echo", "requestStage": "Request" }] }
+    }))
+    .await;
+    ctx.expect_result(4, json!({}), Some("SID-1"));
+    for replace_headers in [false, true] {
+        ctx.sent.clear();
+        ctx.process_async(json!({
+            "id": 5, "method": "Runtime.evaluate", "sessionId": "SID-1",
+            "params": {
+                "expression": r#"fetch('/echo', {headers: {'x-web': '\u00e9\u00ff', 'x-override': '\u00e9'}}).then(response => response.text())"#,
+                "awaitPromise": true, "returnByValue": true
+            }
+        })).await;
+        wait_until_messages(
+            &mut ctx,
+            Some("SID-1"),
+            "byte header request pause",
+            |messages| {
+                messages
+                    .iter()
+                    .any(|message| message["method"] == "Fetch.requestPaused")
+            },
+        )
+        .await;
+        let messages = ctx.take_all();
+        let paused = messages
+            .iter()
+            .find(|message| message["method"] == "Fetch.requestPaused")
+            .unwrap();
+        let mut params = json!({"requestId": paused["params"]["requestId"]});
+        if replace_headers {
+            params["headers"] = json!([
+                {"name": "x-cdp", "value": "é中"},
+                {"name": "x-web", "value": "é中"},
+                {"name": "x-override", "value": "é"}
+            ]);
+        }
+        ctx.process_async(json!({
+            "id": 6, "method": "Fetch.continueRequest", "sessionId": "SID-1", "params": params
+        }))
+        .await;
+        wait_until_messages(
+            &mut ctx,
+            Some("SID-1"),
+            "continued byte header request",
+            |messages| messages.iter().any(|message| message["id"] == json!(5)),
+        )
+        .await;
+        let expected = if replace_headers {
+            json!({"cdp": [0xc3, 0xa9, 0xe4, 0xb8, 0xad], "web": [0xc3, 0xa9, 0xe4, 0xb8, 0xad], "override": [0xc3, 0xa9]})
+        } else {
+            json!({"cdp": [0xc3, 0xa9, 0xe4, 0xb8, 0xad], "web": [0xe9, 0xff], "override": [0xe9]})
+        };
+        ctx.expect_result(
+            5,
+            json!({"result": {"type": "string", "value": expected.to_string()}}),
+            Some("SID-1"),
+        );
+    }
+    server.abort();
+}

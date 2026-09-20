@@ -167,6 +167,7 @@ pub(crate) use self::stylesheet_subresource::{
 pub(crate) use self::text_track::{
     TextTrackResourceFetchStart, start_text_track_resource_fetch, text_track_response_result,
 };
+pub(crate) use self::url_helpers::merge_byte_string_request_headers;
 pub(in crate::network_host) use self::url_helpers::merge_subresource_request_headers;
 pub(crate) use self::url_helpers::resolve_context_url;
 #[cfg(test)]
