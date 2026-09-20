@@ -140,7 +140,7 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
         crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
             traversal.results.as_slice()
         }
-        crate::native_bridge::PendingHistoryTraversalAction::ChildCrossDocument(traversal) => {
+        crate::native_bridge::PendingHistoryTraversalAction::CrossDocument(traversal) => {
             traversal.results.as_slice()
         }
     };
@@ -292,7 +292,7 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
     }
 }
 
-fn history_traversal_target_window<'s>(
+pub(in crate::context_bootstrap) fn history_traversal_target_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &mut JsContextHost,
     target: crate::native_bridge::WindowTaskTarget,

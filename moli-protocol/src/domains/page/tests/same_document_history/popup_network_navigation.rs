@@ -5,6 +5,8 @@ use std::sync::{
 };
 use std::time::Duration;
 
+mod history_traversal;
+
 struct ResponseGate {
     requests: AtomicUsize,
     responses: AtomicUsize,
