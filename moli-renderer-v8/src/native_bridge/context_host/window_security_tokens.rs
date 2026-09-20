@@ -9,6 +9,49 @@ use std::{cell::RefCell, rc::Rc};
 const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
+pub(crate) fn window_contexts_allow_access(
+    accessing_context: v8::Local<'_, v8::Context>,
+    accessed_context: v8::Local<'_, v8::Context>,
+) -> bool {
+    if accessing_context == accessed_context {
+        return true;
+    }
+    let Some(accessing_host_ptr) =
+        crate::util::context_host_ptr_from_context_slot(accessing_context)
+    else {
+        return false;
+    };
+    let Some(accessed_host_ptr) =
+        crate::util::context_host_ptr_from_context_slot(accessed_context)
+    else {
+        return false;
+    };
+    let host = unsafe { &*accessing_host_ptr };
+    let accessed_host = unsafe { &*accessed_host_ptr };
+    let accessing_identity = host
+        .window_execution_context_identity_for_access_check(accessing_context)
+        .filter(|identity| host.window_execution_context_identity_is_current(*identity));
+    let accessed_identity = accessed_host
+        .window_execution_context_identity_for_access_check(accessed_context)
+        .filter(|identity| accessed_host.window_execution_context_identity_is_current(*identity));
+    if let (Some(accessing), Some(accessed)) = (accessing_identity, accessed_identity) {
+        return accessing_host_ptr == accessed_host_ptr
+            && host.window_execution_context_can_access(accessing, accessed);
+    }
+    if accessing_host_ptr == accessed_host_ptr {
+        // Domain state survives execution retirement, without granting a task route.
+        return host.window_context_origins_allow_access(accessing_context, accessed_context);
+    }
+    accessing_identity.is_none()
+        && accessed_identity.is_some_and(|accessed| {
+            accessing_context
+                .get_slot::<super::WindowEnvironmentSettings>()
+                .is_some_and(|settings| {
+                    settings.can_access_current_window(host, accessed_host, accessed)
+                })
+        })
+}
+
 #[derive(Clone, Default)]
 pub(in crate::native_bridge::context_host) struct DocumentDomainState(Rc<DocumentDomainStateData>);
 
