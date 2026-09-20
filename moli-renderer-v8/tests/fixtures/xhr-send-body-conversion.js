@@ -73,6 +73,49 @@ function xhrSendBodyConversionProbe() {
       ['unsent', 'pending', 'done'].includes(phase) ? 'InvalidStateError' : null);
     xhr.abort();
   }
+  // Document is a separate union member and is only exposed in Window.
+  if (typeof document !== 'undefined') {
+    const documents = [
+      ['html-document', () => document.implementation.createHTMLDocument(), true],
+      ['xml-document', () => document.implementation.createDocument('urn:xhr-body', 'root'), true],
+      ['document-without-prototype', () => Object.setPrototypeOf(
+        document.implementation.createHTMLDocument(), null), true],
+      ['document-prototype', () => Object.create(Document.prototype), false],
+      ['inherited-document', () => Object.create(document), false],
+      ['proxy-document', () => new Proxy(document.implementation.createHTMLDocument(), {}), false],
+    ];
+    for (const phase of ['unsent', 'GET', 'HEAD', 'pending', 'done']) {
+      for (const [kind, create, isDocument] of documents) {
+        for (const hook of ['method', 'getter']) {
+          const label = phase + '/' + kind + '/' + hook;
+          const xhr = new XMLHttpRequest();
+          if (phase === 'pending') { xhr.open('POST', nextDataUrl()); xhr.send(); }
+          else if (phase === 'done') { xhr.open('GET', nextDataUrl(), false); xhr.send(); }
+          else if (phase !== 'unsent') xhr.open(phase, nextDataUrl());
+          const before = [xhr.readyState, xhr.status, xhr.responseText];
+          let events = 0, coerced = 0;
+          for (const type of ['readystatechange', 'loadstart', 'progress', 'load', 'error', 'loadend'])
+            xhr.addEventListener(type, () => events++);
+          const marker = new RangeError('Document coercion');
+          const body = create();
+          const coerce = () => { coerced++; throw marker; };
+          Object.defineProperty(body, Symbol.toPrimitive,
+            hook === 'getter' ? {get: coerce} : {value: coerce});
+          let caught;
+          try { xhr.send(body); } catch (error) { caught = error; }
+          const allowed = isDocument && ['GET', 'HEAD'].includes(phase);
+          check(label + '/error', caught && caught.name || null,
+            isDocument ? (allowed ? null : 'InvalidStateError') : 'RangeError');
+          check(label + '/identity', isDocument ?
+            (allowed ? caught === undefined : caught instanceof DOMException) : caught === marker, true);
+          check(label + '/coercion', coerced, isDocument ? 0 : 1);
+          check(label + '/state', [xhr.readyState, xhr.status, xhr.responseText], before);
+          check(label + '/events', events, allowed ? 1 : 0);
+          xhr.abort();
+        }
+      }
+    }
+  }
   const revoked = Proxy.revocable(new XMLHttpRequest(), {}); revoked.revoke();
   for (const [index, receiver] of [null, {}, XMLHttpRequest.prototype,
     Object.create(XMLHttpRequest.prototype), Object.create(new XMLHttpRequest()),

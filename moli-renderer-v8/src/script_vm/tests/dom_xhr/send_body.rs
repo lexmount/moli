@@ -3,7 +3,7 @@ use super::*;
 const BODY_CONVERSION_PROBE: &str =
     include_str!("../../../../tests/fixtures/xhr-send-body-conversion.js");
 
-fn assert_body_conversion_result(observed: &str) {
+fn assert_body_conversion_result(observed: &str, expected_checks: usize) {
     let result: serde_json::Value = serde_json::from_str(observed).expect("body conversion result");
     let checks = result["checks"].as_array().expect("body conversion checks");
     let failures: Vec<_> = checks
@@ -14,23 +14,23 @@ fn assert_body_conversion_result(observed: &str) {
         failures.is_empty(),
         "body conversion failures: {failures:#?}"
     );
-    assert_eq!(checks.len(), 1451);
+    assert_eq!(checks.len(), expected_checks);
     assert_eq!(result["state"], "pass");
 }
 
 #[test]
-fn window_xhr_send_body_validates_buffers_before_state_and_method() {
+fn window_xhr_send_body_converts_union_before_state_and_method() {
     let mut vm = new_storage_test_vm("https://xhr-body-conversion.test/");
     let observed = vm
         .eval(&format!(
             "{BODY_CONVERSION_PROBE}\nJSON.stringify(xhrSendBodyConversionProbe())"
         ))
         .expect("Window body conversion probe");
-    assert_body_conversion_result(&observed);
+    assert_body_conversion_result(&observed, 1751);
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn worker_xhr_send_body_validates_buffers_before_state_and_method() {
+async fn worker_xhr_send_body_converts_union_before_state_and_method() {
     let loader = static_http_loader(std::iter::empty::<String>());
     let mut vm =
         new_page_task_executor_test_vm_with_loader("https://xhr-body-conversion.test/", &loader);
@@ -58,7 +58,7 @@ async fn worker_xhr_send_body_validates_buffers_before_state_and_method() {
     let observed = vm
         .eval("bodyConversionResult")
         .expect("Worker conversion result");
-    assert_body_conversion_result(&observed);
+    assert_body_conversion_result(&observed, 1451);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

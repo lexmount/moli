@@ -209,7 +209,8 @@ pub(crate) fn convert_xhr_send_body_from_args<'s>(
         return Ok(ConvertedXhrSendBody::Native(body));
     }
     if let Ok(object) = v8::Local::<v8::Object>::try_from(body)
-        && (web_api_interfaces::Blob::is_instance(scope, object)
+        && (web_api_interfaces::Document::is_instance(scope, object)
+            || web_api_interfaces::Blob::is_instance(scope, object)
             || web_api_interfaces::FormData::is_instance(scope, object)
             || web_api_interfaces::URLSearchParams::is_instance(scope, object))
     {
