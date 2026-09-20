@@ -472,7 +472,10 @@ fn effective_history_mutation_kind<'s>(
     }
 }
 
-fn document_can_have_url_rewritten(document_url: &url::Url, target_url: &url::Url) -> bool {
+pub(super) fn document_can_have_url_rewritten(
+    document_url: &url::Url,
+    target_url: &url::Url,
+) -> bool {
     if document_url.scheme() != target_url.scheme()
         || document_url.username() != target_url.username()
         || document_url.password() != target_url.password()

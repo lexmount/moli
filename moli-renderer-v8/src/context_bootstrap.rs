@@ -61,6 +61,7 @@ mod navigation_bootstrap;
 mod navigation_callbacks;
 mod navigation_cancellation;
 mod navigation_cross_document;
+mod navigation_download;
 mod navigation_entry;
 mod navigation_entry_state;
 mod navigation_event_worlds;
