@@ -1,6 +1,10 @@
 use super::*;
 
+mod child_history_traversal;
 mod popup_network_navigation;
+mod response_gate;
+
+use response_gate::ResponseGate;
 
 const SESSION: &str = "SID-COMMIT-HISTORY";
 const FRAME: &str = "TID-COMMIT-HISTORY";

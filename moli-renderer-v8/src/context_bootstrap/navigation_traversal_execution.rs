@@ -270,7 +270,11 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
             && window_task_target_for_runtime_owner(scope, host, owner) == Some(traversal.target)
             && navigation_document_is_active(scope, owner)
     };
-    dispatch_beforeunload_for_runtime_owner(scope, owner);
+    if let crate::native_bridge::OwnerDispatchScope::Child(child_handle) = dispatch_scope {
+        host.dispatch_child_document_tree_beforeunload_for_traversal(scope, child_handle);
+    } else {
+        dispatch_beforeunload_for_runtime_owner(scope, owner);
+    }
     if !is_current(scope, host) {
         reject_cross_document_traversal(scope, &traversal);
         return;
