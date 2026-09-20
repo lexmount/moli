@@ -6,6 +6,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
     owner: v8::Local<'s, v8::Object>,
     href: &str,
     kind: LocationNavigationKind,
+    protocol_navigation_type: &str,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -70,6 +71,13 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
         }
         LocationNavigationKind::Reload => return,
     }
+    sync_same_document_navigation_commit(
+        scope,
+        owner,
+        href,
+        protocol_navigation_type,
+        true,
+    );
     let navigation_type = match kind {
         LocationNavigationKind::Assign => Some("push"),
         LocationNavigationKind::Replace => Some("replace"),
@@ -93,6 +101,7 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
     href: &str,
     kind: LocationNavigationKind,
     navigation_state: Option<v8::Local<'s, v8::Value>>,
+    protocol_navigation_type: &str,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -136,6 +145,13 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
                 sync_location_object(scope, location, href);
             }
             let joint_pruned = super::super::session_history::prune_views(scope, owner);
+            sync_same_document_navigation_commit(
+                scope,
+                owner,
+                href,
+                protocol_navigation_type,
+                true,
+            );
             dispatch_navigation_currententrychange(scope, navigation, previous_entry, Some("push"));
             dispatch_pruned_history_entry_disposes(scope, joint_pruned);
             dispatch_pruned_history_entry_disposes(scope, pruned_entries);
@@ -172,6 +188,13 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
             if let Some(location) = window_location_for_holder(scope, owner) {
                 sync_location_object(scope, location, href);
             }
+            sync_same_document_navigation_commit(
+                scope,
+                owner,
+                href,
+                protocol_navigation_type,
+                true,
+            );
             dispatch_navigation_currententrychange(
                 scope,
                 navigation,

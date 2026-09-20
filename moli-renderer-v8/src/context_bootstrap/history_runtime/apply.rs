@@ -10,7 +10,7 @@ use super::super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_popstate_event,
     queue_hash_change_for_runtime_owner,
 };
-use super::super::navigation_mutation::sync_local_document_front_from_window;
+use super::super::navigation_mutation::sync_same_document_navigation_commit;
 use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
@@ -88,6 +88,7 @@ pub(in crate::context_bootstrap) fn prepare_local_history_entry_commit<'s>(
 pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     prepared: PreparedHistoryEntry<'s>,
+    protocol_navigation_type: Option<&str>,
 ) -> AppliedHistoryEntry<'s> {
     let PreparedHistoryEntry {
         history,
@@ -102,6 +103,13 @@ pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
         .map(Into::into)
         .unwrap_or_else(|| v8::undefined(scope).into());
     sync_child_navigation_entry_seed_from_owner(scope, applied.owner);
+    sync_same_document_navigation_commit(
+        scope,
+        applied.owner,
+        &applied.url,
+        protocol_navigation_type.unwrap_or("fragment"),
+        protocol_navigation_type.is_some() && applied.previous_history_index != applied.history_index,
+    );
     applied
 }
 
@@ -130,11 +138,6 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return;
         };
-        let host = unsafe { &mut *host_ptr };
-        host.set_document_url(applied.parsed_url.clone());
-        if dispatch_popstate && applied.previous_history_index != applied.history_index {
-            host.record_same_document_navigation(&applied.parsed_url, "fragment");
-        }
         if dispatch_popstate {
             dispatch_popstate_event(scope, host_ptr, applied.owner, applied.state);
             perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
@@ -146,7 +149,6 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             );
         }
     } else if dispatch_popstate && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        sync_local_document_front_from_window(scope, applied.owner);
         dispatch_popstate_event(scope, host_ptr, applied.owner, applied.state);
         perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         queue_hash_change_for_runtime_owner(
@@ -179,7 +181,5 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
                 None,
             );
         }
-    } else {
-        sync_local_document_front_from_window(scope, applied.owner);
     }
 }

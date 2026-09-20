@@ -416,9 +416,6 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             rv.set(pending.object.into());
             return;
         }
-        let intercepted = navigate_outcome
-            .as_ref()
-            .is_some_and(|outcome| outcome.intercepted);
         let transition_from = navigate_outcome
             .as_ref()
             .is_some_and(|outcome| outcome.intercepted)
@@ -445,6 +442,9 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             } else {
                 None
             };
+        let intercepted = navigate_outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.intercepted);
         let resolved_value = commit_navigation_navigate_same_document(
             scope,
             owner,
@@ -452,6 +452,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             &effective_href,
             effective_kind,
             effective_state,
+            intercepted,
         );
         let result = if intercepted {
             let Some(pending) = navigation_current_entry_result_with_pending_finished(scope, owner)
@@ -633,6 +634,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                 &effective_href,
                 effective_kind,
                 effective_state,
+                true,
             );
             let Some(pending) = navigation_current_entry_result_with_pending_finished(scope, owner)
             else {
@@ -703,6 +705,7 @@ fn commit_navigation_navigate_same_document<'s>(
     effective_href: &str,
     effective_kind: LocationNavigationKind,
     effective_state: Option<v8::Local<'s, v8::Value>>,
+    intercepted: bool,
 ) -> v8::Local<'s, v8::Value> {
     if matches!(effective_kind, LocationNavigationKind::Reload) {
         if let Some(state) = effective_state {
@@ -718,6 +721,7 @@ fn commit_navigation_navigate_same_document<'s>(
         effective_href,
         effective_kind,
         effective_state,
+        if intercepted { "other" } else { "fragment" },
     );
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let popstate_state = navigation_current_entry(scope, owner)
@@ -725,15 +729,6 @@ fn commit_navigation_navigate_same_document<'s>(
             .unwrap_or_else(|| v8::null(scope).into());
         dispatch_popstate_event(scope, host_ptr, owner, popstate_state);
         queue_hash_change_for_runtime_owner(scope, owner, Some(current_href), effective_href);
-        if runtime_window_is_global(scope, owner) {
-            if let Ok(effective_url) = url::Url::parse(effective_href) {
-                unsafe { &mut *host_ptr }.set_document_url(effective_url);
-            }
-        } else {
-            sync_local_document_front_from_window(scope, owner);
-        }
-    } else if !runtime_window_is_global(scope, owner) {
-        sync_local_document_front_from_window(scope, owner);
     }
     navigation_current_entry(scope, owner)
         .map(v8::Local::<v8::Value>::from)
@@ -1204,6 +1199,7 @@ fn precommit_commit_fulfilled_callback<'s>(
         &data.effective_href,
         data.effective_kind,
         data.effective_state,
+        true,
     );
     if matches!(data.effective_kind, LocationNavigationKind::Reload) {
         let current_entry = navigation_current_entry(scope, data.owner);
