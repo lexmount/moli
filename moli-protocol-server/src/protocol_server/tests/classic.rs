@@ -11623,7 +11623,6 @@ async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offse
 }
 
 #[tokio::test]
-#[ignore = "Pending iframe overlay click fix; expectations verified against Chromium"]
 async fn webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_wrapping() {
     for depth in 0..=2 {
         for selector in ["#target", "#container"] {
@@ -11710,7 +11709,6 @@ async fn webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_w
 }
 
 #[tokio::test]
-#[ignore = "Pending ancestor overlay click fix; expectations verified against Chromium"]
 async fn webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatch() {
     for (depth, blocked_level) in [(1, 0), (2, 0), (2, 1)] {
         let app = build_router(test_state());

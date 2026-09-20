@@ -154,3 +154,37 @@ fn remove_and_clear_return_all_byte_charges() {
     assert!(buffer.is_empty());
     assert_eq!(buffer.used_bytes(), 0);
 }
+
+#[test]
+fn retain_visits_once_preserves_fifo_and_releases_only_removed_charges() {
+    let mut buffer = BoundedByteBuffer::new(ByteLimits::new(10, 10));
+    for key in 0..4 {
+        let _ = buffer.insert(key, key * 10, 2);
+    }
+    let mut visited = Vec::new();
+    let removed = buffer.retain(|key, value| {
+        visited.push(*key);
+        *value += 1;
+        key % 2 == 0
+    });
+    assert_eq!(visited, vec![0, 1, 2, 3]);
+    assert_eq!(removed, vec![(1, 11), (3, 31)]);
+    assert_eq!(buffer.used_bytes(), 4);
+    assert_eq!(buffer.get(&2), Some(&21));
+    assert_eq!(
+        buffer.insert(4, 40, 8),
+        InsertOutcome::Stored {
+            evicted: vec![(0, 1)]
+        }
+    );
+    assert!(buffer.retain(|_, _| true).is_empty());
+    assert_eq!(buffer.used_bytes(), 10);
+    assert_eq!(buffer.retain(|_, _| false), vec![(2, 21), (4, 40)]);
+    assert_eq!(buffer.used_bytes(), 0);
+    assert!(buffer.is_empty());
+    assert!(
+        buffer
+            .retain(|_, _| panic!("empty buffer must not visit"))
+            .is_empty()
+    );
+}
