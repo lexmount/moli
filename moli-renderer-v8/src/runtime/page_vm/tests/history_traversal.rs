@@ -320,6 +320,108 @@ history.back();
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn history_traversal_rejects_removed_child_results_at_selected_completion() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/history-removed-results").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r##"
+const frame = document.createElement("iframe");
+frame.id = "history-removed-results";
+frame.srcdoc = "<!doctype html><body>child</body>";
+document.body.appendChild(frame);
+"created"
+"##,
+        )?;
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            &mut page_vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "removed results srcdoc commit",
+        )
+        .await;
+        materialize_child_realm_through_page_turn_for_test(&mut page_vm, "history-removed-results")?;
+        page_vm.vm_mut().eval(
+            r##"
+globalThis.__removedTraversalLog = [];
+globalThis.__removedTraversalReasons = [];
+const child = frame.contentWindow;
+const ChildDOMException = child.DOMException;
+const key = child.navigation.currentEntry.key;
+child.history.pushState(null, "", "about:srcdoc#queued");
+"prepared"
+"##,
+        )?;
+        // Finish the setup navigation before observing the queued traversal.
+        // Removing the frame in the same script as pushState would also cancel
+        // that earlier navigation's pending success microtask.
+        page_vm.vm_mut().eval(
+            r##"
+for (const type of ["navigate", "navigateerror", "popstate", "hashchange"]) {
+  const target = type.startsWith("navigate") ? child.navigation : child;
+  target.addEventListener(type, () => __removedTraversalLog.push(type));
+}
+const result = child.navigation.traverseTo(key);
+for (const name of ["committed", "finished"]) {
+  result[name].then(
+    () => __removedTraversalLog.push(name + ":fulfilled"),
+    error => {
+      __removedTraversalReasons.push(error);
+      __removedTraversalLog.push([
+        name, error.name, error instanceof ChildDOMException,
+        error instanceof DOMException
+      ].join(":"));
+      const script = document.createElement("script");
+      script.textContent = "__removedTraversalLog.push('reaction-script')";
+      document.body.appendChild(script);
+    }
+  );
+}
+child.DOMException = () => { throw new Error("author constructor must not run"); };
+frame.remove();
+"retired"
+"##,
+        )?;
+        let task = page_vm
+            .take_history_traversal_body_task_for_test()
+            .expect("the removed child retains its queued traversal results");
+        let outcome = page_vm.apply_selected_page_history_traversal_turn(task)?;
+        assert_eq!(
+            outcome.action.target_effect,
+            PageHistoryTraversalTargetEffect::RejectedStaleResults
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
+                "__removedTraversalLog.join('|')",
+            )?,
+            "",
+            "the rejection body must leave Promise reactions to selected-task completion"
+        );
+        let completion = outcome.action.into_page_task_completion();
+        assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
+        page_vm
+            .finish_selected_page_task_completion(completion, &loader)
+            .await?;
+        assert_eq!(
+            page_vm.vm_mut().eval("__removedTraversalLog.join('|')")?,
+            "committed:AbortError:true:false|reaction-script|finished:AbortError:true:false|reaction-script"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "String(__removedTraversalReasons.length === 2 && __removedTraversalReasons[0] === __removedTraversalReasons[1])",
+            )?,
+            "true"
+        );
+        assert!(page_vm.take_history_traversal_body_task_for_test().is_none());
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("removed traversal results should settle at the selected task boundary");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn history_traversal_discards_a_retired_child_local_window() {
     run_page_vm_async_test(async move {
         let loader =
@@ -431,7 +533,7 @@ fn history_traversal_rejects_a_real_page_vm_replacement_id_collision() {
                         .vm_mut()
                         .advance_timers_until_deadline_for_test(&loader)
                         .await?;
-                    page_vm.vm_mut().eval("history.back(); 'queued'")?;
+                    page_vm.vm_mut().eval("navigation.back(); 'queued'")?;
                     let retired_root = page_vm.document_lifecycle.identity().document;
 
                     let replacement_url = format!("{base_url}/replacement.html");
@@ -463,7 +565,19 @@ fn history_traversal_rejects_a_real_page_vm_replacement_id_collision() {
                         .vm_mut()
                         .advance_timers_until_deadline_for_test(&loader)
                         .await?;
-                    page_vm.vm_mut().eval("history.back(); 'queued'")?;
+                    page_vm.vm_mut().eval(
+                        r#"
+globalThis.__replacementTraversalResults = [];
+const result = navigation.back();
+for (const key of ["committed", "finished"]) {
+  result[key].then(
+    () => __replacementTraversalResults.push(key),
+    error => __replacementTraversalResults.push(error.name)
+  );
+}
+"queued"
+"#,
+                    )?;
 
                     let stale = page_vm
                         .claim_exact_selected_page_task_for_test(
@@ -489,6 +603,14 @@ fn history_traversal_rejects_a_real_page_vm_replacement_id_collision() {
                             .dynamic_scripts.pending_source_load_count_for_test(),
                         1,
                         "retired traversal must not checkpoint or advance replacement runtime work"
+                    );
+
+                    assert_eq!(
+                        page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
+                            "__replacementTraversalResults.join('|')",
+                        )?,
+                        "",
+                        "retired PageVm ids must not reject the replacement's pending results"
                     );
 
                     let current = page_vm
@@ -518,6 +640,10 @@ fn history_traversal_rejects_a_real_page_vm_replacement_id_collision() {
                         .run_claimed_selected_page_task_for_test(current, &loader)
                         .await?;
                     assert_eq!(page_vm.vm_mut().eval("location.hash")?, "");
+                    assert_eq!(
+                        page_vm.vm_mut().eval("__replacementTraversalResults.join('|')")?,
+                        "committed|finished"
+                    );
                     Ok::<_, anyhow::Error>(())
                 })
                 .await

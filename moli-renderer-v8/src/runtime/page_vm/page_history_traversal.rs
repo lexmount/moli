@@ -10,12 +10,14 @@ use super::{IntoPageTaskCompletion, PageTaskCompletion, PageVm};
 impl IntoPageTaskCompletion for PageHistoryTraversalTurnAction {
     fn into_page_task_completion(self) -> PageTaskCompletion {
         match self.target_effect {
-            PageHistoryTraversalTargetEffect::AppliedToCurrentOwner => {
+            PageHistoryTraversalTargetEffect::AppliedToCurrentOwner
+            | PageHistoryTraversalTargetEffect::RejectedStaleResults => {
                 // A traversal can dispatch Navigation API, popstate, hashchange
                 // and child-traversal callbacks, and can itself publish child
                 // work. Preserve the established full post-checkpoint
                 // reconciliation even when a particular traversal has no
-                // registered listener.
+                // registered listener. Rejected results can also publish work
+                // through their Promise reactions after the target retires.
                 PageTaskCompletion::CallbackCompletion
             }
             PageHistoryTraversalTargetEffect::DiscardedStaleOwner { .. } => {
@@ -70,9 +72,9 @@ impl PageVm {
             // Local task ids restart in each PageVm. Only a same-root stale
             // task may clean this Host's retained payload; an old PageVm task
             // must never consume a naturally reused id in its replacement.
-            if owner.root_document() == self.document_lifecycle.identity().document {
-                self.vm_mut().discard_stale_history_traversal_task(task_id);
-            }
+            let rejected_results = owner.root_document()
+                == self.document_lifecycle.identity().document
+                && self.vm_mut().reject_stale_history_traversal_results(task)?;
             tracing::debug!(
                 ?owner,
                 ?current,
@@ -80,8 +82,12 @@ impl PageVm {
                 ?kind,
                 "discarded stale exact-owner history traversal"
             );
-            PageHistoryTraversalTargetEffect::DiscardedStaleOwner {
-                current_owner: current.map(|(owner, _)| owner),
+            if rejected_results {
+                PageHistoryTraversalTargetEffect::RejectedStaleResults
+            } else {
+                PageHistoryTraversalTargetEffect::DiscardedStaleOwner {
+                    current_owner: current.map(|(owner, _)| owner),
+                }
             }
         };
         let action = PageHistoryTraversalTurnAction {

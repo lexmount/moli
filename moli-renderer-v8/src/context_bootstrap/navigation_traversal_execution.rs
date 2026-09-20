@@ -20,7 +20,7 @@ use super::navigation_window::{
 use super::*;
 use crate::native_bridge::{
     PendingCrossDocumentTraversal,
-    PendingHistoryTraversalAction,
+    PendingHistoryTraversalAction, PendingNavigationResult,
 };
 use moli_history::HistoryEntryRef;
 
@@ -365,9 +365,16 @@ fn reject_cross_document_traversal(
     scope: &mut v8::PinScope<'_, '_>,
     traversal: &PendingCrossDocumentTraversal,
 ) {
-    if traversal.results.is_empty() {
+    reject_canceled_history_traversal_results(scope, &traversal.results);
+}
+
+pub(crate) fn reject_canceled_history_traversal_results(
+    scope: &mut v8::PinScope<'_, '_>,
+    results: &[PendingNavigationResult],
+) {
+    if results.is_empty() {
         return;
     }
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    reject_pending_navigation_results(scope, &traversal.results, error);
+    reject_pending_navigation_results(scope, results, error);
 }
