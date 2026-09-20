@@ -3,7 +3,7 @@ use moli_webapi::navigation_values::options::{
 };
 
 use super::*;
-use crate::context_bootstrap::navigation_activation::install_navigation_transition;
+use crate::context_bootstrap::navigation_activation::{NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition};
 use crate::context_bootstrap::navigation_events::{
     navigation_destination_url_value, navigation_scroll_event_is_active,
     set_navigation_destination_url,
@@ -42,8 +42,6 @@ const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_DESTINATION_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionDestination";
 const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionType";
-const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
-    "__lmNavigateEventPrecommitTransitionResolver";
 const PRECOMMIT_CONTROLLER_EVENT_SLOT: &str = "__lmPrecommitControllerEvent";
 const PRECOMMIT_CONTROLLER_BACKING_SLOT: &str = "__moliPrecommitControllerBacking";
 const PRECOMMIT_CONTROLLER_ACTIVE_SLOT: &str = "__lmPrecommitControllerActive";
