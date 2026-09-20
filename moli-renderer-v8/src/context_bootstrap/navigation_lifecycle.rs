@@ -1,6 +1,6 @@
 use super::navigation_activation::{
-    clear_navigation_transition, resolve_navigation_transition_committed,
-    schedule_settle_navigation_transition,
+    clear_navigation_transition, navigation_transition_matches_resolver,
+    resolve_navigation_transition_committed, schedule_settle_navigation_transition,
 };
 use super::navigation_events::{
     NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT, NAVIGATE_EVENT_SCROLL_CALLED_SLOT,
@@ -174,9 +174,6 @@ pub(super) fn settle_navigation_transition_finished<'s>(
     transition_resolver: Option<v8::Global<v8::PromiseResolver>>,
     error: Option<v8::Local<'s, v8::Value>>,
 ) {
-    if transition_resolver.is_some() {
-        clear_navigation_transition(scope, navigation);
-    }
     if let Some(transition_resolver) = transition_resolver {
         let transition_resolver = v8::Local::new(scope, transition_resolver);
         settle_navigation_transition_finished_local(
@@ -194,10 +191,10 @@ pub(super) fn settle_navigation_transition_finished_local<'s>(
     transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
     error: Option<v8::Local<'s, v8::Value>>,
 ) {
-    if transition_resolver.is_some() {
-        clear_navigation_transition(scope, navigation);
-    }
     if let Some(transition_resolver) = transition_resolver {
+        if navigation_transition_matches_resolver(scope, navigation, transition_resolver) {
+            clear_navigation_transition(scope, navigation);
+        }
         schedule_settle_navigation_transition(scope, navigation, transition_resolver, error);
     }
 }

@@ -1,6 +1,8 @@
 use super::*;
 use crate::context_bootstrap::file_api::is_branded_data_transfer_object;
-use crate::context_bootstrap::navigation_activation::install_navigation_transition;
+use crate::context_bootstrap::navigation_activation::{
+    NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition,
+};
 use crate::context_bootstrap::navigation_events::navigation_scroll_event_is_active;
 use crate::context_bootstrap::navigation_handler_callbacks::{
     NAVIGATE_EVENT_ADDED_HANDLERS_SLOT, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT,
@@ -36,8 +38,6 @@ const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_DESTINATION_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionDestination";
 const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT: &str =
     "__lmNavigateEventPrecommitTransitionType";
-const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
-    "__lmNavigateEventPrecommitTransitionResolver";
 const PRECOMMIT_CONTROLLER_EVENT_SLOT: &str = "__lmPrecommitControllerEvent";
 const PRECOMMIT_CONTROLLER_ACTIVE_SLOT: &str = "__lmPrecommitControllerActive";
 

@@ -20701,3 +20701,75 @@ source_path = "navigation-api/precommit-handler/precommitHandler-traverse.html"
 source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
 tags = ["navigation-api", "precommit-handler", "navigation", "history"]
 notes = "Imported upstream WPT test. Keep this in the broad suite until it is proven stable under the Moli harness."
+
+[[test]]
+id = "upstream-navigation-api-ordering-and-transition-back-same-document-intercept-reject-no-currententrychange"
+upstream = "web-platform-tests/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html?no-currententrychange"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/ordering-and-transition/back-same-document-intercept-reject.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "ordering-and-transition", "navigation", "history"]
+notes = "Unmodified upstream test for intercepted traversal transition lifetime and event/Promise ordering, including this explicit query variant."
+query = "no-currententrychange"
+
+[[test]]
+id = "upstream-navigation-api-ordering-and-transition-back-same-document-intercept-reject-currententrychange"
+upstream = "web-platform-tests/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html?currententrychange"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/ordering-and-transition/back-same-document-intercept-reject.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/ordering-and-transition/back-same-document-intercept-reject.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "ordering-and-transition", "navigation", "history"]
+notes = "Unmodified upstream test for intercepted traversal transition lifetime and event/Promise ordering, including this explicit query variant."
+query = "currententrychange"
+
+[[test]]
+id = "upstream-navigation-api-ordering-and-transition-back-same-document-intercept-no-currententrychange"
+upstream = "web-platform-tests/navigation-api/ordering-and-transition/back-same-document-intercept.html?no-currententrychange"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/ordering-and-transition/back-same-document-intercept.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/ordering-and-transition/back-same-document-intercept.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "ordering-and-transition", "navigation", "history"]
+notes = "Unmodified upstream test for intercepted traversal transition lifetime and event/Promise ordering, including this explicit query variant."
+query = "no-currententrychange"
+
+[[test]]
+id = "upstream-navigation-api-ordering-and-transition-back-same-document-intercept-currententrychange"
+upstream = "web-platform-tests/navigation-api/ordering-and-transition/back-same-document-intercept.html?currententrychange"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/ordering-and-transition/back-same-document-intercept.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/ordering-and-transition/back-same-document-intercept.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "ordering-and-transition", "navigation", "history"]
+notes = "Unmodified upstream test for intercepted traversal transition lifetime and event/Promise ordering, including this explicit query variant."
+query = "currententrychange"

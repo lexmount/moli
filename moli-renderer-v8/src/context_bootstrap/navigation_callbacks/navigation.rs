@@ -1,6 +1,6 @@
 use super::super::navigation_activation::{
     clear_navigation_transition, install_navigation_transition,
-    navigation_transition_matches_resolver, reject_navigation_transition_committed,
+    navigation_transition_matches_resolver, precommit_transition_resolver_from_event, reject_navigation_transition_committed,
     resolve_navigation_transition_committed,
 };
 use super::super::navigation_events::dispatch_popstate_event;
@@ -21,9 +21,6 @@ use crate::util::{get_private_value, set_private_value};
 use crate::webidl;
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use moli_webapi_declare::WebApiObject;
-
-const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT: &str =
-    "__lmNavigateEventPrecommitTransitionResolver";
 
 #[derive(webidl::WebIdlDictionary)]
 #[webidl(prefix = "NavigationNavigateOptions")]
@@ -1086,19 +1083,6 @@ fn cancel_precommit_commit_attempt<'s>(
     {
         cancel_navigation_attempt(scope, attempt_id);
     }
-}
-
-fn precommit_transition_resolver_from_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::PromiseResolver>> {
-    get_private_value(
-        scope,
-        event,
-        NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT,
-    )
-    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) })
 }
 
 fn set_pending_precommit_commit_active<'s>(
