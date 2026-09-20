@@ -40,9 +40,6 @@ mod tests {
 
     struct SharedWriterGuard(Arc<Mutex<Vec<u8>>>);
 
-    #[derive(Clone, Copy)]
-    struct BrokenWriter;
-
     impl Write for SharedWriterGuard {
         fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
             self.0.lock().extend_from_slice(buffer);
@@ -51,30 +48,6 @@ mod tests {
 
         fn flush(&mut self) -> io::Result<()> {
             Ok(())
-        }
-    }
-
-    impl Write for BrokenWriter {
-        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
-            Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "diagnostic sink is gone",
-            ))
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "diagnostic sink is gone",
-            ))
-        }
-    }
-
-    impl<'writer> MakeWriter<'writer> for BrokenWriter {
-        type Writer = Self;
-
-        fn make_writer(&'writer self) -> Self::Writer {
-            *self
         }
     }
 

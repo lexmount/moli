@@ -1,6 +1,6 @@
 /// Project the request metadata for successive followed redirect hops.
 ///
-/// This mirrors FetchRequest::apply_redirect_status: the emitted CDP request
+/// This shares FetchRequest::apply_redirect_status rules: the emitted CDP request
 /// must describe the new hop, not repeat the original POST after it became GET.
 pub(super) struct RedirectRequest<'a> {
     pub(super) method: &'a str,
@@ -22,23 +22,11 @@ impl<'a> RedirectRequest<'a> {
     }
 
     pub(super) fn follow(&mut self, status: u16) {
-        let becomes_get = matches!(status, 301 | 302) && self.method.eq_ignore_ascii_case("POST")
-            || status == 303
-                && !self.method.eq_ignore_ascii_case("GET")
-                && !self.method.eq_ignore_ascii_case("HEAD");
-        if becomes_get {
+        if moli_fetch::redirect_status_rewrites_to_get(status, self.method) {
             self.method = "GET";
             self.body = None;
-            self.headers.retain(|(name, _)| {
-                !matches!(
-                    name.to_ascii_lowercase().as_str(),
-                    "content-encoding"
-                        | "content-language"
-                        | "content-length"
-                        | "content-location"
-                        | "content-type"
-                )
-            });
+            self.headers
+                .retain(|(name, _)| !moli_fetch::is_request_body_header_name(name));
         }
     }
 }
