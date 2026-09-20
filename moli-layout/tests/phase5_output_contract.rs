@@ -4,11 +4,11 @@ use moli_layout::{
     DocumentLayoutServices, LayoutControlSurfaceHit, LayoutDisplay, LayoutElementCategory,
     LayoutElementSemantics, LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace,
     LayoutPaintedSurfaceHit, LayoutPassRequest, LayoutPassResult, LayoutPoint, LayoutPosition,
-    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollbarColors,
-    LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintBrush,
-    PaintCaptureRequest, PaintColor, PaintFragment, PaintShape, ResolvedLayoutElementStyles,
-    ResolvedLayoutStyle, build_layout_pass,
+    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutReplacedKind,
+    LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth,
+    LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport,
+    PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment, PaintShape,
+    ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -91,7 +91,7 @@ impl LayoutSource for Source {
                 LayoutNamespace::Html,
                 self.0[node].local_name,
                 LayoutElementCategory::Generic,
-                None,
+                (self.0[node].local_name == "img").then_some(LayoutReplacedKind::Image),
             )
         })
     }
@@ -2677,6 +2677,49 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {
         .expect("rendered text fragments should provide scroll target geometry");
     assert!(!scroll_geometry.target_rects.is_empty());
     assert_eq!(scroll_geometry.scroll_containers.len(), 1);
+}
+
+#[test]
+fn collapsed_space_before_atomic_inline_keeps_its_range_geometry() {
+    for local_name in ["span", "img"] {
+        for trailing_text in ["", " "] {
+            let source = Source(vec![
+                Node::element("root", vec![1, 2, 3]),
+                Node::text("before", "a "),
+                Node::html_element("atomic", local_name, vec![]),
+                Node::text("after", trailing_text),
+            ]);
+            let mut styles = Styles::default();
+            styles
+                .0
+                .insert(0, fixed_size(LayoutDisplay::Block, 200.0, 80.0));
+            for node in [1, 3] {
+                styles
+                    .0
+                    .insert(node, resolved(LayoutDisplay::Inline, Style::default()));
+            }
+            let display = if local_name == "img" {
+                LayoutDisplay::Inline
+            } else {
+                LayoutDisplay::InlineBlock
+            };
+            styles.0.insert(2, fixed_size(display, 20.0, 20.0));
+            let output = build(&source, &mut styles);
+            let space = output.text_range_rects(1, 1..2);
+            assert_eq!(space.len(), 1, "{local_name}, {trailing_text:?}");
+            let space = space[0].bounding_rect();
+            assert!(
+                space.width > 0.0,
+                "space before an atomic inline is not trailing"
+            );
+            let atomic = output.client_rects_for_source(2)[0].bounding_rect();
+            assert_close(space.x + space.width, atomic.x);
+            assert!(
+                output.text_range_rects(3, 0..1).is_empty(),
+                "line-end space still collapses"
+            );
+        }
+    }
 }
 
 #[test]

@@ -175,7 +175,7 @@ impl TokenSink for EmbedderPausingTreeBuilder {
 }
 
 impl HtmlParserSession {
-    pub(super) fn initialize_text_document(&mut self, content_type: &str) {
+    pub(super) fn initialize_text_document(&self) {
         // Parse only the browser-owned shell. Response bytes enter the tokenizer
         // after it has switched to plaintext, so tags and entities stay literal.
         self.process(StrTendril::from(concat!(
@@ -183,11 +183,6 @@ impl HtmlParserSession {
             "<pre style=\"word-wrap: break-word; white-space: pre-wrap;\">\n"
         )));
         self.tokenizer.set_plaintext_state();
-        let sink = self.tokenizer.sink.sink();
-        let mut host = sink.take_parser_stream_dom_host();
-        let document_handle = host.document_handle();
-        host.set_document_content_type_for_handle(document_handle, content_type);
-        sink.restore_parser_stream_dom_host(host);
     }
 
     fn new(sink: DocumentSink, opts: ParseOpts) -> Self {
@@ -375,10 +370,10 @@ fn feed_with_definitive_encoding(
 
 pub(super) fn new_html_tree_sink_session(
     target: ParserStreamHtmlTreeSinkTarget,
-    scripting_enabled: bool,
+    options: ParseOpts,
 ) -> HtmlTreeSinkSession {
     let sink = DocumentSink::new(target);
-    let parser = HtmlParserSession::new(sink, html_parse_opts_with_scripting(scripting_enabled));
+    let parser = HtmlParserSession::new(sink, options);
     let script_input = ParserInputQueue::default();
 
     HtmlTreeSinkSession {

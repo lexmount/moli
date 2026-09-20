@@ -449,14 +449,40 @@ pub(crate) fn build_inline_fragments(
         .iter()
         .map(text_style_paint_outsets)
         .collect::<Vec<_>>();
+    // Inline objects occupy positions between text units, not text bytes.
+    // Retain their logical offsets so spaces before an atomic box cannot be
+    // mistaken for line-end whitespace (including in bidi-reordered lines).
+    let atomic_offsets: HashMap<_, _> = layout
+        .inline_boxes()
+        .iter()
+        .filter(|inline_box| {
+            context
+                .object(inline_box.id)
+                .is_some_and(|object| object.role == InlineObjectRole::Atomic)
+        })
+        .map(|inline_box| (inline_box.id, inline_box.index))
+        .collect();
 
     for (line_index, line) in layout.lines().enumerate() {
         let metrics = line.metrics();
         let line_range = line.text_range();
+        let last_atomic_offset = line
+            .items()
+            .filter_map(|item| match item {
+                PositionedLayoutItem::InlineBox(positioned) => {
+                    atomic_offsets.get(&positioned.id).copied()
+                }
+                PositionedLayoutItem::GlyphRun(_) => None,
+            })
+            .max()
+            .unwrap_or(line_range.start);
         let trailing_start = overlapping_output_ranges(&context.text_units, &line_range)
             .iter()
             .rev()
-            .take_while(|unit| unit.control || unit.collapsed_space)
+            .take_while(|unit| {
+                unit.output_range.start >= last_atomic_offset
+                    && (unit.control || unit.collapsed_space)
+            })
             .filter(|unit| unit.collapsed_space)
             .map(|unit| unit.output_range.start)
             .last();
