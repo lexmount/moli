@@ -89,7 +89,7 @@ use super::global_scope::{
     fulfill_pending_worker_csp_report, fulfill_pending_worker_fetch,
     fulfill_pending_worker_fetch_response, fulfill_pending_worker_xhr,
     fulfill_pending_worker_xhr_response, install_worker_global_scope,
-    service_worker_fetch_handler_type,
+    prepare_worker_global_scope_templates, service_worker_fetch_handler_type,
 };
 use super::handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
@@ -1759,7 +1759,31 @@ async fn worker_main(
         let scope = pin!(v8::HandleScope::new(isolate));
         let scope = &mut scope.init();
         *isolate_handle.lock() = Some(scope.thread_safe_handle());
-        let ctx = v8::Context::new(scope, Default::default());
+        let worker_templates =
+            match prepare_worker_global_scope_templates(scope, &state.borrow().global_kind) {
+                Ok(templates) => Some(templates),
+                Err(error) => {
+                    tracing::error!(
+                        url = %script_url,
+                        error = %error,
+                        "failed to prepare worker global templates"
+                    );
+                    bootstrap_completion
+                        .mark_install_global_failure(&script_url, error.to_string());
+                    install_global_failed = true;
+                    None
+                }
+            };
+        let global_template = worker_templates
+            .as_ref()
+            .map(|templates| templates.global_template(scope));
+        let ctx = v8::Context::new(
+            scope,
+            v8::ContextOptions {
+                global_template,
+                ..Default::default()
+            },
+        );
         crate::resource_owner::install_resource_owner_for_context(ctx, resource_owner_id);
         crate::context_bootstrap::set_indexed_db_manager_for_context(
             ctx,
@@ -1778,17 +1802,21 @@ async fn worker_main(
 
         let scope = &mut v8::ContextScope::new(scope, ctx);
         let global = ctx.global(scope);
-        if let Err(e) = install_worker_global_scope(scope, global, state.clone()) {
-            tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
-            bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
-            install_global_failed = true;
-        } else if script_kind == WorkerScriptKind::Classic {
-            let referrer_policy = { state.borrow().referrer_policy.clone() };
-            install_classic_worker_dynamic_module_runtime(
-                scope,
-                referrer_policy,
-                module_evaluation_tx.clone(),
-            );
+        if !install_global_failed {
+            if let Err(e) =
+                install_worker_global_scope(scope, global, state.clone(), worker_templates.as_ref())
+            {
+                tracing::error!(url = %script_url, error = %e, "failed to install worker global scope");
+                bootstrap_completion.mark_install_global_failure(&script_url, e.to_string());
+                install_global_failed = true;
+            } else if script_kind == WorkerScriptKind::Classic {
+                let referrer_policy = { state.borrow().referrer_policy.clone() };
+                install_classic_worker_dynamic_module_runtime(
+                    scope,
+                    referrer_policy,
+                    module_evaluation_tx.clone(),
+                );
+            }
         }
     }
     if install_global_failed {
