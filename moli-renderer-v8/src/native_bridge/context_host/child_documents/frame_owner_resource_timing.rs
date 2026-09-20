@@ -12,6 +12,8 @@ use crate::{
 pub(in crate::native_bridge::context_host) enum ChildDocumentNavigationInitiator {
     FrameOwnerElement,
     BrowsingContext,
+    /// The history task already checked beforeunload for the retiring subtree.
+    HistoryTraversal,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

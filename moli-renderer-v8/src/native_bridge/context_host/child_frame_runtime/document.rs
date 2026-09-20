@@ -15,6 +15,25 @@ use url::Url;
 pub(crate) const CHILD_DOCUMENT_CONTEXT_HANDLE_SLOT: &str = "__lmChildDocumentContextHandle";
 
 impl JsContextHost {
+    pub(in crate::native_bridge::context_host) fn existing_child_browsing_context_document_wrapper<
+        's,
+    >(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let document = self.child_browsing_context_document_handle(handle)?;
+        let window = self.existing_child_browsing_context_window_wrapper(scope, handle)?;
+        let context = window.get_creation_context(scope)?;
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let host_ptr = self as *mut JsContextHost;
+        // Removal callbacks still belong to the retiring Document even after
+        // its frame element was disconnected. Refreshing the frame here would
+        // discard that owner before its unload listeners can run.
+        self.native_bridge_mut()
+            .wrap_handle(scope, host_ptr, document)
+    }
+
     fn child_browsing_context_has_uncommitted_navigation_seed(&self, handle: DomHandle) -> bool {
         let Some(entry) = self.child_browsing_contexts.get(&handle) else {
             return false;

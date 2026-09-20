@@ -710,7 +710,12 @@ impl JsContextHost {
             self.retire_current_child_navigation_commit_task(handle);
             self.unregister_service_worker_child_client(handle);
             if let Some(scope) = scope.as_deref_mut() {
-                self.inform_about_canceled_child_navigation_before_detach(scope, handle);
+                self.dispatch_child_document_tree_unload_without_beforeunload(scope, handle, true);
+                if self.child_browsing_context_document_handle(handle)
+                    != document_handle_before_drop
+                {
+                    continue;
+                }
             }
             self.clear_child_parser_classic_runner_for_current_document(handle);
             let removed = self.remove_child_browsing_context_entry(handle).is_some();

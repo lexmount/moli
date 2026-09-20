@@ -224,12 +224,17 @@ pub(super) fn navigation_unload_event_active<'s>(
         })
 }
 
-pub(super) fn set_navigation_unload_event_active<'s>(
+pub(super) fn replace_navigation_unload_event_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     active: bool,
-) {
+) -> bool {
+    // Restore only the event flag, not the effective state that also includes
+    // native ancestor guards. Those counters unwind independently.
+    let previous =
+        object_bool_property(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT).unwrap_or(false);
     define_non_enumerable_bool_property(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT, active);
+    previous
 }
 
 pub(super) fn url_is_about_blank_document(url: &url::Url) -> bool {

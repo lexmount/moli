@@ -425,6 +425,12 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
+        let initiator = if self.child_browsing_context_has_pending_cross_document_traversal(handle)
+        {
+            ChildDocumentNavigationInitiator::HistoryTraversal
+        } else {
+            ChildDocumentNavigationInitiator::BrowsingContext
+        };
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
@@ -432,7 +438,7 @@ impl JsContextHost {
             handle,
             pending_bootstrap,
             navigation_load,
-            ChildDocumentNavigationInitiator::BrowsingContext,
+            initiator,
             initiator_url,
         );
         if commit_result
@@ -702,7 +708,7 @@ impl JsContextHost {
             self.child_document_credentialless_storage_nonce(document_credentialless);
 
         self.clear_pending_child_document_loads_for_handle(handle);
-        self.dispatch_child_javascript_url_unload_lifecycle(scope, handle);
+        self.dispatch_child_document_tree_unload_without_beforeunload(scope, handle, false);
         if !self.child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
         {
             let _ = self.finish_child_frame_navigation_without_load_dispatch(
