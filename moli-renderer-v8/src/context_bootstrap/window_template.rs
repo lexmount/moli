@@ -98,7 +98,7 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 0, callback = window_noop_callback)]
     clear_immediate: (),
 
-    #[webapi(method, length = 0, callback = window_stop_callback)]
+    #[webapi(method, length = 0, callback = window_stop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     stop: (),
 
     #[webapi(method, length = 0, callback = window_noop_callback)]
