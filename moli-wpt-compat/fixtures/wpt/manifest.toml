@@ -20635,6 +20635,74 @@ tags = ["sharedworker", "worker", "xhr", "sync-xhr", "baseurl"]
 notes = "Imported upstream WPT SharedWorker synchronous XMLHttpRequest coverage for resolving relative URLs against the shared worker script directory. Uses the long local timeout because full-workspace nextest can run many fixture servers and worker runtimes concurrently before this window/iframe/SharedWorker chain reports its first subtest."
 
 [[test]]
+id = "upstream-navigation-api-precommit-handler-precommithandler-push"
+upstream = "web-platform-tests/navigation-api/precommit-handler/precommitHandler-push.html"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/precommit-handler/precommitHandler-push.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/precommit-handler/precommitHandler-push.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "precommit-handler", "navigation", "history"]
+notes = "Imported upstream WPT test. Keep this in the broad suite until it is proven stable under the Moli harness."
+
+[[test]]
+id = "upstream-navigation-api-precommit-handler-precommithandler-reload"
+upstream = "web-platform-tests/navigation-api/precommit-handler/precommitHandler-reload.html"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/precommit-handler/precommitHandler-reload.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/precommit-handler/precommitHandler-reload.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "precommit-handler", "navigation", "history"]
+notes = "Imported upstream WPT test. Keep this in the broad suite until it is proven stable under the Moli harness."
+
+[[test]]
+id = "upstream-navigation-api-precommit-handler-precommithandler-replace"
+upstream = "web-platform-tests/navigation-api/precommit-handler/precommitHandler-replace.html"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/precommit-handler/precommitHandler-replace.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/precommit-handler/precommitHandler-replace.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "precommit-handler", "navigation", "history"]
+notes = "Imported upstream WPT test. Keep this in the broad suite until it is proven stable under the Moli harness."
+
+[[test]]
+id = "upstream-navigation-api-precommit-handler-precommithandler-traverse"
+upstream = "web-platform-tests/navigation-api/precommit-handler/precommitHandler-traverse.html"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/navigation-api/precommit-handler/precommitHandler-traverse.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/precommit-handler/precommitHandler-traverse.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["navigation-api", "precommit-handler", "navigation", "history"]
+notes = "Imported upstream WPT test. Keep this in the broad suite until it is proven stable under the Moli harness."
+
+[[test]]
 id = "testharness-dom-exception-assertions"
 upstream = "local WPT harness DOMException assertion overload and realm canary"
 upstream_commit = "local-regression-2026-09-20"
