@@ -4600,21 +4600,35 @@ async fn webdriver_classic_click_point(
         )
         .await
         .map_err(classic_error_from_devtools_error)?;
-    match hit {
-        DevToolsCommandResult::GetNodeForLocation(hit)
-            if hit.frame_id == DevToolsFrameId::from(frame_id.to_owned()) =>
-        {
-            Ok(point)
-        }
-        DevToolsCommandResult::GetNodeForLocation(_) => Err(ClassicError::new(
-            ClassicErrorCode::ElementClickIntercepted,
-            "an ancestor document obscures the target frame's click point",
-        )),
-        _ => Err(ClassicError::new(
+    let DevToolsCommandResult::GetNodeForLocation(hit) = hit else {
+        return Err(ClassicError::new(
             ClassicErrorCode::UnknownError,
             "frame hit test returned an unexpected result",
-        )),
+        ));
+    };
+    // Local preflight already requires the hit element to be in the target's
+    // subtree. A target iframe (or its container) can legitimately lead the
+    // deep hit into another document, so require the hit path to pass through
+    // the current frame, not to end there. Ancestor/sibling overlays fail this.
+    let mut hit_frame_id = Some(hit.frame_id.as_str().to_owned());
+    while let Some(hit_frame) = hit_frame_id {
+        if hit_frame == frame_id {
+            return Ok(point);
+        }
+        hit_frame_id = binding
+            .runtime
+            .parent_frame_id(
+                binding.session_id.clone(),
+                binding.target_id.clone(),
+                hit_frame,
+            )
+            .await
+            .map_err(classic_error_from_devtools_error)?;
     }
+    Err(ClassicError::new(
+        ClassicErrorCode::ElementClickIntercepted,
+        "an ancestor document obscures the target frame's click point",
+    ))
 }
 
 async fn webdriver_classic_activate_element_by_handle(

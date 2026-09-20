@@ -11559,6 +11559,92 @@ async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offse
 }
 
 #[tokio::test]
+async fn webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_wrapping() {
+    for depth in 0..=2 {
+        for selector in ["#target", "#container"] {
+            let app = build_router(test_state());
+            let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+            let session_id = session["value"]["sessionId"].as_str().unwrap();
+            let mut html = "<div id='container' style='width:200px;height:100px'><iframe id='target' style='width:200px;height:100px;border:0' srcdoc=\"<body style='margin:0'><button style='width:200px;height:100px' onclick='window.clicks++'>go</button><script>window.clicks=0;</script>\"></iframe></div>".to_owned();
+            for _ in 0..depth {
+                let child = html.replace('&', "&amp;").replace('"', "&quot;");
+                html = format!(
+                    "<iframe style='width:600px;height:400px;border:0' srcdoc=\"{child}\"></iframe>"
+                );
+            }
+            classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/url"),
+                json!({"url":classic_data_url(&html)}),
+            )
+            .await;
+            for _ in 0..depth {
+                classic_request_json_with_body(
+                    app.clone(),
+                    Method::POST,
+                    &format!("/session/{session_id}/frame"),
+                    json!({"id":0}),
+                )
+                .await;
+            }
+            let target = classic_find_css_element_id(app.clone(), session_id, selector).await;
+            let (status, clicked) = classic_request_status_and_json(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/element/{target}/click"),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::OK,
+                "depth={depth} target={selector}: {clicked}"
+            );
+            assert_eq!(clicked, json!({"value":null}));
+            let observed = classic_request_json_with_body(
+                app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+                json!({"script":"return document.getElementById('target').contentWindow.clicks;","args":[]}),
+            ).await;
+            assert_eq!(observed["value"], 1, "depth={depth} target={selector}");
+            // Another child of the same document is not a descendant of the
+            // requested target. It must not become an accepted deep hit.
+            classic_request_json_with_body(
+                app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+                json!({"script":r#"
+                    window.overlayClicks=0;
+                    const veil=document.createElement('iframe');
+                    veil.style.cssText='position:fixed;inset:0;width:100%;height:100%;border:0;z-index:999';
+                    veil.srcdoc='<body style="margin:0" onclick="parent.overlayClicks++">overlay</body>';
+                    document.body.appendChild(veil);
+                "#,"args":[]}),
+            ).await;
+            let (status, blocked) = classic_request_status_and_json(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/element/{target}/click"),
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::BAD_REQUEST,
+                "depth={depth} target={selector}: {blocked}"
+            );
+            assert_eq!(blocked["value"]["error"], "element click intercepted");
+            let observed = classic_request_json_with_body(
+                app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+                json!({"script":"return [document.getElementById('target').contentWindow.clicks,window.overlayClicks];","args":[]}),
+            ).await;
+            assert_eq!(
+                observed["value"],
+                json!([1, 0]),
+                "rejected clicks must have no effect"
+            );
+            classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+        }
+    }
+}
+
+#[tokio::test]
 async fn webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatch() {
     for (depth, blocked_level) in [(1, 0), (2, 0), (2, 1)] {
         let app = build_router(test_state());
