@@ -423,7 +423,11 @@ fn set_xhr_response_head(
         .unwrap_or(&head.final_url);
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_URL_SLOT, response_url.as_str());
 
-    let headers_json = serde_json::to_string(&head.headers).unwrap_or_else(|_| "[]".to_owned());
+    // All delivery paths expose the same filtered header list, including
+    // synchronous workers and responses fulfilled without HTTP transport.
+    // Keep head.headers intact for MIME processing and network metadata.
+    let headers = super::super::header_surface::xhr_response_headers_for_script(&head.headers);
+    let headers_json = serde_json::to_string(&headers).unwrap_or_else(|_| "[]".to_owned());
     set_xhr_state_string(scope, xhr, XHR_RESPONSE_HEADERS_SLOT, &headers_json);
 }
 
