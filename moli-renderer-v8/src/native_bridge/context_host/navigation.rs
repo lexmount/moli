@@ -159,6 +159,9 @@ impl JsContextHost {
         &self,
         document_handle: crate::document_runtime::DomHandle,
     ) -> Option<bool> {
+        if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document_handle) {
+            return self.lightweight_popup_document_is_completely_loaded(popup_id);
+        }
         let owner = if document_handle == self.document_handle() {
             self.current_main_document_task_owner()?.document_owner()
         } else {
