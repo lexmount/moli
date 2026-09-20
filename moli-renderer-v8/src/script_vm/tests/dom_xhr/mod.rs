@@ -1,5 +1,6 @@
 use super::*;
 
+mod blob_mime;
 mod computed_style;
 mod cssom;
 mod dom;

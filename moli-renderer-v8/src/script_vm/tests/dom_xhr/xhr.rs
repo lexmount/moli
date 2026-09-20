@@ -779,60 +779,112 @@ fn xml_http_request_methods_apply_webidl_argument_conversion() {
     );
 }
 #[test]
-fn xml_http_request_override_mime_type_affects_response_mime() {
-    let mut vm = new_storage_test_vm("https://xhr-override-mime.test/");
+fn xml_http_request_blob_response_uses_final_mime_type() {
+    let cases: &[(&[&str], Option<&str>, &str)] = &[
+        (&[], None, "text/xml"),
+        (&[""], None, "text/xml"),
+        (&["invalid", "*/*"], None, "text/xml"),
+        (&["TEXT/PLAIN;CHARSET=GBK"], None, "text/plain;charset=GBK"),
+        (&["text/plain;title=ÿ"], None, "text/plain;title=\"ÿ\""),
+        (
+            &["text/html;charset=GBK", "text/html;x=y"],
+            None,
+            "text/html;x=y;charset=GBK",
+        ),
+        (
+            &[
+                "text/html;charset=GBK",
+                "text/html;charset=UTF-8",
+                "text/html",
+            ],
+            None,
+            "text/html;charset=GBK",
+        ),
+        (
+            &["text/html;charset=GBK", "x/x", "text/html"],
+            None,
+            "text/html",
+        ),
+        (
+            &["text/html;title=\"A,B\"", "invalid"],
+            None,
+            "text/html;title=\"A,B\"",
+        ),
+        (&["text/plain"], Some("text/custom"), "text/custom"),
+        (
+            &["text/plain"],
+            Some("TEXT/HTML;CHARSET=GBK"),
+            "text/html;charset=GBK",
+        ),
+        (&["text/plain"], Some("x/x;title=ÿ"), "x/x;title=\"ÿ\""),
+        (&[], Some("invalid"), "application/octet-stream"),
+        (&[], Some(""), "application/octet-stream"),
+        (&[], Some("*/*"), "*/*"),
+    ];
+    for (headers, override_mime, expected) in cases {
+        let mut vm = new_storage_test_vm("https://xhr-override-mime.test/");
 
-    vm.eval(
-        r#"
+        vm.eval(
+            r#"
 (() => {
   globalThis.__xhrMime = new XMLHttpRequest();
   __xhrMime.open('GET', '/mime');
   __xhrMime.responseType = 'blob';
-  __xhrMime.overrideMimeType('text/custom');
   return 'ready';
 })()
 "#,
-    )
-    .expect("xhr override MIME setup should run");
+        )
+        .expect("xhr override MIME setup should run");
+        if let Some(override_mime) = override_mime {
+            vm.eval(&format!(
+                "__xhrMime.overrideMimeType({});",
+                serde_json::to_string(override_mime).unwrap()
+            ))
+            .unwrap();
+        }
+        let headers = headers
+            .iter()
+            .map(|value| ("Content-Type".to_owned(), (*value).to_owned()))
+            .collect();
 
-    let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
-    vm.renderer_document_isolate
-        .with_entered_renderer_document_isolate(move |isolate| {
-            let scope = std::pin::pin!(v8::HandleScope::new(isolate));
-            let scope = &mut scope.init();
-            let context = unsafe { v8::Local::new(scope, &*context_ptr) };
-            let scope = &mut v8::ContextScope::new(scope, context);
-            let global = context.global(scope);
-            let key = v8::String::new(scope, "__xhrMime").expect("xhr key should allocate");
-            let xhr_value = global
-                .get(scope, key.into())
-                .expect("stored XHR should be readable");
-            let xhr = v8::Local::<v8::Object>::try_from(xhr_value)
-                .expect("stored XHR should be an object");
-            crate::network_host::apply_xhr_response_body_source(
-                scope,
-                xhr,
-                moli_fetch::ResponseHead {
-                    final_url: Url::parse("https://xhr-override-mime.test/mime")
-                        .expect("response URL should parse"),
-                    status: 200,
-                    headers: vec![("Content-Type".to_owned(), "text/plain".to_owned())],
-                    request_cookie_report: None,
-                    cookie_set_reports: Vec::new(),
-                    redirected: false,
-                    redirect_chain: Vec::new(),
-                    from_cache: false,
-                    negotiated_http_version: None,
-                },
-                moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
-            );
-            Ok(())
-        })
-        .expect("xhr response should apply");
+        let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
+        vm.renderer_document_isolate
+            .with_entered_renderer_document_isolate(move |isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = unsafe { v8::Local::new(scope, &*context_ptr) };
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let global = context.global(scope);
+                let key = v8::String::new(scope, "__xhrMime").expect("xhr key should allocate");
+                let xhr_value = global
+                    .get(scope, key.into())
+                    .expect("stored XHR should be readable");
+                let xhr = v8::Local::<v8::Object>::try_from(xhr_value)
+                    .expect("stored XHR should be an object");
+                crate::network_host::apply_xhr_response_body_source(
+                    scope,
+                    xhr,
+                    moli_fetch::ResponseHead {
+                        final_url: Url::parse("https://xhr-override-mime.test/mime")
+                            .expect("response URL should parse"),
+                        status: 200,
+                        headers,
+                        request_cookie_report: None,
+                        cookie_set_reports: Vec::new(),
+                        redirected: false,
+                        redirect_chain: Vec::new(),
+                        from_cache: false,
+                        negotiated_http_version: None,
+                    },
+                    moli_fetch::ResponseBody::materialized_bytes(b"body".to_vec()),
+                );
+                Ok(())
+            })
+            .expect("xhr response should apply");
 
-    let result = vm
-        .eval(
-            r#"
+        let result = vm
+            .eval(
+                r#"
 (() => {
   const probe = callback => {
     try {
@@ -849,10 +901,11 @@ fn xml_http_request_override_mime_type_affects_response_mime() {
   ].join('|');
 })()
 "#,
-        )
-        .expect("xhr override MIME response probe should run");
+            )
+            .expect("xhr override MIME response probe should run");
 
-    assert_eq!(result, "4|text/custom|throw:InvalidStateError");
+        assert_eq!(result, format!("4|{expected}|throw:InvalidStateError"));
+    }
 }
 
 #[test]

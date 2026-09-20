@@ -325,6 +325,145 @@ fn reads_response_header_values_case_insensitively() {
 }
 
 #[test]
+fn extracts_response_mime_essence_from_the_combined_header_list() {
+    let cases: &[(&[&str], Option<&str>)] = &[
+        (&[], None),
+        (&[""], None),
+        (&["*/*", "not-a-mime-type"], None),
+        (&["application/json"], Some("application/json")),
+        (&["Text/CSS; charset=utf-16"], Some("text/css")),
+        (
+            &["text/plain", "application/json"],
+            Some("application/json"),
+        ),
+        (&["application/json", "text/plain"], Some("text/plain")),
+        (&["application/json", "invalid"], Some("application/json")),
+        (&["application/json", "*/*", ""], Some("application/json")),
+        (&["text/plain, application/json"], Some("application/json")),
+        (&["application/json, text/plain"], Some("text/plain")),
+        (
+            &["application/json, invalid, */*"],
+            Some("application/json"),
+        ),
+        (&["text/plain; charset=gbk, text/css"], Some("text/css")),
+        (
+            &[r#"text/plain; a=",application/json""#],
+            Some("text/plain"),
+        ),
+        (
+            &[r#"text/plain; a="x\",application/json""#],
+            Some("text/plain"),
+        ),
+        (
+            &[r#"text/plain; a="x\\", application/json"#],
+            Some("application/json"),
+        ),
+        (
+            &[r#"text/plain; a=""#, "application/json"],
+            Some("text/plain"),
+        ),
+        (&[r#"text/plain;""#, "application/json"], Some("text/plain")),
+        (&["applic(ation/vnd.api+json"], None),
+        (&["application/vnd)api+json"], None),
+        (&["text /css"], None),
+        (&["application/vnd.中文+json"], None),
+    ];
+    for (values, expected) in cases {
+        let mut headers: Vec<_> = values
+            .iter()
+            .enumerate()
+            .map(|(index, value)| {
+                (
+                    if index % 2 == 0 {
+                        "Content-Type"
+                    } else {
+                        "cOnTeNt-TyPe"
+                    }
+                    .to_owned(),
+                    (*value).to_owned(),
+                )
+            })
+            .collect();
+        headers.push(("X-Content-Type".to_owned(), "application/json".to_owned()));
+        assert_eq!(
+            extract_response_mime_essence(&headers).as_deref(),
+            *expected,
+            "{values:?}"
+        );
+    }
+}
+
+#[test]
+fn extracts_response_mime_parameters_with_charset_inheritance() {
+    let cases: &[(&[&str], Option<&str>)] = &[
+        (&[], None),
+        (&["", "invalid", "*/*"], None),
+        (&["TEXT/PLAIN;CHARSET=GBK"], Some("text/plain;charset=GBK")),
+        (&["text/plain;p=MiXeD"], Some("text/plain;p=MiXeD")),
+        (&["text/plain;p=ÿ"], Some("text/plain;p=\"ÿ\"")),
+        (&["text/plain;charset=GBK", "text/html"], Some("text/html")),
+        (
+            &["text/html;charset=GBK;a=b", "text/html;x=y"],
+            Some("text/html;x=y;charset=GBK"),
+        ),
+        (
+            &["text/html;charset=GBK;a=b, text/html;x=y"],
+            Some("text/html;x=y;charset=GBK"),
+        ),
+        (
+            &[
+                "text/html;charset=GBK",
+                "text/html;charset=UTF-8",
+                "text/html",
+            ],
+            Some("text/html;charset=GBK"),
+        ),
+        (
+            &["text/html", "text/html;charset=GBK", "text/html"],
+            Some("text/html"),
+        ),
+        (
+            &["text/html;charset=GBK", "x/x", "text/html;x=y"],
+            Some("text/html;x=y"),
+        ),
+        (
+            &["text/html;charset=GBK", "invalid", "*/*", "", "text/html"],
+            Some("text/html;charset=GBK"),
+        ),
+        (
+            &["text/html;charset=\"\"", "text/html;x=y"],
+            Some("text/html;x=y;charset=\"\""),
+        ),
+        (
+            &[r#"text/html;charset="A\"B""#, "text/html"],
+            Some(r#"text/html;charset="A\"B""#),
+        ),
+        (
+            &[r#"text/html;x="A,B";charset=GBK"#, "text/html"],
+            Some("text/html;charset=GBK"),
+        ),
+        (
+            &[r#"text/html;x="A"#, "text/plain;charset=GBK"],
+            Some(r#"text/html;x="A, text/plain;charset=GBK""#),
+        ),
+    ];
+    for (values, expected) in cases {
+        let mut headers: Vec<_> = values
+            .iter()
+            .map(|value| ("cOnTeNt-TyPe".to_owned(), (*value).to_owned()))
+            .collect();
+        headers.push(("X-Content-Type".to_owned(), "text/ignored".to_owned()));
+        assert_eq!(
+            extract_response_mime_type(&headers)
+                .map(|mime| mime.to_string())
+                .as_deref(),
+            *expected,
+            "{values:?}"
+        );
+    }
+}
+
+#[test]
 fn derives_effective_response_mime_for_body_consumers() {
     let headers = vec![(
         "Content-Type".to_owned(),

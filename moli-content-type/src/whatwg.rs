@@ -36,6 +36,27 @@ impl MimeType {
             .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
             .map(|(_, value)| value.as_str())
     }
+
+    /// Mutably borrows the first parameter with the given ASCII-case-insensitive name.
+    pub fn parameter_mut(&mut self, name: &str) -> Option<&mut String> {
+        self.inner
+            .parameters
+            .iter_mut()
+            .find(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, value)| value)
+    }
+
+    /// Sets a parameter without changing its position, or appends it if absent.
+    /// The caller supplies a valid HTTP token name and MIME parameter value.
+    pub fn set_parameter(&mut self, name: &str, value: &str) {
+        if let Some(parameter) = self.parameter_mut(name) {
+            value.clone_into(parameter);
+        } else {
+            self.inner
+                .parameters
+                .push((name.to_ascii_lowercase(), value.to_owned()));
+        }
+    }
 }
 
 impl fmt::Display for MimeType {

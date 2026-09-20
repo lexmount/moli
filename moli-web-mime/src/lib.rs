@@ -23,16 +23,16 @@ pub use data_url::{
 };
 pub use destination::FetchDestination;
 pub use headers::{
-    effective_response_mime_essence, effective_response_mime_type,
-    normalize_response_blob_mime_type, response_blob_mime_type, response_content_type,
-    response_document_content_type, response_header_value, response_header_values,
-    response_headers_indicate_attachment_download, response_headers_indicate_binary_document,
-    response_headers_indicate_raw_document,
+    effective_response_mime_essence, effective_response_mime_type, extract_response_mime_essence,
+    extract_response_mime_type, normalize_response_blob_mime_type, response_blob_mime_type,
+    response_content_type, response_document_content_type, response_header_value,
+    response_header_values, response_headers_indicate_attachment_download,
+    response_headers_indicate_binary_document, response_headers_indicate_raw_document,
 };
 pub use media::{MediaMimeSupport, is_media_source_type_supported, media_mime_support};
 pub use parse::{
     mime_charset, mime_essence, mime_parameter, normalize_web_api_mime_type, parse_mime,
-    request_header_content_type_essence,
+    parse_mime_type, request_header_content_type_essence,
 };
 pub use resource::{
     known_url_path_mime_essence, resource_mime_essence_for_path, resource_mime_essence_for_url,

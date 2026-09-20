@@ -1,7 +1,5 @@
-use moli_content_type::parse_mime_type;
-
 pub use moli_content_type::{
-    mime_charset, mime_essence, mime_parameter, normalize_web_api_mime_type,
+    mime_charset, mime_essence, mime_parameter, normalize_web_api_mime_type, parse_mime_type,
 };
 
 pub fn parse_mime(input: &str) -> Option<mime::Mime> {
