@@ -1,5 +1,31 @@
 use super::*;
 
+pub(in crate::context_bootstrap) fn sync_same_document_navigation_commit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    href: &str,
+    navigation_type: &str,
+    notify: bool,
+) {
+    if !runtime_window_is_global(scope, owner) {
+        sync_local_document_front_from_window(scope, owner);
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Ok(url) = url::Url::parse(href) else {
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    // Publish at the entry commit, before any author callback can commit a
+    // nested navigation. A later publication would reverse browser history.
+    host.set_document_url(url.clone());
+    if notify {
+        host.record_same_document_navigation(&url, navigation_type);
+    }
+}
+
 pub(in crate::context_bootstrap) fn sync_local_document_front_from_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,

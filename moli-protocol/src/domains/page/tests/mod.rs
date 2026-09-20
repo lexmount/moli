@@ -433,4 +433,5 @@ mod lifecycle;
 mod navigation;
 mod resources;
 mod runtime;
+mod same_document_history;
 mod scripts;
