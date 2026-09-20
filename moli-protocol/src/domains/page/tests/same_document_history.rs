@@ -474,6 +474,278 @@ async fn navigation_transition_committed_resolves_without_a_history_entry() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn asynchronous_precommit_controllers_apply_final_redirects() {
+    for (owner, operation, mode) in [
+        ("top", "navigate", "push"),
+        ("top", "navigate", "replace"),
+        ("top", "download", "push"),
+        ("top", "download", "replace"),
+        ("top", "location", "push"),
+        ("top", "location", "replace"),
+        ("top", "reload", "add"),
+        ("top", "back", "add"),
+        ("child", "navigate", "push"),
+        ("child", "navigate", "replace"),
+        ("child", "download", "push"),
+        ("child", "download", "replace"),
+        ("child", "location", "push"),
+        ("child", "location", "replace"),
+        ("child", "reload", "add"),
+        ("popup", "navigate", "push"),
+        ("popup", "navigate", "replace"),
+        ("popup", "download", "push"),
+        ("popup", "download", "replace"),
+        ("popup", "location", "push"),
+        ("popup", "location", "replace"),
+        ("popup", "reload", "add"),
+        ("top", "navigate", "cancel-stop"),
+        ("top", "navigate", "cancel-navigate"),
+        ("top", "navigate", "reject"),
+        ("top", "download", "cancel-stop"),
+        ("top", "download", "cancel-navigate"),
+        ("top", "download", "reject"),
+        ("top", "location", "cancel-stop"),
+        ("top", "location", "cancel-navigate"),
+        ("top", "location", "reject"),
+        ("top", "navigate-cross-document", "push"),
+        ("top", "navigate-cross-document", "replace"),
+        ("top", "location-cross-document", "push"),
+        ("top", "location-cross-document", "replace"),
+        ("top", "anchor", "push"),
+        ("top", "anchor", "replace"),
+        ("top", "form", "push"),
+        ("top", "form", "replace"),
+        ("top", "navigate", "document-base"),
+        ("top", "download", "document-base"),
+        ("top", "navigate", "parallel"),
+    ] {
+        let mut page = SameDocumentPage::new().await;
+        page.allow_downloads().await;
+        let script = r###"(async () => {
+  const ownerKind = OWNER, operation = OPERATION, mode = MODE;
+  const parentURL = location.href;
+  let target = window, frame;
+  if (ownerKind === 'child') {
+    frame = document.createElement('iframe'); frame.src = 'history.html'; document.body.appendChild(frame);
+    await new Promise(resolve => frame.addEventListener('load', resolve, {once:true})); target = frame.contentWindow;
+  } else if (ownerKind === 'popup') {
+    target = open('history.html'); await new Promise(resolve => target.addEventListener('load', resolve, {once:true}));
+  }
+  const result = await (async () => {
+    const nav = target.navigation, loc = target.location, doc = target.document;
+    const tick = () => new Promise(resolve => target.setTimeout(resolve, 0));
+    if (operation === 'back') target.history.pushState(null, '', '#setup');
+    await tick();
+    const before = loc.href, entriesBefore = nav.entries().map(e => e.url), from = nav.currentEntry;
+    const checks = {}, order = [], states = {}, failures = [], transitionResults = [];
+    const canceled = mode.startsWith('cancel'), rejected = mode === 'reject';
+    const expectedError = new Error('precommit rejected');
+    let release, event, controller, transition, method, nested, addHandlerSupported;
+    let lateHandlerCalls = 0;
+    const controllerErrors = [];
+    const gate = new Promise(resolve => release = resolve);
+    const state = {step:1}, info = {phase:1};
+    const expectedKind = mode === 'replace' ? 'replace' : 'push';
+    const redirectFirst = mode === 'document-base' ? 'first#step' : '?redirect=1#first';
+    const redirectFinal = mode === 'document-base' ? 'final#final' : '?redirect=2#final';
+    if (mode === 'document-base') { const base = doc.createElement('base'); base.href='/redirect-base/';doc.head.appendChild(base); }
+    const finalURL = new URL(redirectFinal, mode === 'document-base' ? new URL('/redirect-base/', before).href : before).href;
+    const invalid = (phase, callback) => {
+      try { callback(); checks[phase] = false; }
+      catch(error) { controllerErrors.push({phase,name:error?.name}); checks[phase] = error.name === 'InvalidStateError'; }
+    };
+    const checkController = phase => {
+      if (canceled || rejected) {
+        try {
+          controller.redirect('#retained-event');
+          checks[phase+' redirect'] = event.destination.url.endsWith('#retained-event');
+        } catch { checks[phase+' redirect'] = false; }
+        if (addHandlerSupported) {
+          try { controller.addHandler(() => lateHandlerCalls++); checks[phase+' addHandler'] = true; }
+          catch { checks[phase+' addHandler'] = false; }
+        }
+      } else {
+        invalid(phase+' redirect', () => controller.redirect('#invalid'));
+        if (addHandlerSupported) invalid(phase+' addHandler', () => controller.addHandler(() => {}));
+      }
+    };
+    const observe = (name, promise) => promise.then(value => {
+      states[name] = 'fulfilled'; return value;
+    }, reason => { states[name] = 'rejected'; failures.push({name,kind:reason?.name,identity:reason===expectedError}); return reason; });
+    nav.addEventListener('currententrychange', () => {
+      if (!event || event.signal.aborted) return;
+      order.push('currententrychange'); checkController('at commit');
+    });
+    nav.addEventListener('navigatesuccess', () => { if (!event.signal.aborted) order.push('success'); });
+    nav.addEventListener('navigateerror', error => {
+      order.push('error'); checks['error reason'] = canceled ? error.error === event.signal.reason && error.error.name === 'AbortError' : error.error === expectedError;
+    }, {once:true});
+    nav.addEventListener('navigate', e => {
+      event = e;
+      e.intercept({async precommitHandler(c) {
+        controller = c; addHandlerSupported = typeof c.addHandler === 'function'; checks['addHandler supported'] = addHandlerSupported; order.push('precommit'); transition = nav.transition;
+        checks['transition identity'] = transition !== null && transition.from === from && transition.to === e.destination;
+        if (transition) {
+          transitionResults.push(observe('committed', transition.committed));
+          transitionResults.push(observe('finished', transition.finished));
+        }
+        await gate;
+        if (canceled) { checkController('after cancel'); return; }
+        if (rejected) throw expectedError;
+        checks['still pending after await'] = loc.href === before && nav.currentEntry === from && states.committed === undefined;
+        if (operation === 'reload' || operation === 'back') {
+          invalid('non-redirectable type', () => c.redirect('#invalid'));
+        } else {
+          c.redirect(redirectFirst, {history: expectedKind === 'push' ? 'replace' : 'push', state, info});
+          order.push('redirect1'); state.step = 2; info.phase = 2;
+          await tick();
+          c.redirect(redirectFinal, {history: expectedKind, state, info});
+          order.push('redirect2'); state.step = 99;
+          checks['redirect destination'] = e.destination.url === finalURL && e.destination.getState().step === 2 && e.info === info;
+          checks['redirect navigation type'] = e.navigationType === expectedKind;
+        }
+        if (addHandlerSupported) c.addHandler(() => {order.push('added'); checkController('added handler');});
+      }, handler() {
+        order.push('handler'); checkController('handler');
+        checks['commit visible in handler'] = doc.URL === loc.href && nav.currentEntry.url === loc.href;
+      }});
+    }, {once:true});
+    if (mode === 'parallel') nav.addEventListener('navigate', e => e.intercept({async precommitHandler(c) {
+      await gate; await tick(); await tick();
+      c.redirect(finalURL);
+      checks['parallel precommit remains active'] = loc.href === before && !order.includes('handler');
+      if (typeof c.addHandler === 'function') c.addHandler(() => order.push('parallel added'));
+    }}), {once:true});
+    if (operation.startsWith('navigate')) method = nav.navigate(new URL(operation === 'navigate' && mode !== 'cancel-stop' ? '#original' : '?requested=1#original',before).href, {state:{initial:true}});
+    else if (operation.startsWith('location')) loc.assign(operation === 'location' && mode !== 'cancel-stop' ? '#original' : '?requested=1#original');
+    else if (operation === 'anchor') { const a = doc.createElement('a'); a.href='?requested=1#original'; doc.body.appendChild(a); a.click(); }
+    else if (operation === 'form') { const form=doc.createElement('form');form.action='?requested=1#original';form.method='post';doc.body.appendChild(form);form.requestSubmit(); }
+    else if (operation === 'download') {
+      const a = doc.createElement('a'); a.href = '?download=1#original'; a.download = 'example.txt'; doc.body.appendChild(a); a.click();
+    } else method = nav[operation]();
+    const methodResults = method ? [observe('method committed',method.committed),observe('method finished',method.finished)] : [];
+    for (let i=0; i<50 && !controller && states['method committed'] === undefined; i++) await tick();
+    checks['precommit started'] = controller !== undefined;
+    await tick();
+    checks['pending before release'] = loc.href === before && nav.currentEntry === from && !order.includes('handler') && states.committed === undefined;
+    if (canceled) {
+      if (mode === 'cancel-stop') target.stop();
+      else nested = nav.navigate('#next');
+    }
+    release();
+    const all = Promise.all([...transitionResults,...methodResults]);
+    const settled = await Promise.race([all, new Promise(resolve => target.setTimeout(() => resolve(null),700))]);
+    checks['settled'] = settled !== null && transitionResults.length === 2;
+    if (nested) await nested.finished;
+    await tick();
+    checks['transition cleared'] = nav.transition === null;
+    checkController('after finish');
+    await tick();
+    if (canceled || rejected) {
+      checks['canceled handlers stay canceled'] = lateHandlerCalls === 0;
+      checks['rejected before commit'] = states.committed === 'rejected' && states.finished === 'rejected' && !order.includes('handler') && !order.includes('added');
+      checks['no late commit'] = loc.href === (nested ? new URL('#next',before).href : before);
+    } else {
+      checks['promise values'] = settled !== null && settled[0] === undefined && settled[1] === undefined && (!method || settled[2]===nav.currentEntry && settled[3]===nav.currentEntry);
+      checks['handler order'] = order.indexOf('currententrychange') < order.indexOf('handler') && (addHandlerSupported ? order.indexOf('handler') < order.indexOf('added') && order.indexOf('added') < order.indexOf('success') : order.indexOf('handler') < order.indexOf('success'));
+      if (operation !== 'reload' && operation !== 'back') {
+        const expectedEntries = mode === 'replace' ? [...entriesBefore.slice(0,-1),finalURL] : [...entriesBefore,finalURL];
+        checks['final history'] = JSON.stringify(nav.entries().map(e=>e.url)) === JSON.stringify(expectedEntries) && loc.href === finalURL && doc.URL === finalURL;
+        checks['entry state'] = operation.startsWith('navigate') ? nav.currentEntry.getState()?.step === 2 : nav.currentEntry.getState() === undefined;
+      }
+    }
+    return {ownerKind,operation,mode,addHandlerSupported,promiseValues:settled?.map(v=>({undefined:v===undefined,entry:v===nav.currentEntry,name:v?.name})),controllerErrors,checks,order,states,failures,href:loc.href,entries:nav.entries().map(e=>e.url),transitionType:transition?.navigationType,eventType:event?.navigationType};
+  })();
+  if (ownerKind !== 'top') { result.checks['parent unchanged'] = location.href === parentURL && navigation.transition === null; if(frame)frame.remove();else target.close(); }
+  return result;
+})()
+"###
+            .replace("OWNER", &json!(owner).to_string())
+            .replace("OPERATION", &json!(operation).to_string())
+            .replace("MODE", &json!(mode).to_string());
+        let result = page.evaluate(&script).await;
+        assert!(
+            result["checks"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|value| value == true),
+            "{owner}/{operation}/{mode}: {result}"
+        );
+        assert_eq!(
+            page.download_requests
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "intercepted download must not be fetched"
+        );
+        if owner == "top" {
+            if mode == "document-base" {
+                let browser = page.command("Page.getNavigationHistory", json!({})).await;
+                let urls: Vec<_> = browser["entries"].as_array().unwrap()[page.browser_base..]
+                    .iter()
+                    .map(|entry| entry["url"].clone())
+                    .collect();
+                assert_eq!(json!(urls), result["entries"]);
+                assert_eq!(browser["currentIndex"], json!(page.browser_base + 1));
+            } else {
+                match (operation, mode) {
+                    (_, "cancel-navigate") => page.assert_history(&["", "#next"], 1).await,
+                    (_, "cancel-stop" | "reject") | ("reload", _) => {
+                        page.assert_history(&[""], 0).await
+                    }
+                    ("back", _) => page.assert_history(&["", "#setup"], 0).await,
+                    (_, "replace") => page.assert_history(&["?redirect=2#final"], 0).await,
+                    _ => page.assert_history(&["", "?redirect=2#final"], 1).await,
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn asynchronous_precommit_controller_rejects_retired_windows() {
+    for owner in ["child", "popup"] {
+        let mut page = SameDocumentPage::new().await;
+        let script = r###"(async () => {
+  const ownerKind = OWNER;
+  const before = location.href;
+  let target, frame, controller, release;
+  const tick = () => new Promise(resolve => setTimeout(resolve,0));
+  if (ownerKind === 'child') {
+    frame=document.createElement('iframe');frame.src='history.html';document.body.appendChild(frame);
+    await new Promise(resolve=>frame.addEventListener('load',resolve,{once:true}));target=frame.contentWindow;
+  } else {
+    target=open('history.html');await new Promise(resolve=>target.addEventListener('load',resolve,{once:true}));
+  }
+  await tick();
+  target.navigation.addEventListener('navigate',event=>event.intercept({precommitHandler(c){controller=c;return new Promise(resolve=>release=resolve);}}),{once:true});
+  const method=target.navigation.navigate(new URL('#pending',target.location.href).href);
+  method.committed.catch(()=>{});method.finished.catch(()=>{});
+  for(let i=0;i<50&&!controller;i++) await tick();
+  const checks={'precommit started':controller!==undefined};
+  if(frame)frame.remove();else target.close();
+  for(const [name,invoke] of [['redirect',()=>controller.redirect('#late')],['addHandler',()=>controller.addHandler(()=>{})]]) {
+    try { invoke();checks[name+' after retirement']=false; }
+    catch(error) { checks[name+' after retirement']=error.name==='InvalidStateError'; }
+  }
+  release?.();await tick();
+  checks['parent unchanged']=location.href===before&&navigation.transition===null;
+  return {ownerKind,checks};
+})()
+"###.replace("OWNER", &json!(owner).to_string());
+        let result = page.evaluate(&script).await;
+        assert!(
+            result["checks"]
+                .as_object()
+                .unwrap()
+                .values()
+                .all(|value| value == true),
+            "{owner}: {result}"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn active_precommit_cancellation_rejects_owned_transition() {
     for operation in ["back", "navigate", "reload"] {
         for action in ["stop", "navigate", "intercept"] {
