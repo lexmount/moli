@@ -63,6 +63,14 @@ uv run python -m moli_benchmark.wpt_cross \
 Use `--mode cdp` to check the same cases through CDP. Unsupported formats
 remain failures in the report; they are not filtered out of this suite.
 
+HTML crashtests, identified by WPT's `-crash` filename flag or a `crashtests`
+directory, are also included within the semantic profile's existing filters.
+Runs containing crashtests use CDP in `--mode auto`; explicit CLI mode rejects
+them. The runner waits for load, fonts, two animation frames, and removal of
+`test-wait`, dispatching `TestRendered` when needed. Reports record these as
+`crashtest` with zero subtests. An outstanding wait remains a timeout, and a
+renderer crash is reported even when the browser process stays alive.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its

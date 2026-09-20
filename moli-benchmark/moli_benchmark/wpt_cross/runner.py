@@ -1,8 +1,8 @@
 """Per-engine WPT case runner.
 
-Connects to a launched :class:`EngineDriver` and executes either testharness
-cases (through ``window.__bench_wpt__``) or manifest-backed screenshot
-reftests at a fixed viewport.
+Connects to a launched :class:`EngineDriver` and executes testharness cases
+(through ``window.__bench_wpt__``), crashtests (through WPT readiness and crash
+signals), or manifest-backed screenshot reftests at a fixed viewport.
 
 Classifies each result as ``pass`` / ``fail`` / ``timeout`` / ``crash`` /
 ``error`` so that the cross-engine matrix can be built without rewriting raw
@@ -60,7 +60,14 @@ class ReftestRun:
     references: tuple[ReftestReferenceRun, ...]
 
 
-CaseRun = tuple[str, str] | tuple[str, str, float] | ReftestRun
+@dataclass(frozen=True)
+class CrashtestRun:
+    case_path: str
+    url: str
+    timeout_seconds: float
+
+
+CaseRun = tuple[str, str] | tuple[str, str, float] | ReftestRun | CrashtestRun
 
 
 # WPT testharness.js status constants (testharness.js: TestsStatus)
@@ -689,6 +696,97 @@ async def _run_one_case(
         js_exceptions=js_exceptions,
         error=error,
     )
+
+
+_CRASHTEST_READY_SCRIPT = Path(__file__).with_name("crashtest_ready.js").read_text(encoding="utf-8")
+
+
+async def _run_one_crashtest(
+    *,
+    client: RawCdpClient,
+    session_id: str,
+    target_id: str,
+    case: CrashtestRun,
+) -> CaseResult:
+    started = time.perf_counter()
+    deadline = started + case.timeout_seconds
+    seen: list[dict[str, Any]] = []
+
+    def result(status: str, error: str | None = None) -> CaseResult:
+        console_errors, js_exceptions = _count_traces(seen)
+        return CaseResult(
+            case_path=case.case_path,
+            url=case.url,
+            status=status,
+            duration_ms=(time.perf_counter() - started) * 1000.0,
+            error=error,
+            console_errors=console_errors,
+            js_exceptions=js_exceptions,
+            test_type="crashtest",
+            payload_source="crashtest-ready" if status == "pass" else None,
+        )
+
+    async def command(method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        command_id = await client.send(method, params, session_id=session_id)
+        while True:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                raise asyncio.TimeoutError()
+            message = await asyncio.wait_for(client.recv(), timeout=remaining)
+            seen.append(message)
+            # A renderer crash need not terminate the browser process or reply
+            # to the outstanding command. Observe it as soon as it arrives.
+            if (
+                message.get("method") == "Inspector.targetCrashed"
+                and message.get("sessionId") == session_id
+            ) or (
+                message.get("method") == "Target.targetCrashed"
+                and (message.get("params") or {}).get("targetId") == target_id
+            ):
+                raise _PageSessionUnusable(result("crash", "crashtest target crashed"))
+            if message.get("id") == command_id:
+                if "error" in message:
+                    raise RawCdpError(f"{method} failed: {message['error']}")
+                return message
+
+    try:
+        await command("Inspector.enable")
+        response = await command("Page.navigate", {"url": case.url})
+        identity = _navigation_identity(response, session_id=session_id, expected_url=case.url)
+        location_expression = "({href: location.href})"
+        while True:
+            response = await command(
+                "Runtime.evaluate", {"expression": location_expression, "returnByValue": True}
+            )
+            committed_url = _navigation_commit_url(seen, identity)
+            commit_error = _navigation_commit_error(identity, committed_url)
+            if commit_error is not None:
+                return result("error", commit_error)
+            value = _remote_object_value(response)
+            if (
+                committed_url is not None
+                and isinstance(value, dict)
+                and isinstance(value.get("href"), str)
+                and _normalized_navigation_url(value["href"]) == _normalized_navigation_url(case.url)
+            ):
+                break
+            await asyncio.sleep(min(0.025, max(0.0, deadline - time.perf_counter())))
+        response = await command(
+            "Runtime.evaluate",
+            {
+                "expression": f"({_CRASHTEST_READY_SCRIPT})({json.dumps(case.url)})",
+                "returnByValue": True,
+                "awaitPromise": True,
+            },
+        )
+        value = _remote_object_value(response)
+        if not isinstance(value, dict) or value.get("complete") is not True:
+            return result("error", f"crashtest readiness script failed: {response}")
+        return result("pass")
+    except asyncio.TimeoutError as error:
+        raise _PageSessionUnusable(result("timeout", "crashtest did not become ready within timeout")) from error
+    except RawCdpError as error:
+        raise _PageSessionUnusable(result("error", f"crashtest command failed: {error}")) from error
 
 
 _REFTEST_LOCATION_EXPRESSION = """
@@ -1466,6 +1564,13 @@ async def _run_async(
                         artifact_output_dir=artifact_output_dir,
                         reference_cache=reference_cache,
                     )
+                elif isinstance(case, CrashtestRun):
+                    case_result = await _run_one_crashtest(
+                        client=client,
+                        session_id=page.session_id,
+                        target_id=page.target_id,
+                        case=case,
+                    )
                 else:
                     case_result = await _run_one_case(
                         client=client,
@@ -1683,7 +1788,7 @@ async def _wait_then_retry_launch(
 
 
 def _case_parts(case: CaseRun, default_timeout: float) -> tuple[str, str, float]:
-    if isinstance(case, ReftestRun):
+    if isinstance(case, (ReftestRun, CrashtestRun)):
         return case.case_path, case.url, case.timeout_seconds
     if len(case) == 3:
         return case[0], case[1], case[2]
@@ -1691,6 +1796,8 @@ def _case_parts(case: CaseRun, default_timeout: float) -> tuple[str, str, float]
 
 
 def _case_test_type(case: CaseRun) -> str:
+    if isinstance(case, CrashtestRun):
+        return "crashtest"
     return "reftest" if isinstance(case, ReftestRun) else "testharness"
 
 

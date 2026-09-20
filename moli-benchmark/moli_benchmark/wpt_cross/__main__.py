@@ -14,8 +14,8 @@ The runner:
    profile from ``--wpt-root``.
 2. Starts a single fixture server (loopback + optional global IPv6 for Obscura).
 3. For each engine, launches it via :class:`EngineDriver`, runs every case
-   through the testharness bridge or the CDP screenshot reftest path, and
-   writes per-engine JSON results.
+   through the testharness bridge, crashtest readiness, or the CDP screenshot
+   reftest path, and writes per-engine JSON results.
 4. Emits ``matrix.json`` with the cross-engine pass/fail/timeout/crash table.
 """
 
@@ -42,6 +42,8 @@ from .cli_runner import run_engine_on_cases_cli
 from .engine import ENGINES, build_driver
 from .audit import audit_matrix, load_known_failure_manifest
 from .runner import (
+    CaseRun,
+    CrashtestRun,
     LAYOUT_VIEWPORT,
     MAX_RECORDED_FAILURES,
     ReftestReferenceRun,
@@ -580,8 +582,10 @@ def _cdp_case_run(
     *,
     external: bool,
     timeout_seconds: float,
-) -> tuple[str, str, float] | ReftestRun:
+) -> CaseRun:
     url = _url_for_case_origin(server, case.case_path, external=external)
+    if case.test_type == "crashtest":
+        return CrashtestRun(case.case_path, url, timeout_seconds)
     if case.test_type != "reftest":
         return case.case_path, url, timeout_seconds
     return ReftestRun(
@@ -604,8 +608,8 @@ def _cdp_case_run(
     )
 
 
-def _run_case_path(case: tuple[str, str, float] | ReftestRun) -> str:
-    return case.case_path if isinstance(case, ReftestRun) else case[0]
+def _run_case_path(case: CaseRun) -> str:
+    return case.case_path if isinstance(case, (ReftestRun, CrashtestRun)) else case[0]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -655,7 +659,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     has_reftests = any(case.test_type == "reftest" for case in cases)
+    has_crashtests = any(case.test_type == "crashtest" for case in cases)
     fixed_layout_viewport = _is_layout_profile(args.profile) or has_reftests
+    if has_crashtests and args.mode == "cli":
+        print("error: crashtests require CDP mode to observe readiness and crashes", file=sys.stderr)
+        return 4
+    requires_cdp = fixed_layout_viewport or has_crashtests
     if fixed_layout_viewport and args.mode == "cli":
         print(
             "error: layout profiles and reftests require CDP mode for fixed viewport screenshots",
@@ -704,7 +713,7 @@ def main(argv: list[str] | None = None) -> int:
         for engine in args.engine:
             driver = build_driver(engine)
             external = engine == "obscura"
-            mode_for_check = "cdp" if fixed_layout_viewport else args.mode
+            mode_for_check = "cdp" if requires_cdp else args.mode
             if mode_for_check == "auto":
                 mode_for_check = "cli" if driver.cli_fetch_command is not None else "cdp"
             if external and mode_for_check == "cdp" and server.external_base_url is None:
@@ -741,7 +750,7 @@ def main(argv: list[str] | None = None) -> int:
                 for case in scheduled_cases
             ]
 
-            mode = "cdp" if fixed_layout_viewport else args.mode
+            mode = "cdp" if requires_cdp else args.mode
             if mode == "auto":
                 mode = "cli" if driver.cli_fetch_command is not None else "cdp"
             elif mode == "cli" and driver.cli_fetch_command is None:
