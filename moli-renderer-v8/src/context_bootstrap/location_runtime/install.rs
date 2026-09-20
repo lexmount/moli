@@ -40,7 +40,7 @@ enum LocationAttribute {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::Location)]
+#[webapi(interface = web_api_interfaces::Location, receiver)]
 struct LocationOwnSurfaceDeclaration {
     #[webapi(
         accessor_property,
@@ -209,6 +209,7 @@ fn configure_location_instance_template(
             .flags(v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS),
     );
     template.set_immutable_proto();
+    super::access::install_access_check(template);
 }
 
 pub(in crate::context_bootstrap) fn build_location_runtime_object<'s>(
@@ -231,6 +232,7 @@ pub(in crate::context_bootstrap) fn install_location_runtime_state<'s>(
     location: v8::Local<'s, v8::Object>,
     href: &str,
 ) -> Result<()> {
+    let location = super::access::location_target(scope, location);
     sync_location_object_fields(scope, location, href);
     // Location's legacy-unforgeable own properties are non-configurable.
     // Window resets refresh the backing slots on the existing object without
@@ -439,6 +441,11 @@ fn location_attribute_getter<'s>(
     attribute: LocationAttribute,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !super::access::require_same_origin(scope, holder)
+        || !super::access::require_entry_origin(scope, holder)
+    {
+        return;
+    }
     let Some(current_href) = require_location_href_slot(scope, holder) else {
         return;
     };
@@ -522,10 +529,20 @@ fn location_writable_attribute_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    let holder = args.this();
+    if !matches!(attribute, LocationAttribute::Href)
+        && !super::access::require_same_origin(scope, holder)
+    {
+        return;
+    }
     let Some(value) = v8_value_to_string(scope, args.get(0)) else {
         return;
     };
-    let holder = args.this();
+    if !matches!(attribute, LocationAttribute::Href)
+        && !super::access::require_entry_origin(scope, holder)
+    {
+        return;
+    }
     if require_location_href_slot(scope, holder).is_none() {
         return;
     }

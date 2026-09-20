@@ -9,6 +9,38 @@ use std::{cell::RefCell, rc::Rc};
 const WINDOW_SECURITY_TOKEN_PREFIX: &str = "moli-window-origin-v1:";
 const WINDOW_ISOLATED_WORLD_SECURITY_TOKEN_PREFIX: &str = "moli-window-isolated-origin-v1:";
 
+pub(crate) fn window_contexts_allow_access(
+    accessing_context: v8::Local<'_, v8::Context>,
+    accessed_context: v8::Local<'_, v8::Context>,
+) -> bool {
+    if accessing_context == accessed_context {
+        return true;
+    }
+    let Some(accessing_host_ptr) =
+        crate::util::context_host_ptr_from_context_slot(accessing_context)
+    else {
+        return false;
+    };
+    let Some(accessed_host_ptr) = crate::util::context_host_ptr_from_context_slot(accessed_context)
+    else {
+        return false;
+    };
+    if accessing_host_ptr != accessed_host_ptr {
+        return false;
+    }
+    let host = unsafe { &*accessing_host_ptr };
+    if let (Some(accessing), Some(accessed)) = (
+        host.window_execution_context_identity_for_access_check(accessing_context),
+        host.window_execution_context_identity_for_access_check(accessed_context),
+    ) && host.window_execution_context_identity_is_current(accessing)
+        && host.window_execution_context_identity_is_current(accessed)
+    {
+        return host.window_execution_context_can_access(accessing, accessed);
+    }
+    // Script can retain objects after their execution registrations retire.
+    host.window_context_origins_allow_access(accessing_context, accessed_context)
+}
+
 #[derive(Clone, Default)]
 pub(in crate::native_bridge::context_host) struct DocumentDomainState(Rc<DocumentDomainStateData>);
 
