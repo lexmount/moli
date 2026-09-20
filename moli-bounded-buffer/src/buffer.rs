@@ -70,22 +70,23 @@ where
     /// longer fit. Retained entries keep their original insertion order.
     pub fn set_limits(&mut self, limits: ByteLimits) -> Vec<(K, V)> {
         self.limits = limits;
-        let oversized = self
-            .insertion_order
-            .iter()
-            .filter(|key| {
-                self.entries
-                    .get(*key)
-                    .is_some_and(|entry| entry.byte_len > limits.max_entry_bytes)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
         let mut evicted = Vec::new();
-        for key in oversized {
-            if let Some(value) = self.remove(&key) {
-                evicted.push((key, value));
+        // Filter the order once. Calling remove for every oversized entry
+        // would rescan the whole queue on each removal when budgets shrink.
+        self.insertion_order.retain(|key| {
+            if self
+                .entries
+                .get(key)
+                .is_none_or(|entry| entry.byte_len <= limits.max_entry_bytes)
+            {
+                return true;
             }
-        }
+            if let Some(entry) = self.entries.remove(key) {
+                self.used_bytes -= entry.byte_len;
+                evicted.push((key.clone(), entry.value));
+            }
+            false
+        });
         while self.used_bytes > limits.max_total_bytes {
             if let Some(entry) = self.pop_oldest() {
                 evicted.push(entry);
