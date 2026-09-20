@@ -2300,6 +2300,36 @@ impl CdpConnection {
         .await
     }
 
+    pub(crate) async fn prepare_navigation_load_error_for_navigation_async(
+        &mut self,
+        navigation: &NavigationDispatchState,
+        error_text: String,
+    ) -> Result<NavigationLoadOutcome, String> {
+        // Fetch continuation loaders currently share a String error boundary
+        // for protocol errors and network failures. Offline emulation is a
+        // navigation failure that commits an error Document, just as it does
+        // in BackgroundNavigationLoadJob; retain other errors unchanged.
+        if error_text != NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT {
+            return Err(error_text);
+        }
+
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
+        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
+        let page_reservation =
+            self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
+        prepare_network_error_page_navigation_with_engine_async(
+            &mut engine,
+            page_reservation,
+            &load_inputs,
+            navigation.requested_url.clone(),
+            navigation.request_method.clone(),
+            navigation.request_headers.clone(),
+            error_text,
+            RendererReplyBoundary::Stage,
+        )
+        .await
+    }
+
     #[allow(clippy::too_many_arguments)]
     async fn load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
         &mut self,

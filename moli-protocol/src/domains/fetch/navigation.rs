@@ -438,6 +438,17 @@ async fn complete_pending_fetch_navigation_result_into_buffer_async(
     let token = pending.document_navigation_token;
     let navigation_state = pending.navigation;
     let navigation =
+        match navigation {
+            Err(error_text) => {
+                Box::pin(conn.prepare_navigation_load_error_for_navigation_async(
+                    &navigation_state,
+                    error_text,
+                ))
+                .await
+            }
+            navigation => navigation,
+        };
+    let navigation =
         network::materialize_navigation_load_result(conn, &navigation_state, navigation);
     complete_tokened_materialized_navigation_into_buffer_async(
         conn,
