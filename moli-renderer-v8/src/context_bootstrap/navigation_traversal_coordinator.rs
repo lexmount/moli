@@ -3,7 +3,7 @@
 use super::history_runtime::{apply, results, traversal};
 use super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
-    reject_navigation_transition_committed,
+    take_navigation_transition_committed_resolver,
 };
 use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
 use super::navigation_events::{
@@ -334,13 +334,11 @@ fn settle_aborted_admission<'s>(
             let event = v8::Local::new(scope, event);
             precommit_transition_resolver_from_event(scope, event)
         });
-        if let Some(navigation) = navigation
-            && transition_resolver.is_some_and(|resolver| {
-                navigation_transition_matches_resolver(scope, navigation, resolver)
-            })
-        {
-            reject_navigation_transition_committed(scope, navigation, error);
-        }
+        let committed_resolver = navigation.and_then(|navigation| {
+            transition_resolver
+                .filter(|resolver| navigation_transition_matches_resolver(scope, navigation, *resolver))
+                .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation))
+        });
         if let Some(signal) = &participant.outcome.signal {
             let signal = v8::Local::new(scope, signal);
             crate::native_bridge::abort::abort_signal(scope, signal, error);
@@ -359,6 +357,9 @@ fn settle_aborted_admission<'s>(
             super::navigation_lifecycle::finish_navigation_error_events(
                 scope, navigation, error, &filename,
             );
+            if let Some(resolver) = committed_resolver {
+                let _ = resolver.reject(scope, error);
+            }
             super::navigation_lifecycle::settle_navigation_transition_finished_local(
                 scope, navigation, transition_resolver, Some(error),
             );
