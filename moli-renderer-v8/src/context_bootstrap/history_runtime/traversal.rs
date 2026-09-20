@@ -1,7 +1,7 @@
 use super::super::navigation_activation::{
     install_navigation_transition, navigation_transition_matches_resolver,
     precommit_transition_resolver_from_event, reject_navigation_transition_committed,
-    resolve_navigation_transition_committed,
+    resolve_navigation_transition_committed, take_navigation_transition_committed_resolver,
 };
 use super::super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_key_value,
@@ -700,15 +700,20 @@ pub(in crate::context_bootstrap) fn cancel_pending_precommit_history_traversal<'
         navigation_dom_exception(scope, "Navigation was canceled before commit", "AbortError");
     let _execution = ScriptExecutionScope::enter(scope);
     let transition_resolver = traversal_transition_resolver(scope, data.into());
-    reject_traversal_transition_committed(scope, navigation, transition_resolver, error);
+    let committed_resolver = transition_resolver
+        .filter(|resolver| navigation_transition_matches_resolver(scope, navigation, *resolver))
+        .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation));
     if let Some(signal) = signal
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
         unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
     }
-    finish_navigation_error_events(scope, navigation, error, "");
     reject_resolver_array(scope, committed_resolvers, error, false);
     reject_resolver_array(scope, finished_resolvers, error, true);
+    finish_navigation_error_events(scope, navigation, error, "");
+    if let Some(resolver) = committed_resolver {
+        let _ = resolver.reject(scope, error);
+    }
     settle_navigation_transition_finished_local(
         scope,
         navigation,
@@ -781,15 +786,20 @@ fn traversal_precommit_rejected_callback<'s>(
         .unwrap_or_else(|| args.get(0));
     let _execution = ScriptExecutionScope::enter(scope);
     let transition_resolver = traversal_transition_resolver(scope, args.data());
-    reject_traversal_transition_committed(scope, navigation, transition_resolver, error);
+    let committed_resolver = transition_resolver
+        .filter(|resolver| navigation_transition_matches_resolver(scope, navigation, *resolver))
+        .and_then(|_| take_navigation_transition_committed_resolver(scope, navigation));
     if let Some(signal) = signal
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
         unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
     }
-    finish_navigation_error_events(scope, navigation, error, "");
     reject_resolver_array(scope, committed_resolvers, error, false);
     reject_resolver_array(scope, finished_resolvers, error, true);
+    finish_navigation_error_events(scope, navigation, error, "");
+    if let Some(resolver) = committed_resolver {
+        let _ = resolver.reject(scope, error);
+    }
     settle_navigation_transition_finished_local(
         scope,
         navigation,

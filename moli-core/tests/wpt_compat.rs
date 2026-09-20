@@ -112,6 +112,8 @@ wpt_compat_cases! {
     wpt_compat_case_upstream_navigation_api_ordering_and_transition_anchor_download_intercept_reject_currententrychange => "upstream-navigation-api-ordering-and-transition-anchor-download-intercept-reject-currententrychange",
     wpt_compat_case_upstream_navigation_api_ordering_and_transition_navigate_intercept_precommithandler_redirect_no_currententrychange => "upstream-navigation-api-ordering-and-transition-navigate-intercept-precommithandler-redirect-no-currententrychange",
     wpt_compat_case_upstream_navigation_api_ordering_and_transition_navigate_intercept_precommithandler_redirect_currententrychange => "upstream-navigation-api-ordering-and-transition-navigate-intercept-precommithandler-redirect-currententrychange",
+    wpt_compat_case_upstream_navigation_api_ordering_and_transition_navigate_intercept_precommithandler_reject_tentative_no_currententrychange => "upstream-navigation-api-ordering-and-transition-navigate-intercept-precommithandler-reject-tentative-no-currententrychange",
+    wpt_compat_case_upstream_navigation_api_ordering_and_transition_navigate_intercept_precommithandler_reject_tentative_currententrychange => "upstream-navigation-api-ordering-and-transition-navigate-intercept-precommithandler-reject-tentative-currententrychange",
     wpt_compat_case_navigation_currententrychange_ignores_page_tampered_dispatch_basic => "navigation-currententrychange-ignores-page-tampered-dispatch-basic",
     wpt_compat_case_navigation_update_current_entry_event_surface_basic => "navigation-update-current-entry-event-surface-basic",
     wpt_compat_case_navigation_cross_document_currententrychange_quietness_basic => "navigation-cross-document-currententrychange-quietness-basic",
