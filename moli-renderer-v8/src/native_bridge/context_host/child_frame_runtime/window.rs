@@ -648,36 +648,7 @@ unsafe extern "C" fn window_access_check_callback(
     let Some(accessed_context) = accessed_object.get_creation_context(scope) else {
         return false;
     };
-    if accessing_context == accessed_context {
-        return true;
-    }
-
-    let Some(accessing_host_ptr) =
-        crate::util::context_host_ptr_from_context_slot(accessing_context)
-    else {
-        return false;
-    };
-    let Some(accessed_host_ptr) = crate::util::context_host_ptr_from_context_slot(accessed_context)
-    else {
-        return false;
-    };
-    if accessing_host_ptr != accessed_host_ptr {
-        return false;
-    }
-
-    let host = unsafe { &*accessing_host_ptr };
-    if let (Some(accessing), Some(accessed)) = (
-        host.window_execution_context_identity_for_access_check(accessing_context),
-        host.window_execution_context_identity_for_access_check(accessed_context),
-    ) && host.window_execution_context_identity_is_current(accessing)
-        && host.window_execution_context_identity_is_current(accessed)
-    {
-        return host.window_execution_context_can_access(accessing, accessed);
-    }
-
-    // Execution registrations retire before script-held globals do. Their
-    // origin-domain and access policy still govern synchronous Window access.
-    host.window_context_origins_allow_access(accessing_context, accessed_context)
+    super::super::window_contexts_allow_access(accessing_context, accessed_context)
 }
 
 impl JsContextHost {
@@ -2257,7 +2228,10 @@ fn build_detached_cross_origin_location_proxy<'s>(
 fn new_cross_origin_location_proxy_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> v8::Local<'s, v8::Object> {
-    new_null_prototype_object(scope)
+    let target = new_null_prototype_object(scope);
+    moli_webapi_declare::initialize_web_api_object(scope, target, "Location")
+        .expect("native Location target should accept its brand");
+    target
 }
 
 fn wrap_cross_origin_location_proxy<'s>(
@@ -2272,7 +2246,9 @@ fn wrap_cross_origin_location_proxy<'s>(
     }
     .bind(scope)
     .ok()?;
+    set_null_prototype(scope, handler);
     let proxy = v8::Proxy::new(scope, target, handler)?;
+    moli_webapi_declare::register_web_api_proxy(scope, proxy).ok()?;
     let proxy: v8::Local<'s, v8::Value> = proxy.into();
     v8::Local::<v8::Object>::try_from(proxy).ok()
 }
@@ -2341,7 +2317,16 @@ fn child_window_cross_origin_access_surface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    child_window_cross_origin_handler_data(scope, holder).map(|(surface, _)| surface)
+    let (surface, _) = child_window_cross_origin_handler_data(scope, holder)?;
+    if let Some(location) = crate::context_bootstrap::window_location_for_holder(scope, holder) {
+        set_private_value(
+            scope,
+            surface,
+            CROSS_ORIGIN_WINDOW_LOCATION_SLOT,
+            location.into(),
+        );
+    }
+    Some(surface)
 }
 
 fn child_window_cross_origin_handler_data<'s>(
@@ -2897,12 +2882,37 @@ fn cross_origin_window_length_getter_callback<'s>(
     rv.set_uint32(count as u32);
 }
 
+fn live_location_for_cross_origin_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if crate::web_api_interfaces::Window::is_instance(scope, receiver) {
+        return crate::context_bootstrap::window_location_for_holder(scope, receiver);
+    }
+    get_cross_origin_proxy_private_value(scope, receiver, CROSS_ORIGIN_WINDOW_LOCATION_SLOT)?;
+    let dispatch_scope = if let Some(popup_id) = cross_origin_lightweight_popup_id(scope, receiver)
+    {
+        super::super::OwnerDispatchScope::LightweightPopup(popup_id)
+    } else if is_cross_origin_top_window_proxy(scope, receiver) {
+        super::super::OwnerDispatchScope::Top
+    } else {
+        super::super::OwnerDispatchScope::Child(child_handle_from_object(scope, receiver)?)
+    };
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host = unsafe { &mut *host_ptr };
+    let owner = host.current_window_execution_context_owner(dispatch_scope)?;
+    let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
+    crate::context_bootstrap::window_location_for_holder(scope, context.global(scope))
+}
+
 fn cross_origin_window_location_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if let Some(location) =
+    if let Some(location) = live_location_for_cross_origin_window(scope, args.this()) {
+        rv.set(location.into());
+    } else if let Some(location) =
         get_cross_origin_proxy_private_value(scope, args.this(), CROSS_ORIGIN_WINDOW_LOCATION_SLOT)
     {
         rv.set(location);

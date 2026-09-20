@@ -10,6 +10,7 @@ pub(super) fn location_ancestor_origins_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let object = super::access::location_target(scope, object);
     get_private_object(scope, object, LOCATION_ANCESTOR_ORIGINS_SLOT)
 }
 
@@ -18,6 +19,7 @@ pub(super) fn set_location_ancestor_origins_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Object>,
 ) {
+    let object = super::access::location_target(scope, object);
     set_private_value(scope, object, LOCATION_ANCESTOR_ORIGINS_SLOT, value.into());
 }
 
@@ -25,6 +27,7 @@ pub(super) fn clear_location_ancestor_origins_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
+    let object = super::access::location_target(scope, object);
     let undefined = v8::undefined(scope);
     set_private_value(
         scope,
@@ -38,6 +41,7 @@ pub(super) fn location_empty_ancestor_origins_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let object = super::access::location_target(scope, object);
     get_private_object(scope, object, LOCATION_EMPTY_ANCESTOR_ORIGINS_SLOT)
 }
 
@@ -46,6 +50,7 @@ pub(super) fn set_location_empty_ancestor_origins_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Object>,
 ) {
+    let object = super::access::location_target(scope, object);
     set_private_value(
         scope,
         object,
@@ -58,6 +63,7 @@ pub(super) fn location_relevant_document_id_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<u64> {
+    let object = super::access::location_target(scope, object);
     let value = get_private_value(scope, object, LOCATION_RELEVANT_DOCUMENT_ID_SLOT)?;
     let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
     let (document_id, lossless) = value.u64_value();
@@ -69,6 +75,7 @@ pub(super) fn set_location_relevant_document_id_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     document_id: u64,
 ) {
+    let object = super::access::location_target(scope, object);
     let value = v8::BigInt::new_from_u64(scope, document_id);
     set_private_value(
         scope,
@@ -82,6 +89,7 @@ pub(super) fn location_relevant_local_window_id_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<u64> {
+    let object = super::access::location_target(scope, object);
     let value = get_private_value(scope, object, LOCATION_RELEVANT_LOCAL_WINDOW_ID_SLOT)?;
     let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
     let (local_window_id, lossless) = value.u64_value();
@@ -93,6 +101,7 @@ pub(super) fn set_location_relevant_local_window_id_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     local_window_id: u64,
 ) {
+    let object = super::access::location_target(scope, object);
     let value = v8::BigInt::new_from_u64(scope, local_window_id);
     set_private_value(
         scope,
@@ -107,6 +116,7 @@ pub(super) fn set_location_href_slot<'s>(
     object: v8::Local<'s, v8::Object>,
     href: &str,
 ) {
+    let object = super::access::location_target(scope, object);
     if let Some(href) = v8_string(scope, href) {
         set_private_value(scope, object, WINDOW_LOCATION_HREF_SLOT, href.into());
     }
@@ -116,6 +126,7 @@ pub(in crate::context_bootstrap) fn location_href_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    let object = super::access::location_target(scope, object);
     // Only a real Location wrapper may resolve the shared Window URL. The
     // generic owner helper falls back to the current global for unbound
     // objects, which would accidentally accept forged Location receivers.
@@ -127,6 +138,7 @@ pub(in crate::context_bootstrap) fn location_href_slot<'s>(
     .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
     .and_then(|owner| super::super::navigation_window::window_location_for_holder(scope, owner))
     .unwrap_or(object);
+    let object = super::access::location_target(scope, object);
     get_private_value(scope, object, WINDOW_LOCATION_HREF_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))

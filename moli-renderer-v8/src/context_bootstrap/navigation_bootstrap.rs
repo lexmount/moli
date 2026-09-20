@@ -2,8 +2,8 @@ use super::history_runtime::state::{history_window_owner, window_has_shared_hist
 use super::location_history_storage::WINDOW_RUNTIME_OWNER_SLOT;
 use super::location_runtime::{
     build_location_runtime_object, install_location_runtime_state,
-    location_belongs_to_current_local_window, location_owner_has_current_realm,
-    sync_window_location_history_navigation_runtime_surface,
+    location_belongs_to_current_local_window, location_owner_has_current_realm, location_target,
+    sync_window_location_history_navigation_runtime_surface, wrap_location_object,
 };
 use super::navigation_activation::{
     install_navigation_activation_runtime_state, set_navigation_current_entry,
@@ -44,7 +44,7 @@ fn new_location_runtime_object<'s>(
     LocationRuntimeObjectDeclaration::new(owner, href.to_owned())
         .initialize(scope, location)
         .map_err(|error| anyhow::anyhow!("failed to initialize Location object: {error}"))?;
-    Ok(location)
+    wrap_location_object(scope, location)
 }
 
 pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
@@ -97,6 +97,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
         Some(_) | None => None,
     };
     if let Some(location) = location {
+        let location = location_target(scope, location);
         LocationRuntimeObjectDeclaration::new(window, href.to_owned())
             .initialize(scope, location)
             .map_err(|error| anyhow::anyhow!("failed to initialize Location object: {error}"))?;
