@@ -590,18 +590,6 @@ impl JsContextHost {
                 })
     }
 
-    pub(crate) fn window_execution_context_identity_is_default_world(
-        &self,
-        identity: WindowExecutionContextIdentity,
-    ) -> bool {
-        self.window_execution_contexts
-            .get(&identity.owner())
-            .is_some_and(|binding| {
-                binding.dispatch_scope() == identity.dispatch_scope()
-                    && binding.realm_token() == identity.realm_token()
-            })
-    }
-
     pub(crate) fn allocate_runtime_observable_context_token(
         &mut self,
     ) -> RuntimeObservableContextToken {
