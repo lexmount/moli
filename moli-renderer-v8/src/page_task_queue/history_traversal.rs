@@ -186,6 +186,7 @@ impl RendererPageHistoryTraversalProducer {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageHistoryTraversalTargetEffect {
     AppliedToCurrentOwner,
+    RejectedStaleResults,
     DiscardedStaleOwner {
         current_owner: Option<RendererPageHistoryTraversalOwner>,
     },

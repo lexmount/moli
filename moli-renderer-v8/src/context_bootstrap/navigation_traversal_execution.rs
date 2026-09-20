@@ -27,7 +27,7 @@ use super::*;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::{
     NavigationHistoryEntrySeed, PendingCrossDocumentTraversal, PendingHistoryTraversal,
-    PendingHistoryTraversalAction, WindowTaskTarget,
+    PendingHistoryTraversalAction, PendingNavigationResult, WindowTaskTarget,
 };
 
 pub(super) struct TraversalTarget<'s> {
@@ -450,11 +450,18 @@ fn reject_cross_document_traversal(
     scope: &mut v8::PinScope<'_, '_>,
     traversal: &PendingCrossDocumentTraversal,
 ) {
-    if traversal.results.is_empty() {
+    reject_canceled_history_traversal_results(scope, &traversal.results);
+}
+
+pub(crate) fn reject_canceled_history_traversal_results(
+    scope: &mut v8::PinScope<'_, '_>,
+    results: &[PendingNavigationResult],
+) {
+    if results.is_empty() {
         return;
     }
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    reject_pending_navigation_results(scope, &traversal.results, error);
+    reject_pending_navigation_results(scope, results, error);
 }
 
 fn cancel_child_traversal_if_parent_joint_traversal_cancels<'s>(

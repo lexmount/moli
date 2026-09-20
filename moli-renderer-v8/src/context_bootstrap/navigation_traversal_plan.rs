@@ -34,8 +34,9 @@ pub(super) fn navigation_delta_traversal_plan<'s>(
         ));
     }
     let history = window_history_for_holder(scope, owner)?;
-    let current_index = pending_history_traversal_target_index(scope, history)
-        .unwrap_or_else(|| history_index(scope, history)) as i64;
+    // Navigation API methods select an entry relative to the committed
+    // current entry. Repeated calls before the task runs share that target.
+    let current_index = i64::from(history_index(scope, history));
     let entries = history_entries(scope, history)?;
     let current_entry = navigation_current_entry(scope, owner);
     let current_navigation_index = current_entry

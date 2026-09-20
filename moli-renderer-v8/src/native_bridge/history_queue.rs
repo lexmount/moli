@@ -826,15 +826,6 @@ impl JsContextHost {
             .take_pending_history_traversal_task(task_id)
     }
 
-    pub(crate) fn discard_pending_history_traversal_task(
-        &mut self,
-        task_id: RendererPageHistoryTraversalTaskId,
-    ) -> bool {
-        self.history_queue
-            .take_pending_history_traversal_task(task_id)
-            .is_some()
-    }
-
     pub(crate) fn current_pending_navigation_api_task_owner(
         &self,
         task_id: RendererPageNavigationApiTaskId,
