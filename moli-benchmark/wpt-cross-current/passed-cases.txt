@@ -6437,6 +6437,7 @@ html/browsers/history/the-location-interface/location_reload.html
 html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/location_replace.html
 html/browsers/history/the-location-interface/location_search.html
+html/browsers/history/the-location-interface/no-browsing-context.window.js?moli-wpt-script=window
 html/browsers/history/the-location-interface/reload_document_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/security_location_0.htm

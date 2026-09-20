@@ -1,6 +1,6 @@
 use super::location_runtime::{
-    is_same_document_fragment_navigation, location_href_slot, resolve_location_navigation_target,
-    sync_location_object,
+    is_same_document_fragment_navigation, location_has_relevant_document, location_href_slot,
+    resolve_location_navigation_target, sync_location_object,
 };
 use super::navigation_activation::install_navigation_transition;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
@@ -270,6 +270,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     source_element: Option<v8::Local<'s, v8::Object>>,
     options: LocationNavigationOptions,
 ) {
+    // The Location setters and methods return before URL parsing when their
+    // relevant Document is null, including when argument conversion removed it.
+    if !location_has_relevant_document(scope, location) {
+        return;
+    }
     let LocationNavigationOptions {
         dispatch_child_navigate_event_for_all_kinds,
         force_exact_same_document_navigation,
