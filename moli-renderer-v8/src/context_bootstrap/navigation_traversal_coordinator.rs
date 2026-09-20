@@ -1,6 +1,10 @@
 //! Admit, reserve and commit complete traversal plans, including zero or one participant.
 
 use super::history_runtime::{apply, results, traversal};
+use super::navigation_activation::{
+    navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
+    reject_navigation_transition_committed,
+};
 use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
 use super::navigation_events::{
     NavigationDispatchOutcome, dispatch_beforeunload_for_runtime_owner,
@@ -64,6 +68,7 @@ impl TraversalParticipantOutcome {
     fn capture(scope: &mut v8::PinScope<'_, '_>, outcome: &NavigationDispatchOutcome<'_>) -> Self {
         Self {
             intercepted: outcome.intercepted,
+            destination: outcome.destination.map(|value| v8::Global::new(scope, value)),
             signal: outcome.signal.map(|value| v8::Global::new(scope, value)),
             event: outcome
                 .precommit_event
@@ -80,6 +85,7 @@ impl TraversalParticipantOutcome {
     fn local<'s>(&self, scope: &mut v8::PinScope<'s, '_>) -> NavigationDispatchOutcome<'s> {
         let mut outcome = NavigationDispatchOutcome::proceed();
         outcome.intercepted = self.intercepted;
+        outcome.destination = self.destination.as_ref().map(|value| v8::Local::new(scope, value));
         outcome.signal = self
             .signal
             .as_ref()
@@ -323,12 +329,23 @@ fn settle_aborted_admission<'s>(
     });
     results::reject_pending_navigation_results(scope, &admission.results, error);
     for participant in &admission.participants {
+        let navigation = participant.navigation.as_ref().map(|value| v8::Local::new(scope, value));
+        let transition_resolver = participant.outcome.event.as_ref().and_then(|event| {
+            let event = v8::Local::new(scope, event);
+            precommit_transition_resolver_from_event(scope, event)
+        });
+        if let Some(navigation) = navigation
+            && transition_resolver.is_some_and(|resolver| {
+                navigation_transition_matches_resolver(scope, navigation, resolver)
+            })
+        {
+            reject_navigation_transition_committed(scope, navigation, error);
+        }
         if let Some(signal) = &participant.outcome.signal {
             let signal = v8::Local::new(scope, signal);
             crate::native_bridge::abort::abort_signal(scope, signal, error);
         }
-        if let Some(navigation) = &participant.navigation {
-            let navigation = v8::Local::new(scope, navigation);
+        if let Some(navigation) = navigation {
             let filename = if canceled {
                 let owner = super::navigation_window::runtime_window_owner(scope, navigation);
                 window_location_for_holder(scope, owner)
@@ -341,6 +358,9 @@ fn settle_aborted_admission<'s>(
             };
             super::navigation_lifecycle::finish_navigation_error_events(
                 scope, navigation, error, &filename,
+            );
+            super::navigation_lifecycle::settle_navigation_transition_finished_local(
+                scope, navigation, transition_resolver, Some(error),
             );
         }
     }
