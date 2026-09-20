@@ -231,7 +231,7 @@ pub(super) fn require_entry_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if !super::install::location_belongs_to_current_local_window(scope, object) {
+    if !super::install::location_has_relevant_document(scope, object) {
         return true;
     }
     let entry = scope.get_entered_or_microtask_context();
