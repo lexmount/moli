@@ -323,7 +323,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         return;
     }
     let owner = runtime_window_owner(scope, location);
-    if navigation_unload_event_active(scope, owner) {
+    if navigation_unload_event_active(scope, owner)
+        || super::navigation_cancellation::window_navigation_is_stopping(scope, owner)
+    {
         return;
     }
     if sandbox_blocks_ancestor_or_top_location_navigation(scope, owner) {
@@ -612,7 +614,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         return;
     }
 
-    if let Some(popup_id) = popup_id {
+    if let Some(popup_id) = popup_id
+        && resolved.scheme() == "javascript"
+    {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let _ = unsafe { &mut *host_ptr }
                 .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
@@ -629,6 +633,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         && let Some(navigation) =
             super::navigation_window::window_navigation_for_holder(scope, owner)
     {
+        if popup_id.is_some() {
+            super::navigation_result::cancel_active_cross_document_navigation(
+                scope, navigation, None,
+            );
+        }
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_pending_precommit_same_document_navigation(scope, navigation);
         cancel_pending_precommit_history_traversal(scope, navigation);
@@ -733,6 +742,22 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             );
             return;
         }
+        if popup_id.is_some() {
+            super::navigation_result::track_cross_document_location_navigation(
+                scope,
+                navigation,
+                outcome.signal,
+                resolved.as_str(),
+            );
+        }
+    }
+
+    if let Some(popup_id) = popup_id {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let _ = unsafe { &mut *host_ptr }
+                .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
+        }
+        return;
     }
 
     if let Some(handle) = child_handle {
@@ -1093,7 +1118,7 @@ fn settle_location_intercepted_same_document_navigation<'s>(
     );
 }
 
-fn history_entry_seed_for_cross_document_location<'s>(
+pub(crate) fn history_entry_seed_for_cross_document_location<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     resolved: &url::Url,
@@ -1105,7 +1130,7 @@ fn history_entry_seed_for_cross_document_location<'s>(
     let mutation = match kind {
         LocationNavigationKind::Assign => NavigationHistoryMutation::Push,
         LocationNavigationKind::Replace => NavigationHistoryMutation::Replace,
-        LocationNavigationKind::Reload => return None,
+        LocationNavigationKind::Reload => return history_entry_seed_for_reload(scope, owner),
     };
     let mut seed = cross_document_navigation_seed(
         serialize_history_entries(scope, history),

@@ -70,9 +70,9 @@ struct CrossDocumentPendingNavigationDeclaration<'scope> {
     #[webapi(slot = CROSS_DOCUMENT_PENDING_SIGNAL_SLOT)]
     signal: Option<v8::Local<'scope, v8::Object>>,
     #[webapi(slot = CROSS_DOCUMENT_PENDING_COMMITTED_REJECT_SLOT)]
-    committed_reject: v8::Local<'scope, v8::Function>,
+    committed_reject: Option<v8::Local<'scope, v8::Function>>,
     #[webapi(slot = CROSS_DOCUMENT_PENDING_FINISHED_REJECT_SLOT)]
-    finished_reject: v8::Local<'scope, v8::Function>,
+    finished_reject: Option<v8::Local<'scope, v8::Function>>,
     #[webapi(slot = CROSS_DOCUMENT_PENDING_HREF_SLOT)]
     href: v8::Local<'scope, v8::Value>,
 }
@@ -176,14 +176,29 @@ pub(super) fn navigation_cross_document_pending_result<'s>(
         .unwrap_or_else(|| v8::String::empty(scope).into());
     let data = CrossDocumentPendingNavigationDeclaration::new(
         signal,
-        committed_reject,
-        finished_reject,
+        Some(committed_reject),
+        Some(finished_reject),
         href,
     )
     .bind(scope)
     .expect("cross-document pending navigation declaration should bind");
     set_navigation_active_cross_document_pending(scope, navigation, data);
     navigation_result_object(scope, committed, finished)
+}
+
+pub(super) fn track_cross_document_location_navigation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+    signal: Option<v8::Local<'s, v8::Object>>,
+    href: &str,
+) {
+    let href = v8_string(scope, href)
+        .map(v8::Local::<v8::Value>::from)
+        .unwrap_or_else(|| v8::String::empty(scope).into());
+    let data = CrossDocumentPendingNavigationDeclaration::new(signal, None, None, href)
+        .bind(scope)
+        .expect("cross-document Location navigation declaration should bind");
+    set_navigation_active_cross_document_pending(scope, navigation, data);
 }
 
 pub(super) fn navigation_immediate_current_entry_result<'s>(
@@ -421,6 +436,17 @@ pub(super) fn clear_active_cross_document_navigation_if_matches<'s>(
         .map(|value| value.to_rust_string_lossy(scope));
     if active_href.as_deref() == Some(href) {
         clear_active_cross_document_navigation(scope, navigation);
+    }
+}
+
+pub(crate) fn finish_cross_document_navigation_for_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    href: &str,
+) {
+    if let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, window)
+    {
+        clear_active_cross_document_navigation_if_matches(scope, navigation, href);
     }
 }
 
