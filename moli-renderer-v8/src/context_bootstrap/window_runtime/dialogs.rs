@@ -1,6 +1,6 @@
 use super::super::{
     location_navigation::{LocationNavigationKind, navigate_location_object_with_source_element},
-    navigation_cancellation::inform_about_canceled_navigation_for_window,
+    navigation_cancellation::stop_navigation_for_window_and_descendants,
 };
 use crate::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
@@ -107,24 +107,28 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
-        webidl::throw_type_error(scope, "Window.stop called on incompatible receiver.");
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
-    }
-    let owner = super::super::navigation_window::runtime_window_owner(scope, args.this());
-    if super::super::navigation_window::navigation_unload_event_active(scope, owner) {
+    };
+    let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
+        scope,
+        args.this(),
+        unsafe { &*host_ptr },
+    ) {
+        Ok(receiver) => receiver,
+        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
+            webidl::throw_type_error(scope, "Window.stop called on incompatible receiver.");
+            return;
+        }
+        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
+            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+            return;
+        }
+    };
+    let Some(binding) = receiver.resolve_live_binding(unsafe { &*host_ptr }) else {
         return;
-    }
-    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
-        super::super::navigation_window::runtime_window_dispatch_scope(scope, owner)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && unsafe { &*host_ptr }.child_browsing_context_has_pending_cross_document_traversal(handle)
-    {
-        // Unlike an ordinary navigation, session history traversal is not
-        // canceled by Window.stop().
-        return;
-    }
-    inform_about_canceled_navigation_for_window(scope, args.this());
+    };
+    stop_navigation_for_window_and_descendants(scope, args.this(), binding);
 }
 
 pub(in crate::context_bootstrap) fn window_confirm_callback<'s>(
