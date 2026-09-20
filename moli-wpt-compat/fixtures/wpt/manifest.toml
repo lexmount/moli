@@ -20933,6 +20933,23 @@ notes = "Unmodified upstream test for precommit rejection and transition/Promise
 query = "currententrychange"
 
 [[test]]
+id = "upstream-navigation-api-precommit-handler-precommithandler-window-stop-before-commit"
+upstream = "web-platform-tests/navigation-api/precommit-handler/precommitHandler-window-stop-before-commit.html"
+upstream_commit = "86f7d9f9f3656576f8c32aed865efda91e531eae"
+local_path = "upstream/navigation-api/precommit-handler/precommitHandler-window-stop-before-commit.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "navigation-api/precommit-handler/precommitHandler-window-stop-before-commit.html"
+source_commit = "86f7d9f9f3656576f8c32aed865efda91e531eae"
+tags = ["navigation-api", "precommit-handler", "navigation", "window-stop"]
+notes = "Unmodified upstream test including the June 2026 correction requiring Window.stop() to cancel intercepted fragment navigations."
+
+[[test]]
 id = "testharness-dom-exception-assertions"
 upstream = "local WPT harness DOMException assertion overload and realm canary"
 upstream_commit = "local-regression-2026-09-20"
