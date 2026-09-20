@@ -1,0 +1,48 @@
+<!doctype html>
+<meta charset="utf-8">
+<script src="/wpt/resources/testharness.js"></script>
+<script src="/wpt/resources/testharnessreport.js"></script>
+<script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<body>
+<script>
+test(() => {
+  const error = new DOMException("canceled", "AbortError");
+  const fail = () => { throw error; };
+  assert_throws_dom("AbortError", fail);
+  assert_throws_dom("AbortError", fail, "implicit current realm");
+  assert_throws_dom("AbortError", DOMException, fail);
+  assert_throws_dom("AbortError", DOMException, fail, "explicit current realm");
+}, "DOM exception assertions accept implicit and explicit constructors");
+
+test(t => {
+  const frame = document.createElement("iframe");
+  document.body.appendChild(frame);
+  t.add_cleanup(() => frame.remove());
+  const ForeignDOMException = frame.contentWindow.DOMException;
+  assert_not_equals(ForeignDOMException, DOMException);
+  const foreign = new ForeignDOMException("canceled", "AbortError");
+  assert_throws_dom("AbortError", ForeignDOMException, () => { throw foreign; });
+  assert_throws_js(AssertionError, () => {
+    assert_throws_dom("AbortError", DOMException, () => { throw foreign; });
+  });
+  assert_throws_js(AssertionError, () => {
+    assert_throws_dom("AbortError", () => { throw foreign; });
+  });
+}, "DOM exception assertions enforce the selected realm");
+
+test(() => {
+  for (const error of [
+    {name: "AbortError"},
+    Object.assign(new Error("wrong constructor"), {name: "AbortError"}),
+    new DOMException("wrong name", "InvalidStateError"),
+  ]) {
+    assert_throws_js(AssertionError, () => {
+      assert_throws_dom("AbortError", DOMException, () => { throw error; });
+    });
+  }
+  assert_throws_js(AssertionError, () => assert_throws_dom("AbortError", DOMException, () => {}));
+  assert_throws_js(AssertionError, () => assert_throws_dom("AbortError", () => {}, "description", "extra"));
+  const error = new AssertionError("nested assertion");
+  assert_throws_exactly(error, () => assert_throws_dom("AbortError", () => { throw error; }));
+}, "DOM exception assertions reject mismatches and preserve nested assertions");
+</script>

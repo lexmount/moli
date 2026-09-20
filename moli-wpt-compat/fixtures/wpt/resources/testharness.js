@@ -836,12 +836,30 @@
     throw assertionError((description || "assert_throws_exactly") + ": did not throw");
   };
 
-  global.assert_throws_dom = function (name, callback, description) {
+  global.assert_throws_dom = function (name, funcOrConstructor, descriptionOrFunc, maybeDescription) {
+    let constructor = global.DOMException;
+    let callback = funcOrConstructor;
+    let description = descriptionOrFunc;
+    if (typeof funcOrConstructor === "function" && funcOrConstructor.name === "DOMException") {
+      constructor = funcOrConstructor;
+      callback = descriptionOrFunc;
+      description = maybeDescription;
+    } else if (maybeDescription !== undefined) {
+      throw assertionError("Too many args passed to no-constructor version of assert_throws_dom");
+    }
     const expectedName = domExceptionLegacyNames[name] || name;
     try {
       callback();
     } catch (error) {
+      if (error instanceof global.AssertionError) {
+        throw error;
+      }
       if (error && error.name === expectedName) {
+        if (error.constructor !== constructor) {
+          throw assertionError(
+            (description || "assert_throws_dom") + ": exception came from the wrong global",
+          );
+        }
         return;
       }
       throw assertionError(

@@ -75,6 +75,7 @@ wpt_compat_cases! {
     wpt_compat_case_cssstyledeclaration_basic => "cssstyledeclaration-basic",
     wpt_compat_case_eventtarget_idlharness => "eventtarget-idlharness",
     wpt_compat_case_idlharness_shim_basic => "idlharness-shim-basic",
+    wpt_compat_case_testharness_dom_exception_assertions => "testharness-dom-exception-assertions",
     wpt_compat_case_cssstyledeclaration_idlharness => "cssstyledeclaration-idlharness",
     wpt_compat_case_cssstylesheet_idlharness => "cssstylesheet-idlharness",
     wpt_compat_case_upstream_css_css_properties_values_api_property_cascade => "upstream-css-css-properties-values-api-property-cascade",
