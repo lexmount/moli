@@ -208,7 +208,7 @@ pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element,
-    history_entry_seed_for_cross_document_location, is_native_location, navigate_borrowed_location,
+    history_entry_seed_for_cross_document_location, history_entry_seed_for_location_kind, is_native_location, navigate_borrowed_location,
     navigate_child_meta_refresh, navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
@@ -233,6 +233,7 @@ pub(crate) use navigation_history_pruning::{
     NavigationHistoryPrunePlan, apply_navigation_history_prune_plan,
     finalize_navigation_history_prune, plan_navigation_history_prune,
 };
+pub(crate) use navigation_result::finish_cross_document_navigation_for_window;
 pub(crate) use navigation_result::{
     NavigationFinishedResultApplication, apply_pending_navigation_finished_result,
 };

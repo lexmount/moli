@@ -505,7 +505,9 @@ fn navigate_location_object_with_options<'s>(
         return;
     }
     let owner = runtime_window_owner(scope, location);
-    if navigation_unload_event_active(scope, owner) {
+    if navigation_unload_event_active(scope, owner)
+        || super::navigation_cancellation::window_navigation_is_stopping(scope, owner)
+    {
         return;
     }
     if sandbox_blocks_ancestor_or_top_location_navigation(scope, owner) {
@@ -815,7 +817,9 @@ fn navigate_location_object_with_options<'s>(
         return;
     }
 
-    if let Some(popup_id) = popup_id {
+    if let Some(popup_id) = popup_id
+        && resolved.scheme() == "javascript"
+    {
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let _ = unsafe { &mut *host_ptr }
                 .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
@@ -828,7 +832,9 @@ fn navigate_location_object_with_options<'s>(
     } else {
         child_browsing_context_handle_for_runtime_owner(scope, owner)
     };
-    if let Some(handle) = child_handle {
+    if popup_id.is_none()
+        && let Some(handle) = child_handle
+    {
         let is_javascript_url = resolved.scheme() == "javascript";
         let host_ptr = context_host_ptr_for_navigation_owner(scope, owner);
         let replaces_initial_empty_document = !is_javascript_url
@@ -925,10 +931,16 @@ fn navigate_top_level_cross_document_location<'s>(
     navigate_event: Option<LocationNavigateEvent<'s>>,
     navigation_source: Option<LocationNavigationSource>,
 ) {
+    let popup_id = crate::native_bridge::lightweight_popup_id_from_window(scope, owner);
     if let Some(event) = navigate_event
         && let Some(navigation) =
             super::navigation_window::window_navigation_for_holder(scope, owner)
     {
+        if popup_id.is_some() {
+            super::navigation_result::cancel_active_cross_document_navigation(
+                scope, navigation, None,
+            );
+        }
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_pending_precommit_same_document_navigation(scope, navigation);
         cancel_pending_precommit_history_traversal(scope, navigation);
@@ -978,6 +990,22 @@ fn navigate_top_level_cross_document_location<'s>(
             );
             return;
         }
+        if popup_id.is_some() {
+            super::navigation_result::track_cross_document_location_navigation(
+                scope,
+                navigation,
+                outcome.signal,
+                resolved.as_str(),
+            );
+        }
+    }
+
+    if let Some(popup_id) = popup_id {
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let _ = unsafe { &mut *host_ptr }
+                .navigate_lightweight_popup_window_to_url(scope, popup_id, resolved, kind);
+        }
+        return;
     }
 
     if let Some(location) = location
@@ -989,21 +1017,7 @@ fn navigate_top_level_cross_document_location<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let entry_seed = match kind {
-        LocationNavigationKind::Assign => history_entry_seed_for_cross_document_location(
-            scope,
-            owner,
-            &resolved,
-            NavigationHistoryMutation::Push,
-        ),
-        LocationNavigationKind::Replace => history_entry_seed_for_cross_document_location(
-            scope,
-            owner,
-            &resolved,
-            NavigationHistoryMutation::Replace,
-        ),
-        LocationNavigationKind::Reload => history_entry_seed_for_reload(scope, owner),
-    };
+    let entry_seed = history_entry_seed_for_location_kind(scope, owner, &resolved, kind);
     unsafe { &mut *host_ptr }.record_pending_location_navigation_with_kind(
         resolved,
         entry_seed,
@@ -1468,6 +1482,29 @@ fn child_history_entry_seed_for_location(
         }
     }
     Some(seed)
+}
+
+pub(crate) fn history_entry_seed_for_location_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    resolved: &url::Url,
+    kind: LocationNavigationKind,
+) -> Option<NavigationHistoryEntrySeed> {
+    match kind {
+        LocationNavigationKind::Assign => history_entry_seed_for_cross_document_location(
+            scope,
+            owner,
+            resolved,
+            NavigationHistoryMutation::Push,
+        ),
+        LocationNavigationKind::Replace => history_entry_seed_for_cross_document_location(
+            scope,
+            owner,
+            resolved,
+            NavigationHistoryMutation::Replace,
+        ),
+        LocationNavigationKind::Reload => history_entry_seed_for_reload(scope, owner),
+    }
 }
 
 pub(crate) fn history_entry_seed_for_cross_document_location<'s>(
