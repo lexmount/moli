@@ -62,7 +62,7 @@ pub(crate) struct PendingHistoryTraversal {
     pub(crate) results: Vec<PendingNavigationResult>,
 }
 
-pub(crate) struct PendingChildCrossDocumentTraversal {
+pub(crate) struct PendingCrossDocumentTraversal {
     pub(crate) target: WindowTaskTarget,
     pub(crate) target_index: u32,
     pub(crate) target_key: Option<String>,
@@ -80,7 +80,7 @@ struct NavigationResultDeclaration<'scope> {
 
 pub(crate) enum PendingHistoryTraversalAction {
     SameDocument(PendingHistoryTraversal),
-    ChildCrossDocument(Box<PendingChildCrossDocumentTraversal>),
+    CrossDocument(Box<PendingCrossDocumentTraversal>),
 }
 
 pub(crate) struct QueuedHistoryTraversalTask {
@@ -124,7 +124,7 @@ impl HistoryQueueState {
                     Some(pending.target_index)
                 }
                 PendingHistoryTraversalAction::SameDocument(_)
-                | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
+                | PendingHistoryTraversalAction::CrossDocument(_) => None,
             })
     }
 
@@ -157,7 +157,7 @@ impl HistoryQueueState {
                             Some(pending)
                         }
                         PendingHistoryTraversalAction::SameDocument(_)
-                        | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
+                        | PendingHistoryTraversalAction::CrossDocument(_) => None,
                     })
         {
             if let Some(result) = result {
@@ -187,11 +187,11 @@ impl HistoryQueueState {
         Some(task_id)
     }
 
-    fn queue_child_cross_document_traversal(
+    fn queue_cross_document_history_traversal(
         &mut self,
         execution_context: WindowExecutionContextIdentity,
         relevant_context: WindowExecutionContextBinding,
-        traversal: PendingChildCrossDocumentTraversal,
+        traversal: PendingCrossDocumentTraversal,
     ) -> RendererPageHistoryTraversalTaskId {
         let task_id = self.next_history_traversal_task_id;
         self.next_history_traversal_task_id = task_id
@@ -202,7 +202,7 @@ impl HistoryQueueState {
                 task_id,
                 execution_context,
                 relevant_context,
-                action: PendingHistoryTraversalAction::ChildCrossDocument(Box::new(traversal)),
+                action: PendingHistoryTraversalAction::CrossDocument(Box::new(traversal)),
             });
         task_id
     }
@@ -405,7 +405,7 @@ impl JsContextHost {
             .find_map(|queued| {
                 let step = match &queued.action {
                     PendingHistoryTraversalAction::SameDocument(pending) => pending.joint_step,
-                    PendingHistoryTraversalAction::ChildCrossDocument(pending) => {
+                    PendingHistoryTraversalAction::CrossDocument(pending) => {
                         pending.seed.session_history.target_step
                     }
                 }?;
@@ -548,7 +548,7 @@ impl JsContextHost {
                         pending.results.first()
                     }
                     PendingHistoryTraversalAction::SameDocument(_)
-                    | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
+                    | PendingHistoryTraversalAction::CrossDocument(_) => None,
                 })
         {
             // Repeated requests share the original tracker, including its
@@ -598,7 +598,7 @@ impl JsContextHost {
         Some((result, producer))
     }
 
-    pub(crate) fn queue_child_cross_document_traversal<'s>(
+    pub(crate) fn queue_cross_document_history_traversal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
@@ -609,10 +609,10 @@ impl JsContextHost {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
         let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
         let sender = self.page_history_traversal_sender();
-        let task_id = self.history_queue.queue_child_cross_document_traversal(
+        let task_id = self.history_queue.queue_cross_document_history_traversal(
             execution_context,
             relevant_context,
-            PendingChildCrossDocumentTraversal {
+            PendingCrossDocumentTraversal {
                 target,
                 target_index,
                 target_key,
@@ -625,12 +625,12 @@ impl JsContextHost {
             execution_context,
             target,
             task_id,
-            RendererPageHistoryTraversalTaskKind::ChildCrossDocument,
+            RendererPageHistoryTraversalTaskKind::CrossDocument,
         ))
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn queue_child_cross_document_traversal_with_result<'s>(
+    pub(crate) fn queue_cross_document_history_traversal_with_result<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
@@ -651,10 +651,10 @@ impl JsContextHost {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
         let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
         let sender = self.page_history_traversal_sender();
-        let task_id = self.history_queue.queue_child_cross_document_traversal(
+        let task_id = self.history_queue.queue_cross_document_history_traversal(
             execution_context,
             relevant_context,
-            PendingChildCrossDocumentTraversal {
+            PendingCrossDocumentTraversal {
                 target,
                 target_index,
                 target_key,
@@ -672,7 +672,7 @@ impl JsContextHost {
                 execution_context,
                 target,
                 task_id,
-                RendererPageHistoryTraversalTaskKind::ChildCrossDocument,
+                RendererPageHistoryTraversalTaskKind::CrossDocument,
             ),
         ))
     }
@@ -694,9 +694,9 @@ impl JsContextHost {
                 pending.target,
                 RendererPageHistoryTraversalTaskKind::SameDocument,
             ),
-            PendingHistoryTraversalAction::ChildCrossDocument(pending) => (
+            PendingHistoryTraversalAction::CrossDocument(pending) => (
                 pending.target,
-                RendererPageHistoryTraversalTaskKind::ChildCrossDocument,
+                RendererPageHistoryTraversalTaskKind::CrossDocument,
             ),
         };
         if self.current_window_execution_context_owner(target.dispatch_scope())
@@ -720,9 +720,9 @@ impl JsContextHost {
                 pending.target,
                 RendererPageHistoryTraversalTaskKind::SameDocument,
             ),
-            PendingHistoryTraversalAction::ChildCrossDocument(pending) => (
+            PendingHistoryTraversalAction::CrossDocument(pending) => (
                 pending.target,
-                RendererPageHistoryTraversalTaskKind::ChildCrossDocument,
+                RendererPageHistoryTraversalTaskKind::CrossDocument,
             ),
         };
         if queued.execution_context != execution_context

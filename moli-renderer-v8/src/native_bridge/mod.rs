@@ -35,8 +35,9 @@ use super::{
 
 use bindings::NativeBridgeBindings;
 pub(crate) use history_queue::{
-    NavigationAttemptId, PendingHistoryTraversal, PendingHistoryTraversalAction,
-    PendingNavigationApiTaskAction, PendingNavigationFinishedResult, PendingNavigationResult,
+    NavigationAttemptId, PendingCrossDocumentTraversal, PendingHistoryTraversal,
+    PendingHistoryTraversalAction, PendingNavigationApiTaskAction, PendingNavigationFinishedResult,
+    PendingNavigationResult,
 };
 use identity::{BridgeHandle, BridgeIdentityStore, DomTokenListKind, ReflectorId};
 use identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind};
