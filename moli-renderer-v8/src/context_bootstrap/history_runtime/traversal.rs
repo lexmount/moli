@@ -329,7 +329,8 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
                 }
                 return;
             }
-            let Some(applied) = apply_history_entry_commit(scope, history, traversal.target_index)
+            let Some(applied) =
+                apply_history_entry_commit(scope, history, traversal.target_index, Some("other"))
             else {
                 let error =
                     navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
@@ -672,7 +673,8 @@ fn traversal_precommit_fulfilled_callback<'s>(
     if let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) {
         set_traversal_precommit_inactive(scope, data);
     }
-    let Some(applied) = apply_history_entry_commit(scope, history, target_index) else {
+    let Some(applied) = apply_history_entry_commit(scope, history, target_index, Some("other"))
+    else {
         let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
         finish_navigation_error_events(scope, navigation, error, "");
         reject_resolver_array(scope, committed_resolvers, error, false);

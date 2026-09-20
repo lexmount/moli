@@ -5,6 +5,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
     owner: v8::Local<'s, v8::Object>,
     href: &str,
     kind: LocationNavigationKind,
+    protocol_navigation_type: &str,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -85,6 +86,17 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
         }
         LocationNavigationKind::Reload => return,
     }
+    sync_same_document_navigation_commit(
+        scope,
+        owner,
+        href,
+        protocol_navigation_type,
+        Some(match kind {
+            LocationNavigationKind::Assign => SameDocumentHistoryUpdate::Push,
+            LocationNavigationKind::Replace => SameDocumentHistoryUpdate::Replace,
+            LocationNavigationKind::Reload => return,
+        }),
+    );
     let navigation_type = match kind {
         LocationNavigationKind::Assign => Some("push"),
         LocationNavigationKind::Replace => Some("replace"),
@@ -106,6 +118,7 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
     href: &str,
     kind: LocationNavigationKind,
     navigation_state: Option<v8::Local<'s, v8::Value>>,
+    protocol_navigation_type: &str,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -159,6 +172,13 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
             if let Some(location) = window_location_for_holder(scope, owner) {
                 sync_location_object(scope, location, href);
             }
+            sync_same_document_navigation_commit(
+                scope,
+                owner,
+                href,
+                protocol_navigation_type,
+                Some(SameDocumentHistoryUpdate::Push),
+            );
             dispatch_navigation_currententrychange(scope, navigation, previous_entry, Some("push"));
             dispatch_pruned_history_entry_disposes(scope, pruned_entries);
             prune_top_forward_entries_after_child_same_document_push(scope, owner);
@@ -192,6 +212,13 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
             if let Some(location) = window_location_for_holder(scope, owner) {
                 sync_location_object(scope, location, href);
             }
+            sync_same_document_navigation_commit(
+                scope,
+                owner,
+                href,
+                protocol_navigation_type,
+                Some(SameDocumentHistoryUpdate::Replace),
+            );
             dispatch_navigation_currententrychange(
                 scope,
                 navigation,

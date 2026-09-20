@@ -16,6 +16,7 @@ use super::navigation_events::{
     run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
+use super::navigation_mutation::sync_same_document_navigation_commit;
 use super::navigation_projection::set_history_length_at_least_visible_entries;
 use super::navigation_result::{
     cancel_pending_same_document_navigation_finishes,
@@ -302,6 +303,16 @@ fn mutate_history_object<'s>(
     set_history_state(scope, history, current_state);
     sync_location_object(scope, location, url.as_str());
     sync_navigation_current_entry_from_history_entry(scope, owner, entry);
+    sync_same_document_navigation_commit(
+        scope,
+        owner,
+        url.as_str(),
+        "historyApi",
+        Some(match kind {
+            HistoryMutationKind::Push => SameDocumentHistoryUpdate::Push,
+            HistoryMutationKind::Replace => SameDocumentHistoryUpdate::Replace,
+        }),
+    );
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         refresh_navigation_destination_indexes(scope, navigation, history);
         dispatch_navigation_currententrychange(
@@ -346,24 +357,6 @@ fn mutate_history_object<'s>(
         }
     }
     sync_child_navigation_entry_seed_from_owner(scope, owner);
-    if runtime_window_is_global(scope, owner) {
-        let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-            return;
-        };
-        let host = unsafe { &mut *host_ptr };
-        host.set_document_url(url.clone());
-        let history_update = match kind {
-            HistoryMutationKind::Push => SameDocumentHistoryUpdate::Push,
-            HistoryMutationKind::Replace => SameDocumentHistoryUpdate::Replace,
-        };
-        host.record_same_document_navigation(&url, "historyApi", history_update);
-    } else if let Some(popup_id) =
-        crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        let _ =
-            unsafe { &mut *host_ptr }.set_lightweight_popup_same_document_url(scope, popup_id, url);
-    }
 }
 
 fn resolve_history_state_url(base_url: &url::Url, target: &str) -> Option<url::Url> {
