@@ -2896,6 +2896,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "moli-parkable-image"
+version = "0.1.0"
+dependencies = [
+ "moli-disk-pool",
+ "parking_lot",
+]
+
+[[package]]
 name = "moli-parser"
 version = "0.1.0"
 dependencies = [

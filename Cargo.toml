@@ -40,6 +40,7 @@ members = [
     "moli-parser",
     "moli-paint",
     "moli-page-types",
+    "moli-parkable-image",
     "moli-process-signal",
     "moli-renderer-v8",
     "moli-robots",
