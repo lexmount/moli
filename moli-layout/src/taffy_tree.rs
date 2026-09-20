@@ -2059,6 +2059,7 @@ where
                 &context,
                 resolved_aspect_ratio,
                 &style,
+                writing_mode,
                 inputs.sizing_mode,
                 inputs.axis,
             );

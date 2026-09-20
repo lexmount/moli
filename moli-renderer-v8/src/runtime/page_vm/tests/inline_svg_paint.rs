@@ -1,6 +1,76 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_sizes_viewbox_only_svg_from_available_inline_space() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/inline-svg-auto-size.html")?,
+        );
+        let fixture = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/inline-svg-auto-size.html"
+        ));
+        page_vm.vm_mut().eval(&format!(
+            "document.documentElement.innerHTML = {}; 'installed'",
+            serde_json::to_string(fixture)?,
+        ))?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))?
+            .expect("inline SVG sizing fixture must retain a layout root");
+        let geometry = page_vm.vm_mut().eval(
+            "JSON.stringify(Object.fromEntries([...document.querySelectorAll('svg')].map(element => { const rect = element.getBoundingClientRect(); return [element.id, [rect.width, rect.height]]; })))",
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        // Measured in Chromium 145. A viewBox supplies a ratio, not a fixed
+        // 150px natural size; definite author sizes may still overflow.
+        for (id, expected) in [
+            ("plus", [24, 24]),
+            ("padded-parent", [24, 24]),
+            ("wide", [24, 12]),
+            ("no-ratio", [300, 150]),
+            ("width", [80, 80]),
+            ("css-height", [32, 32]),
+            ("margin", [20, 13]),
+            ("css-ratio", [24, 12]),
+            ("percent", [24, 24]),
+            ("min", [40, 40]),
+            ("max", [20, 20]),
+            ("absolute", [64, 64]),
+            ("absolute-left", [54, 54]),
+            ("absolute-right", [54, 54]),
+            ("absolute-insets", [44, 44]),
+            ("absolute-margin", [48, 48]),
+            ("shrink", [0, 0]),
+            ("shrink-percent", [300, 300]),
+        ] {
+            assert_eq!(
+                geometry[id],
+                serde_json::json!(expected),
+                "Chromium-calibrated SVG geometry mismatch for {id}: {geometry}",
+            );
+        }
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| {
+            let index = ((y * raster.width + x) * 4) as usize;
+            <[u8; 4]>::try_from(&raster.rgba[index..index + 4]).expect("RGBA pixel")
+        };
+        assert_eq!(pixel(24, 24), [34, 34, 34, 255]);
+        assert_eq!(pixel(14, 24), [238, 238, 238, 255]);
+        assert_eq!(pixel(30, 30), [238, 238, 238, 255]);
+        assert_eq!(pixel(24, 55), [255, 255, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("inline SVG automatic sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_projects_external_svg_root_paint_like_chromium() {
     run_page_vm_async_test(async move {
         let loader =

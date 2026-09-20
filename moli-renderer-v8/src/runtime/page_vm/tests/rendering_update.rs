@@ -3623,10 +3623,9 @@ document.body.innerHTML = `
         assert_eq!(first_pixel(65, 5), [100, 106, 115, 255]);
         assert_eq!(first_pixel(80, 5), [255, 255, 255, 255]);
         assert_eq!(first_pixel(140, 40), [0, 128, 0, 255]);
-        // A viewBox-only square uses its 1:1 ratio inside the CSS 300x150
-        // default object size, yielding a 150x150 replaced box rather than
-        // losing the ratio and stretching to 300x150.
-        assert_eq!(first_pixel(170, 40), [255, 255, 255, 255]);
+        // The viewBox-only square stretches to the containing block's width
+        // and transfers that width through its 1:1 ratio, like Chromium.
+        assert_eq!(first_pixel(170, 40), [0, 128, 0, 255]);
 
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
