@@ -32,6 +32,7 @@ impl HistoryTraversalId {
 #[derive(Default)]
 pub(crate) struct TraversalParticipantOutcome {
     pub(crate) intercepted: bool,
+    pub(crate) destination: Option<v8::Global<v8::Object>>,
     pub(crate) signal: Option<v8::Global<v8::Object>>,
     pub(crate) event: Option<v8::Global<v8::Object>>,
     pub(crate) intercept_result: Option<v8::Global<v8::Value>>,
