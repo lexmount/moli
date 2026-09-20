@@ -30,7 +30,24 @@ pub(super) fn parsed_location_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<url::Url> {
-    location_href_slot(scope, object).and_then(|href| url::Url::parse(&href).ok())
+    location_url(scope, object).and_then(|href| url::Url::parse(&href).ok())
+}
+
+pub(super) fn location_url<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let href = require_location_href_slot(scope, object)?;
+    // A retained Location has no relevant Document after its Window loses its
+    // browsing context. Its URL is then about:blank, independent of the old
+    // Document's URL or any new Window created for the same iframe element.
+    Some(
+        if super::install::location_has_relevant_document(scope, object) {
+            href
+        } else {
+            "about:blank".to_owned()
+        },
+    )
 }
 
 pub(super) fn require_location_href_slot<'s>(

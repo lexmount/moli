@@ -57,7 +57,8 @@
     await tick();
     check(mode + ':retired-timer-inactive', () => timerCalls, 0);
     check(mode + ':document', () => win.document === doc, true);
-    check(mode + ':location', () => win.location.href, url);
+    // With no relevant Document, Location exposes about:blank; the retained Document keeps its URL.
+    check(mode + ':location', () => win.location.href, 'about:blank');
     result.observations.push({mode, defaultViewIsNull: doc.defaultView === null});
     check(mode + ':own-data', () => win.retainedMarker === marker, true);
     check(mode + ':intrinsic', () => win.Event === eventConstructor, true);
