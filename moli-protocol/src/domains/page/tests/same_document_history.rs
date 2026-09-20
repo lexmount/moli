@@ -3,6 +3,7 @@ use super::*;
 mod child_history_traversal;
 mod popup_network_navigation;
 mod response_gate;
+mod stale_history_traversal;
 
 use response_gate::ResponseGate;
 
