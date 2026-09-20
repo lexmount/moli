@@ -1,9 +1,14 @@
+use super::history_runtime::cancel_pending_precommit_history_traversal;
 use super::location_runtime::{
     is_same_document_fragment_navigation, location_has_relevant_document, location_href_slot,
     resolve_location_navigation_target, sync_location_object,
 };
-use super::navigation_activation::install_navigation_transition;
-use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
+use super::navigation_activation::{install_navigation_transition};
+use super::navigation_callbacks::{
+    cancel_active_intercepted_same_document_navigation,
+    cancel_pending_precommit_same_document_navigation,
+    queue_pending_precommit_same_document_navigation,
+};
 use super::navigation_entry::history_state_value;
 use super::navigation_entry::{
     history_index, navigation_current_entry, navigation_current_entry_index,
@@ -13,7 +18,7 @@ use super::navigation_events::{
     NavigationDispatchOutcome, cancel_active_navigation_event,
     dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data,
     dispatch_navigation_navigate_event_with_form_data_and_outcome,
-    dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event,
+    dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event, finish_navigation_precommit,
     queue_hash_change_for_runtime_owner,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
@@ -425,6 +430,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         };
         let mut navigate_outcome = navigation.map(|navigation| {
             let _ = cancel_active_navigation_event(scope, navigation);
+            cancel_pending_precommit_same_document_navigation(scope, navigation);
+            cancel_pending_precommit_history_traversal(scope, navigation);
             cancel_active_intercepted_same_document_navigation(scope, navigation);
             cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
             dispatch_navigation_navigate_event_with_outcome(
@@ -472,6 +479,35 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         if let Some(navigation) = navigation {
             cancel_pending_same_document_navigation_finishes(scope, navigation);
+        }
+        if let Some(outcome) = navigate_outcome.as_ref()
+            && let Some(event) = outcome.precommit_event
+        {
+            let redirected_kind = match outcome.redirected_history.as_deref() {
+                Some("replace") => LocationNavigationKind::Replace,
+                Some("push") => LocationNavigationKind::Assign,
+                _ => effective_kind,
+            };
+            if queue_pending_precommit_same_document_navigation(
+                scope,
+                owner,
+                event,
+                outcome,
+                &current_href,
+                outcome
+                    .redirected_url
+                    .as_deref()
+                    .unwrap_or(resolved.as_str()),
+                redirected_kind,
+                None,
+                None,
+                None,
+                None,
+                None,
+            ) {
+                return;
+            }
+            finish_navigation_precommit(scope, event);
         }
         let transition_resolver = navigation.and_then(|navigation| {
             navigate_outcome
@@ -594,6 +630,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             super::navigation_window::window_navigation_for_holder(scope, owner)
     {
         let _ = cancel_active_navigation_event(scope, navigation);
+        cancel_pending_precommit_same_document_navigation(scope, navigation);
+        cancel_pending_precommit_history_traversal(scope, navigation);
         cancel_active_intercepted_same_document_navigation(scope, navigation);
         cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
         let navigation_type = match kind {
@@ -646,6 +684,25 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     _ => LocationNavigationKind::Assign,
                 })
                 .unwrap_or(kind);
+            if let Some(event) = outcome.precommit_event {
+                if queue_pending_precommit_same_document_navigation(
+                    scope,
+                    owner,
+                    event,
+                    &outcome,
+                    &current_href,
+                    &effective_href,
+                    effective_kind,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                ) {
+                    return;
+                }
+                finish_navigation_precommit(scope, event);
+            }
             let transition_resolver = navigation_current_entry(scope, owner).and_then(|from| {
                 install_navigation_transition(
                     scope,
@@ -853,6 +910,8 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
         .and_then(|location| location_href_slot(scope, location))
         .unwrap_or_default();
     let _ = cancel_active_navigation_event(scope, navigation);
+    cancel_pending_precommit_same_document_navigation(scope, navigation);
+    cancel_pending_precommit_history_traversal(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
     let outcome = dispatch_navigation_navigate_event_with_outcome(
@@ -877,6 +936,34 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
         return false;
     }
     cancel_pending_same_document_navigation_finishes(scope, navigation);
+    if let Some(event) = outcome.precommit_event {
+        let kind = match outcome
+            .redirected_history
+            .as_deref()
+            .unwrap_or(navigation_type)
+        {
+            "replace" => LocationNavigationKind::Replace,
+            "reload" => LocationNavigationKind::Reload,
+            _ => LocationNavigationKind::Assign,
+        };
+        if queue_pending_precommit_same_document_navigation(
+            scope,
+            global,
+            event,
+            &outcome,
+            &current_href,
+            outcome.redirected_url.as_deref().unwrap_or(href),
+            kind,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ) {
+            return false;
+        }
+        finish_navigation_precommit(scope, event);
+    }
     !outcome.intercepted
 }
 
@@ -899,6 +986,8 @@ pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
         .and_then(|location| location_href_slot(scope, location))
         .unwrap_or_default();
     let _ = cancel_active_navigation_event(scope, navigation);
+    cancel_pending_precommit_same_document_navigation(scope, navigation);
+    cancel_pending_precommit_history_traversal(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
     let outcome = dispatch_navigation_navigate_event_with_form_data_and_outcome(
@@ -924,6 +1013,34 @@ pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
         return false;
     }
     cancel_pending_same_document_navigation_finishes(scope, navigation);
+    if let Some(event) = outcome.precommit_event {
+        let kind = match outcome
+            .redirected_history
+            .as_deref()
+            .unwrap_or(navigation_type)
+        {
+            "replace" => LocationNavigationKind::Replace,
+            "reload" => LocationNavigationKind::Reload,
+            _ => LocationNavigationKind::Assign,
+        };
+        if queue_pending_precommit_same_document_navigation(
+            scope,
+            global,
+            event,
+            &outcome,
+            &current_href,
+            outcome.redirected_url.as_deref().unwrap_or(href),
+            kind,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ) {
+            return false;
+        }
+        finish_navigation_precommit(scope, event);
+    }
     !outcome.intercepted
 }
 

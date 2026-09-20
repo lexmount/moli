@@ -3,7 +3,9 @@ use super::super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event, reject_navigation_transition_committed,
     resolve_navigation_transition_committed,
 };
-use super::super::navigation_events::dispatch_popstate_event;
+use super::super::navigation_events::{
+    dispatch_popstate_event, finish_navigation_precommit, navigation_precommit_redirect,
+};
 use super::super::navigation_lifecycle::{
     begin_navigation_attempt, cancel_navigation_attempt, complete_navigation_attempt,
     finish_navigation_error_events, finish_navigation_success_events,
@@ -413,6 +415,12 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             rv.set(pending.object.into());
             return;
         }
+        if let Some(event) = navigate_outcome
+            .as_ref()
+            .and_then(|outcome| outcome.precommit_event)
+        {
+            finish_navigation_precommit(scope, event);
+        }
         let transition_from = navigate_outcome
             .as_ref()
             .is_some_and(|outcome| outcome.intercepted)
@@ -608,6 +616,9 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             {
                 rv.set(pending.object.into());
                 return;
+            }
+            if let Some(event) = outcome.precommit_event {
+                finish_navigation_precommit(scope, event);
             }
             let transition_from = navigation_current_entry(scope, owner);
             let transition_to = outcome.destination;
@@ -1149,6 +1160,19 @@ fn pending_precommit_commit_data<'s>(
         get_private_value(scope, data, PRECOMMIT_COMMIT_TRANSITION_RESOLVER_SLOT)
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
             .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) });
+    let (redirected_href, redirected_history, redirected_state) =
+        navigation_precommit_redirect(scope, event);
+    let effective_href = redirected_href.unwrap_or(effective_href);
+    let effective_kind = match redirected_history.as_deref() {
+        Some("replace") => LocationNavigationKind::Replace,
+        Some("push") => LocationNavigationKind::Assign,
+        _ => effective_kind,
+    };
+    let effective_state = if committed_resolve.is_some() {
+        redirected_state.or(effective_state)
+    } else {
+        effective_state
+    };
     Some(PendingPrecommitCommitData {
         owner,
         navigation,
@@ -1178,6 +1202,7 @@ fn precommit_commit_fulfilled_callback<'s>(
     let Some(data) = pending_precommit_commit_data(scope, args.data()) else {
         return;
     };
+    finish_navigation_precommit(scope, data.event);
     if let Ok(raw_data) = v8::Local::<v8::Object>::try_from(args.data()) {
         complete_precommit_commit_attempt(scope, raw_data);
         set_pending_precommit_commit_active(scope, data.navigation, raw_data, false);

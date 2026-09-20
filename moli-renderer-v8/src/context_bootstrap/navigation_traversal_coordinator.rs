@@ -447,6 +447,12 @@ struct CrossDocumentParticipant<'s> {
 }
 
 fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalAdmission) {
+    for participant in &admission.participants {
+        if let Some(event) = &participant.outcome.event {
+            let event = v8::Local::new(scope, event);
+            super::navigation_events::finish_navigation_precommit(scope, event);
+        }
+    }
     let Some(targets) = validate(scope, admission) else {
         abort(scope, admission, None);
         return;
