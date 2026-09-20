@@ -327,10 +327,10 @@ pub(super) fn navigation_reload_callback<'s>(
                     &current_href,
                     LocationNavigationKind::Reload,
                     cloned_navigation_state,
-                    pending.committed_resolve,
-                    pending.committed_reject,
-                    pending.finished_resolve,
-                    pending.finished_reject,
+                    Some(pending.committed_resolve),
+                    Some(pending.committed_reject),
+                    Some(pending.finished_resolve),
+                    Some(pending.finished_reject),
                 )
             {
                 rv.set(pending.object.into());

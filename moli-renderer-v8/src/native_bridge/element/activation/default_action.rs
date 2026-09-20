@@ -1756,7 +1756,8 @@ fn anchor_download_activation(
         .and_then(|document| runtime.child_browsing_context_host_for_document_handle(document))
         .and_then(|child| runtime.frame_owner_frame_id_for_child_handle(child))
         .map(|frame| frame.0);
-    let source_element = node_wrapper_from_handle(scope, handle);
+    let source_element = crate::native_bridge::wrapped_handle_value(scope, runtime_ptr, handle)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
     let download_request = suggested_filename.as_deref().unwrap_or("");
     let proceed =
         navigation_owner_window_for_handle(scope, runtime_ptr, handle).is_none_or(|owner| {
