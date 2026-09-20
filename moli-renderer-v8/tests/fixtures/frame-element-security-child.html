@@ -1,0 +1,26 @@
+<!doctype html><body><script>
+onmessage = async event => {
+  if (event.data !== 'frame-element-security') return;
+  const get = Object.getOwnPropertyDescriptor(window, 'frameElement').get;
+  const probe = callback => {
+    try {
+      const value = callback();
+      return value === null ? 'null' : value.tagName;
+    } catch (error) {
+      return error.name + ':' + (error instanceof DOMException);
+    }
+  };
+  const nested = document.createElement('iframe');
+  const loaded = new Promise(resolve => nested.onload = resolve);
+  nested.src = location.href;
+  document.body.appendChild(nested);
+  await loaded;
+  event.source.postMessage({
+    own: probe(() => frameElement),
+    borrowed: probe(() => get.call(window)),
+    parent: probe(() => get.call(parent)),
+    nested: probe(() => nested.contentWindow.frameElement),
+    nestedBorrowed: probe(() => get.call(nested.contentWindow))
+  }, '*');
+};
+</script>
