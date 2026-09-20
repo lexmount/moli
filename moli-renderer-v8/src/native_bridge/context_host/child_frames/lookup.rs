@@ -108,7 +108,7 @@ impl PageScriptHost {
             .collect()
     }
 
-    fn child_browsing_context_direct_frame_handles_for_document(
+    pub(crate) fn child_browsing_context_direct_frame_handles_for_document(
         &self,
         document: DomHandle,
     ) -> Vec<DomHandle> {
