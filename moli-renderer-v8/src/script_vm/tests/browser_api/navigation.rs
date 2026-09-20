@@ -215,12 +215,22 @@ async fn javascript_form_actions_execute_without_serializing_the_entry_list() {
 
 #[test]
 fn location_assign_before_complete_load_respects_user_activation() {
-    for activated in [false, true] {
+    for activation in ["none", "protocol", "input"] {
+        let activated = activation != "none";
         let mut vm = new_storage_test_vm("https://location-before-load.test/source");
-        if activated {
+        if activation == "protocol" {
             vm._context_host
                 .borrow_mut()
                 .begin_protocol_user_gesture_activation();
+        } else if activation == "input" {
+            vm.eval("if (!document.documentElement) document.appendChild(document.createElement('html')); if (!document.body) document.documentElement.appendChild(document.createElement('body'));").unwrap();
+            vm.dispatch_key_event("keydown", "x", "KeyX", "x", 0, false, false)
+                .unwrap();
+            assert_eq!(
+                vm.eval("navigator.userActivation.isActive").unwrap(),
+                "true"
+            );
+            assert!(!vm._context_host.borrow().protocol_user_gesture_activation());
         }
         let navigation_type = vm
             .eval(
@@ -232,7 +242,7 @@ fn location_assign_before_complete_load_respects_user_activation() {
         "#,
             )
             .expect("Location navigation must expose its resolved history behavior");
-        if activated {
+        if activation == "protocol" {
             vm._context_host
                 .borrow_mut()
                 .end_protocol_user_gesture_activation();
