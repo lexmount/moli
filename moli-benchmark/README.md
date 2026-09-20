@@ -80,6 +80,9 @@ pointer geometry properties, and cross-origin or transformed frame pointer
 coordinates reject the automation request. CLI mode cannot run these input
 cases. The bridge preserves the engine's DOM geometry and hit-test APIs.
 
+The Chrome CDP driver disables popup blocking so WPT cases can open auxiliary
+test windows without user activation, as they do under ChromeDriver.
+
 ### Cross-engine layout WPT
 
 The standalone cross-engine runner has separate layout profiles, so its
