@@ -313,3 +313,123 @@ async fn popup_window_open_self_before_load_keeps_push_history() -> Result<()> {
     }
     Ok(())
 }
+
+async fn popup_fragment_history(phase: &str, api: &str, mode: &str) -> Result<serde_json::Value> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let script = include_str!("popup_fragment_navigation.js")
+        .replace("PHASE", &serde_json::to_string(phase)?)
+        .replace("API", &serde_json::to_string(api)?)
+        .replace("MODE", &serde_json::to_string(mode)?);
+    let source = markup_url(
+        &server,
+        &format!("<!doctype html><body><script>{script}</script>"),
+    );
+    let parent = format!(
+        r#"<!doctype html><script>
+          window.finished = new Promise(resolve => window.finish = resolve);
+          window.parentEvents = [];
+          addEventListener('popstate', e => parentEvents.push(e.type));
+          addEventListener('hashchange', e => parentEvents.push(e.type));
+          window.popup = open({});
+        </script>"#,
+        serde_json::to_string(&source)?.replace("</script>", "<\\/script>")
+    );
+    let parent_url = markup_url(&server, &parent);
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut page = browser.fetch(&parent_url).await?;
+        let result = page.evaluate_runtime_expression_with_await_async(
+            "finished.then(result => JSON.stringify(result))", true,
+        ).await?;
+        let parent_result = page.evaluate_runtime_expression_with_await_async(
+            "JSON.stringify({events:parentEvents, href:location.href, documentURL:document.URL})", false,
+        ).await?;
+        let parent_result: serde_json::Value = serde_json::from_str(parent_result["value"].as_str().unwrap())?;
+        assert_eq!(parent_result, serde_json::json!({"events": [], "href": parent_url, "documentURL": parent_url}));
+        page.evaluate_runtime_expression_with_await_async("popup.close()", false).await?;
+        Ok::<_, anyhow::Error>(result)
+    }).await??;
+    server.shutdown().await;
+    Ok(serde_json::from_str(
+        result["value"].as_str().expect("popup fragment result"),
+    )?)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_fragment_navigation_updates_history_and_preserves_document() -> Result<()> {
+    for phase in ["parser", "load", "after-load", "reopen"] {
+        for api in ["hash", "assign", "replace", "open"] {
+            let result = popup_fragment_history(phase, api, "normal").await?;
+            let pushes =
+                api != "replace" && (api == "open" || matches!(phase, "after-load" | "reopen"));
+            let index = u64::from(pushes);
+            let kind = if pushes { "push" } else { "replace" };
+            let synchronous_events = serde_json::json!([
+                format!("navigate:{kind}:true"),
+                format!("currententrychange:{kind}"),
+                "popstate:null:true"
+            ]);
+            assert_eq!(result["delta"], index, "phase={phase}, api={api}, {result}");
+            assert_eq!(result["index"], index);
+            for field in ["sameDocument", "documentURL", "currentURL"] {
+                assert_eq!(result[field], true, "field={field}, {result}");
+            }
+            assert_eq!(result["hash"], "#fragment");
+            assert_eq!(result["state"], serde_json::Value::Null);
+            assert_eq!(
+                result["navigationState"],
+                serde_json::json!({"navigation": 1})
+            );
+            assert_eq!(result["sameKey"], !pushes);
+            assert_eq!(result["sameId"], false);
+            let entries: Vec<_> = (0..=index)
+                .map(|index| serde_json::json!({"index": index, "sameDocument": true}))
+                .collect();
+            assert_eq!(result["entries"], serde_json::json!(entries));
+            assert_eq!(result["synchronousEvents"], synchronous_events);
+            assert_eq!(
+                result["events"],
+                serde_json::json!([
+                    format!("navigate:{kind}:true"),
+                    format!("currententrychange:{kind}"),
+                    "popstate:null:true",
+                    "hashchange::#fragment:true"
+                ])
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_fragment_navigation_can_be_canceled_before_history_changes() -> Result<()> {
+    let result = popup_fragment_history("after-load", "hash", "cancel").await?;
+    assert_eq!(result["delta"], 0);
+    assert_eq!(result["hash"], "");
+    assert_eq!(result["sameId"], true);
+    assert_eq!(result["state"], serde_json::json!({"classic": 1}));
+    assert_eq!(result["events"], serde_json::json!(["navigate:push:true"]));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_fragment_navigation_stops_when_navigate_listener_closes_window() -> Result<()> {
+    let result = popup_fragment_history("after-load", "hash", "close").await?;
+    assert_eq!(
+        result,
+        serde_json::json!({"closed": true, "events": ["navigate:push:true"]})
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn popup_location_same_url_reloads_without_pushing_history() -> Result<()> {
+    let result = popup_fragment_history("after-load", "assign", "repeat").await?;
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "loads": 2, "delta": 0, "documentChanged": true, "entryIndex": 0
+        })
+    );
+    Ok(())
+}
