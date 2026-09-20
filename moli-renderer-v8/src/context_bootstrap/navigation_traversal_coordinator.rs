@@ -512,7 +512,7 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     };
     let applied = prepared
         .into_iter()
-        .map(|(index, entry)| (index, apply::commit_prepared_history_entry(scope, entry)))
+        .map(|(index, entry)| (index, apply::commit_prepared_history_entry(scope, entry, Some("other"))))
         .collect::<Vec<_>>();
     deactivate(scope, admission);
     if delta != 0 {
