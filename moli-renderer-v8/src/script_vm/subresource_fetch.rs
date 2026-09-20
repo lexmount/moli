@@ -1409,11 +1409,19 @@ impl ScriptVm {
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
+        let encoded_headers = if matches!(
+            pending.info.resource_type,
+            SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
+        ) {
+            moli_fetch::RequestHeaders::from_byte_strings(&request_headers)?
+        } else {
+            moli_fetch::RequestHeaders::from(request_headers.clone())
+        };
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
             request_body.clone(),
-            request_headers.clone(),
+            encoded_headers,
         )?
         .with_initiator_url(&pending.info.document_url)
         .with_request_origin(pending.request_origin.clone())
@@ -1679,11 +1687,19 @@ impl ScriptVm {
             ));
         }
         let loader = pending_fetch.load.request_client();
+        let encoded_headers = if matches!(
+            pending_fetch.info.resource_type,
+            SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
+        ) {
+            moli_fetch::RequestHeaders::from_byte_strings(&original_request_headers)?
+        } else {
+            moli_fetch::RequestHeaders::from(original_request_headers.clone())
+        };
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
             request_body.clone(),
-            original_request_headers.clone(),
+            encoded_headers,
         )?
         .with_initiator_url(&pending_fetch.info.document_url)
         .with_request_origin(pending_fetch.request_origin.clone())

@@ -1144,30 +1144,97 @@ mod tests {
         );
     }
 
-    #[test]
-    fn failed_cdp_navigation_returns_error_text_result_after_network_terminal() {
+    fn failed_navigation_messages(navigation: anyhow::Result<NavigationLoadOutcome>) -> Vec<Value> {
+        let mut conn = CdpConnection::new();
+        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        browser_context.set_active_target_id("TID-page");
+        browser_context.attach_active_session("SID-page");
+        browser_context
+            .active_page_target_mut()
+            .runtime_slot
+            .enable_primary_network_events();
+        conn.install_browser_context_fixture_for_test(browser_context);
+
+        let state = navigation_state();
+        let MaterializedNavigationLoadOutcome::Failed(failure) =
+            materialize_navigation_load_result(&mut conn, &state, navigation)
+        else {
+            panic!("expected failed navigation progress");
+        };
         let mut output = CommandOutputBuffer::default();
         MainDocumentFailedNavigationActivity::new(
-            navigation_state(),
-            empty_main_document_progress_gate_for_test(),
-            FailedNavigationResponseMode::CdpErrorTextResult,
+            state,
+            failure.progress_gate,
+            failure.response_mode,
         )
-        .emit_navigation_error_into_buffer(&mut output, "net::ERR_CONNECTION_RESET");
+        .emit_navigation_error_into_buffer(&mut output, &failure.error_text);
         let mut messages = Vec::new();
         output
             .into_plan()
             .emit_into(&mut messages, Some(77), Some("SID-nav"));
+        messages
+    }
 
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0]["id"], json!(77));
-        assert_eq!(messages[0]["result"]["frameId"], json!("FRAME-1"));
-        assert_eq!(messages[0]["result"]["loaderId"], json!("LID-1"));
+    fn assert_failed_navigation_terminal(messages: &[Value], error_text: &str) {
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["method"], json!("Network.loadingFailed"));
+        assert_eq!(messages[0]["sessionId"], json!("SID-page"));
+        assert_eq!(messages[0]["params"]["requestId"], json!("REQ-1"));
+        assert_eq!(messages[0]["params"]["errorText"], json!(error_text));
+        assert_eq!(messages[1]["id"], json!(77));
+        assert_eq!(messages[1]["sessionId"], json!("SID-nav"));
+    }
+
+    #[test]
+    fn failed_navigation_protocol_error_preserves_context_chain() {
+        let error = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "connection reset by peer",
+        ))
+        .context("failed to read page body from stream")
+        .context("failed to load document")
+        .context("failed to continue intercepted navigation");
+        let messages = failed_navigation_messages(Err(error));
+        let expected = "failed to continue intercepted navigation: failed to load document: failed to read page body from stream: connection reset by peer";
+
+        assert_eq!(messages[1]["error"]["code"], json!(-32000));
+        assert_eq!(messages[1]["error"]["message"], json!(expected));
+        assert!(messages[1].get("result").is_none());
+        assert_failed_navigation_terminal(&messages, expected);
+    }
+
+    #[test]
+    fn failed_navigation_protocol_error_does_not_classify_network_display_text() {
+        for error_text in [
+            "net::ERR_INTERNET_DISCONNECTED",
+            "net::ERR_BLOCKED_BY_CLIENT",
+        ] {
+            let error = anyhow::anyhow!(error_text).context("failed to load document");
+            let messages = failed_navigation_messages(Err(error));
+            let expected = format!("failed to load document: {error_text}");
+
+            assert_eq!(messages[1]["error"]["code"], json!(-32000));
+            assert_eq!(messages[1]["error"]["message"], json!(expected));
+            assert!(messages[1].get("result").is_none());
+            assert_failed_navigation_terminal(&messages, &expected);
+        }
+    }
+
+    #[test]
+    fn failed_cdp_navigation_returns_error_text_result_after_network_terminal() {
+        let messages = failed_navigation_messages(Ok(NavigationLoadOutcome::NetworkFailure(
+            "net::ERR_CONNECTION_RESET".to_owned(),
+        )));
+
+        assert_failed_navigation_terminal(&messages, "net::ERR_CONNECTION_RESET");
+        assert_eq!(messages[1]["result"]["frameId"], json!("FRAME-1"));
+        assert_eq!(messages[1]["result"]["loaderId"], json!("LID-1"));
         assert_eq!(
-            messages[0]["result"]["errorText"],
+            messages[1]["result"]["errorText"],
             json!("net::ERR_CONNECTION_RESET")
         );
-        assert_eq!(messages[0]["result"]["isDownload"], json!(false));
-        assert!(messages[0].get("error").is_none());
+        assert_eq!(messages[1]["result"]["isDownload"], json!(false));
+        assert!(messages[1].get("error").is_none());
     }
 
     #[test]

@@ -245,12 +245,12 @@ async fn registry_replaces_future_transport_without_rebinding_existing_loads() {
         )
         .expect("replacement request policy");
     assert_eq!(
-        existing_request.request_headers,
+        existing_request.request_headers.to_byte_strings(),
         vec![("x-request-policy".to_owned(), "original".to_owned())],
         "an in-flight request keeps its prepared configuration"
     );
     assert_eq!(
-        replacement_request.request_headers,
+        replacement_request.request_headers.to_byte_strings(),
         vec![("x-request-policy".to_owned(), "replacement".to_owned())],
         "new requests use the replacement configuration"
     );

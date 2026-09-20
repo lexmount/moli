@@ -63,7 +63,7 @@ impl SessionFetchBodyStreamOwner<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> anyhow::Result<Option<String>> {
         let handle = target_scoped_stream_handle(
             &self.owner_key,
             self.runtime_slot.allocate_io_stream_handle(),
@@ -611,7 +611,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         request_id: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> anyhow::Result<Option<String>> {
         let Some(mut owner) = self.target_session_owner_mut(session_id) else {
             return Ok(None);
         };
@@ -1516,7 +1516,7 @@ impl TargetSessionOwnerMut<'_> {
     fn open_pending_fetch_response_body_stream(
         &mut self,
         request_id: &str,
-    ) -> Result<Option<String>, String> {
+    ) -> anyhow::Result<Option<String>> {
         let Some(mut owner) = self.fetch_body_stream_owner_mut() else {
             return Ok(None);
         };

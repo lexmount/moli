@@ -1,3 +1,4 @@
+use anyhow::Context;
 use moli_core::network::{
     BrowserResourceRuntime, BrowserResourceRuntimeOwner, ResourceRequestClient,
 };
@@ -44,17 +45,17 @@ impl CdpConnection {
     pub(crate) fn ensure_resource_request_client_for_navigation_load_inputs(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
-    ) -> Result<ResourceRequestClient, String> {
+    ) -> anyhow::Result<ResourceRequestClient> {
         let storage = load_inputs.resource_storage_handles();
         let engine = self
             .configured_navigation_engine_for_load_inputs_mut(load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?;
+            .context("navigation Page engine unavailable")?;
         engine
             .ensure_resource_runtime_ready_for_navigation_storage(storage.into_navigation_storage())
-            .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
+            .context("failed to initialize resource runtime")?;
         engine
             .resource_request_client()
-            .ok_or_else(|| "resource request client unavailable".to_owned())
+            .context("resource request client unavailable")
     }
 
     pub(super) fn configured_navigation_engine_for_load_inputs_mut(

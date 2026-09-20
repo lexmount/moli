@@ -1,12 +1,7 @@
 use std::{
-    fs::{File, OpenOptions},
-    io::{Seek, SeekFrom, Write},
+    fs::{File, OpenOptions, TryLockError},
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
-
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
 
 use anyhow::{Context, Result, anyhow};
 
@@ -15,12 +10,9 @@ use crate::BrowserProfilePaths;
 #[derive(Debug)]
 pub struct BrowserProfileLock {
     path: PathBuf,
-    /// Held only on Unix, where the file descriptor keeps the advisory `flock`
-    /// alive for the lifetime of the guard. On non-Unix platforms the lock is
-    /// the file's existence on disk, so no handle needs to be retained.
-    #[cfg(unix)]
-    file: File,
-    remove_on_drop: bool,
+    /// Keeps the profile exclusively owned until this handle closes, including
+    /// when the process exits without running Rust destructors.
+    _file: File,
 }
 
 impl BrowserProfileLock {
@@ -33,40 +25,14 @@ impl BrowserProfileLock {
     }
 }
 
-impl Drop for BrowserProfileLock {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        let _ = unlock_profile_file(&self.file);
-        if self.remove_on_drop {
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
-}
-
 pub fn acquire_profile_lock(paths: &BrowserProfilePaths) -> Result<BrowserProfileLock> {
     if !paths.root.as_os_str().is_empty() {
         std::fs::create_dir_all(&paths.root)
             .with_context(|| format!("failed to create profile dir `{}`", paths.root.display()))?;
     }
 
-    let (mut file, remove_on_drop) = open_and_lock_profile_file(paths)?;
-    if let Err(error) = write_lock_owner_metadata(&mut file, &paths.lock_path) {
-        if remove_on_drop {
-            let _ = std::fs::remove_file(&paths.lock_path);
-        }
-        return Err(error);
-    }
-
-    Ok(BrowserProfileLock {
-        path: paths.lock_path.clone(),
-        #[cfg(unix)]
-        file,
-        remove_on_drop,
-    })
-}
-
-#[cfg(unix)]
-fn open_and_lock_profile_file(paths: &BrowserProfilePaths) -> Result<(File, bool)> {
+    // Keep this file in place after release so contenders always lock the same
+    // file. Its contents do not participate in profile ownership.
     let file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -79,120 +45,22 @@ fn open_and_lock_profile_file(paths: &BrowserProfilePaths) -> Result<(File, bool
                 paths.lock_path.display()
             )
         })?;
-    match try_lock_profile_file(&file) {
-        Ok(()) => Ok((file, false)),
-        Err(error) if is_advisory_lock_contention(&error) => {
-            let owner = lock_owner_description(&paths.lock_path);
-            Err(anyhow!(
-                "browser profile `{}` is already locked by `{}` ({owner})",
-                paths.root.display(),
-                paths.lock_path.display()
-            ))
-        }
-        Err(error) => Err(error).with_context(|| {
+    match file.try_lock() {
+        Ok(()) => Ok(BrowserProfileLock {
+            path: paths.lock_path.clone(),
+            _file: file,
+        }),
+        Err(TryLockError::WouldBlock) => Err(anyhow!(
+            "browser profile `{}` is already locked by `{}`",
+            paths.root.display(),
+            paths.lock_path.display()
+        )),
+        Err(TryLockError::Error(error)) => Err(error).with_context(|| {
             format!(
                 "failed to acquire browser profile lock `{}`",
                 paths.lock_path.display()
             )
         }),
-    }
-}
-
-#[cfg(not(unix))]
-fn open_and_lock_profile_file(paths: &BrowserProfilePaths) -> Result<(File, bool)> {
-    match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&paths.lock_path)
-    {
-        Ok(file) => Ok((file, true)),
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            let owner = lock_owner_description(&paths.lock_path);
-            Err(anyhow!(
-                "browser profile `{}` is already locked by `{}` ({owner}); if no Moli process is using this profile, remove the stale lock file and retry",
-                paths.root.display(),
-                paths.lock_path.display()
-            ))
-        }
-        Err(error) => Err(error).with_context(|| {
-            format!(
-                "failed to acquire browser profile lock `{}`",
-                paths.lock_path.display()
-            )
-        }),
-    }
-}
-
-fn write_lock_owner_metadata(file: &mut File, path: &Path) -> Result<()> {
-    file.set_len(0).with_context(|| {
-        format!(
-            "failed to truncate browser profile lock `{}`",
-            path.display()
-        )
-    })?;
-    file.seek(SeekFrom::Start(0))
-        .with_context(|| format!("failed to seek browser profile lock `{}`", path.display()))?;
-    let created_unix_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    writeln!(
-        file,
-        "pid={}\ncreated_unix_ms={created_unix_ms}",
-        std::process::id()
-    )
-    .with_context(|| format!("failed to write browser profile lock `{}`", path.display()))?;
-    file.flush()
-        .with_context(|| format!("failed to flush browser profile lock `{}`", path.display()))?;
-    Ok(())
-}
-
-#[cfg(unix)]
-fn try_lock_profile_file(file: &File) -> std::io::Result<()> {
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(unix)]
-fn unlock_profile_file(file: &File) -> std::io::Result<()> {
-    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(unix)]
-fn is_advisory_lock_contention(error: &std::io::Error) -> bool {
-    matches!(
-        error.raw_os_error(),
-        Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN
-    )
-}
-
-fn lock_owner_description(path: &Path) -> String {
-    let Ok(contents) = std::fs::read_to_string(path) else {
-        return "lock owner metadata unavailable".to_owned();
-    };
-    let mut fields = Vec::new();
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with("pid=") || line.starts_with("created_unix_ms=") {
-            fields.push(line.to_owned());
-        }
-    }
-    if fields.is_empty() {
-        "lock owner metadata unavailable".to_owned()
-    } else {
-        fields.join(", ")
     }
 }
 
@@ -201,7 +69,9 @@ mod tests {
     use std::{
         fs,
         path::PathBuf,
-        time::{SystemTime, UNIX_EPOCH},
+        process::{Command, Stdio},
+        thread,
+        time::{Duration, SystemTime, UNIX_EPOCH},
     };
 
     use anyhow::Result;
@@ -239,39 +109,83 @@ mod tests {
         let paths = BrowserProfilePaths::new(&profile.path);
 
         let first = BrowserProfileLock::acquire(&paths)?;
-        assert!(paths.lock_path.exists());
-        let lock_contents = fs::read_to_string(&paths.lock_path)?;
-        assert!(
-            lock_contents.contains("pid="),
-            "lock contents: {lock_contents}"
-        );
+        assert_eq!(first.path(), paths.lock_path);
 
         let error =
             BrowserProfileLock::acquire(&paths).expect_err("second lock acquisition should fail");
         let error = error.to_string();
         assert!(error.contains("already locked"), "error: {error}");
-        assert!(
-            error.contains("pid=") && error.contains("created_unix_ms="),
-            "error should include lock owner metadata: {error}"
-        );
 
         drop(first);
-        #[cfg(unix)]
         assert!(
             paths.lock_path.exists(),
-            "Unix advisory lock metadata file should remain reusable after drop"
+            "lock file should remain reusable after drop"
         );
-        #[cfg(not(unix))]
-        assert!(
-            !paths.lock_path.exists(),
-            "non-Unix sentinel lock file should be removed after drop"
-        );
+        assert!(fs::read(&paths.lock_path)?.is_empty());
 
         let _second = BrowserProfileLock::acquire(&paths)?;
         Ok(())
     }
 
-    #[cfg(unix)]
+    const CHILD_PROFILE_ENV: &str = "MOLI_PROFILE_LOCK_TEST_CHILD_PROFILE";
+    const CHILD_READY_ENV: &str = "MOLI_PROFILE_LOCK_TEST_CHILD_READY";
+
+    #[test]
+    fn profile_lock_is_released_when_owner_process_is_terminated() -> Result<()> {
+        if let (Some(profile), Some(ready)) = (
+            std::env::var_os(CHILD_PROFILE_ENV),
+            std::env::var_os(CHILD_READY_ENV),
+        ) {
+            let profile = PathBuf::from(profile);
+            let ready = PathBuf::from(ready);
+            let paths = BrowserProfilePaths::new(&profile);
+            let _lock = BrowserProfileLock::acquire(&paths)?;
+            fs::write(&ready, b"ready")?;
+            thread::sleep(Duration::from_secs(120));
+            return Ok(());
+        }
+
+        let profile = TempProfileDir::new("terminated-owner");
+        let ready = profile.path.join("child-ready");
+        let test_name =
+            "profile_lock::tests::profile_lock_is_released_when_owner_process_is_terminated";
+        let mut child = Command::new(std::env::current_exe()?)
+            .args(["--exact", test_name, "--nocapture"])
+            .env(CHILD_PROFILE_ENV, &profile.path)
+            .env(CHILD_READY_ENV, &ready)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !ready.exists() {
+            if let Some(status) = child.try_wait()? {
+                anyhow::bail!("profile lock child exited before readiness: {status}");
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!("timed out waiting for profile lock child readiness");
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+
+        let paths = BrowserProfilePaths::new(&profile.path);
+        let contention = BrowserProfileLock::acquire(&paths);
+        child.kill()?;
+        let _ = child.wait()?;
+
+        let error = contention.expect_err("live child must keep the profile exclusively locked");
+        assert!(error.to_string().contains("already locked"));
+        assert!(paths.lock_path.exists());
+
+        let reopened = BrowserProfileLock::acquire(&paths)?;
+        drop(reopened);
+        assert!(fs::read(&paths.lock_path)?.is_empty());
+        Ok(())
+    }
+
     #[test]
     fn profile_lock_reuses_existing_unlocked_lock_file() -> Result<()> {
         let profile = TempProfileDir::new("stale-file");
@@ -280,17 +194,6 @@ mod tests {
         fs::write(&paths.lock_path, "pid=1\ncreated_unix_ms=1\n")?;
 
         let lock = BrowserProfileLock::acquire(&paths)?;
-
-        let lock_contents = fs::read_to_string(&paths.lock_path)?;
-        assert!(
-            lock_contents.contains(&format!("pid={}", std::process::id())),
-            "lock contents should be rewritten for the current owner: {lock_contents}"
-        );
-        assert!(
-            !lock_contents.lines().any(|line| line == "pid=1"),
-            "old owner metadata should not survive successful acquisition: {lock_contents}"
-        );
-
         drop(lock);
         let _reopened = BrowserProfileLock::acquire(&paths)?;
         Ok(())

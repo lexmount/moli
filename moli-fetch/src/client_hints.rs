@@ -222,7 +222,7 @@ pub(crate) fn prepare_client_hint_request(
             };
             effective_request
                 .request_headers
-                .push((hint.header_name().to_owned(), value));
+                .push((hint.header_name().to_owned(), value.into_bytes()));
             sent_hints.insert(hint);
         }
     }
@@ -255,8 +255,9 @@ fn configured_client_hint_names(config: &FetchConfig, request: &Request) -> BTre
     config
         .default_request_headers()
         .iter()
-        .chain(&request.request_headers)
-        .filter_map(|(name, _)| ClientHint::from_header_name(name))
+        .map(|(name, _)| name)
+        .chain(request.request_headers.iter().map(|(name, _)| name))
+        .filter_map(|name| ClientHint::from_header_name(name))
         .collect()
 }
 
@@ -335,10 +336,13 @@ mod tests {
         let second =
             prepare_client_hint_request(&preferences, &restarts, &config, &request, &request.url);
         assert!(second.request.request_headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("sec-ch-ua-arch") && value == "\"x86\""
+            name.eq_ignore_ascii_case("sec-ch-ua-arch") && value == b"\"x86\""
         }));
         assert!(second.request.request_headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("sec-ch-ua-full-version-list") && value.contains("145.0.0.0")
+            name.eq_ignore_ascii_case("sec-ch-ua-full-version-list")
+                && value
+                    .windows(b"145.0.0.0".len())
+                    .any(|part| part == b"145.0.0.0")
         }));
         assert_eq!(
             second

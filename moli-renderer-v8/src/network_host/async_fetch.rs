@@ -23,7 +23,7 @@ pub(crate) async fn fetch_browser_subresource_with_preflight_and_network_metadat
     request: Request,
     cancel_handle: Option<FetchCancelHandle>,
 ) -> Result<NetworkFetchResult<Response>, String> {
-    let preflight_request_headers = request.request_headers.clone();
+    let preflight_request_headers = request.request_headers.to_byte_strings();
     fetch_browser_subresource_with_preflight_headers_and_observer(
         loader,
         request,
@@ -218,7 +218,7 @@ impl ManualCorsRedirectState {
         });
         self.request.apply_redirect_status(redirect_status);
         self.request.url = next_url;
-        self.preflight_request_headers = self.request.request_headers.clone();
+        self.preflight_request_headers = self.request.request_headers.to_byte_strings();
         Ok(ManualCorsRedirectTransition::FollowedRedirect)
     }
 

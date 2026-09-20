@@ -302,11 +302,91 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     ctx.expect_error(304, -32000, "net::ERR_BLOCKED_BY_CLIENT");
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn request_paused_then_continue_request_fails_when_network_offline() {
+#[tokio::test]
+async fn request_paused_then_continue_request_preserves_blocked_url_error_text() {
     let mut ctx = TestContext::new();
     ctx.conn
         .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.process_async(json!({
+        "id": 16640,
+        "method": "Network.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(16640, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 16641,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(16641, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 16642,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": "http://example.test/blocked/document" }
+    }))
+    .await;
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    let network_id = paused["params"]["networkId"].clone();
+    assert!(network_id.is_string());
+
+    ctx.process_async(json!({
+        "id": 16643,
+        "method": "Network.setBlockedURLs",
+        "sessionId": "SID-1",
+        "params": { "urls": ["http://example.test/blocked/*"] }
+    }))
+    .await;
+    ctx.expect_result(16643, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 16644,
+        "method": "Fetch.continueRequest",
+        "sessionId": "SID-1",
+        "params": { "requestId": paused["params"]["requestId"] }
+    }))
+    .await;
+    ctx.expect_result(16644, json!({}), Some("SID-1"));
+
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "continued blocked navigation result",
+        |message| message["id"] == json!(16642),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 16642);
+    assert_eq!(response["sessionId"], "SID-1");
+    assert_eq!(response["error"]["code"], -32000);
+    assert_eq!(response["error"]["message"], "net::ERR_BLOCKED_BY_CLIENT");
+    let failed = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["requestId"] == network_id
+        })
+        .expect("continued blocked document must emit loadingFailed");
+    assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn request_paused_then_continue_request_commits_offline_error_document() {
+    assert_continued_offline_navigation_commits_error_document(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn request_paused_then_continue_request_with_auth_handling_commits_offline_error_document() {
+    assert_continued_offline_navigation_commits_error_document(true).await;
+}
+
+async fn assert_continued_offline_navigation_commits_error_document(handle_auth_requests: bool) {
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
+    ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 16630,
@@ -319,7 +399,8 @@ async fn request_paused_then_continue_request_fails_when_network_offline() {
     ctx.process_async(json!({
         "id": 16631,
         "method": "Fetch.enable",
-        "sessionId": "SID-1"
+        "sessionId": "SID-1",
+        "params": { "handleAuthRequests": handle_auth_requests }
     }))
     .await;
     ctx.expect_result(16631, json!({}), Some("SID-1"));
@@ -338,10 +419,16 @@ async fn request_paused_then_continue_request_fails_when_network_offline() {
         .as_str()
         .expect("fetch request id")
         .to_owned();
+    let network_id = paused["params"]["networkId"].clone();
+    assert!(
+        network_id.is_string(),
+        "paused document must have a Network request id"
+    );
 
     ctx.process_async(json!({
         "id": 16633,
         "method": "Network.emulateNetworkConditions",
+        "sessionId": "SID-1",
         "params": {
             "offline": true,
             "latency": 0,
@@ -350,7 +437,7 @@ async fn request_paused_then_continue_request_fails_when_network_offline() {
         }
     }))
     .await;
-    ctx.expect_result(16633, json!({}), None);
+    ctx.expect_result(16633, json!({}), Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 16634,
@@ -360,11 +447,78 @@ async fn request_paused_then_continue_request_fails_when_network_offline() {
     }))
     .await;
     ctx.expect_result(16634, json!({}), Some("SID-1"));
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["errorText"], "Network emulation offline");
-    ctx.expect_error(16632, -32000, "Network emulation offline");
+
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "continued offline navigation result",
+        |message| message["id"] == json!(16632),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 16632);
+    assert!(
+        response.get("error").is_none(),
+        "offline navigation must return a navigation result, not a protocol error: {response}"
+    );
+    assert_eq!(response["sessionId"], "SID-1");
+    assert_eq!(response["result"]["frameId"], "TID-1");
+    assert_eq!(response["result"]["loaderId"], network_id);
+    assert_eq!(response["result"]["isDownload"], false);
+    assert_eq!(
+        response["result"]["errorText"],
+        "net::ERR_INTERNET_DISCONNECTED"
+    );
+
+    wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+    let messages = ctx.take_all();
+    let failed = messages
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["requestId"] == network_id
+        })
+        .unwrap_or_else(|| panic!("missing document loadingFailed: {messages:?}"));
+    assert_eq!(failed["params"]["type"], "Document");
+    assert_eq!(failed["params"]["canceled"], false);
+    assert_eq!(
+        failed["params"]["errorText"],
+        "net::ERR_INTERNET_DISCONNECTED"
+    );
+    let frame = messages
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Page.frameNavigated")
+                && message["sessionId"] == json!("SID-1")
+        })
+        .unwrap_or_else(|| panic!("missing error document commit: {messages:?}"));
+    assert_eq!(frame["params"]["frame"]["id"], "TID-1");
+    assert_eq!(frame["params"]["frame"]["loaderId"], network_id);
+    assert_eq!(frame["params"]["frame"]["url"], NETWORK_ERROR_PAGE_URL);
+    assert_eq!(
+        frame["params"]["frame"]["unreachableUrl"],
+        "http://example.test/offline"
+    );
+
+    ctx.process_async(json!({
+        "id": 16635,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": "({online: navigator.onLine, sum: 1 + 1})",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let runtime = take_response_by_id(&mut ctx, 16635);
+    assert!(
+        runtime.get("error").is_none(),
+        "error document must remain usable: {runtime}"
+    );
+    assert_eq!(
+        runtime["result"]["result"]["value"],
+        json!({"online": false, "sum": 2})
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -87,7 +87,7 @@ struct DocumentStaticMethodsDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(fragment, prototype = "Document", enumerable)]
+#[webapi(fragment, prototype = "Document", enumerable, receiver = web_api_interfaces::Document::is_instance)]
 struct DocumentPrototypeRuntimeDeclaration {
     #[webapi(
         accessor_property = "designMode",

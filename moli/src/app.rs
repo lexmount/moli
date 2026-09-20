@@ -215,7 +215,7 @@ fn read_script_file_arg(option: &str, path: &Path) -> Result<String> {
 fn build_fetch_request(url: &str, config: &AppConfig) -> Result<Request> {
     let mut request = Request::get(url)?;
     // Keep CLI-provided headers scoped to the initial document navigation.
-    request.request_headers = config.fetch.request_headers.clone();
+    request.request_headers = config.fetch.request_headers.clone().into();
     Ok(request)
 }
 

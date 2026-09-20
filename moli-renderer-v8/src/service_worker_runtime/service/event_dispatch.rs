@@ -40,10 +40,12 @@ fn navigation_preload_request_for_job(
 ) -> Result<moli_fetch::Request, String> {
     let mut headers = job.request.request_headers.clone();
     headers.retain(|(name, _)| !name.eq_ignore_ascii_case("service-worker-navigation-preload"));
-    headers.push((
+    let preload_header = moli_fetch::RequestHeaders::from_byte_strings(&[(
         "Service-Worker-Navigation-Preload".to_owned(),
         header_value.to_owned(),
-    ));
+    )])
+    .map_err(|error| error.to_string())?;
+    headers.extend_from_slice(&preload_header);
     let mut request = super::fetch_settlement::service_worker_network_fallback_request_for_job(job);
     request.request_headers = headers;
     Ok(request
@@ -247,7 +249,8 @@ impl ServiceWorkerRuntimeService {
                     &request.method,
                     request.url.clone(),
                     request.body.clone(),
-                    request.headers.clone(),
+                    moli_fetch::RequestHeaders::from_byte_strings(&request.headers)
+                        .expect("service worker request headers are ByteStrings"),
                     origin,
                 )
                 .with_initiator_url(&dispatch.network_context.document_url)

@@ -1415,7 +1415,7 @@ struct ElementAriaElementReflectionDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document)]
+#[webapi(interface = web_api_interfaces::Document, receiver)]
 struct DocumentCustomElementRegistryPrototypeDeclaration {
     #[webapi(
         accessor_property = "customElementRegistry",

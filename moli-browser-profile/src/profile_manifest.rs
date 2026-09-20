@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{BrowserProfilePaths, DEFAULT_PROFILE_PARTITION_ID, write_file_atomically};
+use crate::{BrowserProfilePaths, DEFAULT_PROFILE_PARTITION_ID, write_profile_file};
 
 pub const PROFILE_MANIFEST_VERSION: u32 = 5;
 
@@ -166,7 +166,7 @@ fn save_profile_manifest(
 ) -> Result<()> {
     let bytes =
         serde_json::to_vec_pretty(manifest).context("failed to serialize profile manifest")?;
-    write_file_atomically(&paths.manifest_path, &bytes, "profile manifest")
+    write_profile_file(&paths.manifest_path, &bytes, "profile manifest")
 }
 
 fn validate_profile_manifest(

@@ -112,30 +112,47 @@ struct NodePrototypeReflectionDeclaration {
     normalize: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "ParentNode", enumerable)]
-struct ParentNodePrototypeDeclaration {
-    #[webapi(accessor_property, getter = parent_node_children_getter_function)]
-    children: (),
-    #[webapi(accessor_property, getter = parent_node_first_element_child_getter_function)]
-    first_element_child: (),
-    #[webapi(accessor_property, getter = parent_node_last_element_child_getter_function)]
-    last_element_child: (),
-    #[webapi(accessor_property, getter = parent_node_child_element_count_getter_function)]
-    child_element_count: (),
-    #[webapi(method, length = 0, callback = node_prepend_callback)]
-    prepend: (),
-    #[webapi(method, length = 0, callback = node_append_callback)]
-    append: (),
-    #[webapi(method, length = 0, callback = node_replace_children_callback)]
-    replace_children: (),
-    #[webapi(method = "moveBefore", length = 2, callback = node_move_before_callback)]
-    move_before: (),
-    #[webapi(method, length = 1, callback = super::element::node_query_selector_callback)]
-    query_selector: (),
-    #[webapi(method, length = 1, callback = super::element::node_query_selector_all_callback)]
-    query_selector_all: (),
+macro_rules! declare_parent_node_prototype {
+    ($declaration:ident, $($binding:tt)*) => {
+        #[derive(WebApiFunctionTemplate)]
+        #[webapi($($binding)*)]
+        struct $declaration {
+            #[webapi(accessor_property, getter = parent_node_children_getter_function)]
+            children: (),
+            #[webapi(accessor_property, getter = parent_node_first_element_child_getter_function)]
+            first_element_child: (),
+            #[webapi(accessor_property, getter = parent_node_last_element_child_getter_function)]
+            last_element_child: (),
+            #[webapi(accessor_property, getter = parent_node_child_element_count_getter_function)]
+            child_element_count: (),
+            #[webapi(method, length = 0, callback = node_prepend_callback)]
+            prepend: (),
+            #[webapi(method, length = 0, callback = node_append_callback)]
+            append: (),
+            #[webapi(method, length = 0, callback = node_replace_children_callback)]
+            replace_children: (),
+            #[webapi(method = "moveBefore", length = 2, callback = node_move_before_callback)]
+            move_before: (),
+            #[webapi(method, length = 1, callback = super::element::node_query_selector_callback)]
+            query_selector: (),
+            #[webapi(method, length = 1, callback = super::element::node_query_selector_all_callback)]
+            query_selector_all: (),
+        }
+    };
 }
+
+declare_parent_node_prototype!(
+    ParentNodePrototypeDeclaration,
+    name = "ParentNode",
+    enumerable
+);
+// A mixin member must validate the interface whose prototype owns it.
+declare_parent_node_prototype!(
+    DocumentParentNodePrototypeDeclaration,
+    interface = web_api_interfaces::Document,
+    enumerable,
+    receiver
+);
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "ChildNode", enumerable)]
@@ -1226,7 +1243,9 @@ pub(crate) fn install_node_template_bindings<'s>(
     if interface_name == "Node" {
         NodePrototypeReflectionDeclaration::initialize_prototype_template(scope, prototype);
     }
-    if matches!(interface_name, "Document" | "DocumentFragment" | "Element") {
+    if interface_name == "Document" {
+        DocumentParentNodePrototypeDeclaration::initialize_prototype_template(scope, prototype);
+    } else if matches!(interface_name, "DocumentFragment" | "Element") {
         ParentNodePrototypeDeclaration::initialize_prototype_template(scope, prototype);
     }
     if matches!(interface_name, "DocumentType" | "Element" | "CharacterData") {

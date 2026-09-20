@@ -2045,6 +2045,167 @@ async fn websocket_cdp_raw_client_runtime_evaluate_immediately_after_page_naviga
 }
 
 #[tokio::test]
+async fn websocket_cdp_offline_emulation_navigation_fails_like_network_error() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body><div id='probe'>online</div></body></html>",
+        )
+    }
+    let fixture_app = Router::new().route("/", get(page));
+    let fixture_listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture listener");
+    let fixture_addr = fixture_listener.local_addr().expect("fixture addr");
+    let fixture_server =
+        tokio::spawn(async move { axum::serve(fixture_listener, fixture_app).await });
+    let fixture_url = format!("http://{fixture_addr}/");
+
+    let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .expect("connect to cdp websocket");
+
+    let browser_context_id = cdp_create_browser_context(&mut socket, 1).await;
+    let session = cdp_create_attached_target(&mut socket, 2, &browser_context_id).await;
+
+    let network_enable = send_cdp_command(
+        &mut socket,
+        4,
+        "Network.enable",
+        Some(&session.session_id),
+        json!({}),
+    )
+    .await;
+    assert!(
+        network_enable
+            .iter()
+            .any(|message| message["id"] == json!(4_u64) && message.get("error").is_none()),
+        "Network.enable should succeed: {network_enable:?}"
+    );
+
+    // Turn offline emulation on. Chromium blocks loopback too, so the
+    // navigation must fail as a network error rather than succeed.
+    let emulate = send_cdp_command(
+        &mut socket,
+        5,
+        "Network.emulateNetworkConditions",
+        Some(&session.session_id),
+        json!({
+            "offline": true,
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1
+        }),
+    )
+    .await;
+    assert!(
+        emulate
+            .iter()
+            .any(|message| message["id"] == json!(5_u64) && message.get("error").is_none()),
+        "offline emulation should be accepted: {emulate:?}"
+    );
+
+    let navigate = send_cdp_command(
+        &mut socket,
+        6,
+        "Page.navigate",
+        Some(&session.session_id),
+        json!({ "url": fixture_url }),
+    )
+    .await;
+    let navigate_response = navigate
+        .iter()
+        .find(|message| message["id"] == json!(6_u64))
+        .expect("Page.navigate response");
+    assert!(
+        navigate_response.get("error").is_none(),
+        "an offline navigation must not be a -32000 protocol error; got {navigate_response:#?}"
+    );
+    assert!(
+        navigate_response["result"]["frameId"].is_string(),
+        "Page.navigate must still resolve with a frameId; got {navigate_response:#?}"
+    );
+    assert!(
+        navigate.iter().any(|message| {
+            message["sessionId"].as_str() == Some(session.session_id.as_str())
+                && message["method"] == json!("Network.loadingFailed")
+                && message["params"]["errorText"] == json!("net::ERR_INTERNET_DISCONNECTED")
+        }),
+        "offline navigation must emit Network.loadingFailed with net::ERR_INTERNET_DISCONNECTED: {navigate:#?}"
+    );
+    if let Some(error_text) = navigate_response["result"]["errorText"].as_str() {
+        assert_eq!(
+            error_text, "net::ERR_INTERNET_DISCONNECTED",
+            "Page.navigate errorText must match the network error"
+        );
+    }
+
+    // The committed error Document keeps the target responsive.
+    let value =
+        cdp_runtime_evaluate_string(&mut socket, &session.session_id, 7, "String(1 + 1)").await;
+    assert_eq!(value, "2");
+
+    // Restoring offline:false lets the same loopback navigation succeed.
+    let restore = send_cdp_command(
+        &mut socket,
+        8,
+        "Network.emulateNetworkConditions",
+        Some(&session.session_id),
+        json!({
+            "offline": false,
+            "latency": 0,
+            "downloadThroughput": -1,
+            "uploadThroughput": -1
+        }),
+    )
+    .await;
+    assert!(
+        restore
+            .iter()
+            .any(|message| message["id"] == json!(8_u64) && message.get("error").is_none()),
+        "offline:false should be accepted: {restore:?}"
+    );
+
+    let reloaded = send_cdp_command(
+        &mut socket,
+        9,
+        "Page.navigate",
+        Some(&session.session_id),
+        json!({ "url": fixture_url }),
+    )
+    .await;
+    let reloaded_response = reloaded
+        .iter()
+        .find(|message| message["id"] == json!(9_u64))
+        .expect("recovered Page.navigate response");
+    assert!(
+        reloaded_response.get("error").is_none(),
+        "navigation after offline:false must succeed; got {reloaded_response:#?}"
+    );
+    assert!(
+        reloaded_response["result"]
+            .get("errorText")
+            .is_none_or(|value| value.is_null()),
+        "a recovered navigation must not report an errorText; got {reloaded_response:#?}"
+    );
+    let body = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session.session_id,
+        10,
+        "document.querySelector('#probe')?.textContent ?? ''",
+    )
+    .await;
+    assert_eq!(body, "online");
+
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(protocol_server).await;
+    fixture_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_cdp_runtime_control_command_waits_for_navigation_attachment_cutover() {
     let release_tail = Arc::new(tokio::sync::Notify::new());
     let (fixture_addr, fixture_server) =

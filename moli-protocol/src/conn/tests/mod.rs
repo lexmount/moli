@@ -44,6 +44,7 @@ use url::Url;
 
 mod cookie_surfaces;
 mod message;
+mod navigation_error;
 mod resource_runtime;
 mod site_data;
 

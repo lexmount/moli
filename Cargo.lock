@@ -2385,7 +2385,7 @@ dependencies = [
 
 [[package]]
 name = "moli"
-version = "1.1.8"
+version = "1.1.9"
 dependencies = [
  "anyhow",
  "axum",
@@ -2446,7 +2446,6 @@ name = "moli-browser-profile"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "libc",
  "moli-cookie-cache",
  "serde",
  "serde_json",

@@ -6555,7 +6555,8 @@ fn merge_worker_request_headers(
     context_headers: &[(String, String)],
     request_headers: &[(String, String)],
 ) -> Vec<(String, String)> {
-    let mut merged = context_headers.to_vec();
+    // Worker Fetch/XHR headers are ByteStrings; page extra headers are UTF-8.
+    let mut merged = moli_fetch::RequestHeaders::from(context_headers.to_vec()).to_byte_strings();
     for (name, value) in request_headers {
         let lower = name.to_ascii_lowercase();
         merged.retain(|(existing_name, _)| existing_name.to_ascii_lowercase() != lower);

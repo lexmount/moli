@@ -60,7 +60,7 @@ pub(super) struct CompletedNavigateLoadCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    navigation: Result<NavigationLoadOutcome, String>,
+    navigation: anyhow::Result<NavigationLoadOutcome>,
 }
 
 pub(super) struct PendingChildFrameNavigateCommand {
@@ -436,7 +436,7 @@ impl MaterializedNavigationCompletion {
 pub struct BackgroundMainDocumentBodyCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    body: Result<CapturedBody, String>,
+    body: anyhow::Result<CapturedBody>,
     synthetic: bool,
     body_progress_source: network::MainDocumentBodyProgressSource,
     final_url: Url,
@@ -448,7 +448,7 @@ impl BackgroundMainDocumentBodyCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        body: Result<CapturedBody, String>,
+        body: anyhow::Result<CapturedBody>,
         synthetic: bool,
         body_progress_source: network::MainDocumentBodyProgressSource,
         final_url: Url,
@@ -501,7 +501,11 @@ impl BackgroundMainDocumentBodyCompletion {
                     ?error,
                     "background main document body capture failed after lifecycle commit"
                 );
-                network::record_failed_main_document_response_body(conn, &self.state, error);
+                network::record_failed_main_document_response_body(
+                    conn,
+                    &self.state,
+                    format!("{error:#}"),
+                );
             }
         }
     }
@@ -531,7 +535,7 @@ impl BackgroundNavigationCompletion {
 pub struct BackgroundNavigationLifecycleCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    navigation: Result<NavigationLoadOutcome, String>,
+    navigation: anyhow::Result<NavigationLoadOutcome>,
     ready_at: std::time::Instant,
 }
 
@@ -539,7 +543,7 @@ impl BackgroundNavigationLifecycleCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        navigation: Result<NavigationLoadOutcome, String>,
+        navigation: anyhow::Result<NavigationLoadOutcome>,
     ) -> Self {
         Self {
             token,
@@ -577,7 +581,7 @@ impl BackgroundNavigationCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        navigation: Result<NavigationLoadOutcome, String>,
+        navigation: anyhow::Result<NavigationLoadOutcome>,
     ) -> Self {
         Self::Lifecycle(Box::new(BackgroundNavigationLifecycleCompletion::new(
             token, state, navigation,
@@ -587,7 +591,7 @@ impl BackgroundNavigationCompletion {
     pub(crate) fn main_document_body(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        body: Result<CapturedBody, String>,
+        body: anyhow::Result<CapturedBody>,
         synthetic: bool,
         body_progress_source: network::MainDocumentBodyProgressSource,
         final_url: Url,
@@ -1261,7 +1265,7 @@ fn direct_navigation_result_from_completed_load(
         }
         Err(message) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
-            message.clone(),
+            format!("{message:#}"),
         )),
     }
 }
@@ -3404,9 +3408,9 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
 fn push_navigation_commit_error(
     out: &mut CommandOutputBuffer,
     state: &NavigationDispatchState,
-    error: impl Into<String>,
+    error: impl std::fmt::Display,
 ) {
-    let error = error.into();
+    let error = format!("{error:#}");
     if state.navigate_id.is_some() {
         out.push_error_after_messages(-32000, error);
     } else {

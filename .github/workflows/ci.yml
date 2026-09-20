@@ -143,6 +143,29 @@ jobs:
       - name: Run full workspace tests
         run: cargo nextest run --workspace --profile ci
 
+  windows-persistent-storage:
+    name: Windows persistent storage
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $toolchain = (Get-Content rust-toolchain -Raw).Trim()
+          rustup toolchain install $toolchain --profile minimal --no-self-update
+
+      - name: Test Windows profile, OPFS, and storage paths
+        run: >-
+          cargo test --locked
+          -p moli-browser-profile
+          -p moli-opfs
+          -p moli-storage-service
+
   python-harness-tests:
     name: Python harness tests
     runs-on: ubuntu-latest

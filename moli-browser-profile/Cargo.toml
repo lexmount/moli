@@ -6,7 +6,6 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
-libc = "0.2"
 moli-cookie-cache = { path = "../moli-cookie-cache" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"

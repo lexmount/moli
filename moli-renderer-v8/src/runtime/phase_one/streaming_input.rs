@@ -13,7 +13,7 @@ const STREAMING_DOCUMENT_INPUT_BUFFERED_EVENTS: usize = 1;
 /// continuation runnable and are consumed only by that continuation.
 pub(super) enum StreamingDocumentInputEvent {
     Chunks(Vec<Vec<u8>>),
-    Finished(std::result::Result<(), String>),
+    Finished(Result<()>),
 }
 
 #[derive(Clone)]
@@ -78,7 +78,7 @@ impl StreamingDocumentInputSource {
             }
             let terminal = tokio::select! {
                 _ = sender.receiver_closed() => return,
-                terminal = raw_body.finish() => terminal.map_err(|error| error.to_string()),
+                terminal = raw_body.finish() => terminal,
             };
             let _ = sender
                 .send(StreamingDocumentInputEvent::Finished(terminal))
@@ -186,6 +186,41 @@ mod tests {
                     DocumentId(3),
                 ));
         (networking, continuation, wake_rx)
+    }
+
+    #[tokio::test]
+    async fn body_terminal_preserves_transport_error_and_context() {
+        let (body_tx, completion_tx, _cancel_handle, raw_body) = pending_fetch_body();
+        let (_networking, continuation, mut wake_rx) = continuation_fixture(96);
+        let mut source = StreamingDocumentInputSource::bridge(
+            raw_body,
+            continuation,
+            crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap(),
+        );
+        drop(body_tx);
+        completion_tx
+            .send(Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "typed parser input failure",
+            ))
+            .context("main document transport failed")))
+            .unwrap();
+        wake_rx
+            .recv()
+            .await
+            .expect("failed terminal must wake the parser owner");
+        let Some(StreamingDocumentInputEvent::Finished(Err(error))) = source.try_next().unwrap()
+        else {
+            panic!("the parser must receive its failed body terminal");
+        };
+        assert_eq!(
+            error
+                .downcast_ref::<std::io::Error>()
+                .expect("parser input must preserve the transport error type")
+                .kind(),
+            std::io::ErrorKind::UnexpectedEof
+        );
+        assert!(format!("{error:#}").contains("main document transport failed"));
     }
 
     #[tokio::test]

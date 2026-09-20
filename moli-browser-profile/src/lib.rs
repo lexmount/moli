@@ -1,6 +1,6 @@
-mod atomic_write;
 mod identity;
 mod profile;
+mod profile_file;
 mod profile_lock;
 mod profile_manifest;
 mod profile_partition_id;
@@ -8,13 +8,13 @@ mod profile_paths;
 mod user_agent_override;
 mod window_surface;
 
-pub use atomic_write::write_file_atomically;
 pub use identity::{
     BrowserBrandVersion, BrowserIdentityProfile, BrowserUserAgentMetadataOverride,
     parse_accept_language,
 };
 pub use moli_cookie_cache::{load_cookie_cache, save_cookie_cache};
 pub use profile::{BrowserProfile, BrowserProfilePartition};
+pub use profile_file::write_profile_file;
 pub use profile_lock::{BrowserProfileLock, acquire_profile_lock};
 pub use profile_manifest::{
     BrowserProfileManifest, BrowserProfilePartitionManifest, PROFILE_MANIFEST_VERSION,

@@ -48,6 +48,7 @@ mod dispatch;
 mod downloads;
 mod fetch_support;
 mod inspector_route;
+mod navigation_error;
 mod output;
 mod page_state;
 mod popup_activation_work;
@@ -498,6 +499,9 @@ impl CommandDispatchContext {
 }
 
 pub(crate) use moli_protocol_cdp::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
+pub(crate) use navigation_error::{
+    NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
+};
 pub(crate) use output::NavigationBackgroundEvent;
 pub use output::{
     BackgroundCommandResponsePayload, BackgroundEventSender, BackgroundProtocolEvent,

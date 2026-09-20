@@ -285,8 +285,8 @@ fn read_fetch_response_body_stream_output_plan(
             CommandOutputPlan::error(-32000, "StreamHandleNotFound")
         }
         PendingFetchResponseBodyStreamRead::Read { bytes, eof } => read_output_plan(&bytes, eof),
-        PendingFetchResponseBodyStreamRead::Failed(message) => {
-            CommandOutputPlan::error(-32000, message)
+        PendingFetchResponseBodyStreamRead::Failed(error) => {
+            CommandOutputPlan::error(-32000, format!("{error:#}"))
         }
     }
 }

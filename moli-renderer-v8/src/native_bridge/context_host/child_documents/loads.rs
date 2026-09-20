@@ -209,7 +209,7 @@ impl JsContextHost {
                 .with_network_partition_key(network_partition_key);
                 let request_url = request.url.as_str().to_owned();
                 let request_method = request.method.clone();
-                let request_headers = request.request_headers.clone();
+                let request_headers = request.request_headers.to_byte_strings();
                 if let Some(client_id) = service_worker_client_id
                     && let Some(response) = browser_context_runtime
                         .fetch_service_worker_child_main_resource_for_reserved_client(

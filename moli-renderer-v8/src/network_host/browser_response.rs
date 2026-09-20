@@ -10,10 +10,10 @@ pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
 
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
-    let mut headers = Vec::new();
-    if !mime_type.is_empty() {
-        headers.push(("Content-Type".to_owned(), mime_type));
-    }
+    let headers = vec![
+        ("Content-Length".to_owned(), body_bytes.len().to_string()),
+        ("Content-Type".to_owned(), mime_type),
+    ];
     Some(Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
             final_url: url.clone(),

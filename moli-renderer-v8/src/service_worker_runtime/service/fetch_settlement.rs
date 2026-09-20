@@ -55,7 +55,7 @@ fn fetch_request_for_job(job: &ServiceWorkerFetchJob) -> ServiceWorkerFetchReque
         resulting_client_id: job.resulting_client_id,
         url: job.request.url.clone(),
         method: job.request.method.clone(),
-        headers: job.request.request_headers.clone(),
+        headers: job.request.request_headers.to_byte_strings(),
         body: job.request.body.clone(),
         destination: job.destination,
         request_mode: job.request.request_mode,
@@ -167,7 +167,7 @@ fn apply_service_worker_synthetic_redirect(
             negotiated_http_version: None,
         })
         .map_err(|error| error.to_string())?;
-    job.cors_preflight_request_headers = job.request.request_headers.clone();
+    job.cors_preflight_request_headers = job.request.request_headers.to_byte_strings();
     Ok(())
 }
 
@@ -201,7 +201,7 @@ impl ServiceWorkerRuntimeService {
                 resulting_client_id: Some(client_id),
                 url: request.url.clone(),
                 method: request.method.clone(),
-                headers: request.request_headers.clone(),
+                headers: request.request_headers.to_byte_strings(),
                 body: request.body.clone(),
                 destination,
                 request_mode: request.request_mode,
@@ -267,7 +267,7 @@ impl ServiceWorkerRuntimeService {
             job.network_context,
             job.request.url,
             job.request.method,
-            job.request.request_headers,
+            job.request.request_headers.to_byte_strings(),
             request_body_text(&job.request.body),
         );
     }
@@ -385,7 +385,7 @@ impl ServiceWorkerRuntimeService {
                         internal_id: job.internal_id,
                         request_url: job.request.url.clone(),
                         request_method: job.request.method.clone(),
-                        request_headers: job.request.request_headers.clone(),
+                        request_headers: job.request.request_headers.to_byte_strings(),
                         request_body: request_body_text(&job.request.body),
                         body_source_id: started.body_source_id,
                         network_request_headers: None,
@@ -638,7 +638,7 @@ impl ServiceWorkerRuntimeService {
                 internal_id: job.internal_id,
                 request_url: job.request.url,
                 request_method: job.request.method,
-                request_headers: job.request.request_headers,
+                request_headers: job.request.request_headers.to_byte_strings(),
                 request_body: request_body_text(&job.request.body),
                 response_status_text: Some(response.status_text),
                 skip_fetch_security_validation: true,
@@ -691,7 +691,7 @@ impl ServiceWorkerRuntimeService {
                 internal_id: job.internal_id,
                 request_url: job.request.url,
                 request_method: job.request.method,
-                request_headers: job.request.request_headers,
+                request_headers: job.request.request_headers.to_byte_strings(),
                 request_body: request_body_text(&job.request.body),
                 response_status_text: None,
                 skip_fetch_security_validation: false,
@@ -1960,12 +1960,12 @@ mod tests {
         assert_eq!(request_body_text(&job.request.body), None);
         assert_eq!(job.request.body, None);
         assert_eq!(
-            job.request.request_headers,
+            job.request.request_headers.to_byte_strings(),
             vec![("x-keep".to_owned(), "yes".to_owned())]
         );
         assert_eq!(
             job.cors_preflight_request_headers,
-            job.request.request_headers
+            job.request.request_headers.to_byte_strings()
         );
         assert_eq!(job.request.redirect_count(), 1);
         assert_eq!(job.request.redirect_chain().len(), 1);

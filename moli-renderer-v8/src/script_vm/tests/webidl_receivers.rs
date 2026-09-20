@@ -1,5 +1,6 @@
 use super::*;
 
+mod document;
 mod dom;
 
 #[test]

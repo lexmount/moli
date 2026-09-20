@@ -20,7 +20,7 @@ use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::Document, enumerable)]
+#[webapi(interface = web_api_interfaces::Document, enumerable, receiver)]
 struct DocumentRangePrototypeDeclaration {
     #[webapi(method, length = 0, callback = document_create_range_callback)]
     create_range: (),

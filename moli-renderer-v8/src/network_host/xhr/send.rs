@@ -287,7 +287,8 @@ fn send_synchronous_network_xhr(
         &prepared.method,
         prepared.resolved_url.as_str(),
         prepared.send_body.clone(),
-        prepared.request_headers.clone(),
+        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
+            .expect("prepared Fetch/XHR headers are ByteStrings"),
     )
     .expect("xhr request url was already resolved")
     .with_initiator_url(&prepared.document_url)

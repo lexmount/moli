@@ -1,6 +1,8 @@
 """Enumerate WPT cases that the cross-engine runner can execute.
 
-The default semantic profile selects testharness cases. Layout profiles add a
+The default semantic profile selects testharness cases and HTML crashtests.
+Crashtests use WPT's ``-crash`` filename flag or ``crashtests`` directory and
+do not require testharness.js. Layout profiles add a
 deterministic static subset and read upstream ``MANIFEST.json`` for reftest
 URLs, ``==`` / ``!=`` references, timeout metadata, and fuzzy bounds.
 
@@ -27,8 +29,8 @@ A testharness case is selectable if:
   ``.https.``, ``.sub.``, and ``.serviceworker.`` cases because the fixture
   server has local HTTP substitutions for those WPT features.
 
-The default set is blacklist-based: start from all upstream WPT HTML
-testharness cases the v1 static fixture server can serve, then drop areas
+The default set is blacklist-based: start from upstream WPT HTML testharness
+cases and crashtests the v1 static fixture server can serve, then drop areas
 that require a real layout, paint, compositor, media timeline, or canvas
 rasterizer. This keeps the baseline broad without letting rendering-only gaps
 dominate the signal.
@@ -938,6 +940,17 @@ def _any_js_allows_worker(meta: AnyJsMeta) -> bool:
     return not meta.globals or bool(meta.globals & {"worker", "dedicatedworker"})
 
 
+def _is_crashtest_path(rel: str) -> bool:
+    """Match WPT SourceFile.name_is_crashtest, including markup-only scope."""
+    path = Path(rel)
+    if path.suffix not in {".html", ".htm", ".xhtml", ".xht", ".xml", ".svg"}:
+        return False
+    type_flag = (
+        path.stem.rsplit("-", 1)[1].split(".", 1)[0] if "-" in path.stem else None
+    )
+    return type_flag == "crash" or "crashtests" in path.parts[:-1]
+
+
 def enumerate_cases(
     wpt_root: Path,
     *,
@@ -995,7 +1008,8 @@ def enumerate_cases(
                 include_tentative=include_tentative,
             ):
                 continue
-            if "/resources/testharness.js" not in head:
+            crashtest = _is_crashtest_path(rel)
+            if not crashtest and "/resources/testharness.js" not in head:
                 continue
             if "/resources/testdriver" in head:
                 continue
@@ -1006,8 +1020,12 @@ def enumerate_cases(
                 continue
             timeout_multiplier = LONG_TIMEOUT_MULTIPLIER if parser.long_timeout else 1.0
             found.extend(
-                WptCase(case_path=case_path, timeout_multiplier=timeout_multiplier)
-                for case_path in _case_paths_for_variants(rel, parser)
+                WptCase(
+                    case_path=case_path,
+                    timeout_multiplier=timeout_multiplier,
+                    test_type="crashtest" if crashtest else "testharness",
+                )
+                for case_path in ([rel] if crashtest else _case_paths_for_variants(rel, parser))
             )
         for path in base.rglob("*.any.js"):
             if not path.is_file():
@@ -1553,4 +1571,8 @@ def explicit_case(wpt_root: Path, case_path: str) -> WptCase:
     else:
         parser = _parse_case_html(source)
         timeout_multiplier = LONG_TIMEOUT_MULTIPLIER if parser.long_timeout else 1.0
-    return WptCase(case_path=normalized_case_path, timeout_multiplier=timeout_multiplier)
+    return WptCase(
+        case_path=normalized_case_path,
+        timeout_multiplier=timeout_multiplier,
+        test_type="crashtest" if _is_crashtest_path(source_case_path) else "testharness",
+    )

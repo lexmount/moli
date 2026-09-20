@@ -470,6 +470,7 @@ pub(crate) struct ServiceWorkerFetchRequest {
     pub(crate) resulting_client_id: Option<ServiceWorkerClientId>,
     pub(crate) url: Url,
     pub(crate) method: String,
+    /// Isomorphically decoded wire bytes, ready for the worker's Fetch Headers.
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) destination: ServiceWorkerRequestDestination,

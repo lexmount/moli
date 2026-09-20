@@ -1,3 +1,4 @@
+use anyhow::Context;
 use data_url::DataUrl;
 use moli_core::{
     RendererOutputFence,
@@ -28,7 +29,6 @@ use crate::domains::network::{
     MainDocumentBodyProgressSource,
 };
 
-const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 const HTTP_RESPONSE_CODE_FAILURE_ERROR_TEXT: &str = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
 const CAPTURED_RAW_REPLAY_CHUNK_SIZE: usize = 64 * 1024;
 
@@ -93,7 +93,7 @@ async fn prepare_browser_owned_error_page_navigation_with_engine_async(
     error_text: String,
     body: CapturedBody,
     reply_boundary: RendererReplyBoundary,
-) -> Result<ResponseCommitReady, String> {
+) -> anyhow::Result<ResponseCommitReady> {
     let error_page_url = Url::parse(NETWORK_ERROR_PAGE_URL)
         .expect("the browser-owned network error page URL must be valid");
     let error_page = NetworkErrorPageNavigation::new(error_text, unreachable_url.clone());
@@ -139,7 +139,7 @@ async fn prepare_network_error_page_navigation_with_engine_async(
     request_headers: Vec<(String, String)>,
     error_text: String,
     reply_boundary: RendererReplyBoundary,
-) -> Result<NavigationLoadOutcome, String> {
+) -> anyhow::Result<NavigationLoadOutcome> {
     let body = CapturedBody::from_string(network_error_page_html(&unreachable_url, &error_text));
     prepare_browser_owned_error_page_navigation_with_engine_async(
         engine,
@@ -307,7 +307,7 @@ pub struct ResponseCommitReady {
 }
 
 enum ResponseCommitBodyCapture {
-    Pending(tokio::task::JoinHandle<Result<CapturedBody, String>>),
+    Pending(tokio::task::JoinHandle<anyhow::Result<CapturedBody>>),
     Ready(CapturedBody),
 }
 
@@ -318,11 +318,11 @@ impl ResponseCommitBodyCapture {
         }
     }
 
-    async fn resolve(self) -> Result<CapturedBody, String> {
+    async fn resolve(self) -> anyhow::Result<CapturedBody> {
         match self {
             Self::Pending(task) => task
                 .await
-                .map_err(|error| format!("main document body capture task failed: {error}"))?,
+                .context("main document body capture task failed")?,
             Self::Ready(body) => Ok(body),
         }
     }
@@ -373,15 +373,15 @@ impl ResponseCommitReady {
     pub(crate) async fn update_commit_configuration(
         &self,
         configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> Result<(), String> {
+    ) -> anyhow::Result<()> {
         self.prepared_page
             .as_ref()
             .expect("response commit-ready value must retain its prepared Page")
             .update_commit_configuration(configuration)
             .await
-            .map_err(|error| {
+            .with_context(|| {
                 format!(
-                    "failed to attach commit-time target configuration for page `{}`: {error:#}",
+                    "failed to attach commit-time target configuration for page `{}`",
                     self.requested_url
                 )
             })
@@ -397,7 +397,7 @@ impl ResponseCommitReady {
     pub(crate) async fn commit(
         mut self,
         permit: PreparedDocumentPageCommitPermit,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let prepared_page = self
             .prepared_page
             .take()
@@ -408,10 +408,10 @@ impl ResponseCommitReady {
                 if let Some(body_capture) = self.body_capture.take() {
                     body_capture.abort();
                 }
-                return Err(format!(
-                    "failed to execute scripts for page `{}`: {error:#}",
+                return Err(error.context(format!(
+                    "failed to execute scripts for page `{}`",
                     self.requested_url
-                ));
+                )));
             }
         };
         let body_capture = self
@@ -452,9 +452,9 @@ impl ResponseCommitReady {
             });
             CompletedDocumentProgressTransfer::new_pending_body(body_network_progress_state)
         } else {
-            let captured_body = body_capture.resolve().await.map_err(|error| {
+            let captured_body = body_capture.resolve().await.with_context(|| {
                 format!(
-                    "failed to execute scripts for page `{}`: {error}",
+                    "failed to execute scripts for page `{}`",
                     self.requested_url
                 )
             })?;
@@ -602,7 +602,7 @@ async fn first_nonempty_response_body_chunk(
 fn failed_provisional_body_load(
     error: anyhow::Error,
     context: &str,
-) -> Result<NavigationLoadOutcome, String> {
+) -> anyhow::Result<NavigationLoadOutcome> {
     if error
         .downcast_ref::<NetworkFetchFailureContext>()
         .is_some_and(|failure| {
@@ -613,7 +613,7 @@ fn failed_provisional_body_load(
             moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
         ));
     }
-    Err(format!("{context}: {error:#}"))
+    Err(error.context(context.to_owned()))
 }
 
 fn spawn_streaming_body_capture(
@@ -621,40 +621,37 @@ fn spawn_streaming_body_capture(
     initial_chunk: Option<Vec<u8>>,
     body_tx: mpsc::Sender<Vec<u8>>,
     completion_tx: oneshot::Sender<anyhow::Result<()>>,
-) -> tokio::task::JoinHandle<Result<CapturedBody, String>> {
+) -> tokio::task::JoinHandle<anyhow::Result<CapturedBody>> {
     tokio::spawn(async move {
-        let mut body = CapturedBodyWriter::default();
+        // Publish completion before closing the parser's body channel, as the
+        // transport-backed capture did before sharing errors with both owners.
         let mut renderer_body_tx = Some(body_tx);
-        if let Some(chunk) = initial_chunk {
-            body.append(&chunk)
-                .map_err(|error| format!("failed to capture page body: {error}"))?;
-            if let Some(body_tx) = renderer_body_tx.as_ref()
-                && body_tx.send(chunk).await.is_err()
-            {
-                renderer_body_tx = None;
+        let result = async {
+            let mut body = CapturedBodyWriter::default();
+            if let Some(chunk) = initial_chunk {
+                body.append(&chunk).context("failed to capture page body")?;
+                if let Some(body_tx) = renderer_body_tx.as_ref()
+                    && body_tx.send(chunk).await.is_err()
+                {
+                    renderer_body_tx = None;
+                }
             }
-        }
-        while let Some(chunk) = response.next_chunk().await {
-            body.append(&chunk)
-                .map_err(|error| format!("failed to capture page body: {error}"))?;
-            if let Some(body_tx) = renderer_body_tx.as_ref()
-                && body_tx.send(chunk).await.is_err()
-            {
-                renderer_body_tx = None;
+            while let Some(chunk) = response.next_chunk().await {
+                body.append(&chunk).context("failed to capture page body")?;
+                if let Some(body_tx) = renderer_body_tx.as_ref()
+                    && body_tx.send(chunk).await.is_err()
+                {
+                    renderer_body_tx = None;
+                }
             }
+            response
+                .finish()
+                .await
+                .context("failed to read page body from stream")?;
+            body.finish().context("failed to finish captured page body")
         }
-        let finish_result = response
-            .finish()
-            .await
-            .map_err(|error| format!("failed to read page body from stream: {error:#}"));
-        let completion_result = finish_result
-            .as_ref()
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.clone()));
-        let _ = completion_tx.send(completion_result);
-        finish_result?;
-        body.finish()
-            .map_err(|error| format!("failed to finish captured page body: {error}"))
+        .await;
+        complete_body_capture(result, completion_tx)
     })
 }
 
@@ -662,31 +659,62 @@ fn spawn_captured_body_replay(
     body: CapturedBody,
     body_tx: mpsc::Sender<Vec<u8>>,
     completion_tx: oneshot::Sender<anyhow::Result<()>>,
-) -> tokio::task::JoinHandle<Result<CapturedBody, String>> {
+) -> tokio::task::JoinHandle<anyhow::Result<CapturedBody>> {
     tokio::spawn(async move {
         let replay_result = async {
             let mut reader = body
                 .chunk_reader(CAPTURED_RAW_REPLAY_CHUNK_SIZE)
-                .map_err(|error| error.to_string())?;
+                .context("failed to open captured page body")?;
             let mut renderer_body_tx = Some(body_tx);
-            while let Some(chunk) = reader.next_chunk().map_err(|error| error.to_string())? {
+            while let Some(chunk) = reader
+                .next_chunk()
+                .context("failed to replay captured page body")?
+            {
                 if let Some(body_tx) = renderer_body_tx.as_ref()
                     && body_tx.send(chunk).await.is_err()
                 {
                     renderer_body_tx = None;
                 }
             }
-            Ok::<(), String>(())
+            Ok(body)
         }
         .await;
-        let completion_result = replay_result
-            .as_ref()
-            .map(|_| ())
-            .map_err(|error| anyhow::anyhow!(error.clone()));
-        let _ = completion_tx.send(completion_result);
-        replay_result?;
-        Ok(body)
+        complete_body_capture(replay_result, completion_tx)
     })
+}
+
+/// Both the renderer and the navigation task must observe the same failure.
+/// Keep its source chain alive instead of cloning a formatted diagnostic.
+#[derive(Clone, Debug)]
+struct SharedBodyCaptureError(Arc<anyhow::Error>);
+
+impl std::fmt::Display for SharedBodyCaptureError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("main document body transfer failed")
+    }
+}
+
+impl std::error::Error for SharedBodyCaptureError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.0.as_ref().as_ref())
+    }
+}
+
+fn complete_body_capture(
+    result: anyhow::Result<CapturedBody>,
+    completion_tx: oneshot::Sender<anyhow::Result<()>>,
+) -> anyhow::Result<CapturedBody> {
+    match result {
+        Ok(body) => {
+            let _ = completion_tx.send(Ok(()));
+            Ok(body)
+        }
+        Err(error) => {
+            let error = SharedBodyCaptureError(Arc::new(error));
+            let _ = completion_tx.send(Err(error.clone().into()));
+            Err(error.into())
+        }
+    }
 }
 
 pub(crate) struct BackgroundNavigationLoadJob {
@@ -754,7 +782,7 @@ impl BackgroundNavigationBodyCompletionSink {
 
     fn send(
         self,
-        body: Result<CapturedBody, String>,
+        body: anyhow::Result<CapturedBody>,
         body_progress_source: MainDocumentBodyProgressSource,
         final_url: Url,
         response_headers: Vec<(String, String)>,
@@ -805,7 +833,7 @@ impl BackgroundNavigationEarlyResult {
 impl BackgroundNavigationLoadJob {
     fn emit_early_result_for_successful_document(
         early_result: &mut Option<BackgroundNavigationEarlyResult>,
-        navigation: &Result<NavigationLoadOutcome, String>,
+        navigation: &anyhow::Result<NavigationLoadOutcome>,
     ) -> bool {
         let is_successful_document = match navigation {
             Ok(NavigationLoadOutcome::ResponseCommitReady(navigation)) => {
@@ -827,7 +855,7 @@ impl BackgroundNavigationLoadJob {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> (Result<NavigationLoadOutcome, String>, bool) {
+    ) -> (anyhow::Result<NavigationLoadOutcome>, bool) {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         let timing_url = self.raw_url.clone();
         let mut engine = self.engine;
@@ -835,7 +863,7 @@ impl BackgroundNavigationLoadJob {
         if let Some(resource_runtime) = self.shared_resource_runtime.take()
             && let Err(error) = engine.adopt_registered_resource_runtime(resource_runtime)
         {
-            return (Err(error.to_string()), false);
+            return (Err(error), false);
         }
         let mut early_result_sent = false;
         let navigation = async {
@@ -873,12 +901,33 @@ impl BackgroundNavigationLoadJob {
 
             ensure_url_not_blocked_for_load_inputs(&self.load_inputs, &self.raw_url)?;
             if self.load_inputs.network_offline {
-                return Err("Network emulation offline".to_owned());
+                // Emulated offline is a network failure, not a protocol error.
+                // Report it like any other transport failure: commit a
+                // browser-owned error page so Page.navigate resolves with an
+                // `errorText` and the target stays responsive (Chromium
+                // reports net::ERR_INTERNET_DISCONNECTED here).
+                let requested_url = Url::parse(&self.raw_url)
+                    .with_context(|| format!("failed to parse request url `{}`", self.raw_url))?;
+                tracing::debug!(
+                    url = %self.raw_url,
+                    network_error_text = NavigationNetworkErrorKind::InternetDisconnected.error_text(),
+                    "main document blocked by emulated offline conditions"
+                );
+                return prepare_network_error_page_navigation_with_engine_async(
+                    &mut engine,
+                    self.page_reservation,
+                    &self.load_inputs,
+                    requested_url,
+                    self.method,
+                    self.request_headers,
+                    NavigationNetworkErrorKind::InternetDisconnected.error_text().to_owned(),
+                    RendererReplyBoundary::DocumentCommit,
+                )
+                .await;
             }
 
-            let requested_url = Url::parse(&self.raw_url).map_err(|error| {
-                format!("failed to parse request url `{}`: {error}", self.raw_url)
-            })?;
+            let requested_url = Url::parse(&self.raw_url)
+                .with_context(|| format!("failed to parse request url `{}`", self.raw_url))?;
             let resource_storage = self.load_inputs.resource_storage_handles();
             let navigation_response = engine
                 .fetch_navigation_streaming_raw_response_bytes_with_storage_async(
@@ -944,7 +993,7 @@ impl BackgroundNavigationLoadJob {
                         )
                         .await;
                     }
-                    return Err(format!("failed to fetch page `{}`: {error}", self.raw_url));
+                    return Err(error.context(format!("failed to fetch page `{}`", self.raw_url)));
                 }
             };
             let (response, network_observation_journal) = navigation_response
@@ -1001,12 +1050,12 @@ impl BackgroundStreamingResponseNavigationLoadJob {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let mut engine = self.engine;
         if let Some(resource_runtime) = self.shared_resource_runtime.take()
             && let Err(error) = engine.adopt_registered_resource_runtime(resource_runtime)
         {
-            return Err(error.to_string());
+            return Err(error);
         }
         build_navigation_from_streaming_raw_response_with_engine_async(
             &mut engine,
@@ -1030,7 +1079,7 @@ impl BackgroundStreamingResponseNavigationLoadJob {
 }
 
 #[cfg(test)]
-pub(crate) fn decode_data_url_body(raw_url: &str) -> Option<Result<Vec<u8>, String>> {
+pub(crate) fn decode_data_url_body(raw_url: &str) -> Option<anyhow::Result<Vec<u8>>> {
     decode_data_url_response(raw_url).map(|result| result.map(|response| response.body))
 }
 
@@ -1052,24 +1101,23 @@ struct InlineHtmlNavigationSource {
 
 pub(crate) fn decode_data_url_response(
     raw_url: &str,
-) -> Option<Result<DecodedDataUrlResponse, String>> {
+) -> Option<anyhow::Result<DecodedDataUrlResponse>> {
     let data_url = DataUrl::process(raw_url).ok()?;
     let content_type = data_url.mime_type().to_string();
     Some(
         data_url
             .decode_to_vec()
             .map(|(body, _fragment)| DecodedDataUrlResponse { content_type, body })
-            .map_err(|_| "failed to decode data url body".to_owned()),
+            .context("failed to decode data url body"),
     )
 }
 
 fn decoded_data_url_navigation_response(
     raw_url: &str,
-) -> Option<Result<DecodedDataUrlNavigationResponse, String>> {
+) -> Option<anyhow::Result<DecodedDataUrlNavigationResponse>> {
     let decoded = decode_data_url_response(raw_url)?;
     Some(decoded.and_then(|decoded| {
-        let requested_url =
-            Url::parse(raw_url).map_err(|error| format!("failed to parse data url: {error}"))?;
+        let requested_url = Url::parse(raw_url).context("failed to parse data url")?;
         let response = RawResponse::from_head_and_body(
             ResponseHead {
                 final_url: requested_url.clone(),
@@ -1091,7 +1139,7 @@ fn decoded_data_url_navigation_response(
     }))
 }
 
-pub(crate) fn decode_text_html_data_url(raw_url: &str) -> Option<Result<String, String>> {
+pub(crate) fn decode_text_html_data_url(raw_url: &str) -> Option<anyhow::Result<String>> {
     if let Some(payload) = raw_url.strip_prefix("data:text/html,")
         && payload.contains('#')
     {
@@ -1107,16 +1155,16 @@ pub(crate) fn decode_text_html_data_url(raw_url: &str) -> Option<Result<String, 
     Some(
         data_url
             .decode_to_vec()
-            .map_err(|_| "failed to decode text/html data url body".to_owned())
+            .context("failed to decode text/html data url body")
             .and_then(|(body, _fragment)| {
-                String::from_utf8(body).map_err(|error| error.to_string())
+                String::from_utf8(body).context("failed to decode text/html data url text")
             }),
     )
 }
 
 fn inline_html_navigation_source(
     raw_url: &str,
-) -> Option<Result<InlineHtmlNavigationSource, String>> {
+) -> Option<anyhow::Result<InlineHtmlNavigationSource>> {
     if raw_url == "about:blank" {
         return Some(
             Url::parse(raw_url)
@@ -1125,7 +1173,7 @@ fn inline_html_navigation_source(
                     html: ABOUT_BLANK_DOCUMENT_HTML.to_owned(),
                     response_headers: vec![("content-type".into(), "text/html".into())],
                 })
-                .map_err(|error| format!("failed to parse about:blank url: {error}")),
+                .context("failed to parse about:blank url"),
         );
     }
 
@@ -1141,7 +1189,7 @@ fn inline_html_navigation_source(
                 html,
                 response_headers: vec![("Content-Type".into(), content_type)],
             })
-            .map_err(|error| format!("failed to parse data url: {error}"))
+            .context("failed to parse data url")
     }))
 }
 
@@ -1153,7 +1201,7 @@ async fn load_inline_html_navigation_with_engine_async(
     raw_url: &str,
     request_headers: Vec<(String, String)>,
     reply_boundary: RendererReplyBoundary,
-) -> Option<Result<NavigationLoadOutcome, String>> {
+) -> Option<anyhow::Result<NavigationLoadOutcome>> {
     let source = inline_html_navigation_source(raw_url)?;
     Some(
         async {
@@ -1203,7 +1251,7 @@ async fn load_data_url_navigation_with_engine_async(
     raw_url: &str,
     request_headers: Vec<(String, String)>,
     reply_boundary: RendererReplyBoundary,
-) -> Option<Result<NavigationLoadOutcome, String>> {
+) -> Option<anyhow::Result<NavigationLoadOutcome>> {
     let source = decoded_data_url_navigation_response(raw_url)?;
     Some(
         async {
@@ -1251,7 +1299,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     reserved_service_worker_client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
     resource_source: CommittedDocumentResourceSource,
     reply_boundary: RendererReplyBoundary,
-) -> Result<NavigationLoadOutcome, String> {
+) -> anyhow::Result<NavigationLoadOutcome> {
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
     let timing_started = std::time::Instant::now();
     let network_extra_info_available = !network_observation_journal.is_empty();
@@ -1362,23 +1410,23 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         if let Some(chunk) = initial_body_chunk.take() {
             body_writer
                 .append(&chunk)
-                .map_err(|error| format!("failed to capture XML page body: {error}"))?;
+                .context("failed to capture XML page body")?;
         }
         while let Some(chunk) = response.next_chunk().await {
             body_writer
                 .append(&chunk)
-                .map_err(|error| format!("failed to capture XML page body: {error}"))?;
+                .context("failed to capture XML page body")?;
         }
         if let Err(error) = response.finish().await {
             return failed_provisional_body_load(error, "failed to read XML page body from stream");
         }
         let captured_body = body_writer
             .finish()
-            .map_err(|error| format!("failed to finish captured XML page body: {error}"))?;
+            .context("failed to finish captured XML page body")?;
         let response_text = captured_body
             .materialize_bytes()
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-            .map_err(|error| format!("failed to materialize XML page body: {error}"))?;
+            .context("failed to materialize XML page body")?;
         let page_storage = load_inputs.page_storage_handles();
         let main_document_commit = load_inputs
             .main_document_commit_for_final_url(&final_url, None)
@@ -1414,7 +1462,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 main_document_commit.as_deref().cloned(),
             )
             .await
-            .map_err(|error| format!("failed to prepare XML page `{}`: {error}", requested_url))?;
+            .with_context(|| format!("failed to prepare XML page `{}`", requested_url))?;
         if timing_enabled {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -1489,7 +1537,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     let prepared_future = async {
         prepared_future
             .await
-            .map_err(|error| format!("failed to prepare streaming raw page: {error:#}"))
+            .context("failed to prepare streaming raw page")
     };
     let body_capture_task =
         spawn_streaming_body_capture(response, initial_body_chunk, body_tx, completion_tx);
@@ -1498,10 +1546,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         Ok(prepared_page) => prepared_page,
         Err(error) => {
             body_capture_task.abort();
-            return Err(format!(
-                "failed to prepare page `{}`: {error}",
-                requested_url
-            ));
+            return Err(error.context(format!("failed to prepare page `{}`", requested_url)));
         }
     };
     if timing_enabled {
@@ -1551,7 +1596,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         final_url: &Url,
-    ) -> Result<PreparedDocumentPageCommitConfiguration, String> {
+    ) -> anyhow::Result<PreparedDocumentPageCommitConfiguration> {
         let idle_override = self.idle_override_for_navigation(owner, final_url);
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         // The renderer runtime is shared by the BrowserContext, but each Page
@@ -1619,7 +1664,7 @@ impl CdpConnection {
         response: &StreamingRawResponse,
         network_observation_journal: &NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<Option<PausedResponsePreparedDocument>, String> {
+    ) -> anyhow::Result<Option<PausedResponsePreparedDocument>> {
         if super::downloads::response_headers_indicate_download(&response.headers)
             || response_headers_indicate_xml_document(&response.headers)
             || response_status_may_use_http_error_page(response.status)
@@ -1677,7 +1722,7 @@ impl CdpConnection {
         if let Some(resource_runtime) = shared_resource_runtime {
             engine
                 .adopt_registered_resource_runtime(resource_runtime)
-                .map_err(|error| error.to_string())?;
+                .context("failed to update navigation runtime policy")?;
         }
         let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
             load_inputs.fetch_subresource_interception;
@@ -1721,12 +1766,10 @@ impl CdpConnection {
                 main_document_commit.as_deref().cloned(),
             )
             .await
-            .map_err(|error| {
-                format!(
-                    "failed to prepare response-stage page `{}`: {error:#}",
+            .with_context(|| format!(
+                    "failed to prepare response-stage page `{}`",
                     requested_url
-                )
-            })?;
+                ))?;
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -2145,6 +2188,7 @@ impl CdpConnection {
         }
         apply_navigation_load_input_overrides_async(&mut page, &load_inputs, override_mode)
             .await
+            .map_err(|error| format!("{error:#}"))
             .inspect_err(|message| {
                 self.fail_initial_document_page_build_for_owner(&owner, message.clone());
             })?;
@@ -2165,7 +2209,7 @@ impl CdpConnection {
     pub async fn load_navigation_via_runtime_async(
         &mut self,
         raw_url: &str,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, None);
         let load_inputs = self.navigation_load_inputs_for_owner(&owner);
         self.load_navigation_via_runtime_with_load_inputs_async(&owner, raw_url, load_inputs)
@@ -2184,7 +2228,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         raw_url: &str,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_fixture_load_inputs_for_session_owner(session_id)?;
         self.load_navigation_via_runtime_with_load_inputs_async(&owner, raw_url, load_inputs)
@@ -2196,7 +2240,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         raw_url: &str,
         load_inputs: TargetNavigationLoadInputs,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let request_headers = load_inputs.extra_http_headers.clone();
         let navigation = self
             .load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
@@ -2217,7 +2261,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         navigation: NavigationLoadOutcome,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         match navigation {
             NavigationLoadOutcome::ResponseCommitReady(navigation) => {
                 let navigation = *navigation;
@@ -2233,9 +2277,11 @@ impl CdpConnection {
             }
             NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
             NavigationLoadOutcome::Download(_) => {
-                Err("navigation resolved to a download".to_owned())
+                Err(anyhow::anyhow!("navigation resolved to a download"))
             }
-            NavigationLoadOutcome::NetworkFailure(error_text) => Err(error_text),
+            NavigationLoadOutcome::NetworkFailure(error_text) => {
+                Err(anyhow::Error::msg(error_text))
+            }
         }
     }
 
@@ -2245,7 +2291,7 @@ impl CdpConnection {
         raw_url: &str,
         body: Option<String>,
         request_headers: Vec<(String, String)>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_async(
             None,
             method,
@@ -2267,7 +2313,7 @@ impl CdpConnection {
         request_headers: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
         request_load_policy: NavigationRequestLoadPolicy,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(&owner),
@@ -2289,7 +2335,7 @@ impl CdpConnection {
         &mut self,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
             &navigation.owner,
             self.navigation_load_inputs_for_navigation(navigation),
@@ -2300,6 +2346,34 @@ impl CdpConnection {
             body_progress_source,
         )
         .await
+        .context("failed to load document")
+    }
+
+    pub(crate) async fn prepare_navigation_load_error_for_navigation_async(
+        &mut self,
+        navigation: &NavigationDispatchState,
+        error: anyhow::Error,
+    ) -> anyhow::Result<NavigationLoadOutcome> {
+        let Some(network_error) = error.downcast_ref::<NavigationNetworkError>() else {
+            return Err(error);
+        };
+
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
+        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
+        let page_reservation =
+            self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
+        prepare_network_error_page_navigation_with_engine_async(
+            &mut engine,
+            page_reservation,
+            &load_inputs,
+            network_error.unreachable_url.clone(),
+            network_error.request_method.clone(),
+            network_error.request_headers.clone(),
+            network_error.kind.error_text().to_owned(),
+            RendererReplyBoundary::Stage,
+        )
+        .await
+        .context("failed to prepare network error document")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2312,7 +2386,7 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         if load_inputs.browser_context_id.is_none() {
             let page_reservation = self
                 .standalone_navigation_engine
@@ -2376,13 +2450,9 @@ impl CdpConnection {
             }
         }
 
-        ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
-        }
-
+        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
         let requested_url = Url::parse(raw_url)
-            .map_err(|error| format!("failed to parse request url `{raw_url}`: {error}"))?;
+            .with_context(|| format!("failed to parse request url `{raw_url}`"))?;
         let response = self
             .fetch_navigation_streaming_raw_response_with_load_inputs_async(
                 &load_inputs,
@@ -2641,7 +2711,7 @@ impl CdpConnection {
         fetch_config
     }
 
-    pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> Result<Page, String> {
+    pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> anyhow::Result<Page> {
         let navigation = self.load_navigation_via_runtime_async(raw_url).await?;
         Ok(navigation.page)
     }
@@ -2653,7 +2723,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         request_headers: Vec<(String, String)>,
-    ) -> Option<Result<NavigationLoadOutcome, String>> {
+    ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
         load_inline_html_navigation_with_engine_async(
             self.standalone_navigation_engine.ensure_mut(),
             page_reservation,
@@ -2675,7 +2745,7 @@ impl CdpConnection {
         raw_url: &str,
         request_headers: Vec<(String, String)>,
         reply_boundary: RendererReplyBoundary,
-    ) -> Option<Result<NavigationLoadOutcome, String>> {
+    ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
         load_inline_html_navigation_with_engine_async(
             engine,
             page_reservation,
@@ -2702,7 +2772,7 @@ impl CdpConnection {
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: String,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         let initial_request_cookie_report =
             load_inputs.request_cookie_report_for_navigation(&requested_url, &request_method, true);
@@ -2730,7 +2800,7 @@ impl CdpConnection {
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: String,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_fixture_load_inputs_for_session_owner(session_id)?;
         let initial_request_cookie_report =
@@ -2759,11 +2829,12 @@ impl CdpConnection {
     fn navigation_fixture_load_inputs_for_session_owner(
         &self,
         session_id: Option<&str>,
-    ) -> Result<TargetNavigationLoadInputs, String> {
+    ) -> anyhow::Result<TargetNavigationLoadInputs> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
-        let frame_id = load_inputs.root_frame_id.clone().ok_or_else(|| {
-            "navigation fixture requires an installed target root frame".to_owned()
-        })?;
+        let frame_id = load_inputs
+            .root_frame_id
+            .clone()
+            .context("navigation fixture requires an installed target root frame")?;
         Ok(load_inputs.with_main_document_commit_seed(
             RendererMainDocumentCommitSeed::from_navigation_fixture(
                 frame_id,
@@ -2790,7 +2861,7 @@ impl CdpConnection {
         response_headers: Vec<(String, String)>,
         response_body: String,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         self.build_loaded_navigation_from_buffered_response_with_request_cookie_report_async(
             &load_inputs,
@@ -2816,7 +2887,7 @@ impl CdpConnection {
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_buffered_body_source_with_load_inputs_async(
             &navigation.owner,
@@ -2850,7 +2921,7 @@ impl CdpConnection {
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let response_cookie_reports =
             load_inputs.store_response_cookie_reports(&final_url, &response_headers);
         let head = ResponseHead {
@@ -2889,7 +2960,7 @@ impl CdpConnection {
         response_body: String,
         captured_response_body: Option<CapturedBody>,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let response_cookie_reports =
             load_inputs.store_response_cookie_reports(&requested_url, &response_headers);
         let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
@@ -2900,7 +2971,7 @@ impl CdpConnection {
             .map(Arc::new);
         let built = self
             .navigation_engine_for_load_inputs_mut(load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?
+            .context("navigation Page engine unavailable")?
             .build_html_page_from_response_with_storage_and_inspector_session_restores_async(
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
@@ -2929,9 +3000,9 @@ impl CdpConnection {
                 main_document_commit.as_deref().cloned(),
             )
             .await
-            .map_err(|error| {
+            .with_context(|| {
                 format!(
-                    "failed to execute scripts for synthetic response `{}`: {error}",
+                    "failed to execute scripts for synthetic response `{}`",
                     requested_url
                 )
             })?;
@@ -2988,16 +3059,13 @@ impl CdpConnection {
         body: Option<String>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<NavigationResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<NavigationResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
-        ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
-        }
+        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
         let resource_storage = load_inputs.resource_storage_handles();
         let engine = self
             .navigation_engine_for_load_inputs_mut(&load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?;
+            .context("navigation Page engine unavailable")?;
         engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
         engine.set_cache_disabled(load_inputs.cache_disabled);
         engine
@@ -3013,7 +3081,7 @@ impl CdpConnection {
                 auth,
             )
             .await
-            .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
+            .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
     pub(crate) async fn fetch_navigation_auth_raw_response_for_owner_async(
@@ -3025,15 +3093,12 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: SubresourceAuthCredentials,
-    ) -> Result<NetworkFetchResult<RawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(owner),
             request_load_policy,
         );
-        ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
-        }
+        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
 
         let mut request = Request::new_browser_bytes(
             method,
@@ -3045,7 +3110,7 @@ impl CdpConnection {
                 .as_ref()
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
-        .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
+        .with_context(|| format!("failed to build request for `{raw_url}`"))?
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3065,7 +3130,7 @@ impl CdpConnection {
         loader
             .fetch_raw_with_network_metadata(request)
             .await
-            .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
+            .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
     pub async fn fetch_navigation_streaming_raw_response_async(
@@ -3075,7 +3140,7 @@ impl CdpConnection {
         body: Option<String>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         self.fetch_navigation_streaming_raw_response_with_load_inputs_async(
             &load_inputs,
@@ -3097,7 +3162,7 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(owner),
             request_load_policy,
@@ -3121,11 +3186,8 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
-        ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
-        }
+    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
+        validate_navigation_network_request(load_inputs, method, raw_url, &request_headers)?;
 
         let mut request = Request::new_browser_bytes(
             method,
@@ -3137,7 +3199,7 @@ impl CdpConnection {
                 .as_ref()
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
-        .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
+        .with_context(|| format!("failed to build request for `{raw_url}`"))?
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3157,7 +3219,7 @@ impl CdpConnection {
         loader
             .fetch_raw_stream_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
             .await
-            .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
+            .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
     pub async fn build_navigation_from_network_response_async(
@@ -3166,7 +3228,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: Vec<(String, String)>,
         response: NetworkFetchResult<NavigationResponse>,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         self.build_navigation_from_network_response_for_session_owner_async(
             None,
             requested_url,
@@ -3184,7 +3246,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: Vec<(String, String)>,
         response: NetworkFetchResult<NavigationResponse>,
-    ) -> Result<LoadedNavigation, String> {
+    ) -> anyhow::Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
@@ -3213,7 +3275,7 @@ impl CdpConnection {
             .map(Arc::new);
         let built = self
             .navigation_engine_for_load_inputs_mut(&load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?
+            .context("navigation Page engine unavailable")?
             .build_html_page_from_response_with_storage_and_inspector_session_restores_async(
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
@@ -3242,12 +3304,7 @@ impl CdpConnection {
                 main_document_commit.as_deref().cloned(),
             )
             .await
-            .map_err(|error| {
-                format!(
-                    "failed to execute scripts for page `{}`: {error}",
-                    requested_url
-                )
-            })?;
+            .with_context(|| format!("failed to execute scripts for page `{}`", requested_url))?;
         let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
         let mut page = built.page;
         apply_navigation_load_input_overrides_async(
@@ -3306,7 +3363,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: Vec<(String, String)>,
         response: RawResponse,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         self.build_navigation_from_buffered_raw_response_for_session_owner_async(
             None,
             requested_url,
@@ -3324,7 +3381,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: Vec<(String, String)>,
         response: NetworkFetchResult<RawResponse>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_load_inputs_for_owner(&owner);
         self.build_navigation_from_buffered_raw_response_with_load_inputs_async(
@@ -3342,7 +3399,7 @@ impl CdpConnection {
         &mut self,
         navigation: &NavigationDispatchState,
         response: NetworkFetchResult<RawResponse>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_buffered_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3363,7 +3420,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: Vec<(String, String)>,
         response: NetworkFetchResult<RawResponse>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         if super::downloads::response_headers_indicate_download(&response.headers) {
@@ -3400,7 +3457,7 @@ impl CdpConnection {
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_captured_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3428,11 +3485,11 @@ impl CdpConnection {
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         if super::downloads::response_headers_indicate_download(&head.headers) {
-            let body_bytes = body.materialize_bytes().map_err(|error| {
-                format!("failed to materialize captured download body: {error}")
-            })?;
+            let body_bytes = body
+                .materialize_bytes()
+                .context("failed to materialize captured download body")?;
             return Ok(NavigationLoadOutcome::download(
                 self.build_download_from_raw_response(
                     request_method,
@@ -3495,7 +3552,7 @@ impl CdpConnection {
         request_headers: Vec<(String, String)>,
         response: StreamingRawResponse,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         self.build_navigation_from_streaming_raw_response_for_session_owner_async(
             None,
             requested_url,
@@ -3515,7 +3572,7 @@ impl CdpConnection {
         request_headers: Vec<(String, String)>,
         response: NetworkFetchResult<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = self.navigation_load_inputs_for_owner(&owner);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
@@ -3537,7 +3594,7 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         response: NetworkFetchResult<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3560,7 +3617,7 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers_override: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
             &navigation.owner,
@@ -3588,7 +3645,7 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers_override: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         if load_inputs.browser_context_id.is_none() {
@@ -3642,13 +3699,13 @@ impl CdpConnection {
     pub(crate) async fn collect_navigation_streaming_raw_response_async(
         &mut self,
         response: NetworkFetchResult<StreamingRawResponse>,
-    ) -> Result<NetworkFetchResult<RawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         let response = response
             .into_materialized_raw_response()
             .await
-            .map_err(|error| format!("failed to read page body from stream: {error}"))?;
+            .context("failed to read page body from stream")?;
         Ok(NetworkFetchResult::with_observation_journal(
             response,
             network_observation_journal,
@@ -3719,7 +3776,7 @@ async fn prepare_navigation_from_captured_raw_response_with_engine_async(
     network_error_page: Option<NetworkErrorPageNavigation>,
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
-) -> Result<ResponseCommitReady, String> {
+) -> anyhow::Result<ResponseCommitReady> {
     let network_extra_info_available = !network_observation_journal.is_empty();
     if network_error_page.is_none()
         && response_status_may_use_http_error_page(head.status)
@@ -3788,7 +3845,7 @@ async fn prepare_captured_document_response_with_engine_async(
     network_error_page: Option<NetworkErrorPageNavigation>,
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
-) -> Result<ResponseCommitReady, String> {
+) -> anyhow::Result<ResponseCommitReady> {
     let network_extra_info_available = !network_observation_journal.is_empty();
     body_progress_source.emit_response_metadata(
         &request_method,
@@ -3881,10 +3938,10 @@ async fn prepare_captured_document_response_with_engine_async(
         Ok(prepared_page) => prepared_page,
         Err(error) => {
             body_capture_task.abort();
-            return Err(format!(
-                "failed to prepare captured page `{}`: {error:#}",
+            return Err(error.context(format!(
+                "failed to prepare captured page `{}`",
                 requested_url
-            ));
+            )));
         }
     };
 
@@ -3908,16 +3965,37 @@ async fn prepare_captured_document_response_with_engine_async(
     })
 }
 
+fn validate_navigation_network_request(
+    load_inputs: &TargetNavigationLoadInputs,
+    method: &str,
+    raw_url: &str,
+    request_headers: &[(String, String)],
+) -> anyhow::Result<()> {
+    ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
+    if load_inputs.network_offline {
+        let requested_url = Url::parse(raw_url)
+            .with_context(|| format!("failed to parse request url `{raw_url}`"))?;
+        return Err(NavigationNetworkError {
+            kind: NavigationNetworkErrorKind::InternetDisconnected,
+            unreachable_url: requested_url,
+            request_method: method.to_owned(),
+            request_headers: request_headers.to_vec(),
+        }
+        .into());
+    }
+    Ok(())
+}
+
 fn ensure_url_not_blocked_for_load_inputs(
     load_inputs: &TargetNavigationLoadInputs,
     raw_url: &str,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     if load_inputs
         .blocked_url_patterns
         .iter()
         .any(|pattern| url_pattern_matches(pattern, raw_url))
     {
-        Err(BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned())
+        Err(NavigationRequestBlocked.into())
     } else {
         Ok(())
     }
@@ -3933,13 +4011,13 @@ async fn apply_navigation_load_input_overrides_async(
     page: &mut moli_core::page::Page,
     load_inputs: &TargetNavigationLoadInputs,
     mode: NavigationLoadInputOverrideMode,
-) -> Result<(), String> {
+) -> anyhow::Result<()> {
     if !load_inputs.permission_overrides.is_empty()
         || mode == NavigationLoadInputOverrideMode::ExistingPage
     {
         page.set_permission_overrides_async(&load_inputs.permission_overrides)
             .await
-            .map_err(|error| format!("failed to apply page permission overrides: {error}"))?;
+            .context("failed to apply page permission overrides")?;
     }
     if mode == NavigationLoadInputOverrideMode::FreshlyBuiltPage {
         return Ok(());
@@ -3948,16 +4026,16 @@ async fn apply_navigation_load_input_overrides_async(
     // the new Document. Native isolates inherit the process default at entry.
     page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
         .await
-        .map_err(|error| format!("failed to apply page script execution override: {error}"))?;
+        .context("failed to apply page script execution override")?;
     page.set_bypass_content_security_policy_async(load_inputs.bypass_content_security_policy)
         .await
-        .map_err(|error| format!("failed to apply page CSP bypass override: {error}"))?;
+        .context("failed to apply page CSP bypass override")?;
     page.set_emulated_media_async(&load_inputs.emulated_media)
         .await
-        .map_err(|error| format!("failed to apply page emulated media: {error}"))?;
+        .context("failed to apply page emulated media")?;
     page.set_viewport_surface_async(load_inputs.viewport_surface)
         .await
-        .map_err(|error| format!("failed to apply page viewport surface: {error}"))?;
+        .context("failed to apply page viewport surface")?;
     Ok(())
 }
 
@@ -3969,6 +4047,36 @@ mod tests {
         inline_html_navigation_source,
     };
     use serde_json::json;
+
+    #[test]
+    fn provisional_body_failure_preserves_typed_source_and_context() {
+        let source = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "body transport reset",
+        ))
+        .context("transport completion failed");
+        let error =
+            super::failed_provisional_body_load(source, "failed to read XML page body from stream")
+                .expect_err("transport failure must remain an error");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::ConnectionReset
+        );
+        let message = format!("{error:#}");
+        assert!(message.contains("failed to read XML page body from stream"));
+        assert!(message.contains("transport completion failed"));
+        assert!(message.contains("body transport reset"));
+    }
+
+    #[test]
+    fn provisional_body_failure_does_not_infer_cancellation_from_error_text() {
+        let error = super::failed_provisional_body_load(
+            anyhow::anyhow!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT),
+            "failed to read page body from stream",
+        )
+        .expect_err("only a typed transport cancellation may become a network outcome");
+        assert!(format!("{error:#}").contains(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT));
+    }
 
     #[tokio::test]
     async fn response_capture_survives_ordinary_renderer_body_retirement() {
@@ -4009,6 +4117,76 @@ mod tests {
             b"prefixcaptured after parser retirement"
         );
         assert!(!cancellation.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn streaming_body_failure_preserves_source_for_renderer_and_navigation() {
+        let (chunks_tx, chunks_rx) = tokio::sync::mpsc::unbounded_channel();
+        chunks_tx.send(b"partial body".to_vec()).unwrap();
+        drop(chunks_tx);
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        finish_tx
+            .send(Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "typed body transport failure",
+            ))
+            .context("transport completion failed")))
+            .unwrap();
+        let response = moli_fetch::StreamingRawResponse::new(
+            url::Url::parse("https://example.test/document").unwrap(),
+            200,
+            Vec::new(),
+            None,
+            Vec::new(),
+            false,
+            Vec::new(),
+            chunks_rx,
+            moli_fetch::FetchCancelHandle::new(),
+            finish_rx,
+        );
+        let (body_tx, mut body_rx) = tokio::sync::mpsc::channel(1);
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let task = super::spawn_streaming_body_capture(response, None, body_tx, completion_tx);
+        assert_eq!(body_rx.recv().await.unwrap(), b"partial body");
+        assert!(body_rx.recv().await.is_none());
+        let navigation_error = super::ResponseCommitBodyCapture::Pending(task)
+            .resolve()
+            .await
+            .expect_err("partial response must fail navigation capture");
+        let renderer_error = completion_rx
+            .await
+            .unwrap()
+            .expect_err("renderer must receive the transport failure");
+        for error in [&navigation_error, &renderer_error] {
+            let cause = error
+                .root_cause()
+                .downcast_ref::<std::io::Error>()
+                .expect("shared body failure must retain the typed I/O cause");
+            assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionReset);
+            assert!(format!("{error:#}").contains("transport completion failed"));
+            assert!(format!("{error:#}").contains("failed to read page body from stream"));
+        }
+        assert!(std::ptr::eq(
+            navigation_error.root_cause(),
+            renderer_error.root_cause()
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancelled_body_capture_retains_join_error() {
+        let task = tokio::spawn(std::future::pending::<anyhow::Result<super::CapturedBody>>());
+        task.abort();
+        let error = super::ResponseCommitBodyCapture::Pending(task)
+            .resolve()
+            .await
+            .expect_err("cancelled capture must fail");
+        assert!(
+            error
+                .downcast_ref::<tokio::task::JoinError>()
+                .expect("capture must preserve the task failure type")
+                .is_cancelled()
+        );
+        assert!(format!("{error:#}").contains("main document body capture task failed"));
     }
 
     #[test]

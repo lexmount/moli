@@ -2716,22 +2716,29 @@ fn detached_html_document_clone_uses_native_root_metadata_after_property_tamper(
         r#"
         (() => {
             const d = document.implementation.createHTMLDocument('');
+            let reads = 0;
             Object.defineProperty(d.documentElement, 'localName', {
-                get() { return 'svg'; },
+                get() { reads++; return 'svg'; },
                 configurable: true
             });
             const cloned = d.cloneNode(false);
+            const deep = d.cloneNode(true);
             return [
                 cloned !== d,
                 cloned.contentType,
-                cloned.documentElement && cloned.documentElement.localName,
-                cloned.head !== null,
-                cloned.body !== null
+                cloned.childNodes.length,
+                cloned.documentElement === null,
+                cloned.head === null,
+                cloned.body === null,
+                deep.documentElement.localName,
+                deep.head !== null,
+                deep.body !== null,
+                reads
             ].join('|');
         })()
         "#,
     );
-    assert_eq!(status, "true|text/html|html|true|true");
+    assert_eq!(status, "true|text/html|0|true|true|true|html|true|true|0");
 }
 
 #[test]

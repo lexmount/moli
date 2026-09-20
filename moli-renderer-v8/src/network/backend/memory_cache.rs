@@ -616,7 +616,7 @@ pub(in crate::network) fn script_text_cache_key(request: &Request) -> ScriptText
         integrity: request
             .subresource_request_metadata()
             .and_then(|metadata| metadata.integrity.clone()),
-        request_headers: request.request_headers.clone(),
+        request_headers: request.request_headers.to_byte_strings(),
     }
 }
 

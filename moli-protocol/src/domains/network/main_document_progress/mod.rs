@@ -19,7 +19,7 @@ use url::Url;
 use crate::conn::{
     BackgroundEventSender, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     CompletedDownloadBodyArtifact, DownloadNavigation, LoadedNavigation, NavigationDispatchState,
-    NavigationLoadOutcome, ResponseCommitReady, TargetRuntimeSlot,
+    NavigationLoadOutcome, NavigationRequestBlocked, ResponseCommitReady, TargetRuntimeSlot,
 };
 
 #[cfg(test)]
@@ -373,11 +373,20 @@ fn failed_navigation_document_policy(error_text: &str) -> FailedNavigationDocume
 pub(crate) fn materialize_navigation_load_result(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
-    navigation: Result<NavigationLoadOutcome, String>,
+    navigation: anyhow::Result<NavigationLoadOutcome>,
 ) -> MaterializedNavigationLoadOutcome {
     match navigation {
         Ok(navigation) => materialize_navigation_load_outcome(conn, state, navigation),
-        Err(error_text) => {
+        Err(error) => {
+            tracing::debug!(
+                error = ?error,
+                session_id = state.owner.session_id(),
+                "navigation load failed"
+            );
+            let error_text = match error.downcast_ref::<NavigationRequestBlocked>() {
+                Some(blocked) => blocked.to_string(),
+                None => format!("{error:#}"),
+            };
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,

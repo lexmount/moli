@@ -2067,7 +2067,15 @@ fn inline_source_matches_hash(source: &str, hash_source: CspHashSourceValue<'_>)
         .digest_algorithm()
         .digest_bytes(source.as_bytes());
     let actual = BASE64_STANDARD.encode(digest);
-    actual == hash_source.digest
+    // Inline checks normalize base64url symbols, preserving padding and all
+    // other bytes. External script integrity matches remain literal.
+    actual
+        .bytes()
+        .eq(hash_source.digest.bytes().map(|byte| match byte {
+            b'-' => b'+',
+            b'_' => b'/',
+            _ => byte,
+        }))
 }
 
 #[cfg(test)]
@@ -3476,6 +3484,10 @@ mod tests {
             ("'sha256-YQ=='", "sha256-YQ==", true),
             ("'sha256-YQ=='", "sha256-YQ", false),
             ("'sha256-+w=='", "sha256--w==", false),
+            ("'sha256--w=='", "sha256-+w==", false),
+            ("'sha256--w=='", "sha256--w==", true),
+            ("'sha256-/w=='", "sha256-_w==", false),
+            ("'sha256-_w=='", "sha256-/w==", false),
             ("'sha256-YR=='", "sha256-YR==", true),
         ] {
             assert_eq!(
@@ -3872,6 +3884,110 @@ mod tests {
             assert!(inline_source_matches_hash(source, hash_source));
         }
         assert!(csp_hash_source_value("'SHA1-digest'").is_none());
+    }
+
+    #[test]
+    fn inline_hashes_normalize_base64url_symbols_without_decoding_the_digest() {
+        let source = "globalThis.__inlineHashRuns += 1;/*☃ 8*/";
+        for (algorithm, encoded) in [
+            ("sHa256", "1u5siURgPyHwZ-QAD8UUU8_PSFeCLQfQgff1wmWe30c="),
+            (
+                "sHa384",
+                "dfgfWBTXEJmr8n1u3heMCmQspfZzXztxsa6b_uRqupCtR1-hV5y1NIRIuk1GgyfX",
+            ),
+            (
+                "sHa512",
+                "yuIija81LFQ7iw1A1DtvkYIsDvqIgpOAzeloywzVVvfCZdYs43Z-Dh0lhILbiEstq4O56dtDfie_iALMCVjEMA==",
+            ),
+        ] {
+            let matches = |source: &str, encoded: &str| {
+                let expression = format!("'{algorithm}-{encoded}'");
+                inline_source_matches_hash(source, csp_hash_source_value(&expression).unwrap())
+            };
+            for encoded in [
+                encoded.to_owned(),
+                encoded.replace('-', "+"),
+                encoded.replace('_', "/"),
+                encoded.replace('-', "+").replace('_', "/"),
+            ] {
+                assert!(matches(source, &encoded), "{algorithm}: {encoded}");
+                assert!(!matches(&format!("{source} "), &encoded));
+                assert!(!matches(source, &encoded.to_ascii_uppercase()));
+                assert!(!matches(source, &format!("{encoded}=")));
+                if encoded.ends_with('=') {
+                    assert!(!matches(source, encoded.trim_end_matches('=')));
+                }
+            }
+        }
+        // Changing unused padding bits can decode to the same bytes, but CSP
+        // compares encoded strings after replacing only '-' and '_'.
+        assert!(!inline_source_matches_hash(
+            source,
+            csp_hash_source_value("'sha256-1u5siURgPyHwZ-QAD8UUU8_PSFeCLQfQgff1wmWe30d='",)
+                .unwrap()
+        ));
+    }
+
+    #[test]
+    fn style_and_navigation_hash_checks_accept_base64url_and_require_unsafe_hashes() {
+        let endpoints = ContentSecurityPolicyReportingEndpoints::default();
+        let style_source = ".target { color: green; }/*☃ 0*/";
+        let style_policy = "style-src 'sha256-GIrKCpP-iQOfwzOEC4HO_QF0a8OAlKUdqbDq5l8WXn0='";
+        for (source, allowed) in [
+            (style_source.to_owned(), true),
+            (format!("{style_source} "), false),
+        ] {
+            let violation = content_security_policy_inline_style_element_violation_with_disposition_and_reporting_endpoints(
+                style_policy, &protected_url(), &source, ContentSecurityPolicyStyleElementRequest::default(),
+                ContentSecurityPolicyDisposition::Enforce, &endpoints,
+            );
+            assert_eq!(violation.is_none(), allowed);
+        }
+        for (kind, source, encoded) in [
+            (
+                ContentSecurityPolicyNonUrlKind::DocumentInlineStyleAttribute,
+                "color: green;/*☃ 8*/",
+                "GjRTlK2I8F4B9NVwz22_fJvEUruslF4nw-V2jUp0LIM=",
+            ),
+            (
+                ContentSecurityPolicyNonUrlKind::DocumentInlineNavigation,
+                "javascript:/*☃ 0*/void(0)",
+                "r92XonOGS4-_MCpEOXhFyBgS4-xKf3v6fZMeHTK873c=",
+            ),
+        ] {
+            for unsafe_hashes in ["", "'unsafe-hashes'"] {
+                let policy = format!("default-src {unsafe_hashes} 'sha256-{encoded}'");
+                for (source, matching) in [(source.to_owned(), true), (format!("{source} "), false)]
+                {
+                    let violation = content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints(
+                        &policy, &protected_url(), kind, &source,
+                        ContentSecurityPolicyDisposition::Enforce, &endpoints,
+                    );
+                    assert_eq!(
+                        violation.is_none(),
+                        matching && !unsafe_hashes.is_empty(),
+                        "{kind:?}: {policy}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inline_hash_base64url_normalization_does_not_normalize_nonces() {
+        for (nonce, allowed) in [("-_/+", true), ("+//+", false), ("-_--", false)] {
+            assert_eq!(
+                script_element_request_allowed(
+                    "script-src 'nonce--_/+'",
+                    ContentSecurityPolicyScriptElementRequest {
+                        nonce: Some(nonce),
+                        ..Default::default()
+                    },
+                ),
+                allowed,
+                "{nonce}"
+            );
+        }
     }
 
     #[test]

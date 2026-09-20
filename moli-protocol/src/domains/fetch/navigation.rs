@@ -120,7 +120,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
                 conn,
                 out,
                 pending,
-                Err(format!(
+                Err(anyhow::anyhow!(
                     "Fetch response-stage interception after {auth_scheme} authentication is not supported for navigation without buffering"
                 )),
             )
@@ -433,10 +433,20 @@ async fn complete_pending_fetch_navigation_result_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
     pending: PendingFetchNavigation,
-    navigation: Result<NavigationLoadOutcome, String>,
+    navigation: anyhow::Result<NavigationLoadOutcome>,
 ) {
     let token = pending.document_navigation_token;
     let navigation_state = pending.navigation;
+    let navigation = match navigation {
+        Err(error) => {
+            Box::pin(conn.prepare_navigation_load_error_for_navigation_async(
+                &navigation_state,
+                error.context("failed to continue intercepted navigation"),
+            ))
+            .await
+        }
+        navigation => navigation,
+    };
     let navigation =
         network::materialize_navigation_load_result(conn, &navigation_state, navigation);
     complete_tokened_materialized_navigation_into_buffer_async(
@@ -602,7 +612,7 @@ async fn complete_or_pause_response_stage_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
     pending: PendingFetchNavigation,
-    navigation: Result<NavigationLoadOutcome, String>,
+    navigation: anyhow::Result<NavigationLoadOutcome>,
 ) {
     match navigation {
         Ok(NavigationLoadOutcome::Loaded(_)) if pending.intercept_response => {
@@ -614,10 +624,9 @@ async fn complete_or_pause_response_stage_into_buffer_async(
                 conn,
                 out,
                 pending,
-                Err(
+                Err(anyhow::anyhow!(
                     "response-stage document pause reached unexpected loaded-navigation path"
-                        .to_owned(),
-                ),
+                )),
             )
             .await;
         }
@@ -708,7 +717,7 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
 async fn collect_navigation_streaming_response(
     conn: &mut CdpConnection,
     response: NetworkFetchResult<StreamingRawResponse>,
-) -> Result<NetworkFetchResult<RawResponse>, String> {
+) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
     conn.collect_navigation_streaming_raw_response_async(response)
         .await
 }

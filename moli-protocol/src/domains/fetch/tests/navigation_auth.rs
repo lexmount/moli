@@ -550,21 +550,19 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     .await;
     ctx.expect_result(72_203, json!({}), Some("SID-1"));
 
+    let expected_error = concat!(
+        "failed to continue intercepted navigation: ",
+        "Fetch response-stage interception after Negotiate authentication is not supported for navigation without buffering"
+    );
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["params"]["requestId"], LOADER_ID);
-    assert_eq!(
-        failed["params"]["errorText"],
-        "Fetch response-stage interception after Negotiate authentication is not supported for navigation without buffering"
-    );
+    assert_eq!(failed["params"]["errorText"], expected_error);
 
     let navigate_error = ctx.take_one();
     assert_eq!(navigate_error["id"], 72_201);
     assert_eq!(navigate_error["error"]["code"], -32000);
-    assert_eq!(
-        navigate_error["error"]["message"],
-        "Fetch response-stage interception after Negotiate authentication is not supported for navigation without buffering"
-    );
+    assert_eq!(navigate_error["error"]["message"], expected_error);
     assert_eq!(
         request_count.load(Ordering::SeqCst),
         1,

@@ -19,6 +19,7 @@ mod proxy;
 mod proxy_connect;
 mod referrer_policy;
 mod request;
+mod request_headers;
 mod request_policy;
 mod response;
 mod runtime;
@@ -67,6 +68,7 @@ pub use request::{
     RequestPriorityHints, RequestRedirectMode, RequestResourceType, ResourceLoadPriority,
     ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
 };
+pub use request_headers::RequestHeaders;
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RawResponse,

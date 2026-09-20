@@ -1008,7 +1008,8 @@ fn explicit_navigation_headers_override_browser_defaults() {
         ("Sec-Fetch-Site".to_owned(), "cross-site".to_owned()),
         ("Sec-Fetch-User".to_owned(), "?0".to_owned()),
         ("Cache-Control".to_owned(), "no-cache".to_owned()),
-    ];
+    ]
+    .into();
 
     let headers = outgoing_request_headers(&config, &request, None);
 

@@ -29,7 +29,8 @@ pub struct Request {
     pub url: Url,
     pub method: String,
     pub body: Option<Vec<u8>>,
-    pub request_headers: Vec<(String, String)>,
+    /// Wire bytes, with the source encoding resolved before header merging.
+    pub request_headers: crate::RequestHeaders,
     cache_mode: RequestCacheMode,
     pub resource_type: RequestResourceType,
     subresource_request_metadata: Option<SubresourceRequestMetadata>,
@@ -385,7 +386,7 @@ impl Request {
             url,
             method: "GET".to_owned(),
             body: None,
-            request_headers: vec![],
+            request_headers: crate::RequestHeaders::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -416,7 +417,7 @@ impl Request {
             url,
             method: "GET".to_owned(),
             body: None,
-            request_headers: vec![],
+            request_headers: crate::RequestHeaders::default(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -441,11 +442,13 @@ impl Request {
         }
     }
 
+    /// String header values use UTF-8. To supply HTTP bytes or WebIDL
+    /// ByteStrings, pass an explicitly constructed `RequestHeaders` instead.
     pub fn new(
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: impl Into<crate::RequestHeaders>,
     ) -> Result<Self> {
         Self::new_bytes(
             method,
@@ -461,7 +464,7 @@ impl Request {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: impl Into<crate::RequestHeaders>,
     ) -> Result<Self> {
         let url = Url::parse(raw_url)
             .with_context(|| anyhow!("failed to parse request url `{raw_url}`"))?;
@@ -472,13 +475,13 @@ impl Request {
         method: &str,
         url: Url,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: impl Into<crate::RequestHeaders>,
     ) -> Self {
         Self {
             url,
             method: method.to_owned(),
             body,
-            request_headers,
+            request_headers: request_headers.into(),
             cache_mode: RequestCacheMode::Default,
             resource_type: RequestResourceType::Raw,
             subresource_request_metadata: None,
@@ -687,7 +690,7 @@ impl Request {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
+        headers: impl Into<crate::RequestHeaders>,
         origin: WebOrigin,
     ) -> Result<Self> {
         Ok(Self::new_bytes(method, raw_url, body, headers)?.with_request_origin(origin))
@@ -697,7 +700,7 @@ impl Request {
         method: &str,
         url: Url,
         body: Option<Vec<u8>>,
-        headers: Vec<(String, String)>,
+        headers: impl Into<crate::RequestHeaders>,
         origin: WebOrigin,
     ) -> Self {
         Self::new_http_with_url(method, url, body, headers).with_request_origin(origin)
