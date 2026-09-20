@@ -258,7 +258,7 @@ pub(crate) fn start_event_source_request<'s>(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result: Ok(response.into()),
+                result: Ok(response.into()).into(),
             },
         );
         return;
@@ -445,7 +445,7 @@ fn dispatch_service_worker_event_source<'s>(
                 skip_fetch_security_validation: false,
                 response_filter: None,
                 network_error_text: None,
-                result: Err("service worker EventSource dispatch failed".to_owned()),
+                result: Err("service worker EventSource dispatch failed".to_owned()).into(),
             },
         );
     }
