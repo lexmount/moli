@@ -165,6 +165,7 @@ mod websockets;
 mod window_document_tasks;
 mod window_execution_context;
 mod window_security_tokens;
+pub(crate) use window_security_tokens::window_contexts_allow_access;
 mod workers;
 use window_security_tokens::DocumentDomainState;
 pub(crate) use window_security_tokens::set_window_security_token;

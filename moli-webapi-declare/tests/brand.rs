@@ -206,17 +206,41 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
     let native = v8::Proxy::new(scope, target, handler).unwrap();
     let native_object = v8::Local::<v8::Object>::from(native);
     assert_eq!(web_api_object_type(scope, native_object), None);
+    assert_eq!(
+        moli_webapi_declare::web_api_object_target(scope, native_object),
+        None
+    );
     moli_webapi_declare::register_web_api_proxy(scope, native).unwrap();
     assert!(implements_interface(scope, native_object, "TestBase"));
+    assert_eq!(
+        moli_webapi_declare::web_api_object_target(scope, native_object),
+        Some(target)
+    );
+    assert_eq!(
+        moli_webapi_declare::web_api_object_target(scope, target),
+        Some(target)
+    );
     initialize_web_api_object(scope, native_object, "TestBase").unwrap();
     let impostor = v8::Proxy::new(scope, target, handler).unwrap();
     assert_eq!(web_api_object_type(scope, impostor.into()), None);
+    assert_eq!(
+        moli_webapi_declare::web_api_object_target(scope, impostor.into()),
+        None
+    );
     let outer_handler = v8::Object::new(scope);
     let outer = v8::Proxy::new(scope, native_object, outer_handler).unwrap();
     assert_eq!(web_api_object_type(scope, outer.into()), None);
+    assert_eq!(
+        moli_webapi_declare::web_api_object_target(scope, outer.into()),
+        None
+    );
     assert!(moli_webapi_declare::register_web_api_proxy(scope, outer).is_err());
     native.revoke();
     assert_eq!(web_api_object_type(scope, native_object), None);
+    assert_eq!(
+        moli_webapi_declare::web_api_object_target(scope, native_object),
+        None
+    );
 }
 
 #[derive(moli_webapi_declare::WebApiFunctionTemplate)]

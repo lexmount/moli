@@ -76,6 +76,7 @@ mod navigation_traversal;
 mod navigation_traversal_execution;
 mod navigation_traversal_plan;
 mod navigation_window;
+pub(crate) use navigation_window::window_location_for_holder;
 mod navigator_runtime;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{

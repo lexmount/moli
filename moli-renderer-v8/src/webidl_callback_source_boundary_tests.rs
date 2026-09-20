@@ -177,6 +177,13 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         1,
         DirectCallOwner::NativeForwardingOrScript,
     ),
+    // Location's native Proxy forwards to a captured Reflect.set intrinsic or
+    // its generated, receiver-checked href setter. Neither is an author callback.
+    allowed(
+        "context_bootstrap/location_runtime/access.rs",
+        2,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
     allowed(
         "context_bootstrap/runtime_state.rs",
         1,

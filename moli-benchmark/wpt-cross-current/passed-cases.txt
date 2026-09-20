@@ -6398,6 +6398,7 @@ html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
+html/browsers/history/the-location-interface/allow_prototype_cycle_through_location.sub.html
 html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
@@ -6413,6 +6414,9 @@ html/browsers/history/the-location-interface/location-protocol-setter-non-broken
 html/browsers/history/the-location-interface/location-protocol-setter-sameish.html
 html/browsers/history/the-location-interface/location-protocol-setter.html
 html/browsers/history/the-location-interface/location-prototype-no-toString-valueOf.html
+html/browsers/history/the-location-interface/location-prototype-setting-cross-origin-domain.sub.html
+html/browsers/history/the-location-interface/location-prototype-setting-cross-origin.sub.html
+html/browsers/history/the-location-interface/location-prototype-setting-goes-cross-origin-domain.sub.html
 html/browsers/history/the-location-interface/location-prototype-setting-same-origin.html
 html/browsers/history/the-location-interface/location-stringifier.html
 html/browsers/history/the-location-interface/location-symbol-toprimitive.html
@@ -6436,6 +6440,7 @@ html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/reload_document_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/security_location_0.htm
+html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-length.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-name.html

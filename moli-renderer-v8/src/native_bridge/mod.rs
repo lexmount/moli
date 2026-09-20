@@ -63,6 +63,7 @@ pub(crate) use context_host::{
     lightweight_popup_id_from_window, restore_active_lightweight_popup_scope,
     restore_deferred_active_lightweight_popup_scope_if_present,
     throw_cross_origin_location_security_error, throw_cross_origin_type_error,
+    window_contexts_allow_access,
 };
 
 pub(crate) const ACTIVE_CHILD_WINDOW_HANDLE_SLOT: &str = "__moliActiveChildWindowHandle";

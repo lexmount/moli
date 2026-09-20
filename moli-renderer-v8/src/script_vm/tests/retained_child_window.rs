@@ -1,6 +1,65 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn retained_location_rechecks_origin_domain_access() {
+    for parent_first in [false, true] {
+        let server = StaticHttpServer::spawn_with_bodies(vec![
+            "<!doctype html><body>Location target</body>".to_owned(); 2
+        ])
+        .await;
+        let loader = static_http_loader([server.resolve_entry("www.example.test")]);
+        let parent_url = server.url_for_host("www.example.test", "/page.html");
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        let script = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/retained-location-origin.js"
+        ));
+        vm.exec(
+            &format!(
+                r#"
+if (!document.documentElement) document.appendChild(document.createElement('html'));
+if (!document.body) document.documentElement.appendChild(document.createElement('body'));
+globalThis.__retainedLocationResult = null;
+({script})({{parentFirst: {parent_first}}}).then(
+  result => {{ globalThis.__retainedLocationResult = result; }},
+  error => {{ globalThis.__retainedLocationResult = {{error: String(error)}}; }}
+);
+"#,
+            ),
+            None,
+        )
+        .expect("retained Location probe should start");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__retainedLocationResult !== null)",
+            "true",
+            "retained Location probe should finish",
+        )
+        .await;
+        let result: serde_json::Value = serde_json::from_str(
+            &vm.eval("JSON.stringify(__retainedLocationResult)")
+                .expect("retained Location observations"),
+        )
+        .unwrap();
+        assert_eq!(
+            result["checks"], 143,
+            "parent_first={parent_first}: {result}"
+        );
+        assert_eq!(
+            result["failures"],
+            serde_json::json!([]),
+            "parent_first={parent_first}: {result}"
+        );
+        assert_eq!(
+            server.finish_targets().await,
+            vec!["/child.html", "/peer.html"]
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn retained_child_window_origin_rebinds_default_and_isolated_realms() {
     let server = StaticHttpServer::spawn_with_bodies(vec![
         "<!doctype html><script>document.domain = 'example.test';</script>".to_owned(),

@@ -174,6 +174,18 @@ pub fn web_api_object_type<'s>(
     })
 }
 
+/// Returns the native backing object for a branded instance. Only explicitly
+/// registered native Proxies share their target; author and revoked Proxies
+/// are rejected without invoking traps.
+pub fn web_api_object_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let registry = scope.get_slot::<Rc<RefCell<TypeRegistry>>>().cloned()?;
+    object_type_id(scope, object, &registry)?;
+    native_identity_target(scope, object, &registry)
+}
+
 pub fn implements_interface<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,

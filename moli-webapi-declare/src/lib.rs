@@ -279,7 +279,7 @@ macro_rules! web_api_constructor {
 
 pub use brand::{
     WebApiType, implements_interface, initialize_web_api_object, register_web_api_interfaces,
-    register_web_api_proxy, web_api_object_type,
+    register_web_api_proxy, web_api_object_target, web_api_object_type,
 };
 
 pub use declaration::{
