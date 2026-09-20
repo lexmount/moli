@@ -1,3 +1,4 @@
+use anyhow::Context;
 use data_url::DataUrl;
 use moli_core::{
     RendererOutputFence,
@@ -2206,7 +2207,8 @@ impl CdpConnection {
                 request_headers,
                 MainDocumentBodyProgressSource::default(),
             )
-            .await?;
+            .await
+            .map_err(|error| format!("{error:#}"))?;
         self.commit_navigation_load_outcome_for_owner_async(owner, navigation)
             .await
     }
@@ -2243,7 +2245,7 @@ impl CdpConnection {
         raw_url: &str,
         body: Option<String>,
         request_headers: Vec<(String, String)>,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_async(
             None,
             method,
@@ -2265,7 +2267,7 @@ impl CdpConnection {
         request_headers: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
         request_load_policy: NavigationRequestLoadPolicy,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(&owner),
@@ -2287,7 +2289,7 @@ impl CdpConnection {
         &mut self,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_and_load_inputs_async(
             &navigation.owner,
             self.navigation_load_inputs_for_navigation(navigation),
@@ -2298,20 +2300,17 @@ impl CdpConnection {
             body_progress_source,
         )
         .await
+        .context("failed to load document")
     }
 
     pub(crate) async fn prepare_navigation_load_error_for_navigation_async(
         &mut self,
         navigation: &NavigationDispatchState,
-        error_text: String,
-    ) -> Result<NavigationLoadOutcome, String> {
-        // Fetch continuation loaders currently share a String error boundary
-        // for protocol errors and network failures. Offline emulation is a
-        // navigation failure that commits an error Document, just as it does
-        // in BackgroundNavigationLoadJob; retain other errors unchanged.
-        if error_text != NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT {
-            return Err(error_text);
-        }
+        error: anyhow::Error,
+    ) -> anyhow::Result<NavigationLoadOutcome> {
+        let Some(network_error) = error.downcast_ref::<NavigationNetworkError>() else {
+            return Err(error);
+        };
 
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
@@ -2321,13 +2320,15 @@ impl CdpConnection {
             &mut engine,
             page_reservation,
             &load_inputs,
-            navigation.requested_url.clone(),
-            navigation.request_method.clone(),
-            navigation.request_headers.clone(),
-            error_text,
+            network_error.unreachable_url.clone(),
+            network_error.request_method.clone(),
+            network_error.request_headers.clone(),
+            network_error.error_text.clone(),
             RendererReplyBoundary::Stage,
         )
         .await
+        .map_err(anyhow::Error::msg)
+        .context("failed to prepare network error document")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2340,7 +2341,7 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Result<NavigationLoadOutcome, String> {
+    ) -> anyhow::Result<NavigationLoadOutcome> {
         if load_inputs.browser_context_id.is_none() {
             let page_reservation = self
                 .standalone_navigation_engine
@@ -2356,7 +2357,7 @@ impl CdpConnection {
                 )
                 .await
             {
-                return navigation;
+                return navigation.map_err(anyhow::Error::msg);
             }
             if let Some(navigation) = load_data_url_navigation_with_engine_async(
                 self.standalone_navigation_engine.ensure_mut(),
@@ -2369,7 +2370,7 @@ impl CdpConnection {
             )
             .await
             {
-                return navigation;
+                return navigation.map_err(anyhow::Error::msg);
             }
         } else {
             let mut inline_engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
@@ -2387,7 +2388,7 @@ impl CdpConnection {
                 )
                 .await
             {
-                return navigation;
+                return navigation.map_err(anyhow::Error::msg);
             }
             if let Some(navigation) = load_data_url_navigation_with_engine_async(
                 &mut inline_engine,
@@ -2400,17 +2401,13 @@ impl CdpConnection {
             )
             .await
             {
-                return navigation;
+                return navigation.map_err(anyhow::Error::msg);
             }
         }
 
-        ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
-        }
-
+        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
         let requested_url = Url::parse(raw_url)
-            .map_err(|error| format!("failed to parse request url `{raw_url}`: {error}"))?;
+            .with_context(|| format!("failed to parse request url `{raw_url}`"))?;
         let response = self
             .fetch_navigation_streaming_raw_response_with_load_inputs_async(
                 &load_inputs,
@@ -2433,6 +2430,7 @@ impl CdpConnection {
             body_progress_source,
         )
         .await
+        .map_err(anyhow::Error::msg)
     }
 
     pub(crate) fn navigation_load_job_for_navigation(
@@ -3016,16 +3014,13 @@ impl CdpConnection {
         body: Option<String>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<NavigationResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<NavigationResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
-        ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
-        }
+        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
         let resource_storage = load_inputs.resource_storage_handles();
         let engine = self
             .navigation_engine_for_load_inputs_mut(&load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?;
+            .context("navigation Page engine unavailable")?;
         engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
         engine.set_cache_disabled(load_inputs.cache_disabled);
         engine
@@ -3041,7 +3036,7 @@ impl CdpConnection {
                 auth,
             )
             .await
-            .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
+            .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
     pub(crate) async fn fetch_navigation_auth_raw_response_for_owner_async(
@@ -3053,15 +3048,12 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: SubresourceAuthCredentials,
-    ) -> Result<NetworkFetchResult<RawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(owner),
             request_load_policy,
         );
-        ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
-        }
+        validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
 
         let mut request = Request::new_browser_bytes(
             method,
@@ -3073,7 +3065,7 @@ impl CdpConnection {
                 .as_ref()
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
-        .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
+        .with_context(|| format!("failed to build request for `{raw_url}`"))?
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3088,12 +3080,13 @@ impl CdpConnection {
         request.set_auth(Some(auth.into()));
 
         let loader = self
-            .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
+            .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)
+            .map_err(anyhow::Error::msg)?
             .clone();
         loader
             .fetch_raw_with_network_metadata(request)
             .await
-            .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
+            .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
     pub async fn fetch_navigation_streaming_raw_response_async(
@@ -3103,7 +3096,7 @@ impl CdpConnection {
         body: Option<String>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         self.fetch_navigation_streaming_raw_response_with_load_inputs_async(
             &load_inputs,
@@ -3125,7 +3118,7 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(owner),
             request_load_policy,
@@ -3149,11 +3142,8 @@ impl CdpConnection {
         body: Option<Vec<u8>>,
         request_headers: Vec<(String, String)>,
         auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
-        ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
-        if load_inputs.network_offline {
-            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
-        }
+    ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
+        validate_navigation_network_request(load_inputs, method, raw_url, &request_headers)?;
 
         let mut request = Request::new_browser_bytes(
             method,
@@ -3165,7 +3155,7 @@ impl CdpConnection {
                 .as_ref()
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
-        .map_err(|error| format!("failed to build request for `{raw_url}`: {error}"))?
+        .with_context(|| format!("failed to build request for `{raw_url}`"))?
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3180,12 +3170,13 @@ impl CdpConnection {
         request.set_auth(auth.map(Into::into));
 
         let loader = self
-            .ensure_resource_request_client_for_navigation_load_inputs(load_inputs)?
+            .ensure_resource_request_client_for_navigation_load_inputs(load_inputs)
+            .map_err(anyhow::Error::msg)?
             .clone();
         loader
             .fetch_raw_stream_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
             .await
-            .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
+            .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
     pub async fn build_navigation_from_network_response_async(
@@ -3670,13 +3661,13 @@ impl CdpConnection {
     pub(crate) async fn collect_navigation_streaming_raw_response_async(
         &mut self,
         response: NetworkFetchResult<StreamingRawResponse>,
-    ) -> Result<NetworkFetchResult<RawResponse>, String> {
+    ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
         let (response, network_observation_journal) =
             response.into_parts_with_observation_journal();
         let response = response
             .into_materialized_raw_response()
             .await
-            .map_err(|error| format!("failed to read page body from stream: {error}"))?;
+            .context("failed to read page body from stream")?;
         Ok(NetworkFetchResult::with_observation_journal(
             response,
             network_observation_journal,
@@ -3934,6 +3925,27 @@ async fn prepare_captured_document_response_with_engine_async(
         main_document_commit,
         network_error_page,
     })
+}
+
+fn validate_navigation_network_request(
+    load_inputs: &TargetNavigationLoadInputs,
+    method: &str,
+    raw_url: &str,
+    request_headers: &[(String, String)],
+) -> anyhow::Result<()> {
+    ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url).map_err(anyhow::Error::msg)?;
+    if load_inputs.network_offline {
+        let requested_url = Url::parse(raw_url)
+            .with_context(|| format!("failed to parse request url `{raw_url}`"))?;
+        return Err(NavigationNetworkError {
+            error_text: NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned(),
+            unreachable_url: requested_url,
+            request_method: method.to_owned(),
+            request_headers: request_headers.to_vec(),
+        }
+        .into());
+    }
+    Ok(())
 }
 
 fn ensure_url_not_blocked_for_load_inputs(
