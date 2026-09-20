@@ -1092,11 +1092,23 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
         "alpha beta gamma delta epsilon zeta eta theta iota kappa ",
         "supercalifragilisticexpialidocious",
     );
+    assert_scrollbar_feedback_inline_geometry(TEXT, true);
+}
+
+#[test]
+fn collapsed_line_end_spaces_do_not_create_horizontal_scrollbar_after_feedback() {
+    assert_scrollbar_feedback_inline_geometry(
+        "alpha beta gamma delta epsilon zeta eta theta iota kappa",
+        false,
+    );
+}
+
+fn assert_scrollbar_feedback_inline_geometry(text: &'static str, horizontal_overflow: bool) {
     let source = Source(vec![
         Node::element("root", vec![1]),
         Node::element("scroller", vec![2]),
         Node::element("fixed-font", vec![3]),
-        Node::text("text", TEXT),
+        Node::text("text", text),
     ]);
     let mut styles = Styles::default();
     styles
@@ -1144,7 +1156,7 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     assert!(extent.vertical_scrollbar.is_some());
     assert!(extent.horizontal_scrollbar.is_none());
     assert!(!extent.allows_user_scroll_x);
-    let feedback_text = feedback.text_range_rects(3, 0..TEXT.encode_utf16().count());
+    let feedback_text = feedback.text_range_rects(3, 0..text.encode_utf16().count());
     assert!(
         !feedback_text.is_empty(),
         "compare real text fragments, not element-only client rects"
@@ -1175,13 +1187,14 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     .unwrap();
     assert_eq!(
         feedback_text,
-        direct.text_range_rects(3, 0..TEXT.encode_utf16().count())
+        direct.text_range_rects(3, 0..text.encode_utf16().count())
     );
-    assert!(
+    assert_eq!(
         feedback_text
             .iter()
             .any(|quad| quad.points.iter().any(|point| point.x > 85.0)),
-        "the unbreakable final word should retain horizontal overflow"
+        horizontal_overflow,
+        "only the unbreakable final word should retain horizontal overflow"
     );
 }
 
