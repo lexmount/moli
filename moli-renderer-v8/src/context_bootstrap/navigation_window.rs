@@ -8,6 +8,7 @@ pub(super) fn runtime_window_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {
+    let object = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
     get_private_value(
         scope,
         object,
@@ -22,6 +23,7 @@ pub(super) fn set_runtime_window_owner<'s>(
     object: v8::Local<'s, v8::Object>,
     owner: v8::Local<'s, v8::Object>,
 ) {
+    let object = moli_webapi_declare::web_api_object_target(scope, object).unwrap_or(object);
     set_private_value(
         scope,
         object,
@@ -61,7 +63,7 @@ pub(super) fn runtime_top_window_owner<'s>(
         .unwrap_or_else(|| runtime_window_owner(scope, window))
 }
 
-pub(super) fn window_location_for_holder<'s>(
+pub(crate) fn window_location_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {

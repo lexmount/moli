@@ -215,6 +215,7 @@ fn only_explicitly_registered_native_proxies_share_target_identity() {
     moli_webapi_declare::register_web_api_proxy(scope, native).unwrap();
     assert!(implements_interface(scope, native_object, "TestBase"));
     assert_eq!(web_api_object_target(scope, native_object), Some(target));
+    assert_eq!(web_api_object_target(scope, target), Some(target));
     initialize_web_api_object(scope, native_object, "TestBase").unwrap();
     let impostor = v8::Proxy::new(scope, target, handler).unwrap();
     assert_eq!(web_api_object_type(scope, impostor.into()), None);
