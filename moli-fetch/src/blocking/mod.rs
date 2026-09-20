@@ -1,8 +1,6 @@
 mod cache;
 mod collectors;
 
-pub(crate) use moli_curl::RequestHeaderList;
-
 use std::{
     ffi::{c_char, c_long},
     net::IpAddr,
@@ -677,7 +675,7 @@ pub(crate) fn configure_easy(
             .context("failed to configure curl host resolve overrides")?;
     }
 
-    let mut headers = RequestHeaderList::default();
+    let mut headers = List::new();
     let mut outgoing_headers =
         outgoing_request_header_bytes_for_url(config, request, request_url, cookie_header);
     // A 407 can come from a transparent proxy even when no explicit proxy
@@ -707,7 +705,7 @@ pub(crate) fn configure_easy(
             header_line.extend_from_slice(value);
         }
         headers
-            .append(&header_line)
+            .append_bytes(&header_line)
             .context("failed to build request header")?;
     }
     if let Some(validation_headers) = validation_headers {
@@ -718,7 +716,7 @@ pub(crate) fn configure_easy(
             let mut line = format!("{name}: ").into_bytes();
             line.extend_from_slice(value);
             headers
-                .append(&line)
+                .append_bytes(&line)
                 .context("failed to build cache validation request header")?;
         }
     }
@@ -730,7 +728,7 @@ pub(crate) fn configure_easy(
         // for POST bodies and bodyless PUT requests. Browser requests only send Content-Type when
         // BodyInit or caller headers produce one, so suppress curl's transport default.
         headers
-            .append(b"Content-Type:")
+            .append("Content-Type:")
             .context("failed to suppress curl default content-type")?;
     }
 
@@ -773,7 +771,8 @@ pub(crate) fn configure_easy(
         }
     }
 
-    crate::runtime::FetchTransferHandler::set_request_headers(easy, headers)?;
+    easy.http_headers(headers)
+        .context("failed to attach curl request headers")?;
     Ok(outgoing_headers.to_byte_strings())
 }
 

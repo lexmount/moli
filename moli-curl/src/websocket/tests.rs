@@ -155,6 +155,10 @@ fn server(handler: impl FnOnce(TcpStream) + Send + 'static) -> (String, thread::
 }
 
 fn read_request(stream: &mut TcpStream) -> String {
+    String::from_utf8(read_request_bytes(stream)).unwrap()
+}
+
+fn read_request_bytes(stream: &mut TcpStream) -> Vec<u8> {
     let mut request = Vec::new();
     while !request.ends_with(b"\r\n\r\n") {
         let mut byte = [0];
@@ -162,7 +166,7 @@ fn read_request(stream: &mut TcpStream) -> String {
         request.push(byte[0]);
         assert!(request.len() < 65536);
     }
-    String::from_utf8(request).unwrap()
+    request
 }
 
 fn assert_listener_stays_idle(listener: &TcpListener) {
@@ -219,6 +223,64 @@ async fn opened(connection: &mut CurlWebSocketConnection) {
         }
         unexpected => panic!("expected handshake, got {unexpected:?}"),
     }
+}
+
+#[tokio::test]
+async fn native_handshake_preserves_non_utf8_duplicate_and_empty_headers() {
+    let (finish_tx, finish_rx) = std::sync::mpsc::channel();
+    let (url, task) = server(move |mut stream| {
+        let request = read_request_bytes(&mut stream);
+        let expected = b"X-Raw: \xe9\xff\r\nX-Raw: \xc3\xa9\r\nX-Empty:\r\n";
+        assert!(
+            request.windows(expected.len()).any(|part| part == expected),
+            "request headers: {request:?}"
+        );
+        let key = request
+            .split(|byte| *byte == b'\n')
+            .find_map(|line| line.strip_prefix(b"Sec-WebSocket-Key: "))
+            .unwrap()
+            .trim_ascii();
+        // Tungstenite serializes response headers through UTF-8; use raw bytes
+        // so the fixture can exercise opaque response headers as well.
+        let mut response = format!(
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n",
+            derive_accept_key(key)
+        ).into_bytes();
+        response.extend_from_slice(b"x-reply: \xff\x80\r\n\r\n");
+        stream.write_all(&response).unwrap();
+        finish_rx.recv_timeout(DEADLINE).unwrap();
+    });
+    let runtime = CurlWebSocketRuntime::new().unwrap();
+    let mut request = CurlWebSocketRequest::new(url);
+    request.headers = moli_header_field::HeaderFields::from_bytes(vec![
+        ("X-Raw".to_owned(), vec![0xe9, 0xff]),
+        ("X-Raw".to_owned(), vec![0xc3, 0xa9]),
+        ("X-Empty".to_owned(), Vec::new()),
+    ]);
+    let mut connection = runtime.connect(request).unwrap();
+    match event(&mut connection).await {
+        CurlWebSocketEvent::Handshake {
+            request,
+            response,
+            result,
+        } => {
+            result.unwrap();
+            assert!(
+                request
+                    .windows(b"X-Raw: \xe9\xff\r\n".len())
+                    .any(|part| part == b"X-Raw: \xe9\xff\r\n")
+            );
+            assert!(
+                response
+                    .windows(b"x-reply: \xff\x80\r\n".len())
+                    .any(|part| part == b"x-reply: \xff\x80\r\n")
+            );
+        }
+        unexpected => panic!("expected a handshake, got {unexpected:?}"),
+    }
+    finish_tx.send(()).unwrap();
+    drop(connection);
+    task.join().unwrap();
 }
 
 #[tokio::test]
