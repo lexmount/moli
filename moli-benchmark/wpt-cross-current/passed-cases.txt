@@ -6403,6 +6403,7 @@ html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
+html/browsers/history/the-location-interface/cross-origin-location-stringify-crash.sub.html
 html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
 html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
