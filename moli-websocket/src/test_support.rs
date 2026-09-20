@@ -35,7 +35,7 @@ pub fn test_websocket_context() -> ConnectOptions {
     ConnectOptions {
         origin: "https://example.com".to_owned(),
         user_agent: "Moli-WebSocket-Test/1.0".to_owned(),
-        extra_headers: Vec::new(),
+        extra_headers: Default::default(),
         http_proxy: None,
         http_no_proxy: None,
         http_host_resolve: Vec::new(),

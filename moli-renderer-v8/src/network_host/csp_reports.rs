@@ -340,7 +340,7 @@ fn dispatch_service_worker_content_security_policy_report(
                 internal_id,
                 request_url: request.url,
                 request_method: request.method,
-                request_headers: request.request_headers.to_byte_strings(),
+                request_headers: request.request_headers.clone(),
                 request_body: request_body_text,
                 response_status_text: None,
                 skip_fetch_security_validation: true,
@@ -388,7 +388,7 @@ fn spawn_content_security_policy_report_fetch(
         },
         request.url,
         request.method,
-        request.request_headers.to_byte_strings(),
+        request.request_headers.clone(),
         request_body_text,
     );
 }
@@ -407,7 +407,7 @@ fn report_subresource_fetch_info(
         url: request.url.clone(),
         websocket_socket_id: None,
         method: request.method.clone(),
-        request_headers: request.request_headers.to_byte_strings(),
+        request_headers: request.request_headers.clone(),
         request_body: report_request_body_text(request),
         request_body_bytes: request.body.clone(),
         resource_type: SubresourceResourceType::CspReport,

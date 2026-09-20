@@ -286,7 +286,7 @@ impl PageVm {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<crate::PendingSubresourceContinueOutcome> {

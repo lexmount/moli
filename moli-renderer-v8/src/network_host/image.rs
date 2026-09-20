@@ -79,7 +79,10 @@ pub(crate) fn start_scanned_image_preload(
             return ScannedImagePreloadStart::Disabled;
         }
     };
-    let request_headers = merge_subresource_request_headers(host.extra_http_headers(), &[]);
+    let request_headers = moli_fetch::RequestHeaders::from_utf8(merge_subresource_request_headers(
+        host.extra_http_headers(),
+        &[],
+    ));
     let policy_context = effective_subresource_policy_context(scope, host, OwnerDispatchScope::Top);
     let request = match Request::new("GET", request_url.as_str(), None, request_headers) {
         Ok(request) => request
@@ -246,7 +249,10 @@ pub(crate) fn start_image_element_resource_fetch(
         "GET",
         credentials_mode,
     );
-    let request_headers = merge_subresource_request_headers(host.extra_http_headers(), &[]);
+    let request_headers = moli_fetch::RequestHeaders::from_utf8(merge_subresource_request_headers(
+        host.extra_http_headers(),
+        &[],
+    ));
     let info = PendingSubresourceFetchInfo {
         internal_id: 0,
         network_request_handle: None,
@@ -398,7 +404,7 @@ pub(crate) fn start_image_element_resource_fetch(
         loader,
         request,
         Some(cancel_handle),
-        request_headers,
+        request_headers.to_byte_strings(),
         internal_id,
         AsyncSubresourceNetworkContext {
             frame_id,
@@ -409,7 +415,7 @@ pub(crate) fn start_image_element_resource_fetch(
         },
         request_url,
         "GET".to_owned(),
-        Vec::new(),
+        Default::default(),
         None,
     );
     Ok(ImageElementResourceFetchStart::Pending)

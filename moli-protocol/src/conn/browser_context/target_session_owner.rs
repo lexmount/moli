@@ -110,7 +110,7 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) document_fetch_event_session_id: Option<String>,
     pub(crate) inherited_security_origin: String,
     pub(crate) inherited_secure_context_type: String,
-    pub(crate) request_headers: Vec<(String, String)>,
+    pub(crate) request_headers: moli_fetch::RequestHeaders,
     pub(crate) document_fetch_request_stage: Option<FetchRequestStage>,
     pub(crate) document_fetch_response_stage_candidate: bool,
     pub(crate) document_auth_required: bool,
@@ -1015,7 +1015,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 document_fetch_event_session_id,
                 inherited_security_origin,
                 inherited_secure_context_type,
-                request_headers,
+                request_headers: request_headers.into(),
                 document_fetch_request_stage,
                 document_fetch_response_stage_candidate,
                 document_auth_required,
@@ -2873,7 +2873,7 @@ mod tests {
         assert!(
             preflight
                 .request_headers
-                .contains(&("User-Agent".to_owned(), "Moli/Test-UA".to_owned()))
+                .contains(&("User-Agent".to_owned(), b"Moli/Test-UA".to_vec()))
         );
         assert!(!active.has_captured_response_body_for_test("REQ-old"));
     }
@@ -3008,7 +3008,7 @@ mod tests {
         assert!(
             preflight
                 .request_headers
-                .contains(&("X-Owner".to_owned(), "background".to_owned()))
+                .contains(&("X-Owner".to_owned(), b"background".to_vec()))
         );
         assert!(
             preflight
@@ -3018,19 +3018,19 @@ mod tests {
         );
         assert!(preflight.request_headers.contains(&(
             "User-Agent".to_owned(),
-            "Browser-Context-Default-UA".to_owned()
+            b"Browser-Context-Default-UA".to_vec()
         )));
         assert!(
             !preflight
                 .request_headers
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("user-agent")
-                    && value == "Active-Only-UA")
+                    && value == b"Active-Only-UA")
         );
         assert!(
             preflight
                 .request_headers
-                .contains(&("Referer".to_owned(), "https://referrer.example/".to_owned()))
+                .contains(&("Referer".to_owned(), b"https://referrer.example/".to_vec()))
         );
     }
 

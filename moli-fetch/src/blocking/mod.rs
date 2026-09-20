@@ -1,8 +1,7 @@
 mod cache;
 mod collectors;
-mod request_headers;
 
-pub(crate) use request_headers::RequestHeaderList;
+pub(crate) use moli_curl::RequestHeaderList;
 
 use std::{
     ffi::{c_char, c_long},

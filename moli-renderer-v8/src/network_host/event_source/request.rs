@@ -46,7 +46,7 @@ struct PreparedEventSourceRequest {
     document_url: url::Url,
     request_origin: moli_url::WebOrigin,
     resolved_url: url::Url,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     cors_preflight_request_headers: Vec<(String, String)>,
     credentials_mode: RequestCredentialsMode,
     request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
@@ -342,8 +342,10 @@ fn prepare_event_source_request<'s>(
     if !last_event_id.is_empty() {
         request_headers.push(("Last-Event-ID".to_owned(), last_event_id));
     }
-    let request_headers =
-        merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
+    let request_headers = moli_fetch::RequestHeaders::from_utf8(merge_subresource_request_headers(
+        host.extra_http_headers(),
+        &request_headers,
+    ));
     let credentials_mode = if event_source_with_credentials(scope, event_source) {
         RequestCredentialsMode::Include
     } else {

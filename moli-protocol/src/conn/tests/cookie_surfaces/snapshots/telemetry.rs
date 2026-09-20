@@ -10,7 +10,7 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -132,7 +132,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_probe_telemetr
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),

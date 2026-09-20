@@ -8,7 +8,7 @@ pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     document_url: Url,
     resolved_url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     send_body: Option<Vec<u8>>,
     credentials_mode: RequestCredentialsMode,
 }
@@ -566,8 +566,7 @@ fn send_synchronous_worker_xhr(
         &prepared.method,
         prepared.resolved_url.as_str(),
         prepared.send_body.clone(),
-        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
-            .expect("prepared Fetch/XHR headers are ByteStrings"),
+        prepared.request_headers.clone(),
     ) {
         Ok(request) => {
             let mut request = request
@@ -1191,7 +1190,8 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         document_url,
         resolved_url,
         method,
-        request_headers,
+        request_headers: moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
+            .expect("validated worker XHR headers are ByteStrings"),
         send_body: prepared_body.body,
         credentials_mode,
     })

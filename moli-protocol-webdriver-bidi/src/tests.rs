@@ -9090,7 +9090,7 @@ fn maps_network_continue_request_to_shared_fetch_command() {
     assert_eq!(command.post_data.as_deref(), Some("payload"));
     assert!(command.intercept_response);
     assert_eq!(
-        command.headers,
+        command.headers.map(|headers| headers.to_byte_strings()),
         Some(vec![
             ("X-Test".to_owned(), "1".to_owned()),
             ("Cookie".to_owned(), "sid=abc".to_owned()),
@@ -14770,5 +14770,31 @@ fn rejects_invalid_bidi_command_adapter_params() {
             .expect_err("non-object preload argument entries should fail")
             .code,
         super::BidiErrorCode::InvalidArgument
+    );
+}
+
+#[test]
+fn network_continue_request_preserves_header_bytes() {
+    let command = super::parse_bidi_command(json!({
+        "id": 100,
+        "method": "network.continueRequest",
+        "params": {"request": "REQ-raw", "headers": [
+            {"name": "X-Raw", "value": {"type": "base64", "value": "6f8="}},
+            {"name": "x-raw", "value": {"type": "string", "value": "é"}}
+        ]}
+    }))
+    .unwrap();
+    let context = super::BidiDevToolsCommandContext::new("bidi-session-1");
+    let moli_protocol::devtools_runtime::DevToolsCommand::ContinueInterceptedRequest(command) =
+        super::devtools_command_from_bidi_command(&command, &context).unwrap()
+    else {
+        panic!("expected request continuation");
+    };
+    assert_eq!(
+        command.headers.unwrap(),
+        moli_header_field::HeaderFields::from_bytes(vec![
+            ("X-Raw".to_owned(), vec![0xe9, 0xff]),
+            ("x-raw".to_owned(), vec![0xc3, 0xa9]),
+        ])
     );
 }

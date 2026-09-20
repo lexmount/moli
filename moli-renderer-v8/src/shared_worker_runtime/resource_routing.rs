@@ -480,7 +480,7 @@ mod tests {
             url: Url::parse("https://example.test/shared-worker-fetch").unwrap(),
             method: "GET".to_owned(),
             body: None,
-            headers: Vec::new(),
+            headers: Vec::new().into(),
             intercept_response: false,
             handle_auth_requests: false,
             auth: None,

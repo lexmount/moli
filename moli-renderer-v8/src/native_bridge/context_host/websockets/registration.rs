@@ -56,7 +56,7 @@ impl JsContextHost {
             user_agent: loader
                 .map(|loader| loader.user_agent().to_owned())
                 .unwrap_or_else(|| moli_fetch::FetchConfig::DEFAULT_USER_AGENT.to_owned()),
-            extra_headers: self.extra_http_headers.clone(),
+            extra_headers: moli_fetch::RequestHeaders::from_utf8(self.extra_http_headers.clone()),
             http_proxy: loader.and_then(|loader| loader.http_proxy().map(ToOwned::to_owned)),
             http_no_proxy: loader.and_then(|loader| loader.http_no_proxy().map(ToOwned::to_owned)),
             http_host_resolve: loader
@@ -167,7 +167,7 @@ impl JsContextHost {
         &mut self,
         pending: PendingWebSocketConnection,
         url: Url,
-        headers: Vec<(String, String)>,
+        headers: moli_fetch::RequestHeaders,
         headers_overridden: bool,
         intercept_response: bool,
     ) -> Result<(), String> {
@@ -251,7 +251,7 @@ impl JsContextHost {
         &mut self,
         pending: PendingWebSocketConnection,
         request_url: Url,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
         response_headers: Vec<(String, String)>,
     ) -> Result<(), String> {
@@ -263,7 +263,8 @@ impl JsContextHost {
             pending.socket_id,
             request_headers,
             response_status,
-            response_headers,
+            moli_fetch::ResponseHeaders::from_byte_strings(&response_headers)
+                .map_err(|error| error.to_string())?,
             event_sender,
         );
         state.url = request_url;
@@ -275,9 +276,9 @@ impl JsContextHost {
     pub(crate) fn pause_websocket_handshake_response(
         &mut self,
         socket_id: u64,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: moli_fetch::ResponseHeaders,
     ) -> bool {
         let Some((internal_id, url)) = self.websockets.get_mut(&socket_id).and_then(|state| {
             state
@@ -303,7 +304,7 @@ impl JsContextHost {
                 request_cookie_report: None,
                 network_request_headers: None,
                 response_status,
-                response_headers,
+                response_headers: response_headers.to_byte_strings(),
                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                 from_cache: false,
             }),
@@ -327,7 +328,14 @@ impl JsContextHost {
             ));
         };
         controller
-            .continue_open(response_status, response_headers)
+            .continue_open(
+                response_status,
+                response_headers
+                    .as_ref()
+                    .map(|headers| moli_fetch::ResponseHeaders::from_byte_strings(headers))
+                    .transpose()
+                    .map_err(|error| error.to_string())?,
+            )
             .map_err(|error| format!("pending WebSocket `{}`: {error}", pending.socket_id))
     }
 
@@ -353,26 +361,29 @@ impl JsContextHost {
 
 fn websocket_interception_request_headers(
     context: &WebSocketConnectOptions,
-) -> Vec<(String, String)> {
+) -> moli_fetch::RequestHeaders {
     let mut headers = context.extra_headers.clone();
     if !headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
     {
-        headers.push(("Origin".to_owned(), context.origin.clone()));
+        headers.push(("Origin".to_owned(), context.origin.as_bytes().to_vec()));
     }
     if !headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
     {
-        headers.push(("User-Agent".to_owned(), context.user_agent.clone()));
+        headers.push((
+            "User-Agent".to_owned(),
+            context.user_agent.as_bytes().to_vec(),
+        ));
     }
     if let Some(cookie) = context.cookie_header.as_ref()
         && !headers
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("cookie"))
     {
-        headers.push(("Cookie".to_owned(), cookie.clone()));
+        headers.push(("Cookie".to_owned(), cookie.as_bytes().to_vec()));
     }
     headers
 }

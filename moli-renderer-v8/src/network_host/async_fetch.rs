@@ -448,7 +448,10 @@ async fn run_cors_preflight_if_needed(
                 if let Some(observer) = preflight_observer {
                     observer.send_preflight_failure(
                         request.url.clone(),
-                        observable_preflight_headers,
+                        moli_fetch::RequestHeaders::from_byte_strings(
+                            &observable_preflight_headers,
+                        )
+                        .expect("observed request headers are ByteStrings"),
                         error.clone(),
                     );
                 }
@@ -458,7 +461,8 @@ async fn run_cors_preflight_if_needed(
         if let Some(observer) = preflight_observer {
             observer.send_preflight_success(
                 request.url.clone(),
-                observable_preflight_headers,
+                moli_fetch::RequestHeaders::from_byte_strings(&observable_preflight_headers)
+                    .expect("observed request headers are ByteStrings"),
                 &preflight_response,
             );
         }
@@ -485,7 +489,7 @@ pub(crate) fn spawn_async_subresource_fetch(
     network_context: AsyncSubresourceNetworkContext,
     request_url: url::Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
 ) {
     task_runner.spawn(async move {
@@ -597,7 +601,7 @@ async fn fetch_browser_subresource_streaming_with_preflight_headers(
     internal_id: u64,
     request_url: url::Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
 ) -> Result<(), String> {
     let body_source_id = new_network_body_source_id();
@@ -1127,7 +1131,7 @@ mod tests {
             },
             request_url.clone(),
             "GET".to_owned(),
-            request_headers,
+            request_headers.into(),
             None,
         );
 
@@ -1258,7 +1262,7 @@ mod tests {
             },
             target_url.clone(),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
         );
 
@@ -1350,7 +1354,7 @@ mod tests {
             },
             request_url,
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
         );
 
@@ -1459,7 +1463,7 @@ mod tests {
             },
             request_url,
             "POST".to_owned(),
-            request_headers,
+            request_headers.into(),
             Some("payload".to_owned()),
         );
 
@@ -1622,7 +1626,7 @@ mod tests {
             },
             request_url.clone(),
             "POST".to_owned(),
-            request_headers,
+            request_headers.into(),
             Some("payload".to_owned()),
         );
 

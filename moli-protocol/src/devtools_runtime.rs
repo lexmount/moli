@@ -1312,7 +1312,7 @@ pub struct DevToolsContinueInterceptedRequestCommand {
     pub url: Option<String>,
     pub method: Option<String>,
     pub post_data: Option<String>,
-    pub headers: Option<Vec<(String, String)>>,
+    pub headers: Option<moli_fetch::RequestHeaders>,
     pub intercept_response: bool,
 }
 

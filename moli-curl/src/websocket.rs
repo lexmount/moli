@@ -41,7 +41,7 @@ const SESSION_CAPACITY: usize = 255;
 #[derive(Debug)]
 pub struct CurlWebSocketRequest {
     pub url: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: moli_header_field::HeaderFields,
     /// An already resolved proxy policy. None explicitly disables environment proxies.
     pub proxy: Option<String>,
     pub proxy_headers: Vec<(String, String)>,
@@ -56,9 +56,9 @@ impl CurlWebSocketRequest {
     pub fn new(url: String) -> Self {
         Self {
             url,
-            headers: Vec::new(),
+            headers: Default::default(),
             proxy: None,
-            proxy_headers: Vec::new(),
+            proxy_headers: Default::default(),
             tls: CurlTlsConfig::default(),
             resolve_entries: Vec::new(),
             dns_resolution: CurlDnsResolution::no_shared_resolution(),

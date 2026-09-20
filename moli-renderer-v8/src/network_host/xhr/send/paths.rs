@@ -105,8 +105,7 @@ pub(super) fn dispatch_service_worker_xhr(
         client_id,
         prepared.resolved_url.clone(),
         prepared.method.clone(),
-        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
-            .expect("prepared Fetch/XHR headers are ByteStrings"),
+        prepared.request_headers.clone(),
         prepared.send_body.clone(),
         ServiceWorkerRequestDestination::Empty,
         moli_fetch::RequestMode::Cors,
@@ -302,8 +301,7 @@ pub(super) fn spawn_network_xhr_fetch(
         &prepared.method,
         prepared.resolved_url.as_str(),
         prepared.send_body.clone(),
-        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
-            .expect("prepared Fetch/XHR headers are ByteStrings"),
+        prepared.request_headers.clone(),
     )
     .expect("xhr request url was already resolved")
     .with_initiator_url(&prepared.document_url)

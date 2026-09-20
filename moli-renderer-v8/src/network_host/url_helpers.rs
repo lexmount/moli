@@ -36,14 +36,17 @@ pub(in crate::network_host) fn merge_subresource_request_headers(
     merged.into_values().collect()
 }
 
-/// Renderer Fetch/XHR state carries isomorphically decoded HTTP bytes. Convert
-/// the page's ordinary UTF-8 strings before merging them with WebIDL values.
+/// Encode validated WebIDL headers once, then overlay them on UTF-8 defaults.
 pub(crate) fn merge_byte_string_request_headers(
     context_headers: &[(String, String)],
     request_headers: &[(String, String)],
-) -> Vec<(String, String)> {
-    let context = moli_fetch::RequestHeaders::from(context_headers.to_vec()).to_byte_strings();
-    merge_subresource_request_headers(&context, request_headers)
+) -> moli_fetch::RequestHeaders {
+    let mut headers = moli_fetch::RequestHeaders::from_utf8(context_headers.to_vec());
+    headers.overlay(
+        moli_fetch::RequestHeaders::from_byte_strings(request_headers)
+            .expect("validated Fetch/XHR headers are ByteStrings"),
+    );
+    headers
 }
 
 fn header_name_key(name: &str) -> String {

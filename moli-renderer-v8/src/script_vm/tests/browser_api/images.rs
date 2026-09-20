@@ -823,7 +823,7 @@ async fn image_request_interception_fulfills_through_image_continuation() {
     assert_eq!(pending.url.as_str(), "https://example.test/paused.png");
     assert_eq!(
         pending.request_headers,
-        vec![("X-Image-Request".to_owned(), "intercepted".to_owned())],
+        vec![("X-Image-Request".to_owned(), "intercepted".to_owned())].into(),
         "interception must observe the request headers frozen at request start"
     );
     vm.fulfill_pending_subresource_fetch(

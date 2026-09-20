@@ -92,7 +92,7 @@ impl ScriptVm {
             ),
             RendererAppManifestNetworkObservation::new(
                 self.root_frame_id.clone(),
-                request_headers,
+                moli_fetch::RequestHeaders::from_utf8(request_headers),
                 credentials_mode,
                 load,
                 cancel_handle,

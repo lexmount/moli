@@ -2589,7 +2589,9 @@ dependencies = [
  "cidr",
  "crossbeam-channel",
  "curl",
+ "curl-sys",
  "moli-dns-resolver",
+ "moli-header-field",
  "openssl-sys",
  "parking_lot",
  "rcgen",
@@ -2659,6 +2661,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-curl",
  "moli-dns-resolver",
+ "moli-header-field",
  "moli-http-cache",
  "moli-trace",
  "moli-url",
@@ -2699,6 +2702,9 @@ dependencies = [
 [[package]]
 name = "moli-header-field"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "moli-html-input-temporal"
@@ -3010,6 +3016,7 @@ name = "moli-protocol-webdriver-bidi"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "moli-header-field",
  "moli-protocol",
  "serde_json",
  "url",
@@ -3421,6 +3428,7 @@ dependencies = [
  "http",
  "moli-crypto",
  "moli-curl",
+ "moli-header-field",
  "moli-url",
  "openssl",
  "rcgen",

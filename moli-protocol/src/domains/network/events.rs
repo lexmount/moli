@@ -1358,7 +1358,7 @@ mod tests {
             url: Url::parse("https://example.test/api").unwrap(),
             websocket_socket_id: None,
             method: "POST".to_owned(),
-            request_headers: vec![("x-test".to_owned(), "1".to_owned())],
+            request_headers: vec![("x-test".to_owned(), "1".to_owned())].into(),
             request_body: Some("body".to_owned()),
             request_body_bytes: Some(b"body".to_vec()),
             resource_type: SubresourceResourceType::Fetch,

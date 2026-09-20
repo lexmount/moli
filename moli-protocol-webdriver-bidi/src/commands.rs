@@ -1069,17 +1069,17 @@ fn bidi_network_continue_response_command(
     let cookie_headers = network_response_cookie_headers(&command.params)?;
     let response_headers = match (headers, cookie_headers.is_empty()) {
         (Some(mut headers), _) => {
-            headers.extend(cookie_headers);
+            headers.extend(moli_header_field::HeaderFields::from_utf8(cookie_headers));
             Some(headers)
         }
-        (None, false) => Some(cookie_headers),
+        (None, false) => Some(moli_header_field::HeaderFields::from_utf8(cookie_headers)),
         (None, true) => None,
     };
     Ok(DevToolsContinueInterceptedResponseCommand {
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(request),
         response_code: optional_network_status_code(&command.params)?,
-        response_headers,
+        response_headers: response_headers.map(|headers| headers.to_byte_strings()),
         response_phrase: optional_string(&command.params, "reasonPhrase")?.map(str::to_owned),
         auth_credentials: optional_network_auth_credentials(&command.params)?,
     })
@@ -1167,12 +1167,14 @@ fn bidi_network_provide_response_command(
 ) -> Result<DevToolsFulfillInterceptedRequestCommand, BidiError> {
     let request = required_network_request_id(&command.params)?;
     let mut headers = optional_network_headers(&command.params, "headers")?.unwrap_or_default();
-    headers.extend(network_response_cookie_headers(&command.params)?);
+    headers.extend(moli_header_field::HeaderFields::from_utf8(
+        network_response_cookie_headers(&command.params)?,
+    ));
     Ok(DevToolsFulfillInterceptedRequestCommand {
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(request),
         response_code: optional_network_status_code(&command.params)?.unwrap_or(200),
-        response_headers: headers,
+        response_headers: headers.to_byte_strings(),
         body: optional_network_bytes(&command.params, "body")?,
         response_phrase: optional_string(&command.params, "reasonPhrase")?.map(str::to_owned),
     })
@@ -1243,7 +1245,7 @@ fn required_network_bytes(value: &Value, field: &str) -> Result<Vec<u8>, BidiErr
 fn optional_network_headers(
     params: &Value,
     field: &str,
-) -> Result<Option<Vec<(String, String)>>, BidiError> {
+) -> Result<Option<moli_header_field::HeaderFields>, BidiError> {
     let Some(value) = params.get(field) else {
         return Ok(None);
     };
@@ -1257,10 +1259,10 @@ fn optional_network_headers(
     for header in headers {
         out.push(network_header_pair(header, field)?);
     }
-    Ok(Some(out))
+    Ok(Some(moli_header_field::HeaderFields::from_bytes(out)))
 }
 
-fn network_header_pair(value: &Value, field: &str) -> Result<(String, String), BidiError> {
+fn network_header_pair(value: &Value, field: &str) -> Result<(String, Vec<u8>), BidiError> {
     let Some(header) = value.as_object() else {
         return Err(BidiError::new(
             BidiErrorCode::InvalidArgument,
@@ -1269,20 +1271,20 @@ fn network_header_pair(value: &Value, field: &str) -> Result<(String, String), B
     };
     let name = required_object_string(header, "name")?;
     validate_network_header_name(name, "header name")?;
-    let value = required_network_bytes_value(required_object_value(header, "value")?, "value")?;
+    let value = required_network_bytes(required_object_value(header, "value")?, "value")?;
     Ok((name.to_owned(), value))
 }
 
 fn apply_network_request_cookies(
-    headers: &mut Option<Vec<(String, String)>>,
+    headers: &mut Option<moli_header_field::HeaderFields>,
     params: &Value,
 ) -> Result<(), BidiError> {
     let Some(cookie_header) = optional_network_request_cookie_header(params)? else {
         return Ok(());
     };
-    let headers = headers.get_or_insert_with(Vec::new);
+    let headers = headers.get_or_insert_with(Default::default);
     headers.retain(|(name, _)| !name.eq_ignore_ascii_case("cookie"));
-    headers.push(("Cookie".to_owned(), cookie_header));
+    headers.push(("Cookie".to_owned(), cookie_header.into_bytes()));
     Ok(())
 }
 

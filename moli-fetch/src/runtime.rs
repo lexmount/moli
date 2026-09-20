@@ -3709,7 +3709,7 @@ fn network_fetch_failure_for_request(
             current_url.clone(),
             request.method.clone(),
             request.body.clone(),
-            request.request_headers.to_byte_strings(),
+            request.request_headers.clone(),
             redirect_chain.to_vec(),
         ),
     )

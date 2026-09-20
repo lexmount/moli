@@ -11,7 +11,7 @@ pub(in crate::worker) fn record_worker_subresource_failure(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     error_text: String,
@@ -35,7 +35,7 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     error_text: String,
@@ -63,7 +63,7 @@ pub(in crate::worker) fn record_worker_subresource_success(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     head: ResponseHead,
@@ -90,7 +90,7 @@ pub(in crate::worker) fn record_worker_subresource_success_with_handle(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     network_request_headers: Option<Vec<(String, String)>>,
@@ -149,7 +149,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    mut headers: Vec<(String, String)>,
+    mut headers: moli_fetch::RequestHeaders,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     redirect_mode: RequestRedirectMode,
@@ -174,18 +174,17 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 None,
             )
         } else {
-            let cors_preflight_request_headers = headers.clone();
+            let cors_preflight_request_headers = headers.to_byte_strings();
             if suppress_default_content_type {
                 // An empty header value is intentional: the fetch transport serializes this
                 // as `Content-Type:` so the HTTP stack does not synthesize its own upload default.
-                headers.push(("Content-Type".to_owned(), String::new()));
+                headers.push(("Content-Type".to_owned(), Vec::new()));
             }
             match Request::new_browser_bytes(
                 &method,
                 resolved_url.as_str(),
                 body,
-                moli_fetch::RequestHeaders::from_byte_strings(&headers)
-                    .expect("prepared worker Fetch headers are ByteStrings"),
+                headers.clone(),
                 moli_url::WebOrigin::from_url(&document_url),
             ) {
                 Ok(request) => {
@@ -388,7 +387,7 @@ fn spawn_worker_fetch_service_worker(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    headers: Vec<(String, String)>,
+    headers: moli_fetch::RequestHeaders,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     redirect_mode: RequestRedirectMode,
@@ -404,7 +403,7 @@ fn spawn_worker_fetch_service_worker(
             resulting_client_id: None,
             url: resolved_url.clone(),
             method: method.clone(),
-            headers: headers.clone(),
+            headers: headers.to_byte_strings(),
             body: body.clone(),
             destination: ServiceWorkerRequestDestination::Empty,
             request_mode,
@@ -414,7 +413,7 @@ fn spawn_worker_fetch_service_worker(
             is_reload: false,
             metadata: request_metadata.clone(),
         },
-        cors_preflight_request_headers: headers.clone(),
+        cors_preflight_request_headers: headers.to_byte_strings(),
         request_cookie_report: None,
         network_context: AsyncSubresourceNetworkContext {
             frame_id: None,
@@ -509,19 +508,18 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    headers: Vec<(String, String)>,
+    headers: moli_fetch::RequestHeaders,
     credentials_mode: RequestCredentialsMode,
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let cors_preflight_request_headers = headers.clone();
+        let cors_preflight_request_headers = headers.to_byte_strings();
         let request = Request::new_browser_bytes(
             &method,
             resolved_url.as_str(),
             body,
-            moli_fetch::RequestHeaders::from_byte_strings(&headers)
-                .expect("prepared worker XHR headers are ByteStrings"),
+            headers.clone(),
             moli_url::WebOrigin::from_url(&document_url),
         )
         .map(|request| {
@@ -1177,7 +1175,7 @@ pub(in crate::worker) fn record_worker_websocket_subresource_failure(
     socket_id: u64,
     document_url: Url,
     url: Url,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     error_text: String,
 ) {
     let _ = state
@@ -1298,7 +1296,7 @@ pub(crate) fn register_worker_websocket<'s>(
             .effective_browser_identity()
             .user_agent()
             .to_owned(),
-        extra_headers: extra_http_headers,
+        extra_headers: moli_fetch::RequestHeaders::from_utf8(extra_http_headers),
         http_proxy: loader.request_client().http_proxy().map(ToOwned::to_owned),
         http_no_proxy: loader
             .request_client()
@@ -1495,7 +1493,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                 socket_id,
                 &socket_url,
                 &loader,
-                response_headers,
+                &response_headers.to_byte_strings(),
             );
             parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
                 WorkerWebSocketLifecycleEvent::Open {
@@ -1517,7 +1515,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                     Vec::new(),
                     socket_url.clone(),
                     *response_status,
-                    response_headers.clone(),
+                    response_headers.to_byte_strings(),
                     String::new(),
                     cookie_set_reports,
                 )
@@ -1556,7 +1554,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                         document_url.clone(),
                         socket_url.clone(),
                         "GET".to_owned(),
-                        Vec::new(),
+                        Default::default(),
                         None,
                         SubresourceResourceType::WebSocket,
                         message.clone(),
@@ -1986,7 +1984,11 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
-    let headers = merge_worker_request_headers(&extra_http_headers, &request_headers);
+    let headers = merge_worker_request_headers(
+        &extra_http_headers,
+        &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
+            .expect("validated worker Fetch headers are ByteStrings"),
+    );
     if let Some(signal) = signal
         && worker_abort_signal_aborted(scope, signal)
     {

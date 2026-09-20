@@ -10,7 +10,7 @@ async fn browser_context_cookie_manager_surface_projects_live_effective_browser_
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://child.example/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -171,7 +171,7 @@ async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationsh
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://app.example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -305,7 +305,7 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
         .build_navigation_from_network_response_async(
             requested_url,
             "GET".into(),
-            Vec::new(),
+            Vec::new().into(),
             moli_fetch::NetworkFetchResult::without_request_observation(response),
         )
         .await
@@ -367,7 +367,7 @@ async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://app.example.test/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -446,7 +446,7 @@ async fn browser_context_cookie_manager_surface_projects_navigation_initiator_re
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://initiator.example/home").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>start</body></html>".into(),
@@ -463,7 +463,7 @@ async fn browser_context_cookie_manager_surface_projects_navigation_initiator_re
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://target.example/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>next</body></html>".into(),

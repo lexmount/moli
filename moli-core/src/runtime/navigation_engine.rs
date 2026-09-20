@@ -950,7 +950,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> Result<NetworkFetchResult<NavigationResponse>> {
         let mut request = Request::new_browser_bytes(
@@ -996,7 +996,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> Result<NetworkFetchResult<NavigationResponse>> {
         let cookie_store = storage.into_cookie_store();
@@ -1023,7 +1023,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NavigationStreamingRawResponse> {
@@ -1091,7 +1091,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> Result<NavigationStreamingRawResponse> {
         let cookie_store = storage.into_cookie_store();
@@ -1120,7 +1120,7 @@ impl NavigationEngine {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
         cancel_handle: FetchCancelHandle,
     ) -> Result<NavigationStreamingRawResponse> {

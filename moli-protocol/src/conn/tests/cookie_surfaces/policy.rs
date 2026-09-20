@@ -18,7 +18,7 @@ async fn browser_context_document_cookie_facade_overrides_apply_to_new_loaded_pa
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -70,7 +70,7 @@ async fn browser_context_document_cookie_facade_overrides_update_live_page() {
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -139,7 +139,7 @@ async fn browser_context_document_cookie_browser_context_overrides_update_live_p
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -321,7 +321,7 @@ async fn browser_context_document_cookie_capability_and_freshness_snapshots_proj
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -740,7 +740,7 @@ async fn browser_context_cookie_manager_surface_projects_document_capability_and
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),

@@ -539,7 +539,7 @@ struct ActiveDocumentBodyStreamState {
     navigation: NavigationDispatchState,
     requested_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     response: StreamingRawResponse,
     network_observation_journal: NetworkObservationJournal,
     body_progress_source: MainDocumentBodyProgressSource,
@@ -1259,7 +1259,7 @@ impl ActiveDocumentBodyStreamState {
         navigation: NavigationDispatchState,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: StreamingRawResponse,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
@@ -1372,14 +1372,14 @@ pub enum DocumentBodySource {
     BufferedRaw {
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: RawResponse,
         network_observation_journal: NetworkObservationJournal,
     },
     StreamingRaw {
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: StreamingRawResponse,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
@@ -1388,7 +1388,7 @@ pub enum DocumentBodySource {
     CapturedRaw {
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         head: ResponseHead,
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
@@ -1810,7 +1810,7 @@ impl PendingSubresourceFetchRequest {
         url: Option<Url>,
         method: Option<String>,
         body: Option<String>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
     ) {
         let Some(chain) = self.request_stage_chain.as_mut() else {
             return;
@@ -1836,7 +1836,7 @@ impl PendingSubresourceFetchRequest {
         Option<Url>,
         Option<String>,
         Option<Option<String>>,
-        Option<Vec<(String, String)>>,
+        Option<moli_fetch::RequestHeaders>,
     ) {
         let Some(chain) = self.request_stage_chain.as_ref() else {
             return (None, None, None, None);
@@ -1865,7 +1865,7 @@ impl PendingSubresourceFetchRequest {
 pub struct PendingSubresourceFetchRequestStageChain {
     pub url: Url,
     pub method: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: moli_fetch::RequestHeaders,
     pub body: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub remaining_sessions: Vec<PendingSubresourceFetchRequestStage>,
@@ -1917,7 +1917,7 @@ pub struct PendingSubresourceFetchAuthRequest {
     pub websocket_socket_id: Option<u64>,
     pub url: Url,
     pub method: String,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub challenge: FetchAuthChallenge,
@@ -1967,7 +1967,7 @@ pub struct PendingSubresourceFetchResponseRequest {
     pub websocket_socket_id: Option<u64>,
     pub url: Url,
     pub method: String,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub response_status: u16,
@@ -2032,7 +2032,7 @@ impl CdpConnection {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome, String> {
@@ -2056,7 +2056,7 @@ impl CdpConnection {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome, String> {
@@ -2081,7 +2081,7 @@ impl CdpConnection {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome, String> {

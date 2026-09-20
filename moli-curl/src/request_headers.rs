@@ -2,10 +2,12 @@ use std::ffi::CString;
 
 use anyhow::{Context, Result};
 
-// curl::easy::List only accepts UTF-8 strings. Own a libcurl list here so the
-// transport can send already encoded header values without re-encoding them.
+/// An owned libcurl header list that accepts encoded bytes.
+///
+/// `curl::easy::List` only accepts UTF-8 strings. Retain this list in the Easy2
+/// handler so it outlives transfers that borrow its native pointer.
 #[derive(Default)]
-pub(crate) struct RequestHeaderList {
+pub struct RequestHeaderList {
     raw: *mut curl_sys::curl_slist,
 }
 
@@ -14,7 +16,7 @@ pub(crate) struct RequestHeaderList {
 unsafe impl Send for RequestHeaderList {}
 
 impl RequestHeaderList {
-    pub(crate) fn append(&mut self, line: &[u8]) -> Result<()> {
+    pub fn append(&mut self, line: &[u8]) -> Result<()> {
         let line = CString::new(line).context("HTTP request header contains NUL")?;
         // SAFETY: self.raw is null or a live list owned by self. libcurl copies
         // the NUL-terminated string; failure leaves the existing list intact.
@@ -26,7 +28,7 @@ impl RequestHeaderList {
         Ok(())
     }
 
-    pub(crate) fn as_ptr(&self) -> *mut curl_sys::curl_slist {
+    pub fn as_ptr(&self) -> *mut curl_sys::curl_slist {
         self.raw
     }
 }

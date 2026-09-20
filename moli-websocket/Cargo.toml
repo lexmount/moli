@@ -8,6 +8,7 @@ edition = "2024"
 test-support = ["dep:rcgen", "dep:openssl", "dep:tokio-tungstenite", "dep:tokio-rustls", "dep:rustls", "dep:futures-util", "tokio/net", "tokio/io-util"]
 
 [dependencies]
+moli-header-field = { path = "../moli-header-field" }
 base64 = "0.22"
 moli-curl = { path = "../moli-curl" }
 moli-crypto = { path = "../moli-crypto" }

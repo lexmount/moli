@@ -529,7 +529,7 @@ fn completed_or_streaming_document_progress_queue(
         state.requested_url.clone(),
         state.request_method.clone(),
         state.request_body.clone(),
-        state.request_headers.clone(),
+        state.request_headers.to_byte_strings(),
         state.loader_id.clone(),
         state.frame_id.clone(),
         state.timestamp,
@@ -899,7 +899,7 @@ impl MainDocumentLiveNetworkProgressSource {
             loader_id: state.loader_id.clone(),
             frame_id: state.frame_id.clone(),
             timestamp: state.timestamp,
-            initial_request_headers: state.request_headers.clone(),
+            initial_request_headers: state.request_headers.to_byte_strings(),
             initial_request_cookie_report: initial_request_cookie_report.cloned(),
         })
     }
@@ -1298,7 +1298,7 @@ fn emit_main_document_initial_request_will_be_sent_for_sessions_into(
         url: state.requested_url.clone(),
         method: state.request_method.clone(),
         request_body: state.request_body.clone(),
-        request_headers: state.request_headers.clone(),
+        request_headers: state.request_headers.to_byte_strings(),
         request_initiator_type: SubresourceRequestInitiatorType::Other,
         redirect_response: Box::new(None),
         redirect_has_extra_info: false,
@@ -1464,7 +1464,7 @@ pub(crate) fn start_observed_main_document_navigation_progress_background_events
             &state.requested_url,
             &state.request_method,
             state.request_body.as_deref(),
-            &state.request_headers,
+            &state.request_headers.to_byte_strings(),
             cookie_access_report,
         );
         return MainDocumentBodyProgressSource::from_live_source(

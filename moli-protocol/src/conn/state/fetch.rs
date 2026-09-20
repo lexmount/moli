@@ -2305,7 +2305,7 @@ mod tests {
             websocket_socket_id: None,
             url: test_url("auth"),
             method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_body: None,
             request_cookie_report: None,
             challenge: FetchAuthChallenge {
@@ -2349,7 +2349,7 @@ mod tests {
             websocket_socket_id: None,
             url: test_url("response"),
             method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_body: None,
             request_cookie_report: None,
             response_status: 200,
@@ -2394,7 +2394,7 @@ mod tests {
                 request_method: "GET".to_owned(),
                 request_body: None,
                 request_body_bytes: None,
-                request_headers: Vec::new(),
+                request_headers: Vec::new().into(),
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                 timestamp: 0.0,
                 source_document_security: Default::default(),
@@ -2425,7 +2425,7 @@ mod tests {
         pending_b.request_stage_chain = Some(Box::new(PendingSubresourceFetchRequestStageChain {
             url: test_url("api"),
             method: "GET".to_owned(),
-            headers: Vec::new(),
+            headers: Vec::new().into(),
             body: None,
             request_cookie_report: None,
             remaining_sessions: vec![
@@ -2595,7 +2595,7 @@ mod tests {
             Some(Box::new(PendingSubresourceFetchRequestStageChain {
                 url: test_url("api"),
                 method: "GET".to_owned(),
-                headers: Vec::new(),
+                headers: Vec::new().into(),
                 body: None,
                 request_cookie_report: None,
                 remaining_sessions: vec![

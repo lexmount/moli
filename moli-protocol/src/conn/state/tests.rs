@@ -39,7 +39,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         request_method: "GET".to_owned(),
         request_body: None,
         request_body_bytes: None,
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),

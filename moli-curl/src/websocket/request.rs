@@ -12,6 +12,8 @@ pub(super) struct Handshake {
     pub error: Option<String>,
     #[cfg(test)]
     pub pool_waiting: Option<std::sync::Arc<tokio::sync::Notify>>,
+    request_headers: crate::RequestHeaderList,
+    proxy_headers: crate::RequestHeaderList,
     proxy_connect: bool,
     header_bytes: usize,
 }
@@ -99,8 +101,35 @@ pub(super) fn configure(request: &CurlWebSocketRequest) -> Result<Easy2<Handshak
         easy.resolve(resolve)
             .context("failed to configure curl host resolve overrides")?;
     }
-    easy.http_headers(headers(&request.headers)?)?;
-    easy.proxy_headers(headers(&request.proxy_headers)?)?;
+    let request_headers = headers(&request.headers)?;
+    // SAFETY: libcurl borrows the list, which the handler retains until after
+    // Easy2 cleans up the native handle, including on configuration failure.
+    let result = unsafe {
+        curl_sys::curl_easy_setopt(
+            easy.raw(),
+            curl_sys::CURLOPT_HTTPHEADER,
+            request_headers.as_ptr(),
+        )
+    };
+    if result != curl_sys::CURLE_OK {
+        return Err(curl::Error::new(result)).context("failed to attach WebSocket request headers");
+    }
+    easy.get_mut().request_headers = request_headers;
+    let proxy_headers = headers(&moli_header_field::HeaderFields::from_utf8(
+        request.proxy_headers.clone(),
+    ))?;
+    // SAFETY: the handler owns the list until Easy2 has cleaned up its handle.
+    let result = unsafe {
+        curl_sys::curl_easy_setopt(
+            easy.raw(),
+            curl_sys::CURLOPT_PROXYHEADER,
+            proxy_headers.as_ptr(),
+        )
+    };
+    if result != curl_sys::CURLE_OK {
+        return Err(curl::Error::new(result)).context("failed to attach WebSocket proxy headers");
+    }
+    easy.get_mut().proxy_headers = proxy_headers;
     // Capture HeaderOut through our handler; never print debug or credentials.
     easy.verbose(true)?;
     Ok(easy)
@@ -119,15 +148,15 @@ fn proxy_uses_https_tls(proxy: &str) -> bool {
         .is_some_and(|(scheme, _)| scheme.eq_ignore_ascii_case("https"))
 }
 
-fn headers(entries: &[(String, String)]) -> Result<List> {
-    let mut list = List::new();
+fn headers(entries: &moli_header_field::HeaderFields) -> Result<crate::RequestHeaderList> {
+    let mut list = crate::RequestHeaderList::default();
     let mut size = 0usize;
     for (name, value) in entries {
         if name.is_empty()
             || name
                 .bytes()
                 .any(|b| !b.is_ascii_alphanumeric() && !b"!#$%&'*+-.^_`|~".contains(&b))
-            || value.bytes().any(|b| matches!(b, 0 | b'\r' | b'\n'))
+            || value.iter().any(|b| matches!(b, 0 | b'\r' | b'\n'))
         {
             bail!("invalid WebSocket request header");
         }
@@ -139,11 +168,14 @@ fn headers(entries: &[(String, String)]) -> Result<List> {
             bail!("WebSocket request headers are too large");
         }
         // curl uses a semicolon to request an empty header instead of removing it.
-        list.append(&if value.is_empty() {
-            format!("{name};")
+        let mut line = name.as_bytes().to_vec();
+        if value.is_empty() {
+            line.push(b';');
         } else {
-            format!("{name}: {value}")
-        })?;
+            line.extend_from_slice(b": ");
+            line.extend_from_slice(value);
+        }
+        list.append(&line)?;
     }
     Ok(list)
 }

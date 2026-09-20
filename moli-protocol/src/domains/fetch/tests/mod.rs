@@ -320,6 +320,7 @@ async fn spawn_digest_proxy(
 
 mod basics;
 mod command_correlation;
+mod header_bytes;
 mod navigation_auth;
 mod navigation_control;
 mod navigation_response_stage;

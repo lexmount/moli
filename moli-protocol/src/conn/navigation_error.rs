@@ -30,7 +30,7 @@ pub(crate) struct NavigationNetworkError {
     pub(crate) kind: NavigationNetworkErrorKind,
     pub(crate) unreachable_url: Url,
     pub(crate) request_method: String,
-    pub(crate) request_headers: Vec<(String, String)>,
+    pub(crate) request_headers: moli_fetch::RequestHeaders,
 }
 
 impl fmt::Display for NavigationNetworkError {

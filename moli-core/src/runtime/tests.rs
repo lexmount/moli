@@ -1647,7 +1647,7 @@ async fn navigation_engine_bypasses_service_worker_for_main_resource() -> Result
             "GET",
             &format!("{base_url}/app/controlled.html"),
             None,
-            Vec::new(),
+            Vec::new().into(),
             None,
         )
         .await?;
@@ -1721,7 +1721,7 @@ async fn navigation_engine_service_worker_main_resource_has_no_network_transport
             "GET",
             &format!("{base_url}/app/controlled.html"),
             None,
-            Vec::new(),
+            Vec::new().into(),
             None,
         )
         .await?;

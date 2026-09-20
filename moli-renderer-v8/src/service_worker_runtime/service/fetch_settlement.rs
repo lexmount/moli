@@ -267,7 +267,7 @@ impl ServiceWorkerRuntimeService {
             job.network_context,
             job.request.url,
             job.request.method,
-            job.request.request_headers.to_byte_strings(),
+            job.request.request_headers.clone(),
             request_body_text(&job.request.body),
         );
     }
@@ -385,7 +385,7 @@ impl ServiceWorkerRuntimeService {
                         internal_id: job.internal_id,
                         request_url: job.request.url.clone(),
                         request_method: job.request.method.clone(),
-                        request_headers: job.request.request_headers.to_byte_strings(),
+                        request_headers: job.request.request_headers.clone(),
                         request_body: request_body_text(&job.request.body),
                         body_source_id: started.body_source_id,
                         network_request_headers: None,
@@ -638,7 +638,7 @@ impl ServiceWorkerRuntimeService {
                 internal_id: job.internal_id,
                 request_url: job.request.url,
                 request_method: job.request.method,
-                request_headers: job.request.request_headers.to_byte_strings(),
+                request_headers: job.request.request_headers.clone(),
                 request_body: request_body_text(&job.request.body),
                 response_status_text: Some(response.status_text),
                 skip_fetch_security_validation: true,
@@ -691,7 +691,7 @@ impl ServiceWorkerRuntimeService {
                 internal_id: job.internal_id,
                 request_url: job.request.url,
                 request_method: job.request.method,
-                request_headers: job.request.request_headers.to_byte_strings(),
+                request_headers: job.request.request_headers.clone(),
                 request_body: request_body_text(&job.request.body),
                 response_status_text: None,
                 skip_fetch_security_validation: false,
@@ -1960,8 +1960,8 @@ mod tests {
         assert_eq!(request_body_text(&job.request.body), None);
         assert_eq!(job.request.body, None);
         assert_eq!(
-            job.request.request_headers.to_byte_strings(),
-            vec![("x-keep".to_owned(), "yes".to_owned())]
+            job.request.request_headers.clone(),
+            vec![("x-keep".to_owned(), "yes".to_owned())].into()
         );
         assert_eq!(
             job.cors_preflight_request_headers,

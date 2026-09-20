@@ -4795,7 +4795,7 @@ document.body.setAttribute('data-error-state', [
                             Url::parse("https://example.test/").unwrap(),
                             Url::parse("https://example.test/preflight").unwrap(),
                             "OPTIONS".to_owned(),
-                            Vec::new(),
+                            Vec::new().into(),
                             None,
                             crate::types::SubresourceResourceType::Fetch,
                             "phase-one typed terminal".to_owned(),

@@ -681,7 +681,7 @@ impl ScriptVm {
                 url: script.url.clone(),
                 websocket_socket_id: None,
                 method: "GET".to_owned(),
-                request_headers: Vec::new(),
+                request_headers: Default::default(),
                 request_body: None,
                 request_body_bytes: None,
                 resource_type: SubresourceResourceType::Script,
@@ -1106,7 +1106,7 @@ impl ScriptVm {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<AsyncSubresourceCommandExecution<PendingSubresourceContinueOutcome>> {
@@ -1377,7 +1377,7 @@ impl ScriptVm {
         pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         intercept_response: bool,
         handle_auth_requests: bool,
@@ -1409,19 +1409,11 @@ impl ScriptVm {
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
-        let encoded_headers = if matches!(
-            pending.info.resource_type,
-            SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-        ) {
-            moli_fetch::RequestHeaders::from_byte_strings(&request_headers)?
-        } else {
-            moli_fetch::RequestHeaders::from(request_headers.clone())
-        };
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
             request_body.clone(),
-            encoded_headers,
+            request_headers.clone(),
         )?
         .with_initiator_url(&pending.info.document_url)
         .with_request_origin(pending.request_origin.clone())
@@ -1491,7 +1483,7 @@ impl ScriptVm {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
         request_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         request_body_bytes: Option<Vec<u8>>,
     ) -> Result<Option<PendingSubresourceFetchState>> {
@@ -1687,19 +1679,11 @@ impl ScriptVm {
             ));
         }
         let loader = pending_fetch.load.request_client();
-        let encoded_headers = if matches!(
-            pending_fetch.info.resource_type,
-            SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-        ) {
-            moli_fetch::RequestHeaders::from_byte_strings(&original_request_headers)?
-        } else {
-            moli_fetch::RequestHeaders::from(original_request_headers.clone())
-        };
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
             request_body.clone(),
-            encoded_headers,
+            original_request_headers.clone(),
         )?
         .with_initiator_url(&pending_fetch.info.document_url)
         .with_request_origin(pending_fetch.request_origin.clone())
@@ -2499,7 +2483,7 @@ impl ScriptVm {
         pending: &PendingSubresourceFetchState,
         request_url: &Url,
         request_method: &str,
-        request_headers: &[(String, String)],
+        request_headers: &moli_fetch::RequestHeaders,
         request_body: &Option<String>,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
@@ -2515,7 +2499,7 @@ impl ScriptVm {
                         pending.info.document_url.clone(),
                         request_url.clone(),
                         request_method.to_owned(),
-                        request_headers.to_vec(),
+                        request_headers.clone(),
                         request_body.clone(),
                         pending.info.resource_type,
                         request_cookie_report,
@@ -2553,7 +2537,7 @@ impl ScriptVm {
                         pending.info.document_url.clone(),
                         request_url.clone(),
                         request_method.to_owned(),
-                        request_headers.to_vec(),
+                        request_headers.clone(),
                         request_body.clone(),
                         pending.info.resource_type,
                         network_error_text,
@@ -3051,7 +3035,7 @@ impl ScriptVm {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaders>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome> {
@@ -3133,7 +3117,7 @@ impl ScriptVm {
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
@@ -3255,7 +3239,7 @@ impl ScriptVm {
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,
@@ -3498,7 +3482,7 @@ impl ScriptVm {
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,

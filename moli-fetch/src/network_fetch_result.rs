@@ -383,7 +383,7 @@ pub struct NetworkFetchFailureRequestContext {
     current_url: Url,
     request_method: String,
     request_body: Option<Vec<u8>>,
-    request_headers: Vec<(String, String)>,
+    request_headers: crate::RequestHeaders,
     redirect_chain: Vec<RedirectInfo>,
 }
 
@@ -392,7 +392,7 @@ impl NetworkFetchFailureRequestContext {
         current_url: Url,
         request_method: String,
         request_body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: crate::RequestHeaders,
         redirect_chain: Vec<RedirectInfo>,
     ) -> Self {
         Self {
@@ -416,7 +416,7 @@ impl NetworkFetchFailureRequestContext {
         self.request_body.as_deref()
     }
 
-    pub fn request_headers(&self) -> &[(String, String)] {
+    pub fn request_headers(&self) -> &crate::RequestHeaders {
         &self.request_headers
     }
 
@@ -594,7 +594,7 @@ mod tests {
                 Url::parse("http://localhost/").expect("test URL should parse"),
                 "GET".to_owned(),
                 None,
-                Vec::new(),
+                Vec::new().into(),
                 Vec::new(),
             ),
         )
@@ -627,7 +627,7 @@ mod tests {
                 Url::parse("https://example.test/").expect("test URL should parse"),
                 "POST".to_owned(),
                 Some(b"secret request body".to_vec()),
-                vec![("Authorization".to_owned(), "secret token".to_owned())],
+                vec![("Authorization".to_owned(), "secret token".to_owned())].into(),
                 Vec::new(),
             )),
         };

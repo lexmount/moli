@@ -112,7 +112,7 @@ pub struct HandshakeController {
 pub(crate) enum HandshakeDecision {
     Continue {
         response_status: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<moli_header_field::HeaderFields>,
     },
     Fail(String),
 }
@@ -125,7 +125,7 @@ impl HandshakeController {
     pub fn continue_open(
         self,
         response_status: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<moli_header_field::HeaderFields>,
     ) -> Result<(), SendError> {
         self.decide(HandshakeDecision::Continue {
             response_status,

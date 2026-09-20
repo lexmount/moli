@@ -19,7 +19,6 @@ mod proxy;
 mod proxy_connect;
 mod referrer_policy;
 mod request;
-mod request_headers;
 mod request_policy;
 mod response;
 mod runtime;
@@ -53,6 +52,8 @@ pub use headers::{
 pub use moli_cookie_jar::SharedBrowserCookieStore as SharedCookieStore;
 pub use moli_curl::websocket::CurlWebSocketConnector;
 pub use moli_curl::{CurlTlsConfig, validate_http_host_resolve_entries};
+pub use moli_header_field::HeaderFields as RequestHeaders;
+pub use moli_header_field::HeaderFields as ResponseHeaders;
 pub use moli_web_bot_auth::{WebBotAuthProfile, WebBotAuthSigner};
 pub use network_fetch_result::{
     NetworkExchangeObservation, NetworkFetchFailureContext, NetworkFetchFailureRequestContext,
@@ -68,7 +69,6 @@ pub use request::{
     RequestPriorityHints, RequestRedirectMode, RequestResourceType, ResourceLoadPriority,
     ScriptFetchRequestMetadata, ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
 };
-pub use request_headers::RequestHeaders;
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RawResponse,

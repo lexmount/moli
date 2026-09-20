@@ -14,7 +14,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) resolved_url: url::Url,
     pub(super) method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
     pub(super) body: Option<Vec<u8>>,
     pub(super) request_mode: moli_fetch::RequestMode,

@@ -70,7 +70,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_cookie_get_fre
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![("set-cookie".into(), "theme=dark; Path=/".into())],
             "<!doctype html><html><body>ok</body></html>".into(),

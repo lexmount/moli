@@ -10,9 +10,9 @@ pub(crate) async fn run_synthetic_websocket_connection(
     socket_id: u64,
     mut command_rx: CommandReceiver,
     event_tx: EventSender,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_header_field::HeaderFields,
     response_status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: moli_header_field::HeaderFields,
 ) -> EventResult {
     let Some(_connection_slot) = acquire_websocket_connection_slot() else {
         drop(command_rx);
@@ -125,11 +125,14 @@ pub(crate) async fn run_synthetic_websocket_connection(
     Ok(())
 }
 
-fn response_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+fn response_header<'a>(
+    headers: &'a moli_header_field::HeaderFields,
+    name: &str,
+) -> Option<&'a str> {
     headers
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
+        .and_then(|(_, value)| std::str::from_utf8(value).ok())
 }
 
 #[cfg(test)]
@@ -148,9 +151,9 @@ mod tests {
             97,
             receiver,
             events.into(),
-            Vec::new(),
+            Vec::new().into(),
             101,
-            Vec::new(),
+            Vec::new().into(),
         ));
         assert!(matches!(
             timeout(Duration::from_secs(3), incoming.recv())

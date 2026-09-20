@@ -9,6 +9,7 @@ default = []
 test-support = ["moli-cookie-jar/test-support"]
 
 [dependencies]
+moli-header-field = { path = "../moli-header-field" }
 anyhow = "1.0.100"
 cidr = "0.3.2"
 crossbeam-channel = "0.5.15"

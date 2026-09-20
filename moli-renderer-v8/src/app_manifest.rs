@@ -190,7 +190,7 @@ pub struct RendererPreparedAppManifestLoad {
 
 pub(crate) struct RendererAppManifestNetworkObservation {
     frame_id: Option<String>,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     credentials_mode: RequestCredentialsMode,
     load: ResourceLoadLease,
     cancel_handle: FetchCancelHandle,
@@ -199,7 +199,7 @@ pub(crate) struct RendererAppManifestNetworkObservation {
 impl RendererAppManifestNetworkObservation {
     pub(crate) fn new(
         frame_id: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         credentials_mode: RequestCredentialsMode,
         load: ResourceLoadLease,
         cancel_handle: FetchCancelHandle,

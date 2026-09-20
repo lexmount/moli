@@ -58,7 +58,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_default_cookie
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://live.example.com/page").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),

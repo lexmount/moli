@@ -662,7 +662,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             request_method: "GET".to_owned(),
             request_body: None,
             request_body_bytes: None,
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 0.0,
             source_document_security: Default::default(),
@@ -670,7 +670,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
         DocumentBodySource::BufferedRaw {
             requested_url: url.clone(),
             request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             response: RawResponse::from_head_and_body(
                 ResponseHead {
                     final_url: url,

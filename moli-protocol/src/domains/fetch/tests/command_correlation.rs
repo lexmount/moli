@@ -69,7 +69,7 @@ fn pending_auth(
         websocket_socket_id: pending.websocket_socket_id,
         url: Url::parse("https://example.test/protected").unwrap(),
         method: "GET".to_owned(),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_body: None,
         request_cookie_report: None,
         challenge: FetchAuthChallenge {
@@ -106,7 +106,7 @@ fn pending_response(
         websocket_socket_id: pending.websocket_socket_id,
         url: Url::parse("https://example.test/response").unwrap(),
         method: "GET".to_owned(),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_body: None,
         request_cookie_report: None,
         response_status: 200,
