@@ -161,6 +161,29 @@ fn keeps_adjacent_code_elements_distinct_and_chooses_safe_delimiters() {
 }
 
 #[test]
+fn empty_text_nodes_do_not_separate_code_values() {
+    let mut dom = Tree::new();
+    dom.leaf(0, "code", "name");
+    dom.text(0, "");
+    dom.leaf(0, "code", "string");
+    dom.text(0, "");
+    dom.text(0, "");
+    dom.leaf(0, "code", "third");
+    for preformatted_code in [false, true] {
+        let result = Converter::new(Options {
+            preformatted_code,
+            ..Options::default()
+        })
+        .convert(&dom, 0);
+        assert_eq!(
+            rendered_html(&result),
+            "<p><code>name</code><code>string</code><code>third</code></p>\n",
+            "preformatted={preformatted_code}: {result}"
+        );
+    }
+}
+
+#[test]
 fn preserves_preformatted_text_including_blank_lines_and_nested_elements() {
     let mut dom = Tree::new();
     let pre = dom.element(0, "pre");
