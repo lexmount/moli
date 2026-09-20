@@ -170,20 +170,6 @@ fn stop_navigation_for_window<'s>(
     if navigation_unload_event_active(scope, window) {
         return;
     }
-    if let Some(OwnerDispatchScope::Child(handle)) = runtime_window_dispatch_scope(scope, window)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && unsafe { &*host_ptr }.child_browsing_context_has_pending_cross_document_traversal(handle)
-    {
-        // Window.stop() cannot cancel an ongoing cross-document history traversal.
-        return;
-    }
-    if let Some(OwnerDispatchScope::LightweightPopup(popup_id)) =
-        runtime_window_dispatch_scope(scope, window)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && unsafe { &*host_ptr }.lightweight_popup_has_pending_cross_document_traversal(popup_id)
-    {
-        return;
-    }
     inform_about_canceled_navigation_for_window(scope, window);
 }
 
@@ -211,7 +197,23 @@ pub(super) fn clear_pending_cross_document_navigation_for_window<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    match runtime_window_dispatch_scope(scope, window) {
+    let dispatch_scope = runtime_window_dispatch_scope(scope, window);
+    if window_navigation_is_stopping(scope, window)
+        && match dispatch_scope {
+            Some(OwnerDispatchScope::Child(handle)) => {
+                host.child_browsing_context_has_pending_cross_document_traversal(handle)
+            }
+            Some(OwnerDispatchScope::LightweightPopup(popup_id)) => {
+                host.lightweight_popup_has_pending_cross_document_traversal(popup_id)
+            }
+            _ => false,
+        }
+    {
+        // stop() still aborts the Navigation API signal and method promises,
+        // but cannot cancel the physical cross-document history traversal.
+        return;
+    }
+    match dispatch_scope {
         Some(crate::native_bridge::OwnerDispatchScope::Top) => {
             host.clear_pending_location_navigation();
         }

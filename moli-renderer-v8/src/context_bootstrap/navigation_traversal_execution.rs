@@ -7,25 +7,26 @@ use super::navigation_entry::{
     navigation_entry_url_value,
 };
 use super::navigation_events::{
-    dispatch_beforeunload_for_runtime_owner, dispatch_navigation_traverse_event,
-    dispatch_navigation_traverse_event_with_outcome, mark_navigation_outcome_default_prevented,
+    NavigationDispatchOutcome, dispatch_beforeunload_for_runtime_owner,
+    dispatch_navigation_traverse_event, dispatch_navigation_traverse_event_with_outcome,
+    mark_navigation_outcome_default_prevented,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_result::{
-    navigation_dom_exception, navigation_immediate_current_entry_result, navigation_pending_result,
-    navigation_rejected_dom_exception_result,
+    cancel_active_cross_document_navigation, navigation_dom_exception,
+    navigation_immediate_current_entry_result, navigation_pending_result,
+    navigation_rejected_dom_exception_result, track_cross_document_traversal_navigation,
 };
 use super::navigation_seed::history_entry_seed_for_traversal;
-use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, runtime_top_window_owner,
-    runtime_window_is_global, runtime_window_owner, window_history_for_holder,
-    window_location_for_holder, window_task_target_for_runtime_owner,
-};
 use super::navigation_window::{navigation_document_is_active, window_navigation_for_holder};
+use super::navigation_window::{
+    runtime_top_window_owner, runtime_window_is_global, runtime_window_owner,
+    window_history_for_holder, window_location_for_holder, window_task_target_for_runtime_owner,
+};
 use super::*;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::{
-    NavigationHistoryEntrySeed, PendingChildCrossDocumentTraversal, PendingHistoryTraversal,
+    NavigationHistoryEntrySeed, PendingCrossDocumentTraversal, PendingHistoryTraversal,
     PendingHistoryTraversalAction, WindowTaskTarget,
 };
 
@@ -41,7 +42,6 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
     target: TraversalTarget<'s>,
     info: Option<v8::Local<'s, v8::Value>>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let child_handle = child_browsing_context_handle_for_traversal(scope, target.owner);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         if !dispatch_traverse_event(scope, &target) {
             return Some(navigation_rejected_dom_exception_result(
@@ -74,20 +74,6 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
             host.record_pending_location_navigation(target_url, Some(seed.clone()));
             return Some(navigation_pending_result(scope));
         }
-        if let Some(popup_id) =
-            crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
-        {
-            host.queue_lightweight_popup_cross_document_traversal(
-                scope,
-                popup_id,
-                target_url.as_str(),
-                seed,
-            );
-            return Some(navigation_pending_result(scope));
-        }
-        let Some(child_handle) = child_handle else {
-            return Some(navigation_pending_result(scope));
-        };
         let target_key = traversal_target_entry(scope, &target)
             .and_then(|entry| navigation_entry_key_value(scope, entry));
         let receiver_context = target
@@ -95,10 +81,9 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
             .get_creation_context(scope)
             .unwrap_or_else(|| scope.get_current_context());
         let receiver_scope = &mut v8::ContextScope::new(scope, receiver_context);
-        let (result, producer) = host.queue_child_cross_document_traversal_with_result(
+        let (result, producer) = host.queue_cross_document_history_traversal_with_result(
             receiver_scope,
             exact_target,
-            child_handle,
             target.target_index,
             target_key,
             target_url.as_str(),
@@ -236,36 +221,21 @@ fn apply_history_traversal_by_delta(
             host.record_pending_top_level_history_traversal(delta);
             return;
         }
-        if let Some(popup_id) =
-            crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
-        {
-            host.queue_lightweight_popup_cross_document_traversal(
-                scope,
-                popup_id,
-                target_url.as_str(),
+        let target_key = traversal_target_entry(scope, &target)
+            .and_then(|entry| navigation_entry_key_value(scope, entry));
+        apply_pending_cross_document_traversal(
+            scope,
+            host,
+            PendingCrossDocumentTraversal {
+                target: exact_target,
+                target_index: target.target_index,
+                target_key,
+                target_url: target_url.to_string(),
                 seed,
-            );
-            return;
-        }
-        if let Some(child_handle) = child_browsing_context_handle_for_traversal(scope, target.owner)
-        {
-            let target_key = traversal_target_entry(scope, &target)
-                .and_then(|entry| navigation_entry_key_value(scope, entry));
-            apply_pending_child_cross_document_traversal(
-                scope,
-                host,
-                PendingChildCrossDocumentTraversal {
-                    target: exact_target,
-                    child_handle,
-                    target_index: target.target_index,
-                    target_key,
-                    target_url: target_url.to_string(),
-                    seed,
-                    info: None,
-                    results: Vec::new(),
-                },
-            );
-        }
+                info: None,
+                results: Vec::new(),
+            },
+        );
         return;
     }
     let target_key = traversal_target_entry(scope, &target)
@@ -332,47 +302,18 @@ fn dispatch_traverse_event<'s>(
     dispatch_navigation_traverse_event(scope, navigation, target.history, target.target_index)
 }
 
-fn dispatch_child_cross_document_traverse_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: &TraversalTarget<'s>,
-    info: Option<v8::Local<'s, v8::Value>>,
-) -> bool {
-    dispatch_beforeunload_for_runtime_owner(scope, target.owner);
-    window_navigation_for_holder(scope, target.owner).is_none_or(|navigation| {
-        let outcome = dispatch_navigation_traverse_event_with_outcome(
-            scope,
-            navigation,
-            target.history,
-            target.target_index,
-            info,
-        );
-        if !navigation_document_is_active(scope, target.owner) {
-            mark_navigation_outcome_default_prevented(scope, &outcome);
-            return false;
-        }
-        outcome.proceed
-    })
-}
-
-pub(in crate::context_bootstrap) fn apply_pending_child_cross_document_traversal(
-    scope: &mut v8::PinScope<'_, '_>,
+pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, 'i>(
+    scope: &mut v8::PinScope<'s, 'i>,
     host: &mut JsContextHost,
-    traversal: PendingChildCrossDocumentTraversal,
+    traversal: PendingCrossDocumentTraversal,
 ) {
-    let Some(owner) = host.child_browsing_context_window_wrapper(scope, traversal.child_handle)
-    else {
-        reject_child_cross_document_traversal(scope, &traversal);
+    let Some(owner) = history_traversal_target_window(scope, host, traversal.target) else {
+        reject_cross_document_traversal(scope, &traversal);
         return;
     };
     let Some(history) = window_history_for_holder(scope, owner) else {
-        reject_child_cross_document_traversal(scope, &traversal);
+        reject_cross_document_traversal(scope, &traversal);
         return;
-    };
-    let target = TraversalTarget {
-        owner,
-        history,
-        current_index: history_index(scope, history),
-        target_index: traversal.target_index,
     };
     if !traversal_target_key_still_available(
         scope,
@@ -380,38 +321,107 @@ pub(in crate::context_bootstrap) fn apply_pending_child_cross_document_traversal
         traversal.target_index,
         traversal.target_key.as_deref(),
     ) {
-        reject_child_cross_document_traversal(scope, &traversal);
+        reject_cross_document_traversal(scope, &traversal);
+        return;
+    }
+    let dispatch_scope = traversal.target.dispatch_scope();
+    let retiring_document =
+        host.current_window_document_task_target_for_dispatch_scope(dispatch_scope);
+    let is_current = |scope: &mut v8::PinScope<'s, 'i>, host: &JsContextHost| {
+        retiring_document.is_some()
+            && host.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+                == retiring_document
+            && window_task_target_for_runtime_owner(scope, host, owner) == Some(traversal.target)
+            && navigation_document_is_active(scope, owner)
+    };
+    dispatch_beforeunload_for_runtime_owner(scope, owner);
+    if !is_current(scope, host) {
+        reject_cross_document_traversal(scope, &traversal);
         return;
     }
     let info = traversal
         .info
         .as_ref()
         .map(|info| v8::Local::new(scope, info));
-    let retiring_document = host.child_browsing_context_document_handle(traversal.child_handle);
-    if !dispatch_child_cross_document_traverse_event(scope, &target, info) {
-        reject_child_cross_document_traversal(scope, &traversal);
+    let navigation = window_navigation_for_holder(scope, owner);
+    if let Some(navigation) = navigation {
+        cancel_active_cross_document_navigation(scope, navigation, None);
+    }
+    if !is_current(scope, host) {
+        reject_cross_document_traversal(scope, &traversal);
         return;
     }
-    if retiring_document.is_none()
-        || host.child_browsing_context_document_handle(traversal.child_handle) != retiring_document
-        || window_task_target_for_runtime_owner(scope, host, owner) != Some(traversal.target)
+    let outcome = navigation.map_or_else(NavigationDispatchOutcome::proceed, |navigation| {
+        dispatch_navigation_traverse_event_with_outcome(
+            scope,
+            navigation,
+            history,
+            traversal.target_index,
+            info,
+        )
+    });
+    if let Some(error) = outcome.abort_error {
+        // stop() aborts the API method and signal even though a cross-document
+        // history traversal itself cannot be canceled by script.
+        reject_pending_navigation_results(scope, &traversal.results, error);
+    }
+    // close() queues retirement of this exact Window. Keep its dispatched
+    // event and API results alive until the close task aborts them together.
+    let closing_popup = matches!(dispatch_scope,
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
+            if host.lightweight_popup_is_closing(popup_id))
+        && host.current_window_document_task_target_for_dispatch_scope(dispatch_scope)
+            == retiring_document;
+    if outcome.proceed
+        && outcome.abort_error.is_none()
+        && (is_current(scope, host) || closing_popup)
+        && let Some(navigation) = navigation
     {
-        reject_child_cross_document_traversal(scope, &traversal);
+        track_cross_document_traversal_navigation(
+            scope,
+            navigation,
+            outcome.signal,
+            &traversal.target_url,
+            &traversal.results,
+        );
+    }
+    if !outcome.proceed || !is_current(scope, host) {
+        if !closing_popup {
+            reject_cross_document_traversal(scope, &traversal);
+        }
         return;
     }
-    host.dispatch_child_document_unload_after_traversal_check(scope, traversal.child_handle);
-    if host.child_browsing_context_document_handle(traversal.child_handle) != retiring_document
-        || window_task_target_for_runtime_owner(scope, host, owner) != Some(traversal.target)
-    {
-        reject_child_cross_document_traversal(scope, &traversal);
-        return;
+    if let crate::native_bridge::OwnerDispatchScope::Child(child_handle) = dispatch_scope {
+        host.dispatch_child_document_unload_after_traversal_check(scope, child_handle);
+        if !is_current(scope, host) {
+            reject_cross_document_traversal(scope, &traversal);
+            return;
+        }
     }
-    queue_child_cross_document_traversal(
-        host,
-        traversal.child_handle,
-        &traversal.target_url,
-        traversal.seed,
-    );
+    match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Child(child_handle) => {
+            queue_child_cross_document_traversal(
+                host,
+                child_handle,
+                &traversal.target_url,
+                traversal.seed,
+            );
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            if !host.queue_lightweight_popup_cross_document_traversal(
+                scope,
+                popup_id,
+                &traversal.target_url,
+                traversal.seed,
+            ) && let Some(navigation) = navigation
+            {
+                cancel_active_cross_document_navigation(scope, navigation, None);
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::Top => {
+            unreachable!("top-level traversals are handed off to the browser")
+        }
+    }
 }
 
 pub(crate) fn apply_authorized_history_traversal_task(
@@ -433,15 +443,15 @@ pub(crate) fn apply_authorized_history_traversal_task(
         PendingHistoryTraversalAction::SameDocument(traversal) => {
             super::history_runtime::apply_pending_history_traversal(scope, host, traversal);
         }
-        PendingHistoryTraversalAction::ChildCrossDocument(traversal) => {
-            apply_pending_child_cross_document_traversal(scope, host, *traversal);
+        PendingHistoryTraversalAction::CrossDocument(traversal) => {
+            apply_pending_cross_document_traversal(scope, host, *traversal);
         }
     }
 }
 
-fn reject_child_cross_document_traversal(
+fn reject_cross_document_traversal(
     scope: &mut v8::PinScope<'_, '_>,
-    traversal: &PendingChildCrossDocumentTraversal,
+    traversal: &PendingCrossDocumentTraversal,
 ) {
     if traversal.results.is_empty() {
         return;
@@ -569,10 +579,9 @@ fn maybe_queue_joint_child_back_traversal<'s>(
                 .get_creation_context(scope)
                 .unwrap_or_else(|| scope.get_current_context());
             let receiver_scope = &mut v8::ContextScope::new(scope, receiver_context);
-            let Some(producer) = host.queue_child_cross_document_traversal(
+            let Some(producer) = host.queue_cross_document_history_traversal(
                 receiver_scope,
                 exact_target,
-                child_handle,
                 child_target.target_index,
                 target_key,
                 child_target_url.as_str(),
@@ -609,17 +618,6 @@ fn maybe_queue_joint_child_back_traversal<'s>(
     // Fall through to the top-level delta request instead of treating this as
     // a renderer-local no-op.
     false
-}
-
-fn child_browsing_context_handle_for_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-) -> Option<DomHandle> {
-    if runtime_window_is_global(scope, owner) {
-        None
-    } else {
-        child_browsing_context_handle_for_runtime_owner(scope, owner)
-    }
 }
 
 fn queue_child_cross_document_traversal(

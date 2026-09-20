@@ -34,7 +34,7 @@ use super::{
 
 use bindings::NativeBridgeBindings;
 pub(crate) use history_queue::{
-    NavigationAttemptId, PendingChildCrossDocumentTraversal, PendingHistoryTraversal,
+    NavigationAttemptId, PendingCrossDocumentTraversal, PendingHistoryTraversal,
     PendingHistoryTraversalAction, PendingNavigationApiTaskAction, PendingNavigationFinishedResult,
     PendingNavigationResult,
 };

@@ -254,7 +254,7 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
         crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
             traversal.results.as_slice()
         }
-        crate::native_bridge::PendingHistoryTraversalAction::ChildCrossDocument(traversal) => {
+        crate::native_bridge::PendingHistoryTraversalAction::CrossDocument(traversal) => {
             traversal.results.as_slice()
         }
     };

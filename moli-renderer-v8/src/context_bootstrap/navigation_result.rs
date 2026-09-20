@@ -20,6 +20,8 @@ const CROSS_DOCUMENT_PENDING_COMMITTED_REJECT_SLOT: &str =
     "__lmCrossDocumentPendingCommittedReject";
 const CROSS_DOCUMENT_PENDING_FINISHED_REJECT_SLOT: &str = "__lmCrossDocumentPendingFinishedReject";
 const CROSS_DOCUMENT_PENDING_HREF_SLOT: &str = "__lmCrossDocumentPendingHref";
+const CROSS_DOCUMENT_PENDING_TRAVERSAL_RESULTS_SLOT: &str =
+    "__lmCrossDocumentPendingTraversalResults";
 const NAVIGATION_ACTIVE_CROSS_DOCUMENT_PENDING_SLOT: &str =
     "__lmNavigationActiveCrossDocumentPending";
 
@@ -199,6 +201,33 @@ pub(super) fn track_cross_document_location_navigation<'s>(
         .bind(scope)
         .expect("cross-document Location navigation declaration should bind");
     set_navigation_active_cross_document_pending(scope, navigation, data);
+}
+
+pub(super) fn track_cross_document_traversal_navigation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+    signal: Option<v8::Local<'s, v8::Object>>,
+    href: &str,
+    results: &[crate::native_bridge::PendingNavigationResult],
+) {
+    track_cross_document_location_navigation(scope, navigation, signal, href);
+    let data = navigation_active_cross_document_pending(scope, navigation)
+        .expect("new traversal must retain its pending navigation");
+    let mut resolvers = Vec::with_capacity(results.len() * 2);
+    for result in results {
+        let committed = v8::Local::new(scope, &result.committed_resolver);
+        let finished = v8::Local::new(scope, &result.finished_resolver);
+        resolvers.push(committed.into());
+        resolvers.push(finished.into());
+        suppress_unhandled_rejection(scope, finished.get_promise(scope));
+    }
+    let resolvers = v8::Array::new_with_elements(scope, &resolvers);
+    set_private_value(
+        scope,
+        data,
+        CROSS_DOCUMENT_PENDING_TRAVERSAL_RESULTS_SLOT,
+        resolvers.into(),
+    );
 }
 
 pub(super) fn navigation_immediate_current_entry_result<'s>(
@@ -393,6 +422,21 @@ pub(super) fn cancel_active_cross_document_navigation<'s>(
             .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     {
         let _ = reject.call(scope, receiver, &[error]);
+    }
+    if let Some(resolvers) =
+        get_private_value(scope, data, CROSS_DOCUMENT_PENDING_TRAVERSAL_RESULTS_SLOT)
+            .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    {
+        for index in 0..resolvers.length() {
+            if let Some(resolver) = resolvers
+                .get_index(scope, index)
+                .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                // Only native PromiseResolvers are stored in this private array.
+                .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) })
+            {
+                let _ = resolver.reject(scope, error);
+            }
+        }
     }
     true
 }
