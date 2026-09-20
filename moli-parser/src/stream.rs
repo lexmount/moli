@@ -429,15 +429,25 @@ pub(crate) fn prepare_parser_script_handoff_for_static_document(
 }
 
 impl HtmlTreeSinkStream {
-    pub(super) fn initialize_text_document(&mut self, content_type: &str) {
-        self.parser.initialize_text_document(content_type);
+    pub(super) fn initialize_text_document(&self) {
+        self.parser.initialize_text_document();
     }
 
     pub(super) fn from_target_with_scripting(
         target: ParserStreamHtmlTreeSinkTarget,
         scripting_enabled: bool,
     ) -> Self {
-        let session = new_html_tree_sink_session(target, scripting_enabled);
+        Self::from_target_with_options(
+            target,
+            super::session::html_parse_opts_with_scripting(scripting_enabled),
+        )
+    }
+
+    pub(super) fn from_target_with_options(
+        target: ParserStreamHtmlTreeSinkTarget,
+        options: html5ever::ParseOpts,
+    ) -> Self {
+        let session = new_html_tree_sink_session(target, options);
         Self {
             parser: session.parser,
             script_input: session.script_input,

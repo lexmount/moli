@@ -778,6 +778,21 @@ impl DocumentParserSession {
         )
     }
 
+    pub(crate) fn start_finite_live_text_document(
+        document_url: Url,
+        document_handle: NativeNodeId,
+        owner: &mut impl LiveDocumentParserOwner,
+    ) -> Self {
+        Self::new_html(
+            HtmlParser::with_scripting_enabled(false).start_live_text_document_root(
+                document_url,
+                document_handle,
+                owner,
+            ),
+            DocumentParserLifetime::Finite,
+        )
+    }
+
     pub(crate) fn start_finite_live_xml_document(
         document_url: Url,
         document_handle: NativeNodeId,

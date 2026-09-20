@@ -102,44 +102,44 @@ impl PreparedWorldLayout {
         N: Copy + Debug + Eq + Hash,
     {
         assert!(self.feedback_invalidation_worklist.is_empty());
+        if viewport_changed {
+            for layout_box in &mut world.boxes {
+                layout_box.clear_layout_caches();
+            }
+            world.viewport_layout.cache.clear();
+            return world.boxes.len();
+        }
+        if changed_boxes.is_empty() {
+            return 0;
+        }
         self.feedback_invalidation_marks
             .resize(world.boxes.len(), false);
         let mut invalidated = Vec::new();
-        if viewport_changed {
-            for index in 0..world.boxes.len() {
-                let id = LayoutBoxId::from_index(index);
-                self.feedback_invalidation_marks[index] = true;
-                invalidated.push(id);
-                world.boxes[index].clear_layout_caches();
+        self.feedback_invalidation_worklist
+            .extend(changed_boxes.iter().copied());
+        while let Some(id) = self.feedback_invalidation_worklist.pop() {
+            if self.feedback_invalidation_marks[id.index()] {
+                continue;
             }
-        } else {
+            self.feedback_invalidation_marks[id.index()] = true;
+            invalidated.push(id);
+            world.boxes[id.index()].clear_layout_caches();
             self.feedback_invalidation_worklist
-                .extend(changed_boxes.iter().copied());
-            while let Some(id) = self.feedback_invalidation_worklist.pop() {
-                if self.feedback_invalidation_marks[id.index()] {
-                    continue;
-                }
-                self.feedback_invalidation_marks[id.index()] = true;
-                invalidated.push(id);
-                world.boxes[id.index()].clear_layout_caches();
-                self.feedback_invalidation_worklist
-                    .extend(world.boxes[id.index()].layout_children.iter().copied());
-            }
+                .extend(world.boxes[id.index()].layout_children.iter().copied());
+        }
 
-            for changed in changed_boxes.iter().copied() {
-                let mut ancestor = world.boxes[changed.index()].layout_parent;
-                while let Some(id) = ancestor {
-                    if !self.feedback_invalidation_marks[id.index()] {
-                        self.feedback_invalidation_marks[id.index()] = true;
-                        invalidated.push(id);
-                        world.boxes[id.index()].clear_layout_caches();
-                    }
-                    ancestor = world.boxes[id.index()].layout_parent;
+        for changed in changed_boxes.iter().copied() {
+            let mut ancestor = world.boxes[changed.index()].layout_parent;
+            while let Some(id) = ancestor {
+                if !self.feedback_invalidation_marks[id.index()] {
+                    self.feedback_invalidation_marks[id.index()] = true;
+                    invalidated.push(id);
+                    world.boxes[id.index()].clear_layout_caches();
                 }
+                ancestor = world.boxes[id.index()].layout_parent;
+            }
         }
-        if viewport_changed || !changed_boxes.is_empty() {
-            world.viewport_layout.cache.clear();
-        }
+        world.viewport_layout.cache.clear();
         for id in invalidated.iter().copied() {
             self.feedback_invalidation_marks[id.index()] = false;
         }

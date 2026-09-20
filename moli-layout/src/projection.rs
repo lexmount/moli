@@ -767,37 +767,7 @@ where
             let bottom =
                 last.final_layout.location.y - last_offset.y + last.final_layout.size.height;
             let rect = LayoutRect::new(content.x, top, content.width, (bottom - top).max(0.0));
-            // A zero-area leading continuation follows escaped leading
-            // margins into the first block's flow position. It carries no
-            // line strut of its own and must not remain at the pre-collapse y.
-            for id in &self.boxes[run.preceding_inline.index()].fragments {
-                let existing = &mut self.fragments[id.index()];
-                if matches!(existing.kind, LayoutFragmentKind::InlineBox { .. })
-                    && existing.rect.width == 0.0
-                    && existing.rect.height == 0.0
-                {
-                    let original = self.coordinate_spaces[existing.coordinate_space.index()]
-                        .layout
-                        .local_to_document_ignoring_css_transforms
-                        .map_point(LayoutPoint::new(existing.rect.x, existing.rect.y));
-                    let x = self.coordinate_spaces[parent.index() + 1]
-                        .layout
-                        .local_to_document_ignoring_css_transforms
-                        .inverse()
-                        .map(|inverse| inverse.map_point(original).x)
-                        .unwrap_or(existing.rect.x);
-                    let boundary = LayoutRect::new(x, top, 0.0, 0.0);
-                    existing.rect = boundary;
-                    existing.coordinate_space =
-                        LayoutCoordinateSpaceId::from_index(parent.index() + 1);
-                    existing.box_model = Some(LayoutFragmentBoxModel {
-                        content: boundary,
-                        padding: boundary,
-                        border: boundary,
-                        margin: boundary,
-                    });
-                }
-            }
+            self.reposition_empty_inline_continuation(run.preceding_inline, parent, top);
             let fragment = self.push_fragment(LayoutFragment {
                 id: LayoutFragmentId::from_index(0),
                 kind: LayoutFragmentKind::Box {
@@ -815,6 +785,46 @@ where
                 paint_order: None,
             });
             self.register_box_fragment(run.preceding_inline.index(), fragment);
+        }
+    }
+
+    /// An empty leading continuation follows escaped margins into the first
+    /// block's flow position; it carries no independent line strut.
+    fn reposition_empty_inline_continuation(
+        &mut self,
+        inline: LayoutBoxId,
+        parent: LayoutBoxId,
+        top: f32,
+    ) {
+        let coordinate_space = LayoutCoordinateSpaceId::from_index(parent.index() + 1);
+        let document_to_parent = self.coordinate_spaces[coordinate_space.index()]
+            .layout
+            .local_to_document_ignoring_css_transforms
+            .inverse();
+        for id in &self.boxes[inline.index()].fragments {
+            let fragment = &mut self.fragments[id.index()];
+            if !matches!(fragment.kind, LayoutFragmentKind::InlineBox { .. })
+                || fragment.rect.width != 0.0
+                || fragment.rect.height != 0.0
+            {
+                continue;
+            }
+            let original = self.coordinate_spaces[fragment.coordinate_space.index()]
+                .layout
+                .local_to_document_ignoring_css_transforms
+                .map_point(LayoutPoint::new(fragment.rect.x, fragment.rect.y));
+            let x = document_to_parent
+                .map(|inverse| inverse.map_point(original).x)
+                .unwrap_or(fragment.rect.x);
+            let boundary = LayoutRect::new(x, top, 0.0, 0.0);
+            fragment.rect = boundary;
+            fragment.coordinate_space = coordinate_space;
+            fragment.box_model = Some(LayoutFragmentBoxModel {
+                content: boundary,
+                padding: boundary,
+                border: boundary,
+                margin: boundary,
+            });
         }
     }
 

@@ -1,6 +1,22 @@
 use super::{BoundedByteBuffer, ByteLimits, InsertOutcome};
 
 #[test]
+fn shrinking_entry_limit_keeps_interleaved_survivors_in_fifo_order() {
+    let mut buffer = BoundedByteBuffer::new(ByteLimits::new(100, 20));
+    for (key, bytes) in [(0, 10), (1, 1), (2, 10), (3, 1), (4, 10)] {
+        buffer.insert(key, key, bytes);
+    }
+    assert_eq!(
+        buffer.set_limits(ByteLimits::new(100, 1)),
+        vec![(0, 0), (2, 2), (4, 4)]
+    );
+    assert_eq!(buffer.used_bytes(), 2);
+    assert_eq!(buffer.set_limits(ByteLimits::new(1, 1)), vec![(1, 1)]);
+    assert_eq!(buffer.get(&3), Some(&3));
+    assert_eq!(buffer.len(), 1);
+}
+
+#[test]
 fn changing_limits_evicts_oversized_then_oldest_without_reordering_survivors() {
     let mut buffer = BoundedByteBuffer::new(ByteLimits::new(20, 10));
     buffer.insert("a", 1, 3);

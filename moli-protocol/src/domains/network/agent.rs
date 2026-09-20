@@ -1387,24 +1387,39 @@ impl CapturedResponseBodyStore {
             self.durable_sessions.insert(session, limits);
         } else {
             self.durable_sessions.remove(&session);
-            // Turning off durability revokes only old-document claims, not
-            // ordinary access to responses from the current document.
-            for request_id in self.retained_request_ids.clone() {
-                if let Some(body) = self.bodies.get_mut(&request_id)
-                    && !body.remove_session_visibility(session_id)
-                {
-                    self.bodies.remove(&request_id);
-                }
-                if let Some(body) = self.buffered_bodies.get_mut(&request_id)
-                    && !body.remove_session_visibility(session_id)
-                {
-                    self.buffered_bodies.remove(&request_id);
-                }
+            self.revoke_retained_visibility(session_id);
+        }
+        for (id, mut body) in self
+            .buffered_bodies
+            .set_limits(self.effective_durable_limits())
+        {
+            body.mark_evicted();
+            self.bodies.insert(id, body);
+        }
+        self.synchronize_durable_entries();
+    }
+
+    fn revoke_retained_visibility(&mut self, session_id: Option<&str>) {
+        // Revocation affects only old-document claims, not ordinary access to
+        // responses from the current document.
+        for request_id in &self.retained_request_ids {
+            if let Some(body) = self.bodies.get_mut(request_id)
+                && !body.remove_session_visibility(session_id)
+            {
+                self.bodies.remove(request_id);
+            }
+            if let Some(body) = self.buffered_bodies.get_mut(request_id)
+                && !body.remove_session_visibility(session_id)
+            {
+                self.buffered_bodies.remove(request_id);
             }
         }
+    }
+
+    fn effective_durable_limits(&self) -> ByteLimits {
         // One target owns one payload store. Multiple clients cannot multiply
         // its budget; each requested budget is an upper bound, not a reserve.
-        let limits = self.durable_sessions.values().fold(
+        self.durable_sessions.values().fold(
             ByteLimits::new(
                 RESPONSE_BODY_BUFFER_MAX_TOTAL_BYTES,
                 RESPONSE_BODY_BUFFER_MAX_ENTRY_BYTES,
@@ -1415,26 +1430,26 @@ impl CapturedResponseBodyStore {
                     acc.max_entry_bytes.min(limits.max_entry_bytes),
                 )
             },
-        );
-        for (id, mut body) in self.buffered_bodies.set_limits(limits) {
-            body.mark_evicted();
-            self.bodies.insert(id, body);
-        }
+        )
+    }
+
+    fn synchronize_durable_entries(&mut self) {
         if self.durable_sessions.is_empty() {
             self.durable_entry_order.clear();
             self.retained_request_ids.clear();
-        } else {
-            let mut untracked = self
-                .bodies
-                .keys()
-                .chain(self.buffered_bodies.iter().map(|(id, _)| id))
-                .filter(|id| !self.durable_entry_order.contains(id))
-                .cloned()
-                .collect::<Vec<_>>();
-            untracked.sort();
-            self.durable_entry_order.extend(untracked);
-            self.trim_durable_entries();
+            return;
         }
+        let tracked: HashSet<_> = self.durable_entry_order.iter().collect();
+        let mut untracked = self
+            .bodies
+            .keys()
+            .chain(self.buffered_bodies.iter().map(|(id, _)| id))
+            .filter(|id| !tracked.contains(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        untracked.sort();
+        self.durable_entry_order.extend(untracked);
+        self.trim_durable_entries();
     }
 
     fn track_durable_entry(&mut self, request_id: &str) {

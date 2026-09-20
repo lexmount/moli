@@ -636,13 +636,7 @@ fn response_document_parser(
     env: &PageVmEnvConfig,
 ) -> (ParseTimeDriverState, HtmlDocumentStreamingDecoder) {
     let content_type = moli_web_mime::response_document_content_type(headers);
-    let text_type = content_type.filter(|mime| {
-        !moli_web_mime::is_html_document_mime(mime)
-            && !moli_web_mime::is_dom_parser_xml_mime(mime)
-            && (moli_web_mime::is_text_mime(mime)
-                || moli_web_mime::is_json_module_mime(mime)
-                || moli_web_mime::is_javascript_mime(mime))
-    });
+    let text_type = content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime));
     let mut state = ParseTimeDriverState::new_with_scripting_enabled(
         final_url,
         main_document_parser_scripting_enabled(env),
