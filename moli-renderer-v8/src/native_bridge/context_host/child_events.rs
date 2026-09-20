@@ -331,7 +331,8 @@ impl PageScriptHost {
         {
             return Some(current_global);
         }
-        self.child_browsing_context_window_wrapper(scope, target.child_handle())
+        self.existing_child_browsing_context_window_wrapper(scope, target.child_handle())
+            .or_else(|| self.child_browsing_context_window_wrapper(scope, target.child_handle()))
     }
 
     pub(crate) fn dispatch_child_document_event_for_owner<'s>(
@@ -506,7 +507,10 @@ impl PageScriptHost {
         if !self.child_window_event_requires_runtime_dispatch(handle, event_type) {
             return;
         }
-        let Some(window) = self.child_browsing_context_window_wrapper(scope, handle) else {
+        let Some(window) = self
+            .existing_child_browsing_context_window_wrapper(scope, handle)
+            .or_else(|| self.child_browsing_context_window_wrapper(scope, handle))
+        else {
             return;
         };
         let Some(dispatch_target) = self.current_child_window_event_target(handle) else {
@@ -517,7 +521,7 @@ impl PageScriptHost {
         // The legacy flag changes event.target, while dispatch still takes
         // place at Window. Script dispatch never sets this flag.
         let target = if legacy_target_override {
-            self.child_browsing_context_document_wrapper(scope, handle)
+            self.existing_child_browsing_context_document_wrapper(scope, handle)
                 .unwrap_or(window)
         } else {
             window

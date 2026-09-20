@@ -3,27 +3,8 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use std::time::Duration;
 
 mod history_traversal;
-
-struct ResponseGate {
-    requests: AtomicUsize,
-    responses: AtomicUsize,
-    release: tokio::sync::Semaphore,
-}
-
-impl ResponseGate {
-    async fn wait_for(counter: &AtomicUsize, expected: usize) {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            while counter.load(Ordering::SeqCst) < expected {
-                tokio::time::sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("popup request must reach the response gate");
-    }
-}
 
 async fn gated_page() -> (SameDocumentPage, Arc<ResponseGate>) {
     let gate = Arc::new(ResponseGate {
