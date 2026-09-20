@@ -876,6 +876,7 @@ impl JsContextHost {
         document: DomHandle,
         installations: Vec<AdoptedStyleSheetInstallation>,
     ) {
+        self.mark_layout_input_dirty();
         self.style_engine
             .set_document_adopted_style_sheet_installations(document, installations);
     }
