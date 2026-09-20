@@ -8,11 +8,16 @@ struct SameDocumentPage {
     base_url: String,
     browser_base: usize,
     server: tokio::task::JoinHandle<()>,
+    download_requests: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    download_directory: Option<std::path::PathBuf>,
 }
 
 impl Drop for SameDocumentPage {
     fn drop(&mut self) {
         self.server.abort();
+        if let Some(path) = &self.download_directory {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 }
 
@@ -20,14 +25,22 @@ impl SameDocumentPage {
     async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
+        let download_requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed_downloads = download_requests.clone();
         let server = tokio::spawn(async move {
             let app = axum::Router::new().route(
                 "/history.html",
-                axum::routing::get(|| async {
-                    (
-                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
-                        "<!doctype html><title>History commits</title>",
-                    )
+                axum::routing::get(move |uri: axum::http::Uri| {
+                    let observed_downloads = observed_downloads.clone();
+                    async move {
+                        if uri.query().is_some_and(|query| query.contains("download=")) {
+                            observed_downloads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        (
+                            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+                            "<!doctype html><title>History commits</title>",
+                        )
+                    }
                 }),
             );
             axum::serve(listener, app).await.unwrap();
@@ -46,6 +59,8 @@ impl SameDocumentPage {
             base_url: format!("http://{addr}/history.html"),
             browser_base: 0,
             server,
+            download_requests,
+            download_directory: None,
         };
         page.command("Page.navigate", json!({ "url": page.base_url }))
             .await;
@@ -68,6 +83,33 @@ impl SameDocumentPage {
         ).await;
         page.ctx.sent.clear();
         page
+    }
+
+    async fn allow_downloads(&mut self) {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "moli-intercepted-download-{}-{nonce}",
+            std::process::id()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        self.download_directory = Some(path.clone());
+        self.ctx
+            .process_and_wait_for_response_async(json!({
+                "id": 1002,
+                "method": "Browser.setDownloadBehavior",
+                "params": {
+                    "behavior": "allow",
+                    "downloadPath": path.to_string_lossy(),
+                    "browserContextId": "BID-COMMIT-HISTORY",
+                    "eventsEnabled": true,
+                },
+            }))
+            .await;
+        let response = take_response_by_id(&mut self.ctx, 1002);
+        assert!(response["error"].is_null(), "{response}");
     }
 
     async fn command(&mut self, method: &str, params: serde_json::Value) -> serde_json::Value {
@@ -179,6 +221,255 @@ impl SameDocumentPage {
             .collect::<Vec<_>>();
         assert_eq!(actual, expected);
         self.ctx.sent.clear();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn download_interception_commits_and_settles_in_owning_window() {
+    for owner in ["top", "child", "popup"] {
+        let mut modes = vec![
+            "empty",
+            "sync",
+            "reject",
+            "precommit",
+            "precommit-reject",
+            "redirect",
+        ];
+        if owner == "top" {
+            modes.extend([
+                "reject-undefined",
+                "precommit-cancel-stop",
+                "precommit-cancel-navigate",
+                "handler-cancel-stop",
+                "handler-cancel-navigate",
+            ]);
+        }
+        for mode in modes {
+            let mut page = SameDocumentPage::new().await;
+            page.allow_downloads().await;
+            let script = r###"(async () => {
+const ownerKind = OWNER;
+const mode = MODE;
+const beforeTop = location.href;
+let target = window, frame;
+if (ownerKind === 'child') {
+  frame = document.createElement('iframe'); frame.src = 'history.html'; document.body.appendChild(frame);
+  await new Promise(resolve => frame.addEventListener('load', resolve, {once:true})); target = frame.contentWindow;
+} else if (ownerKind === 'popup') {
+  target = open('history.html'); await new Promise(resolve => target.addEventListener('load',resolve,{once:true}));
+}
+await new Promise(resolve => target.setTimeout(resolve,0));
+const result = await (async (target, mode) => {
+  const navigation = target.navigation;
+  const location = target.location;
+  const document = target.document;
+  const tick = () => new Promise(resolve => target.setTimeout(resolve, 0));
+  const before = location.href;
+  const from = navigation.currentEntry;
+  const expectedURL = new URL('?download=1#one', before).href;
+  const checks = {};
+  const order = [];
+  const states = {};
+  let metadata;
+  const errorDetails = [];
+  const rejection = mode === 'reject-undefined' ? undefined : new Error('download interception failure');
+  const precommit = mode.startsWith('precommit') || mode === 'redirect';
+  const canceled = mode.includes('cancel');
+  const failed = canceled || mode === 'reject' || mode === 'reject-undefined' || mode === 'precommit-reject';
+  const expectedReason = () => canceled ? event.signal.reason : rejection;
+  let event, transition, committed, finished, releasePrecommit, releaseHandler, nested;
+  let errors = 0, successes = 0, handlerCalls = 0, precommitCalls = 0;
+  const observeTransition = () => {
+    const current = navigation.transition;
+    checks['transition present'] = current !== null;
+    if (!current) return;
+    if (!transition) {
+      transition = current;
+      checks['transition from and to'] = current.from === from && current.to === event.destination;
+      committed = current.committed.then(value => {
+        states.committed = 'fulfilled';
+        return value === undefined;
+      }, reason => {
+        states.committed = 'rejected';
+        return reason === expectedReason();
+      });
+      finished = current.finished.then(value => {
+        states.finished = 'fulfilled';
+        return !failed && value === undefined;
+      }, reason => {
+        states.finished = 'rejected';
+        return failed && reason === expectedReason();
+      });
+    } else checks['transition identity'] = current === transition;
+  };
+  for (const type of ['popstate', 'hashchange']) target.addEventListener(type, () => { if (event && !event.signal.aborted) order.push(type); });
+  navigation.addEventListener('currententrychange', () => {
+    if (event.signal.aborted) return;
+    order.push('currententrychange');
+    observeTransition();
+  });
+  navigation.addEventListener('navigatesuccess', () => {
+    if (event.signal.aborted) return;
+    order.push('navigatesuccess'); successes++;
+    observeTransition();
+  });
+  navigation.addEventListener('navigateerror', e => {
+    order.push('navigateerror'); errors++;
+    checks['error identity'] = e.error === expectedReason();
+    errorDetails.push({name:e.error?.name,message:e.error?.message});
+    observeTransition();
+  }, {once: true});
+  const anchor = document.createElement(mode === 'empty' ? 'area' : 'a');
+  anchor.href = expectedURL;
+  anchor.download = 'example.txt';
+  document.body.appendChild(anchor);
+  navigation.addEventListener('navigate', e => {
+    event = e;
+    order.push('navigate');
+    metadata = {downloadRequest:e.downloadRequest,sourceElement:e.sourceElement===anchor,navigationType:e.navigationType,
+      canIntercept:e.canIntercept,cancelable:e.cancelable,userInitiated:e.userInitiated,hashChange:e.hashChange,
+      sameDocument:e.destination.sameDocument,urlMatches:e.destination.url===expectedURL,
+      stateKind:e.destination.getState()===null?'null':typeof e.destination.getState(),formData:e.formData,infoKind:typeof e.info};
+    checks['download metadata'] = e.downloadRequest === 'example.txt' && e.sourceElement === anchor &&
+      e.navigationType === 'push' && e.canIntercept && e.cancelable && !e.userInitiated &&
+      !e.hashChange && !e.destination.sameDocument && e.destination.url === expectedURL &&
+      e.formData === null && e.info === undefined;
+    checks['download default state'] = e.destination.getState() === null;
+    checks['no transition before intercept'] = navigation.transition === null;
+    e.signal.addEventListener('abort', () => {
+      order.push('abort');
+      if (canceled || rejection !== undefined) {
+        checks['abort reason'] = canceled ? e.signal.reason.name === 'AbortError' : e.signal.reason === rejection;
+      }
+    });
+    const options = {};
+    if (precommit) options.precommitHandler = controller => {
+      precommitCalls++;
+      order.push('precommit');
+      observeTransition();
+      checks['precommit URL unchanged'] = location.href === before && navigation.currentEntry === from;
+      if (mode === 'precommit-reject') return Promise.reject(rejection);
+      if (mode === 'redirect') controller.redirect('?redirect=1#redirect', {history:'replace',state:{download:true}});
+      return new Promise(resolve => releasePrecommit = resolve);
+    };
+    if (mode !== 'empty') options.handler = () => {
+      handlerCalls++;
+      order.push('handler');
+      observeTransition();
+      checks['committed before handler'] = location.href === (mode === 'redirect' ? new URL('?redirect=1#redirect',before).href : expectedURL) &&
+        document.URL === location.href && navigation.currentEntry.url === location.href;
+      if (mode === 'reject' || mode === 'reject-undefined') return Promise.reject(rejection);
+      if (mode.startsWith('handler-cancel')) return new Promise(resolve => releaseHandler = resolve);
+    };
+    e.intercept(options);
+  }, {once:true});
+  anchor.click();
+  await tick();
+  if (mode === 'precommit' || mode === 'redirect' || mode.startsWith('precommit-cancel')) {
+    checks['precommit pending'] = precommitCalls === 1 && handlerCalls === 0 &&
+      location.href === before && states.committed === undefined && states.finished === undefined;
+  }
+  if (canceled) {
+    if (mode.endsWith('stop')) target.stop();
+    else nested = navigation.navigate('#next');
+  } else if (releasePrecommit) releasePrecommit();
+  const observed = committed && finished ? Promise.all([committed, finished]) : Promise.resolve(null);
+  const results = await Promise.race([observed, new Promise(resolve => target.setTimeout(() => resolve(null), 500))]);
+  checks['both transition promises settled'] = results !== null && results.every(value => value === true);
+  await tick();
+  checks['terminal event'] = failed ? errors === 1 && successes === 0 : successes === 1 && errors === 0;
+  checks['transition cleared'] = navigation.transition === null;
+  checks['handler count'] = handlerCalls === (mode === 'empty' || mode === 'precommit-reject' || mode.startsWith('precommit-cancel') ? 0 : 1);
+  checks['promise states'] = states.committed === (mode === 'precommit-reject' || mode.startsWith('precommit-cancel') ? 'rejected' : 'fulfilled') && states.finished === (failed ? 'rejected' : 'fulfilled');
+  if (nested) await nested.finished;
+  const finalURL = location.href;
+  if (canceled) {
+    releasePrecommit?.(); releaseHandler?.();
+    await tick();
+    checks['canceled work stays canceled'] = location.href === finalURL && navigation.transition === null;
+  }
+  const entries = navigation.entries().map(entry => entry.url);
+  const expectedEntries = mode === 'redirect' ? [new URL('?redirect=1#redirect',before).href] :
+    mode === 'precommit-reject' || mode.startsWith('precommit-cancel') ? [before] : [before,expectedURL];
+  if (nested) expectedEntries.push(new URL('#next',expectedEntries.at(-1)).href);
+  checks['entry history'] = JSON.stringify(entries) === JSON.stringify(expectedEntries) && navigation.currentEntry.index === entries.length - 1 &&
+    location.href === entries.at(-1) && document.URL === location.href;
+  checks['no legacy fragment events'] = !order.includes('popstate') && !order.includes('hashchange');
+  if (mode === 'redirect') checks['redirect state'] = event.destination.getState()?.download === true && navigation.currentEntry.getState() === undefined;
+  return {mode,metadata,errorDetails,checks,order,states,entries,index:navigation.currentEntry.index,href:location.href};
+})(target, mode);
+if (ownerKind !== 'top') {
+  result.checks['parent unchanged'] = location.href === beforeTop && navigation.transition === null;
+  if (frame) frame.remove(); else target.close();
+}
+return result;
+})()"###
+                .replace("OWNER", &json!(owner).to_string())
+                .replace("MODE", &json!(mode).to_string());
+            let result = page.evaluate(&script).await;
+            assert!(
+                result["checks"]
+                    .as_object()
+                    .unwrap()
+                    .values()
+                    .all(|value| value == true),
+                "{owner}/{mode}: {result}"
+            );
+            assert_eq!(
+                page.download_requests
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "intercepted {owner}/{mode} must not fetch a download"
+            );
+            if owner == "top" {
+                let (urls, commits): (&[&str], &[(&str, &str)]) = match mode {
+                    "precommit-reject" | "precommit-cancel-stop" => (&[""], &[]),
+                    "precommit-cancel-navigate" => (&["", "#next"], &[("#next", "fragment")]),
+                    "handler-cancel-navigate" => (
+                        &["", "?download=1#one", "?download=1#next"],
+                        &[
+                            ("?download=1#one", "other"),
+                            ("?download=1#next", "fragment"),
+                        ],
+                    ),
+                    "redirect" => (
+                        &["?redirect=1#redirect"],
+                        &[("?redirect=1#redirect", "other")],
+                    ),
+                    _ => (&["", "?download=1#one"], &[("?download=1#one", "other")]),
+                };
+                page.assert_history(urls, urls.len() - 1).await;
+                page.assert_commits(commits);
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn navigation_transition_committed_resolves_without_a_history_entry() {
+    for operation in ["navigate", "reload", "back"] {
+        for precommit in [false, true] {
+            let mut page = SameDocumentPage::new().await;
+            page.run(
+                "history.pushState(null, '', '#current'); void 0",
+                "#current",
+            )
+            .await;
+            let result = page.evaluate(&format!(r#"(async () => {{
+                const operation = {operation};
+                const precommit = {precommit};
+                let transition;
+                navigation.addEventListener('navigate', event => event.intercept({{
+                    ...(precommit ? {{precommitHandler() {{transition = navigation.transition;}}}} : {{}}),
+                    handler() {{transition = navigation.transition;}}
+                }}), {{once: true}});
+                const result = operation === 'navigate' ? navigation.navigate('#next') : navigation[operation]();
+                const [committed, finished] = await Promise.all([result.committed, result.finished]);
+                return committed === navigation.currentEntry && finished === committed &&
+                    await transition.committed === undefined && await transition.finished === undefined;
+            }})()"#, operation=json!(operation))).await;
+            assert_eq!(result, true, "{operation}, precommit={precommit}");
+        }
     }
 }
 

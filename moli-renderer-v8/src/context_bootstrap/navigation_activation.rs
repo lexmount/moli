@@ -242,15 +242,9 @@ pub(super) fn install_navigation_transition<'s>(
 pub(super) fn resolve_navigation_transition_committed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
-    value: v8::Local<'s, v8::Value>,
 ) {
     if let Some(resolver) = take_navigation_transition_committed_resolver(scope, navigation) {
-        let context = resolver
-            .get_promise(scope)
-            .get_creation_context(scope)
-            .unwrap_or_else(|| scope.get_current_context());
-        let value = entry_wrappers::value_in_realm(scope, value, context);
-        let _ = resolver.resolve(scope, value);
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
     }
 }
 
@@ -490,13 +484,13 @@ mod tests {
                     .unwrap()
                     .strict_equals(from.into())
             );
-            resolve_navigation_transition_committed(scope, navigation, from.into());
+            resolve_navigation_transition_committed(scope, navigation);
             let committed = transition
                 .get(scope, v8str(scope, "committed").into())
                 .unwrap();
             let committed = v8::Local::<v8::Promise>::try_from(committed).unwrap();
             assert_eq!(committed.state(), v8::PromiseState::Fulfilled);
-            assert!(committed.result(scope).strict_equals(from.into()));
+            assert!(committed.result(scope).is_undefined());
         }
     }
 }
