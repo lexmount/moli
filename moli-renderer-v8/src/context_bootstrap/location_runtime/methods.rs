@@ -88,7 +88,7 @@ pub(super) fn location_to_string_callback<'s>(
     {
         return;
     }
-    let Some(href) = require_location_href_slot(scope, args.this()) else {
+    let Some(href) = super::helpers::location_url(scope, args.this()) else {
         return;
     };
     set_return_string(scope, &mut rv, &href);
