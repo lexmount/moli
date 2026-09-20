@@ -1072,7 +1072,7 @@ impl HistoryTraversalLane {
         sequence: u64,
     ) -> bool {
         let kind = if sequence.is_multiple_of(2) {
-            RendererPageHistoryTraversalTaskKind::ChildCrossDocument
+            RendererPageHistoryTraversalTaskKind::CrossDocument
         } else {
             RendererPageHistoryTraversalTaskKind::SameDocument
         };
@@ -1915,7 +1915,7 @@ fn navigation_and_traversal_source_preserves_cross_kind_fifo_and_one_readiness_e
             execution_context,
             target,
             RendererPageHistoryTraversalTaskId::from_raw(3),
-            RendererPageHistoryTraversalTaskKind::ChildCrossDocument,
+            RendererPageHistoryTraversalTaskKind::CrossDocument,
         )
         .send()
         .expect("second traversal should enqueue third");
