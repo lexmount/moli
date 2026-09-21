@@ -227,7 +227,14 @@ impl JsContextHost {
             return;
         };
         if let Some(document_handle) = self.child_browsing_context_document_handle(handle) {
-            let _ = self.set_dom_document_url_for_handle(document_handle, url);
+            let _ = self.set_dom_document_url_for_handle(document_handle, url.clone());
+            // Navigation initiators read the current frame owner, while DOM
+            // getters read the native Document. Publish the same committed URL
+            // to both, preserving any explicit document base URL.
+            let base_url = self.document_base_url_for_handle(document_handle);
+            let _ = self
+                .frame_owner_store
+                .update_current_child_document_urls(handle, url, base_url);
         }
     }
 }
