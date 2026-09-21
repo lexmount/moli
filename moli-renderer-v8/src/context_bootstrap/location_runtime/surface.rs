@@ -40,7 +40,7 @@ struct WindowNavigationAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(plain, receiver = crate::web_api_interfaces::Document::is_instance)]
 struct DocumentLocationAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -96,21 +96,14 @@ fn constructed_document_location_setter_callback<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let Some(location) = constructed_document_location_value(scope, receiver) else {
+    if !crate::web_api_interfaces::Document::is_instance(scope, receiver) {
         webidl::throw_type_error(
             scope,
             "Document.location setter called on incompatible receiver.",
         );
         return;
-    };
-    let Ok(location) = v8::Local::<v8::Object>::try_from(location) else {
-        webidl::throw_type_error(scope, "Cannot set location on a detached Document.");
-        return;
-    };
-    let Some(href) = super::helpers::v8_value_to_string(scope, args.get(0)) else {
-        return;
-    };
-    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
+    }
+    put_forward_location_href(scope, receiver, args.get(0));
 }
 
 fn constructed_document_location_accessor_functions<'s>(
@@ -285,19 +278,16 @@ pub(in crate::context_bootstrap) fn window_location_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    let Some(location) = window_location_slot_value(scope, receiver)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
+    if crate::native_bridge::CrossOriginWindowAccessor::for_receiver(scope, receiver).is_none()
+        && !super::super::window_receiver::is_window_receiver(scope, receiver)
+    {
         webidl::throw_type_error(
             scope,
             "Window.location setter called on incompatible receiver.",
         );
         return;
-    };
-    let Some(href) = super::helpers::v8_value_to_string(scope, args.get(0)) else {
-        return;
-    };
-    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
+    }
+    put_forward_location_href(scope, receiver, args.get(0));
 }
 
 fn window_location_slot_value<'s>(
