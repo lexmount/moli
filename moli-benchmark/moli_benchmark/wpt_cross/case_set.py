@@ -739,6 +739,22 @@ def _script_content_type_handler_reference_patterns(directory: str) -> tuple[re.
 
 
 @lru_cache(maxsize=None)
+def _navigation_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
+    resource = (
+        "navigation-api/navigation-methods/return-value/resources/"
+        "204-205-download-on-second-visit.py"
+    )
+    relative = posixpath.relpath(resource, directory)
+    return tuple(
+        re.compile(
+            rf"(?<![A-Za-z0-9_./-]){re.escape(reference)}"
+            rf"{WPTSERVE_HANDLER_TRAILING_BOUNDARY}"
+        )
+        for reference in ("/" + resource, relative, "./" + relative)
+    )
+
+
+@lru_cache(maxsize=None)
 def _json_module_handler_reference_patterns(directory: str) -> tuple[re.Pattern[str], ...]:
     references = []
     for name in (
@@ -793,6 +809,7 @@ def _supported_wptserve_handler_references(
     if rel is not None and rel.startswith("fetch/api/"):
         supported += _empty_location_handler_reference_patterns(posixpath.dirname(rel))
     if rel is not None:
+        supported += _navigation_handler_reference_patterns(posixpath.dirname(rel) or ".")
         supported += _json_module_handler_reference_patterns(posixpath.dirname(rel) or ".")
     if rel is not None:
         supported += _script_content_type_handler_reference_patterns(posixpath.dirname(rel) or ".")

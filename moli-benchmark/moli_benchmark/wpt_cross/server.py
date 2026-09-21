@@ -98,6 +98,10 @@ JSON_LOAD_ERROR_PATH = (
     "/html/semantics/scripting-1/the-script-element/json-module/load-error-events.py"
 )
 
+NAVIGATION_SECOND_VISIT_PATH = (
+    "/navigation-api/navigation-methods/return-value/resources/"
+    "204-205-download-on-second-visit.py"
+)
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
@@ -1573,19 +1577,20 @@ def _fetch_status_response(query: str) -> tuple[int, str, str, bytes]:
 
 
 class FetchStash:
-    """Write-once, read-once stash scoped to /fetch/api/resources/.
+    """Write-once, read-once stash with independent resource-path namespaces.
 
-    Every origin of one fixture server shares this namespace. UUID
+    Every origin of one fixture server shares these namespaces. UUID
     normalization matches wptserve, including equivalent key spellings.
     """
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._values: dict[uuid.UUID, str] = {}
+        self._values: dict[tuple[str, uuid.UUID], str] = {}
         self._counts: dict[tuple[str, uuid.UUID], int] = {}
 
-    def put(self, key: str, value: str, *, overwrite: bool = False) -> None:
-        parsed_key = uuid.UUID(key)
+    def put(self, key: str, value: str, *, path: str = "/fetch/api/resources/",
+            overwrite: bool = False) -> None:
+        parsed_key = (path, uuid.UUID(key))
         with self._lock:
             if not overwrite and parsed_key in self._values:
                 raise ValueError("Tried to overwrite existing shared stash value")
@@ -1599,8 +1604,8 @@ class FetchStash:
             return value
 
 
-    def take(self, key: str) -> str | None:
-        parsed_key = uuid.UUID(key)
+    def take(self, key: str, *, path: str = "/fetch/api/resources/") -> str | None:
+        parsed_key = (path, uuid.UUID(key))
         with self._lock:
             return self._values.pop(parsed_key, None)
 
@@ -1632,6 +1637,9 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == NAVIGATION_SECOND_VISIT_PATH:
+                self._serve_navigation_second_visit()
+                return
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
             }:
@@ -1661,6 +1669,9 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == NAVIGATION_SECOND_VISIT_PATH:
+                self._serve_navigation_second_visit()
+                return
             if path in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
             }:
@@ -1711,6 +1722,9 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == NAVIGATION_SECOND_VISIT_PATH:
+                self._serve_navigation_second_visit()
+                return
             if path in FETCH_RANGE_RESOURCE_PATHS:
                 self._serve_fetch_range_resource(path, parsed.query, emit_body=self.command != "HEAD")
                 return
@@ -1741,6 +1755,9 @@ def _make_handler(
                 self._serve_xhr_response_resource()
                 return
             parsed = urlparse(self.path)
+            if unquote(parsed.path) == NAVIGATION_SECOND_VISIT_PATH:
+                self._serve_navigation_second_visit()
+                return
             if unquote(parsed.path) in FETCH_ABORT_RESOURCE_PATHS | FETCH_RANGE_RESOURCE_PATHS | {
                 "/fetch/api/resources/status.py", "/fetch/api/resources/trickle.py"
             }:
@@ -1872,6 +1889,9 @@ def _make_handler(
                 return
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == NAVIGATION_SECOND_VISIT_PATH:
+                self._serve_navigation_second_visit()
+                return
             if path in FETCH_RANGE_RESOURCE_PATHS:
                 self._serve_fetch_range_resource(path, parsed.query, emit_body=emit_body)
                 return
@@ -2406,6 +2426,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlparse(self.path).path) == NAVIGATION_SECOND_VISIT_PATH:
+                return self._serve_navigation_second_visit
             if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
                 return self._serve_empty_location_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) in XHR_RESPONSE_RESOURCE_PATHS:
@@ -2606,6 +2628,37 @@ def _make_handler(
             except OSError:
                 pass  # Upstream ends its stream when a write reports disconnect.
 
+
+        def _serve_navigation_second_visit(self) -> None:
+            if not self._consume_request_body():
+                return
+            params = parse_qs(urlsplit(self.path).query, keep_blank_values=True, encoding="latin-1")
+            stash_path = NAVIGATION_SECOND_VISIT_PATH.rsplit("/", 1)[0] + "/"
+            status, content_type, body = 400, None, b""
+            headers: list[tuple[str, str]] = []
+            cache_control = None
+            try:
+                key = params["id"][0]
+                if self.command == "POST":
+                    fetch_stash.put(key, params["action"][0], path=stash_path)
+                    status = 204
+                elif self.command == "GET":
+                    action = fetch_stash.take(key, path=stash_path)
+                    if action is None:
+                        status, content_type, body = 200, "text/html", b"initial page"
+                        cache_control = "no-store"
+                    elif action in ("204", "205"):
+                        status = int(action)
+                    elif action == "download":
+                        status, content_type, body = 200, "text/plain", b"some text to download"
+                        headers.append(("Content-Disposition", "attachment"))
+            except (KeyError, ValueError):
+                self.send_error(500)
+                return
+            self._send_bytes(
+                content_type, body, emit_body=self.command != "HEAD",
+                status_code=status, extra_headers=headers, cache_control=cache_control,
+            )
 
         def _serve_fetch_abort_resource(
             self, path: str, query: str, *, emit_body: bool
