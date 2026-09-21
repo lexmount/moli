@@ -43,7 +43,7 @@ pub(crate) fn expand_webapi_cross_origin(
             || attrs.symbol.is_some()
             || attrs.getter_value.is_some()
             || attrs.receiver_access_check.is_some()
-            || attrs.access_policy.is_some()
+            || attrs.has_access_policy()
             || attrs.value.is_some()
             || attrs.init.is_some()
             || attrs.enumerable

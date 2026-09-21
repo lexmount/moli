@@ -331,8 +331,7 @@ struct WindowPostRuntimeAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = window_navigation_getter,
-        setter = window_navigation_setter
-    )]
+        setter = window_navigation_setter, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     navigation: (),
 
     #[webapi(accessor_property, getter = window_screen_getter)]
@@ -366,10 +365,10 @@ struct WindowPostRuntimeAccessorsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowStorageAccessorsDeclaration {
-    #[webapi(accessor_property, getter = window_local_storage_getter)]
+    #[webapi(accessor_property, getter = window_local_storage_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     local_storage: (),
 
-    #[webapi(accessor_property, getter = window_session_storage_getter)]
+    #[webapi(accessor_property, getter = window_session_storage_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     session_storage: (),
 
     #[webapi(

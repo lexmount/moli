@@ -34,8 +34,7 @@ struct WindowNavigationAccessorDeclaration {
         accessor_property,
         getter = window_navigation_getter,
         setter = window_navigation_setter,
-        enumerable
-    )]
+        enumerable, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     navigation: (),
 }
 

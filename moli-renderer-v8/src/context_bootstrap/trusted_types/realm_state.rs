@@ -8,11 +8,21 @@ const TRUSTED_TYPES_LAZY_STATE_INSTALLED_SLOT: &str = "__moliTrustedTypesLazySta
 const TRUSTED_TYPES_FACTORY_SLOT: &str = "__moliTrustedTypesFactory";
 const TRUSTED_TYPES_MATERIALIZING_SLOT: &str = "__moliTrustedTypesMaterializing";
 
-#[derive(WebApiObject)]
+#[derive(Default, WebApiObject)]
 #[webapi(fragment)]
 struct TrustedTypesGlobalAccessorDeclaration {
-    window_receiver: bool,
+    #[webapi(
+        accessor_property = "trustedTypes",
+        getter = trusted_types_global_getter,
+        data = false,
+        enumerable
+    )]
+    trusted_types: (),
+}
 
+#[derive(Default, WebApiObject)]
+#[webapi(fragment, receiver = crate::context_bootstrap::is_window_receiver)]
+struct TrustedTypesWindowAccessorDeclaration {
     #[webapi(
         accessor_property = "trustedTypes",
         getter = trusted_types_global_getter,
@@ -107,9 +117,12 @@ pub(super) fn install_lazy_trusted_types_runtime_state<'s>(
     } else {
         global
     };
-    TrustedTypesGlobalAccessorDeclaration::new(!is_worker)
-        .initialize(scope, target)
-        .map_err(|error| anyhow!("failed to install trustedTypes accessor: {error}"))?;
+    if is_worker {
+        TrustedTypesGlobalAccessorDeclaration::default().initialize(scope, target)
+    } else {
+        TrustedTypesWindowAccessorDeclaration::default().initialize(scope, target)
+    }
+    .map_err(|error| anyhow!("failed to install trustedTypes accessor: {error}"))?;
     set_private_value(
         scope,
         global,
@@ -170,13 +183,9 @@ fn trusted_types_global_getter<'s>(
     let receiver = args.this();
     // Reject in the getter's realm before entering a valid receiver's realm.
     // Borrowing a getter changes neither its TypeError realm nor its brand check.
-    let valid_receiver = if args.data().is_true() {
-        super::super::window_receiver::is_window_receiver(scope, receiver)
-    } else {
-        let global = scope.get_current_context().global(scope);
-        receiver.strict_equals(global.into())
-    };
-    if !valid_receiver {
+    if !args.data().is_true()
+        && !receiver.strict_equals(scope.get_current_context().global(scope).into())
+    {
         throw_type_error(
             scope,
             "trustedTypes getter called on incompatible receiver.",
