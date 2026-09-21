@@ -16,21 +16,15 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
 ) {
     let runtime = unsafe { &mut *runtime_ptr };
     let previous_seed_snapshot = runtime.child_browsing_context_navigation_seed_snapshot(handle);
-    let old_navigation_target = current_iframe_navigation_target(runtime, handle);
-    let old_attribute_target = iframe_navigation_target(runtime, handle);
     set_reflected_attribute(scope, runtime_ptr, handle, "src", value);
     let runtime = unsafe { &mut *runtime_ptr };
     if !runtime.dom_host().is_html_element_named(handle, "iframe") {
         return;
     }
 
+    // Writing the same src still starts a navigation, including from the
+    // child Window's or owner element's load callback.
     let navigation_target = iframe_navigation_target(runtime, handle);
-    if old_navigation_target.as_deref() == Some(navigation_target.as_str())
-        && old_attribute_target == navigation_target
-        && runtime.is_dispatching_child_browsing_context_host_load(handle)
-    {
-        return;
-    }
     if let Some(previous_seed_snapshot) = previous_seed_snapshot
         && !previous_seed_snapshot.pending_attribute_bootstrap_commit
     {
@@ -70,18 +64,6 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
     runtime.cache_child_browsing_context_snapshot(scope, handle, cached_snapshot);
     runtime.sync_existing_child_browsing_context_window_state(scope, handle);
     let _ = runtime.queue_child_document_complete_lifecycle_if_ready(handle);
-}
-
-fn current_iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) -> Option<String> {
-    if let Some(current_url) = runtime.child_browsing_context_visible_url(handle) {
-        return Some(current_url);
-    }
-    let resolved_src = resolve_url_like_attribute(runtime, handle, "src");
-    Some(if resolved_src.is_empty() {
-        "about:blank".to_owned()
-    } else {
-        resolved_src
-    })
 }
 
 fn iframe_navigation_target(runtime: &JsContextHost, handle: DomHandle) -> String {
