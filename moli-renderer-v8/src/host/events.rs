@@ -1653,6 +1653,9 @@ pub(crate) fn dispatch_public_event_with_original_target<'s, 'i>(
         crate::native_bridge::element::perform_access_key_default_action_for_dispatched_event(
             scope, host_ptr, event,
         );
+        crate::native_bridge::element::perform_dialog_escape_default_action_for_dispatched_event(
+            scope, host_ptr, event,
+        );
     }
     set_event_phase(scope, event, 0);
     set_event_internal_flag(scope, event, EVENT_DISPATCHING_SLOT, false);
