@@ -514,6 +514,11 @@ impl JsContextHost {
                     handle,
                     target.navigation_load(),
                 );
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    crate::native_bridge::OwnerDispatchScope::Child(handle),
+                );
                 return ChildDocumentLoadApplication::Applied {
                     followup: None,
                     body_activity,
@@ -666,6 +671,11 @@ impl JsContextHost {
                 self.reject_replaced_service_worker_child_client_navigation(
                     handle,
                     format!("Cannot navigate to URL: {error}"),
+                );
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    crate::native_bridge::OwnerDispatchScope::Child(handle),
                 );
                 let _ = self.finish_child_frame_navigation_without_load_dispatch(
                     handle,

@@ -106,7 +106,12 @@ impl ScriptVm {
         // Page.resetNavigationHistory is one renderer task. Promise reactions
         // queued by dispose listeners run only after every live realm has been
         // updated.
-        self.with_default_context_scope(|_scope, _host_ptr| Ok(()))?;
+        self.with_default_context_scope(|scope, host_ptr| {
+            // Publish the reset only after dispose handlers and every realm's
+            // local history have finished pruning.
+            crate::context_bootstrap::reset_joint_history(scope, unsafe { &mut *host_ptr });
+            Ok(())
+        })?;
         Ok(true)
     }
 

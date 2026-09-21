@@ -155,6 +155,10 @@ fn history_length_getter_function<'s>(
     if require_fully_active_history_owner(scope, args.this()).is_none() {
         return;
     }
+    if let Some(length) = super::super::joint_history::length(scope, args.this()) {
+        rv.set(v8::Number::new(scope, length as f64).into());
+        return;
+    }
     let value = history_length_value(scope, args.this())
         .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
     rv.set(value);

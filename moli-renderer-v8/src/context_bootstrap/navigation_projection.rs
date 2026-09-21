@@ -245,12 +245,9 @@ pub(super) fn set_history_length_at_least_visible_entries<'s>(
         return;
     }
 
-    // Same-document child pushes commit synchronously. They add one entry to
-    // the traversable's joint session history even when another child has
-    // already made the top-level length larger than this child's local list.
-    super::increment_top_level_history_length_for_runtime_owner(scope, owner);
-    let joint_length = history_length_floor_from_visible_entries(scope, history, entries);
-    set_history_length(scope, history, current_length.max(length).max(joint_length));
+    // This slot is a bootstrap fallback. Once a Window joins a traversable,
+    // History.length reads the shared session-history model.
+    set_history_length(scope, history, current_length.max(length));
 }
 
 fn history_length_floor_from_visible_entries<'s>(

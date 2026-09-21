@@ -254,6 +254,22 @@ impl PendingLightweightPopupHistory {
             activation.entry.url = final_url.as_str().to_owned();
         }
         install_navigation_bootstrap_entry_for_holder(scope, window, &seed);
+        let update = match self {
+            Self::Traversal(_) => moli_page_types::SameDocumentHistoryUpdate::Traverse { delta: 0 },
+            Self::Navigation(_)
+                if seed.activation.as_ref().is_some_and(|activation| {
+                    activation.navigation_type.as_deref() == Some("push")
+                        && activation
+                            .from
+                            .as_ref()
+                            .is_none_or(|from| from.index != activation.entry.index)
+                }) =>
+            {
+                moli_page_types::SameDocumentHistoryUpdate::Push
+            }
+            _ => moli_page_types::SameDocumentHistoryUpdate::Replace,
+        };
+        crate::context_bootstrap::commit_joint_history_navigation(scope, window, update);
     }
 }
 
@@ -2689,6 +2705,11 @@ impl JsContextHost {
                     );
                 }
                 self.finish_service_worker_clients_open_window_popup(document_owner);
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    OwnerDispatchScope::LightweightPopup(popup_id),
+                );
                 return PopupDocumentLoadApplication::Applied { body_activity };
             }
             Ok(PopupDocumentLoadOutcome::Loaded(loaded)) => {
@@ -2812,6 +2833,11 @@ impl JsContextHost {
                     url = %pending.target_url,
                     error,
                     "lightweight popup document load failed"
+                );
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    OwnerDispatchScope::LightweightPopup(popup_id),
                 );
                 let Some(current_owner) = self.current_lightweight_popup_document_owner(popup_id)
                 else {

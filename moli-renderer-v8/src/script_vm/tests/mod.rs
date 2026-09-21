@@ -15715,6 +15715,7 @@ mod history_replace_forward;
 mod http_fixture;
 mod indexed_db;
 mod inspector_unwrap;
+mod joint_history;
 mod lazy_storage;
 mod lazy_window_surfaces;
 mod location_put_forwards;

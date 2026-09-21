@@ -31,6 +31,7 @@ mod history_runtime;
 mod idle_detection;
 mod image_data;
 mod javascript_url;
+mod joint_history;
 pub(crate) use self::idle_detection::apply_idle_override_to_current_context;
 mod indexed_db;
 #[cfg(test)]
@@ -282,7 +283,6 @@ pub(crate) use self::geometry_clone::{
     geometry_clone_payload_from_object,
 };
 use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
-pub(crate) use self::history_runtime::increment_top_level_history_length_for_runtime_owner;
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object,
@@ -318,6 +318,11 @@ pub(in crate::context_bootstrap) use self::indexed_db::{
 pub(crate) use self::javascript_url::{
     arm_internal_javascript_url_eval, consume_internal_javascript_url_eval,
     restore_internal_javascript_url_eval,
+};
+pub(crate) use self::joint_history::{
+    commit as commit_joint_history_navigation,
+    finish_without_document_commit as finish_joint_history_without_document_commit,
+    remove_navigable as remove_joint_history_navigable, reset as reset_joint_history,
 };
 pub(crate) use self::location_runtime::sync_global_location_runtime_state;
 pub(crate) use self::location_runtime::{

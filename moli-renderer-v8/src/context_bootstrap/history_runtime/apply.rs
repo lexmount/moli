@@ -2,9 +2,8 @@ use super::super::location_runtime::{
     is_same_document_fragment_navigation, location_href_slot, sync_location_object,
 };
 use super::super::navigation_entry::{
-    history_entries, history_index, navigation_current_entry, navigation_current_entry_index,
-    navigation_entries_share_document, navigation_entry_initial_index,
-    navigation_entry_joint_top_index, navigation_entry_key_value, navigation_entry_url_value,
+    history_entries, history_index, navigation_current_entry, navigation_entries_share_document,
+    navigation_entry_key_value, navigation_entry_url_value,
     restore_current_navigation_entry_scroll_position, set_history_index, set_history_state,
     sync_navigation_current_entry_from_history_entry,
 };
@@ -13,13 +12,11 @@ use super::super::navigation_events::{
     navigation_has_active_scroll_event, queue_hash_change_for_runtime_owner,
 };
 use super::super::navigation_mutation::sync_same_document_navigation_commit;
-use super::super::navigation_projection::build_visible_navigation_entries_array;
 use super::super::navigation_result::perform_navigation_scroll_if_needed;
 use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
-    navigation_document_has_opaque_origin, runtime_top_window_owner, runtime_window_is_global,
-    runtime_window_owner, window_history_for_holder, window_location_for_holder,
-    window_navigation_for_holder, window_task_target_for_runtime_owner,
+    navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
+    window_location_for_holder, window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use super::super::*;
 use super::results::{resolve_pending_navigation_committed, resolve_pending_navigation_finished};
@@ -114,7 +111,6 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
         return None;
     };
     sync_navigation_current_entry_from_history_entry(scope, owner, entry);
-    sync_top_history_after_child_traversal(scope, owner, entry, previous_entry);
     let resolved_entry = navigation_current_entry(scope, owner)
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::undefined(scope).into());
@@ -139,78 +135,6 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
         resolved_entry,
         entry,
         previous_entry,
-    })
-}
-
-fn sync_top_history_after_child_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-    child_entry: v8::Local<'s, v8::Object>,
-    previous_child_entry: Option<v8::Local<'s, v8::Object>>,
-) {
-    if runtime_window_is_global(scope, owner) {
-        return;
-    }
-    let Some(previous_child_index) =
-        previous_child_entry.and_then(|entry| navigation_entry_initial_index(scope, entry))
-    else {
-        return;
-    };
-    let Some(target_index) = navigation_entry_joint_top_index(scope, child_entry)
-        .or_else(|| navigation_entry_initial_index(scope, child_entry))
-    else {
-        return;
-    };
-    let top_owner = runtime_top_window_owner(scope, owner);
-    if top_owner.strict_equals(owner.into()) {
-        return;
-    }
-    if navigation_current_entry_index(scope, top_owner)
-        .is_none_or(|top_index| top_index <= previous_child_index)
-    {
-        return;
-    }
-    let Some(top_history) = window_history_for_holder(scope, top_owner) else {
-        return;
-    };
-    let Some(top_entries) = history_entries(scope, top_history) else {
-        return;
-    };
-    let top_current_entry = navigation_current_entry(scope, top_owner);
-    let visible_entries =
-        build_visible_navigation_entries_array(scope, top_entries, top_current_entry);
-    let Some(top_entry) = visible_entries
-        .get_index(scope, target_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(raw_index) = raw_index_for_entry(scope, top_entries, top_entry) else {
-        return;
-    };
-
-    set_history_index(scope, top_history, raw_index);
-    let state = super::super::navigation_entry_state::clone_history_entry_state(scope, top_entry)
-        .unwrap_or_else(|| v8::null(scope).into());
-    set_history_state(scope, top_history, state);
-    if let Some(url) = navigation_entry_url_value(scope, top_entry)
-        && let Some(location) = window_location_for_holder(scope, top_owner)
-    {
-        sync_location_object(scope, location, &url);
-    }
-    sync_navigation_current_entry_from_history_entry(scope, top_owner, top_entry);
-}
-
-fn raw_index_for_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entries: v8::Local<'s, v8::Array>,
-    target: v8::Local<'s, v8::Object>,
-) -> Option<u32> {
-    (0..entries.length()).find(|index| {
-        entries
-            .get_index(scope, *index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .is_some_and(|entry| entry.strict_equals(target.into()))
     })
 }
 

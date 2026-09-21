@@ -872,6 +872,52 @@ impl JsContextHost {
             .get_attribute(handle, "sandbox")
             .is_none_or(|sandbox| sandbox_attribute_allows_top_navigation(&sandbox))
     }
+
+    pub(crate) fn sandbox_allows_history_traversal(
+        &self,
+        source: OwnerDispatchScope,
+        target: OwnerDispatchScope,
+        root: OwnerDispatchScope,
+    ) -> bool {
+        if source == target {
+            return true;
+        }
+        let policy = match source {
+            OwnerDispatchScope::Top => self.document_policy_container().sandbox,
+            OwnerDispatchScope::Child(handle) => {
+                let Some(entry) = self.child_browsing_contexts.get(&handle) else {
+                    return false;
+                };
+                entry.document_sandbox_policy()
+            }
+            OwnerDispatchScope::LightweightPopup(id) => {
+                let Some(container) = self.lightweight_popup_policy_container(id) else {
+                    return false;
+                };
+                container.sandbox
+            }
+        };
+        if !policy.restricts_navigation || source == root {
+            return true;
+        }
+        if target == root {
+            return policy.allows_top_navigation
+                || (policy.allows_top_navigation_by_user_activation
+                    && self.window_has_transient_user_activation(source));
+        }
+        if let (OwnerDispatchScope::Child(source), OwnerDispatchScope::Child(target)) =
+            (source, target)
+        {
+            let mut parent = self.child_browsing_context_parent_handle(target);
+            while let Some(handle) = parent {
+                if handle == source {
+                    return true;
+                }
+                parent = self.child_browsing_context_parent_handle(handle);
+            }
+        }
+        false
+    }
 }
 
 fn web_storage_key_for_origin_and_top_level_site_with_nonce(
@@ -939,6 +985,12 @@ pub(in crate::native_bridge::context_host) fn document_sandbox_policy_from_attri
         return crate::document_runtime::DocumentSandboxPolicy::default();
     };
     crate::document_runtime::DocumentSandboxPolicy {
+        restricts_navigation: true,
+        allows_top_navigation: sandbox_attribute_allows_top_navigation(value),
+        allows_top_navigation_by_user_activation: sandbox_attribute_allows_top_navigation(value)
+            || value
+                .split_ascii_whitespace()
+                .any(|token| token.eq_ignore_ascii_case("allow-top-navigation-by-user-activation")),
         forces_opaque_origin: sandbox_attribute_forces_opaque_origin(value),
         allows_scripts: sandbox_attribute_allows_scripts(value),
         allows_modals: sandbox_attribute_allows_modals(value),

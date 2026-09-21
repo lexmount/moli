@@ -19,7 +19,6 @@ use moli_page_types::{NavigationHistoryEntryId, NavigationHistoryEntryKey};
 use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_ENTRY_INITIAL_INDEX_SLOT: &str = "__lmNavigationEntryInitialIndex";
-const NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT: &str = "__lmNavigationEntryJointTopIndex";
 const NAVIGATION_ENTRY_URL_SLOT: &str = "__lmNavigationEntryUrl";
 const NAVIGATION_ENTRY_REFERRER_POLICY_SLOT: &str = "__lmNavigationEntryReferrerPolicy";
 const NAVIGATION_ENTRY_ID_SLOT: &str = "__lmNavigationEntryId";
@@ -53,9 +52,6 @@ struct NavigationHistoryEntryObjectDeclaration<'scope, 'value> {
 
     #[webapi(slot = NAVIGATION_ENTRY_INITIAL_INDEX_SLOT)]
     initial_index: f64,
-
-    #[webapi(slot = NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT, init = "undefined")]
-    joint_top_index: (),
 
     #[webapi(slot = NAVIGATION_ENTRY_SCROLL_X_SLOT, init = "undefined")]
     scroll_x: (),
@@ -265,29 +261,6 @@ pub(super) fn set_navigation_entry_initial_index<'s>(
         scope,
         entry,
         NAVIGATION_ENTRY_INITIAL_INDEX_SLOT,
-        index as f64,
-    );
-}
-
-pub(super) fn navigation_entry_joint_top_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-) -> Option<u32> {
-    navigation_entry_slot_value(scope, entry, NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT)
-        .and_then(|value| value.integer_value(scope))
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
-}
-
-pub(super) fn set_navigation_entry_joint_top_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    index: u32,
-) {
-    set_navigation_entry_number_slot(
-        scope,
-        entry,
-        NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT,
         index as f64,
     );
 }

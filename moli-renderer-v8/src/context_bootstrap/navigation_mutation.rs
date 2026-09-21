@@ -9,8 +9,7 @@ use super::navigation_entry::{
     navigation_current_entry, navigation_current_entry_index, navigation_entry_key_value,
     navigation_entry_url_value, new_navigation_entry_id, new_navigation_entry_key,
     set_history_entries, set_history_index, set_history_state, set_navigation_entry_document_id,
-    set_navigation_entry_joint_top_index, stringify_history_state,
-    sync_navigation_current_entry_from_history_entry,
+    stringify_history_state, sync_navigation_current_entry_from_history_entry,
 };
 use super::navigation_entry_state::{clone_navigation_entry_state, set_navigation_entry_state};
 use super::navigation_events::{
@@ -18,8 +17,7 @@ use super::navigation_events::{
     refresh_navigation_destination_indexes,
 };
 use super::navigation_projection::{
-    build_visible_navigation_entries_array, set_history_length_at_least_visible_entries,
-    set_history_length_from_visible_entries,
+    set_history_length_at_least_visible_entries, set_history_length_from_visible_entries,
 };
 use super::navigation_serialize::{
     serialize_history_entries, serialize_navigation_entry_object,
@@ -27,8 +25,8 @@ use super::navigation_serialize::{
     sync_child_pending_navigation_entry_seed_from_owner,
 };
 use super::navigation_window::{
-    runtime_top_window_owner, runtime_window_is_global, window_history_for_holder,
-    window_location_for_holder, window_navigation_for_holder,
+    runtime_window_is_global, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::native_bridge::NavigationActivationSeed;

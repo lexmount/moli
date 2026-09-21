@@ -720,6 +720,13 @@ impl JsContextHost {
             self.clear_child_parser_classic_runner_for_current_document(handle);
             let removed = self.remove_child_browsing_context_entry(handle).is_some();
             self.clear_child_browsing_context_current_document(handle);
+            if removed && let Some(scope) = scope.as_deref_mut() {
+                crate::context_bootstrap::remove_joint_history_navigable(
+                    scope,
+                    self,
+                    crate::native_bridge::OwnerDispatchScope::Child(handle),
+                );
+            }
             self.detach_child_frame_owner_and_wake_parent(handle);
             if removed && let Some(frame_id) = frame_id {
                 self.queue_child_frame_detachment_event(frame_id);

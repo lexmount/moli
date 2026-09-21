@@ -33,6 +33,11 @@ impl JsContextHost {
                     scope, handle, &violation,
                 );
                 self.cancel_child_document_navigation_after_csp_block(handle, navigation_load);
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    crate::native_bridge::OwnerDispatchScope::Child(handle),
+                );
                 return Some(ChildDocumentCommitResult::ready(None));
             }
         }

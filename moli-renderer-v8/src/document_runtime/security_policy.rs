@@ -3052,6 +3052,9 @@ mod tests {
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
+                restricts_navigation: true,
+                allows_top_navigation: false,
+                allows_top_navigation_by_user_activation: false,
                 forces_opaque_origin: true,
                 allows_scripts: false,
                 allows_modals: false,
@@ -3066,6 +3069,9 @@ mod tests {
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
+                restricts_navigation: true,
+                allows_top_navigation: false,
+                allows_top_navigation_by_user_activation: false,
                 forces_opaque_origin: false,
                 allows_scripts: true,
                 allows_modals: true,
@@ -3081,6 +3087,9 @@ mod tests {
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
+                restricts_navigation: true,
+                allows_top_navigation: false,
+                allows_top_navigation_by_user_activation: false,
                 forces_opaque_origin: true,
                 allows_scripts: false,
                 allows_modals: false,

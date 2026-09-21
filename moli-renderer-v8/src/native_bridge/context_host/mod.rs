@@ -961,6 +961,7 @@ pub(crate) struct JsContextHost {
     >,
     opfs_owner_state: Option<opfs_tasks::WindowOpfsOwnerState>,
     pub(super) history_queue: HistoryQueueState,
+    pub(crate) joint_histories: super::joint_history::JointSessionHistories,
     rendering_updates: rendering_updates::RenderingUpdateState,
     scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,

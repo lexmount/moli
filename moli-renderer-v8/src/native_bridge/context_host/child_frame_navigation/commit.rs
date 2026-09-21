@@ -5,7 +5,7 @@ use super::super::{
 };
 use crate::native_bridge::context_host::child_documents::ChildDocumentNavigationInitiator;
 use crate::{
-    context_bootstrap::increment_top_level_history_length_for_runtime_owner,
+    context_bootstrap::commit_joint_history_navigation,
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
     frame_owner_model::{
@@ -460,10 +460,25 @@ impl JsContextHost {
             .child_browsing_contexts
             .get_mut(&handle)
             .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
-        if increments_joint_history
-            && let Some(window) = self.child_browsing_context_window_wrapper(scope, handle)
-        {
-            increment_top_level_history_length_for_runtime_owner(scope, window);
+        // The stable WindowProxy may still project the retiring Document's
+        // history. Publish the committed seed before recording its joint step.
+        self.sync_existing_child_browsing_context_window_state(scope, handle);
+        if let Some(window) = self.child_browsing_context_window_wrapper(scope, handle) {
+            let traversing = self
+                .child_browsing_contexts
+                .get(&handle)
+                .and_then(|entry| entry.committed_navigation_entry_seed().activation)
+                .is_some_and(|activation| {
+                    activation.navigation_type.as_deref() == Some("traverse")
+                });
+            let update = if increments_joint_history {
+                moli_page_types::SameDocumentHistoryUpdate::Push
+            } else if traversing {
+                moli_page_types::SameDocumentHistoryUpdate::Traverse { delta: 0 }
+            } else {
+                moli_page_types::SameDocumentHistoryUpdate::Replace
+            };
+            commit_joint_history_navigation(scope, window, update);
         }
     }
 

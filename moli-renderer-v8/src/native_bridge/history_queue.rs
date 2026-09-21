@@ -1,5 +1,6 @@
+use super::joint_history::JointHistoryPosition;
 use super::{
-    JsContextHost, NavigationHistoryEntrySeed, WindowExecutionContextBinding,
+    JsContextHost, NavigationHistoryEntrySeed, OwnerDispatchScope, WindowExecutionContextBinding,
     WindowExecutionContextIdentity, WindowTaskTarget,
 };
 use crate::page_task_queue::{
@@ -8,7 +9,11 @@ use crate::page_task_queue::{
     RendererPageNavigationApiTaskKind, RendererPageNavigationApiTaskProducer,
 };
 use moli_webapi_declare::WebApiObject;
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::{HashMap, VecDeque},
+    rc::Rc,
+};
 
 const NAVIGATION_LIFECYCLE_TRACE_LIMIT: usize = 128;
 
@@ -83,12 +88,21 @@ struct NavigationResultDeclaration<'scope> {
 // without moving the starting point of already queued traversal steps.
 pub(crate) struct HistoryTraversalPosition {
     pub(crate) index: u32,
+    pub(crate) joint: Option<JointHistoryPosition>,
+    source_joint_revision: Option<u64>,
     source_entry_key: Option<String>,
     current_entry_key: Option<String>,
 }
 
 impl HistoryTraversalPosition {
-    fn matches_entry(&self, key: Option<&str>) -> bool {
+    fn matches_entry(&self, key: Option<&str>, joint: Option<JointHistoryPosition>) -> bool {
+        if let Some(source) = joint {
+            return self.joint.is_some_and(|position| {
+                position.root == source.root
+                    && (position.revision == source.revision
+                        || self.source_joint_revision == Some(source.revision))
+            });
+        }
         key.is_some()
             && (self.source_entry_key.as_deref() == key || self.current_entry_key.as_deref() == key)
     }
@@ -113,6 +127,8 @@ pub(crate) struct QueuedHistoryTraversalTask {
 
 pub(super) struct HistoryQueueState {
     active_delta_position: Option<(WindowTaskTarget, Rc<RefCell<HistoryTraversalPosition>>)>,
+    in_flight_delta_positions: HashMap<OwnerDispatchScope, Rc<RefCell<HistoryTraversalPosition>>>,
+    deferred_joint_traversals: VecDeque<(OwnerDispatchScope, QueuedHistoryTraversalTask)>,
     pending_history_traversal_tasks: VecDeque<QueuedHistoryTraversalTask>,
     next_history_traversal_task_id: RendererPageHistoryTraversalTaskId,
     pending_microtask_navigation_finished_results: VecDeque<PendingNavigationFinishedResult>,
@@ -125,6 +141,8 @@ impl Default for HistoryQueueState {
     fn default() -> Self {
         Self {
             active_delta_position: None,
+            in_flight_delta_positions: HashMap::new(),
+            deferred_joint_traversals: VecDeque::new(),
             pending_history_traversal_tasks: VecDeque::new(),
             next_history_traversal_task_id: RendererPageHistoryTraversalTaskId::first(),
             pending_microtask_navigation_finished_results: VecDeque::new(),
@@ -411,32 +429,6 @@ impl JsContextHost {
             .pending_history_traversal_target_index(target)
     }
 
-    pub(crate) fn queue_history_traversal<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        target: WindowTaskTarget,
-        target_index: u32,
-    ) -> Option<RendererPageHistoryTraversalProducer> {
-        let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
-        let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
-        let sender = self.page_history_traversal_sender();
-        let task_id = self.history_queue.queue_history_traversal(
-            execution_context,
-            relevant_context,
-            target,
-            target_index,
-            None,
-            None,
-            None,
-        )?;
-        Some(sender.bind_task(
-            execution_context,
-            target,
-            task_id,
-            RendererPageHistoryTraversalTaskKind::SameDocument,
-        ))
-    }
-
     pub(crate) fn queue_history_traversal_by_delta<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -444,6 +436,7 @@ impl JsContextHost {
         delta: i64,
         source_index: u32,
         source_entry_key: Option<String>,
+        joint: Option<JointHistoryPosition>,
     ) -> Option<RendererPageHistoryTraversalProducer> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
         let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
@@ -457,26 +450,76 @@ impl JsContextHost {
                     target: queued_target,
                     position,
                     ..
-                } if *queued_target == target => Some(position),
+                } if joint.is_some_and(|source| {
+                    position
+                        .borrow()
+                        .joint
+                        .is_some_and(|position| position.root == source.root)
+                }) || (joint.is_none() && *queued_target == target) =>
+                {
+                    Some(position)
+                }
                 _ => None,
+            })
+            .or_else(|| {
+                let root = joint?.root;
+                self.history_queue
+                    .deferred_joint_traversals
+                    .iter()
+                    .rev()
+                    .find_map(|(deferred_root, queued)| match &queued.action {
+                        PendingHistoryTraversalAction::ByDelta { position, .. }
+                            if *deferred_root == root =>
+                        {
+                            Some(position)
+                        }
+                        _ => None,
+                    })
+                    .or_else(|| self.history_queue.in_flight_delta_positions.get(&root))
             })
             .or_else(|| {
                 self.history_queue
                     .active_delta_position
                     .as_ref()
-                    .filter(|(active_target, _)| *active_target == target)
+                    .filter(|(active_target, position)| {
+                        joint.is_some_and(|source| {
+                            position
+                                .borrow()
+                                .joint
+                                .is_some_and(|position| position.root == source.root)
+                        }) || (joint.is_none() && *active_target == target)
+                    })
                     .map(|(_, position)| position)
             });
         let position = previous_position
-            .filter(|position| position.borrow().matches_entry(source_entry_key.as_deref()))
+            .filter(|position| {
+                position
+                    .borrow()
+                    .matches_entry(source_entry_key.as_deref(), joint)
+            })
             .cloned()
             .unwrap_or_else(|| {
                 Rc::new(RefCell::new(HistoryTraversalPosition {
                     index: source_index,
+                    joint,
+                    source_joint_revision: joint.map(|position| position.revision),
                     current_entry_key: source_entry_key.clone(),
                     source_entry_key,
                 }))
             });
+        if let Some(joint) = joint
+            && self
+                .joint_histories
+                .get(joint.root)
+                .is_some_and(|history| history.follows_pending_traversal(joint.revision))
+        {
+            // The in-flight traversal may have been started by navigation.back()
+            // or traverseTo(), so it need not already own a classic-delta position.
+            self.history_queue
+                .in_flight_delta_positions
+                .entry(joint.root)
+                .or_insert_with(|| Rc::clone(&position));
+        }
         let task_id = self.history_queue.next_history_traversal_task_id;
         self.history_queue.next_history_traversal_task_id = task_id
             .checked_next()
@@ -521,6 +564,141 @@ impl JsContextHost {
             position.index = index;
             position.current_entry_key = entry_key;
         }
+    }
+
+    pub(crate) fn commit_active_joint_history_delta_position(
+        &mut self,
+        joint: JointHistoryPosition,
+    ) {
+        if let Some((_, position)) = &self.history_queue.active_delta_position {
+            let mut position = position.borrow_mut();
+            if position
+                .joint
+                .is_some_and(|current| current.root == joint.root)
+            {
+                position.joint = Some(joint);
+            }
+        }
+    }
+
+    pub(crate) fn retain_active_joint_history_delta_position(&mut self, root: OwnerDispatchScope) {
+        let position = self
+            .history_queue
+            .active_delta_position
+            .as_ref()
+            .map(|(_, position)| Rc::clone(position))
+            .or_else(|| {
+                let history = self.joint_histories.get(root)?;
+                self.history_queue
+                    .pending_history_traversal_tasks
+                    .iter()
+                    .find_map(|queued| {
+                        let PendingHistoryTraversalAction::ByDelta { position, .. } =
+                            &queued.action
+                        else {
+                            return None;
+                        };
+                        let joint = position.borrow().joint?;
+                        (joint.root == root && history.follows_pending_traversal(joint.revision))
+                            .then(|| Rc::clone(position))
+                    })
+            });
+        if let Some(position) = position {
+            self.history_queue
+                .in_flight_delta_positions
+                .insert(root, position);
+        }
+    }
+
+    pub(crate) fn defer_joint_history_traversal_task(
+        &mut self,
+        queued: QueuedHistoryTraversalTask,
+    ) -> Option<QueuedHistoryTraversalTask> {
+        let root = match &queued.action {
+            PendingHistoryTraversalAction::ByDelta { position, .. } => {
+                position.borrow().joint.map(|position| position.root)
+            }
+            PendingHistoryTraversalAction::SameDocument(traversal) => self
+                .joint_histories
+                .root_for_owner(traversal.target.dispatch_scope()),
+            PendingHistoryTraversalAction::CrossDocument(traversal) => self
+                .joint_histories
+                .root_for_owner(traversal.target.dispatch_scope()),
+        };
+        if let Some(root) = root
+            && self
+                .joint_histories
+                .get(root)
+                .is_some_and(|history| history.has_pending_traversal())
+        {
+            self.history_queue
+                .deferred_joint_traversals
+                .push_back((root, queued));
+            return None;
+        }
+        Some(queued)
+    }
+
+    pub(crate) fn finish_joint_history_traversal(
+        &mut self,
+        position: JointHistoryPosition,
+    ) -> Vec<RendererPageHistoryTraversalProducer> {
+        if self
+            .joint_histories
+            .get(position.root)
+            .is_some_and(|history| history.has_pending_traversal())
+        {
+            return Vec::new();
+        }
+        if let Some(shared) = self
+            .history_queue
+            .in_flight_delta_positions
+            .remove(&position.root)
+        {
+            shared.borrow_mut().joint = Some(position);
+        }
+        let mut producers = Vec::new();
+        let mut retained = VecDeque::new();
+        while let Some((root, mut queued)) =
+            self.history_queue.deferred_joint_traversals.pop_front()
+        {
+            if root != position.root {
+                retained.push_back((root, queued));
+                continue;
+            }
+            let (target, kind) = match &queued.action {
+                PendingHistoryTraversalAction::ByDelta { target, .. } => {
+                    (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
+                }
+                PendingHistoryTraversalAction::SameDocument(traversal) => (
+                    traversal.target,
+                    RendererPageHistoryTraversalTaskKind::SameDocument,
+                ),
+                PendingHistoryTraversalAction::CrossDocument(traversal) => (
+                    traversal.target,
+                    RendererPageHistoryTraversalTaskKind::CrossDocument,
+                ),
+            };
+            // Re-enter the Page arbiter with the original relevant realm and
+            // exact target. In particular, retirement must still invalidate a
+            // deferred request rather than retarget it to the new LocalWindow.
+            queued.task_id = self.history_queue.next_history_traversal_task_id;
+            self.history_queue.next_history_traversal_task_id = queued
+                .task_id
+                .checked_next()
+                .expect("history-traversal task id overflow");
+            producers.push(self.page_history_traversal_sender().bind_task(
+                queued.execution_context,
+                target,
+                queued.task_id,
+                kind,
+            ));
+            self.history_queue
+                .pending_history_traversal_tasks
+                .push_back(queued);
+        }
+        self.history_queue.deferred_joint_traversals = retained;
+        producers
     }
 
     pub(crate) fn queue_microtask_navigation_finished_result<'s>(
@@ -677,39 +855,6 @@ impl JsContextHost {
             )
         });
         Some((result, producer))
-    }
-
-    pub(crate) fn queue_cross_document_history_traversal<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        target: WindowTaskTarget,
-        target_index: u32,
-        target_key: Option<String>,
-        target_url: &str,
-        seed: NavigationHistoryEntrySeed,
-    ) -> Option<RendererPageHistoryTraversalProducer> {
-        let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
-        let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
-        let sender = self.page_history_traversal_sender();
-        let task_id = self.history_queue.queue_cross_document_history_traversal(
-            execution_context,
-            relevant_context,
-            PendingCrossDocumentTraversal {
-                target,
-                target_index,
-                target_key,
-                target_url: target_url.to_owned(),
-                seed,
-                info: None,
-                results: Vec::new(),
-            },
-        );
-        Some(sender.bind_task(
-            execution_context,
-            target,
-            task_id,
-            RendererPageHistoryTraversalTaskKind::CrossDocument,
-        ))
     }
 
     #[allow(clippy::too_many_arguments)]

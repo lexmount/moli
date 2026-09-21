@@ -20,6 +20,7 @@ pub(crate) mod fullscreen;
 mod helpers;
 mod history_queue;
 pub(super) mod identity;
+pub(crate) mod joint_history;
 pub(crate) mod named_access;
 mod node;
 pub(crate) mod pointer_lock;
