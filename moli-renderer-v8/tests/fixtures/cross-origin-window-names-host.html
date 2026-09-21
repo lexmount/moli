@@ -1,0 +1,45 @@
+<!doctype html><body><script>
+const names = ['document', 'open', 'globalThis', 'then', 'constructor', '__proto__',
+  '01', '4294967295', 'close', 'postMessage', 'frames', 'length', '0', 'duplicate', 'duplicate'];
+const children = [];
+async function navigate(frame, url) {
+  const loaded = new Promise(resolve => frame.onload = resolve);
+  frame.src = url;
+  frame.removeAttribute('srcdoc');
+  await loaded;
+}
+addEventListener('message', async event => {
+  if (event.data?.kind !== 'named-window-action') return;
+  const {action, crossURL} = event.data;
+  try {
+    if (action === 'init') {
+      for (const name of names) {
+        const frame = document.createElement('iframe');
+        frame.name = name;
+        const loaded = new Promise(resolve => frame.onload = resolve);
+        frame.srcdoc = '<p>named child</p>';
+        document.body.append(frame);
+        children.push(frame);
+        await loaded;
+      }
+    } else if (action === 'rename') {
+      children[0].contentWindow.name = 'renamed';
+    } else if (action === 'restore') {
+      children[0].contentWindow.name = 'document';
+    } else if (action === 'cross-duplicate') {
+      await navigate(children[13], crossURL + '#duplicate');
+    } else if (action === 'remove-duplicate') {
+      children[13].remove();
+    } else if (action === 'cross-document') {
+      await navigate(children[0], crossURL + '#document');
+    } else if (action === 'cross-then') {
+      await navigate(children[3], crossURL + '#then');
+    }
+    event.source.postMessage({kind:'named-window-result', action,
+      duplicateType: typeof globalThis.duplicate,
+      duplicateIsSecond: globalThis.duplicate === children[14].contentWindow}, '*');
+  } catch (error) {
+    event.source.postMessage({kind:'named-window-result', action, error:String(error)}, '*');
+  }
+});
+</script>
