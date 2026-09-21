@@ -2264,16 +2264,14 @@ mod worklet_interfaces;
 
 
 mod history_replace_forward;
-
 mod extracted;
 mod navigation_timing_inheritance;
 mod payment_response_interfaces;
 
 mod response_blob_mime;
-
 mod intersection_target_order;
 mod observer_element_arguments;
 
 mod media_device_interfaces;
-
 mod dom_rect_factory_descriptors;
+mod window_restricted_accessors;

@@ -145,7 +145,7 @@ pub(in crate::context_bootstrap) fn window_event_getter<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn window_event_value_for_receiver<'s>(
+fn window_event_value_for_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
