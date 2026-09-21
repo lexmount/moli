@@ -172,24 +172,6 @@ impl JsContextHost {
         true
     }
 
-    pub(crate) fn is_dispatching_child_browsing_context_host_load(
-        &self,
-        handle: DomHandle,
-    ) -> bool {
-        self.active_child_browsing_context_host_loads
-            .last()
-            .is_some_and(|active| *active == handle)
-    }
-
-    fn enter_child_browsing_context_host_load_dispatch(&mut self, handle: DomHandle) {
-        self.active_child_browsing_context_host_loads.push(handle);
-    }
-
-    fn leave_child_browsing_context_host_load_dispatch(&mut self, handle: DomHandle) {
-        let active = self.active_child_browsing_context_host_loads.pop();
-        debug_assert_eq!(active, Some(handle));
-    }
-
     #[cfg(test)]
     pub(crate) fn take_completed_child_frame_navigation_loads(
         &mut self,
@@ -416,9 +398,7 @@ impl JsContextHost {
         if let Some(window) = performance_window {
             record_performance_load_event_start_for_window(scope, window);
         }
-        self.enter_child_browsing_context_host_load_dispatch(handle);
         self.dispatch_child_window_event_with_target_override(scope, handle, "load", event, true);
-        self.leave_child_browsing_context_host_load_dispatch(handle);
         if let Some(window) = performance_window {
             record_performance_load_event_end_for_window(scope, window);
         }
@@ -444,7 +424,6 @@ impl JsContextHost {
             self.abort_and_requeue_child_load_delivery(action);
             return ChildFrameLoadDeliveryPhaseResult::without_callback(None);
         };
-        self.enter_child_browsing_context_host_load_dispatch(handle);
         let runtime = unsafe { &mut *self.runtime };
         let _ = runtime.dispatch_public_event_best_effort(
             scope,
@@ -453,7 +432,6 @@ impl JsContextHost {
             event,
             "child browsing context host load event",
         );
-        self.leave_child_browsing_context_host_load_dispatch(handle);
         let progress = self
             .frame_owner_store
             .finish_current_child_document_load_delivery(action);

@@ -974,7 +974,6 @@ pub(crate) struct JsContextHost {
         HashMap<u64, child_frames::PendingChildExternalClassicDocumentScriptLoad>,
     pending_child_modulepreload_work_awaiting_realm:
         VecDeque<crate::frame_owner_model::FrameDocumentModulepreloadWorkAwaitingRealm>,
-    active_child_browsing_context_host_loads: Vec<DomHandle>,
     character_data_utf16_overrides: HashMap<DomHandle, U16String>,
     child_meta_refresh_navigations: HashMap<DomHandle, host_loads::ChildMetaRefreshNavigationTask>,
     disconnected_shadow_roots: HashSet<DomHandle>,

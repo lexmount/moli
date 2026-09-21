@@ -9,6 +9,9 @@ use url::Url;
 #[path = "history_child/location_before_load.rs"]
 mod location_before_load;
 
+#[path = "history_child/src_during_load.rs"]
+mod src_during_load;
+
 async fn wait_for_body_attribute(
     browser: &Browser,
     page: &mut moli_core::page::Page,
