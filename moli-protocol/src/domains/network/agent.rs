@@ -1408,6 +1408,14 @@ impl CapturedResponseBodyStore {
         };
         self.bodies.retain(keep);
         self.buffered_bodies.retain(keep);
+        self.prune_removed_entry_indexes();
+    }
+
+    fn prune_removed_entry_indexes(&mut self) {
+        let exists =
+            |id: &String| self.bodies.contains_key(id) || self.buffered_bodies.contains_key(id);
+        self.durable_entry_order.retain(exists);
+        self.retained_request_ids.retain(exists);
     }
 
     fn effective_durable_limits(&self) -> ByteLimits {
@@ -1632,6 +1640,7 @@ impl CapturedResponseBodyStore {
 
         self.buffered_bodies
             .retain(|_, body| body.remove_session_visibility(session_id));
+        self.prune_removed_entry_indexes();
     }
 
     #[cfg(test)]
@@ -2142,6 +2151,46 @@ mod tests {
         assert!(store.durable_sessions.is_empty());
         assert!(store.retained_request_ids.is_empty());
         assert!(store.durable_entry_order.is_empty());
+    }
+
+    #[test]
+    fn durable_response_body_revocation_does_not_evict_other_sessions_below_budget() {
+        for disable_retention in [false, true] {
+            let mut store = CapturedResponseBodyStore::default();
+            for session in ["a", "b"] {
+                store.configure_durable(
+                    Some(session),
+                    Some(moli_bounded_buffer::ByteLimits::new(100_000, 100)),
+                );
+            }
+            store.insert("keep".into(), "original".into(), [Some("a".into())]);
+            for n in 1..super::DURABLE_RESPONSE_BODY_MAX_ENTRIES {
+                store.insert(format!("b-{n}"), "other".into(), [Some("b".into())]);
+            }
+            if disable_retention {
+                store.prepare_navigation();
+                store.configure_durable(Some("b"), None);
+            } else {
+                store.remove_session_visibility(Some("b"));
+            }
+            assert!(store.get("b-1").is_none());
+            store.insert("new".into(), "next".into(), [Some("a".into())]);
+            assert_eq!(
+                store
+                    .get("keep")
+                    .expect("unrelated response must remain readable")
+                    .body_bytes_limited(100)
+                    .unwrap(),
+                b"original"
+            );
+            assert_eq!(
+                store.get("new").unwrap().body_bytes_limited(100).unwrap(),
+                b"next"
+            );
+            store.prepare_navigation();
+            assert!(store.get("keep").unwrap().is_visible_to_session(Some("a")));
+            assert!(!store.get("keep").unwrap().is_visible_to_session(Some("b")));
+        }
     }
 
     #[test]
