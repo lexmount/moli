@@ -637,14 +637,15 @@ fn response_document_parser(
 ) -> (ParseTimeDriverState, HtmlDocumentStreamingDecoder) {
     let content_type = moli_web_mime::response_document_content_type(headers);
     let text_type = content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime));
-    let mut state = ParseTimeDriverState::new_with_scripting_enabled(
-        final_url,
-        main_document_parser_scripting_enabled(env),
-    );
+    let mut state = if let Some(mime) = &text_type {
+        ParseTimeDriverState::new_text(final_url, mime)
+    } else {
+        ParseTimeDriverState::new_with_scripting_enabled(
+            final_url,
+            main_document_parser_scripting_enabled(env),
+        )
+    };
     let decoder = if let Some(mime) = text_type {
-        state.parser_session =
-            DocumentParserSession::start_main_text_document(state.final_url.clone(), &mime);
-        state.is_text_document = true;
         HtmlDocumentStreamingDecoder::new_text_document(
             headers,
             state.final_url.as_str(),

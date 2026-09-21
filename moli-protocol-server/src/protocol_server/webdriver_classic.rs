@@ -23,11 +23,11 @@ use moli_protocol::{
         DevToolsGetNodeForLocationCommand, DevToolsGetRealmsCommand, DevToolsGetRealmsResult,
         DevToolsGetServiceWorkerLogsCommand, DevToolsGetServiceWorkerLogsResult,
         DevToolsGetTargetsCommand, DevToolsGetTargetsResult, DevToolsLayoutMetricsResult,
-        DevToolsLocateNodesResult, DevToolsProtocol, DevToolsQuerySelectorResult,
-        DevToolsRemoteHandleId, DevToolsRemoteValue, DevToolsScriptException, DevToolsScriptResult,
-        DevToolsSessionId, DevToolsSetDownloadBehaviorCommand, DevToolsSetFileInputFilesCommand,
-        DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind, RuntimeConsoleEvent,
-        RuntimeExecutionContextEvent,
+        DevToolsLocateNodesResult, DevToolsMouseEventType, DevToolsProtocol,
+        DevToolsQuerySelectorResult, DevToolsRemoteHandleId, DevToolsRemoteValue,
+        DevToolsScriptException, DevToolsScriptResult, DevToolsSessionId,
+        DevToolsSetDownloadBehaviorCommand, DevToolsSetFileInputFilesCommand, DevToolsTargetId,
+        DevToolsTargetInfo, DevToolsTargetKind, RuntimeConsoleEvent, RuntimeExecutionContextEvent,
     },
     version,
 };
@@ -4518,22 +4518,69 @@ async fn webdriver_classic_prepare_text_control_for_send_keys(
     }
 }
 
+enum ClassicClickPreparation {
+    Dom,
+    Pointer {
+        point: ClassicViewportPoint,
+        viewport: ClassicViewportBounds,
+    },
+}
+
+impl ClassicClickPreparation {
+    fn from_value(value: Value) -> Result<Self, ClassicError> {
+        match value.get("status").and_then(Value::as_str) {
+            Some("option" | "dom") => Ok(Self::Dom),
+            Some("file") => Err(ClassicError::new(
+                ClassicErrorCode::InvalidArgument,
+                "file inputs cannot be clicked by WebDriver",
+            )),
+            Some("not interactable") => Err(ClassicError::new(
+                ClassicErrorCode::ElementNotInteractable,
+                "element has no in-view clickable rectangle",
+            )),
+            Some("intercepted") => Err(ClassicError::new(
+                ClassicErrorCode::ElementClickIntercepted,
+                "another element obscures the element's in-view center",
+            )),
+            Some("pointer") => {
+                let coordinate = |name: &str| {
+                    value
+                        .get(name)
+                        .and_then(Value::as_f64)
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| {
+                            ClassicError::new(
+                                ClassicErrorCode::UnknownError,
+                                format!("click preflight has invalid {name}"),
+                            )
+                        })
+                };
+                let point = ClassicViewportPoint::new(coordinate("x")?, coordinate("y")?)?;
+                let viewport = ClassicViewportBounds {
+                    width: coordinate("viewport_width")?,
+                    height: coordinate("viewport_height")?,
+                };
+                if viewport.width <= 0.0 || viewport.height <= 0.0 {
+                    return Err(ClassicError::new(
+                        ClassicErrorCode::ElementNotInteractable,
+                        "frame has an empty viewport",
+                    ));
+                }
+                Ok(Self::Pointer { point, viewport })
+            }
+            _ => Err(ClassicError::new(
+                ClassicErrorCode::UnknownError,
+                "element click preflight returned an invalid status",
+            )),
+        }
+    }
+}
+
 async fn webdriver_classic_click_point(
     binding: &ClassicSessionBinding,
-    preparation: Value,
+    point: ClassicViewportPoint,
+    viewport: ClassicViewportBounds,
 ) -> Result<ClassicViewportPoint, ClassicError> {
-    let coordinate = |name: &str| {
-        preparation
-            .get(name)
-            .and_then(Value::as_f64)
-            .ok_or_else(|| {
-                ClassicError::new(
-                    ClassicErrorCode::UnknownError,
-                    format!("click preflight omitted {name}"),
-                )
-            })
-    };
-    let point = ClassicViewportPoint::new(coordinate("x")?, coordinate("y")?)?;
     let Some(frame_id) = binding.current_frame_id.as_deref() else {
         return ClassicViewportPoint::new(point.x, point.y);
     };
@@ -4568,18 +4615,10 @@ async fn webdriver_classic_click_point(
             "frame has invalid content geometry",
         ));
     };
-    let viewport_width = coordinate("viewport_width")?;
-    let viewport_height = coordinate("viewport_height")?;
-    if viewport_width <= 0.0 || viewport_height <= 0.0 {
-        return Err(ClassicError::new(
-            ClassicErrorCode::ElementNotInteractable,
-            "frame has an empty viewport",
-        ));
-    }
     // The content quad already includes every ancestor-frame transform. Map
     // the exact locally hit-tested point, retaining rotation/scale and borders.
-    let u = point.x / viewport_width;
-    let v = point.y / viewport_height;
+    let u = point.x / viewport.width;
+    let v = point.y / viewport.height;
     let point = ClassicViewportPoint::new(
         x0 + u * (x1 - x0) + v * (x3 - x0),
         y0 + u * (y1 - y0) + v * (y3 - y0),
@@ -4661,7 +4700,7 @@ async fn webdriver_classic_activate_element_by_handle(
         .await;
     let preparation = match prepared {
         Ok(DevToolsCommandResult::Script(result)) => match *result {
-            DevToolsScriptResult::Value(value) => Ok(value.value),
+            DevToolsScriptResult::Value(value) => ClassicClickPreparation::from_value(value.value),
             DevToolsScriptResult::Exception(exception) => {
                 Err(classic_webdriver_command_exception_error(exception))
             }
@@ -4676,8 +4715,8 @@ async fn webdriver_classic_activate_element_by_handle(
     let mut pointer_press_completed = false;
     let operation = async {
         let preparation = preparation?;
-        match preparation.get("status").and_then(Value::as_str) {
-            Some("option" | "dom") => {
+        match preparation {
+            ClassicClickPreparation::Dom => {
                 activation_dispatched = true;
                 Ok(binding
                     .runtime
@@ -4687,26 +4726,18 @@ async fn webdriver_classic_activate_element_by_handle(
                     )
                     .await)
             }
-            Some("file") => Err(ClassicError::new(
-                ClassicErrorCode::InvalidArgument,
-                "file inputs cannot be clicked by WebDriver",
-            )),
-            Some("not interactable") => Err(ClassicError::new(
-                ClassicErrorCode::ElementNotInteractable,
-                "element has no in-view clickable rectangle",
-            )),
-            Some("intercepted") => Err(ClassicError::new(
-                ClassicErrorCode::ElementClickIntercepted,
-                "another element obscures the element's in-view center",
-            )),
-            Some("pointer") => {
-                let point = webdriver_classic_click_point(binding, preparation).await?;
+            ClassicClickPreparation::Pointer { point, viewport } => {
+                let point = webdriver_classic_click_point(binding, point, viewport).await?;
                 // The preflight point has been mapped into the root viewport.
                 let pointer_context = classic_top_level_context(binding);
                 let commands = element_click_input_commands(&pointer_context, point);
                 let mut result = Ok(DevToolsCommandResult::Empty);
-                for (phase, command) in commands.into_iter().enumerate() {
-                    activation_dispatched = phase == 2;
+                for command in commands {
+                    let event_type = match &command {
+                        DevToolsCommand::DispatchMouseEvent(event) => Some(event.event_type),
+                        _ => None,
+                    };
+                    activation_dispatched = event_type == Some(DevToolsMouseEventType::Released);
                     // Do not retry an input command or wait for navigation
                     // between pointer phases. Page residence is not a promise
                     // that the active Document cannot change during input.
@@ -4717,16 +4748,12 @@ async fn webdriver_classic_activate_element_by_handle(
                     if !matches!(result, Ok(DevToolsCommandResult::Empty)) {
                         break;
                     }
-                    if phase == 1 {
+                    if event_type == Some(DevToolsMouseEventType::Pressed) {
                         pointer_press_completed = true;
                     }
                 }
                 Ok(result)
             }
-            _ => Err(ClassicError::new(
-                ClassicErrorCode::UnknownError,
-                "element click preflight returned an invalid status",
-            )),
         }
     }
     .await;
