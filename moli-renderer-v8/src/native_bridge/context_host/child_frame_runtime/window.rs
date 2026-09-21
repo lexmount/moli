@@ -1642,21 +1642,19 @@ fn install_cross_origin_window_named_slots<'s>(
 
 fn is_cross_origin_named_child_slot_name(name: &str) -> bool {
     !name.is_empty()
-        && name.parse::<u32>().is_err()
-        && !CROSS_ORIGIN_DENIED_WINDOW_PROPERTIES.contains(&name)
+        && crate::native_bridge::collections::array_index_property_name(name).is_none()
         && !CROSS_ORIGIN_WINDOW_NOOP_METHODS.contains(&name)
         && !matches!(
             name,
             "window"
                 | "self"
-                | "globalThis"
                 | "top"
                 | "parent"
                 | "frames"
                 | "location"
                 | "closed"
                 | "opener"
-                | "then"
+                | "postMessage"
         )
 }
 
