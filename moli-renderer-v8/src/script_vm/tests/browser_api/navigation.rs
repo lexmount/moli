@@ -3759,6 +3759,73 @@ async fn pending_precommit_navigation_slot_is_not_script_writable() {
         "#two:precommitSpoof:false:reload|navigate:|precommit:|exposed:false|abort:AbortError:|navigate:|precommit:|handler:#two|firstCommittedRejected:AbortError|firstFinishedRejected:AbortError|secondCommitted:#two|secondFinished:#two"
     );
 }
+
+#[tokio::test]
+async fn navigation_cancellation_uses_dispatch_state_instead_of_author_cancelability() {
+    for (kind, cause, phase) in [
+        ("traverse", "detach", "dispatch"),
+        ("traverse", "stop", "dispatch"),
+        ("traverse", "nested", "dispatch"),
+        ("traverse", "preventDefault", "dispatch"),
+        ("navigate", "detach", "dispatch"),
+        ("navigate", "stop", "dispatch"),
+        ("navigate", "nested", "dispatch"),
+        ("navigate", "detach", "precommit"),
+        ("navigate", "stop", "precommit"),
+        ("navigate", "nested", "precommit"),
+    ] {
+        let server = StaticHttpServer::spawn(1).await;
+        let parent_url = server.base_url().join("parent").unwrap();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        let script = include_str!("../../../../tests/fixtures/navigation-cancellation.js");
+        vm.eval(&format!(
+            "{script}\n\
+             globalThis.cancellationResult = 'pending';\n\
+             navigationCancellationProbe({kind:?}, {cause:?}, {phase:?}).then(\n\
+               value => cancellationResult = value,\n\
+               error => cancellationResult = String(error));"
+        ))
+        .unwrap();
+        let context = format!("{kind}/{cause}/{phase}");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(cancellationResult !== 'pending')",
+            "true",
+            &context,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(cancellationResult)").unwrap()).unwrap();
+        let aborted = cause != "preventDefault";
+        let canceled = aborted && phase == "dispatch";
+        let cancelable = kind == "navigate";
+        let abort_states = if aborted {
+            serde_json::json!([[cancelable, canceled]])
+        } else {
+            serde_json::json!([])
+        };
+        let settlement = if aborted { "AbortError" } else { "fulfilled" };
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "cancelable": cancelable,
+                "defaultPrevented": canceled,
+                "afterPreventDefault": if kind == "traverse" { Some(false) } else { None },
+                "aborted": aborted,
+                "abortStates": abort_states,
+                "promises": [settlement, settlement],
+                "sameReason": true,
+                "calleeRealm": true
+            }),
+            "{context}"
+        );
+        assert_eq!(server.finish_targets().await, ["/child"], "{context}");
+    }
+}
+
 #[tokio::test]
 async fn navigation_retirement_reentry_preserves_successor_window() {
     for pending_sibling in [false, true] {
