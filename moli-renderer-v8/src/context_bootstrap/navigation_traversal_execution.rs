@@ -321,7 +321,10 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
             &traversal.results,
         );
     }
-    if !outcome.proceed || !is_current(scope, host) {
+    // Aborting the API event during dispatch sets its canceled flag, but
+    // cross-document traversals cannot be canceled by script. Only continue
+    // while the original Window and Document are still active.
+    if !is_current(scope, host) {
         if !closing_popup {
             reject_cross_document_traversal(scope, &traversal);
         }
