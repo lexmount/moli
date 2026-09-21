@@ -15818,13 +15818,12 @@ mod webidl_collections;
 mod webidl_fetch;
 mod webidl_receivers;
 mod webidl_trusted_types;
+mod history_replace_forward;
 mod websocket;
 mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
-
-
-mod history_replace_forward;
+mod window_promise_method_receivers;
 mod window_restricted_accessors;
 mod window_scheduling_receivers;
 mod window_sync_method_receivers;

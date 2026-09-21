@@ -17,11 +17,15 @@ pub(crate) fn is_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if is_live_window_receiver(scope, receiver)
+    is_current_window_receiver(scope, receiver)
+        || is_live_window_receiver(scope, receiver)
         || get_private_value(scope, receiver, WINDOW_BRAND_SLOT).is_some()
-    {
-        return true;
-    }
+}
+
+fn is_current_window_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
     let current_context = scope.get_current_context();
     receiver.strict_equals(current_context.global(scope).into())
         && context_host_ptr_from_context_slot(current_context).is_some()
@@ -42,6 +46,12 @@ pub(crate) fn require_same_origin_window_receiver<'s>(
     receiver: v8::Local<'s, v8::Object>,
     lenient_this: bool,
 ) -> bool {
+    // A retained function still identifies its own native global after V8 has
+    // detached that global proxy. Reading its private slots would throw before
+    // the operation can observe that its captured Window has retired.
+    if is_current_window_receiver(scope, receiver) {
+        return true;
+    }
     // An extracted method or accessor bypasses WindowProxy's property access check.
     // Authorize native globals before reading slots, which can themselves
     // trigger V8's cross-origin fallback. Leniency only applies to objects
