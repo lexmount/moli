@@ -2853,3 +2853,42 @@ fn base_uri_uses_its_own_source_list_and_reports_violations() {
         }
     }
 }
+
+#[test]
+fn sandbox_top_navigation_permissions_intersect_with_activation_requirements() {
+    for (policies, without_activation, with_activation) in [
+        (vec![], true, true),
+        (vec!["sandbox"], false, false),
+        (vec!["sandbox allow-top-navigation"], true, true),
+        (
+            vec!["sandbox allow-top-navigation-by-user-activation"],
+            false,
+            true,
+        ),
+        (
+            vec![
+                "sandbox allow-top-navigation",
+                "sandbox allow-top-navigation-by-user-activation",
+            ],
+            false,
+            true,
+        ),
+        (
+            vec!["sandbox allow-top-navigation", "sandbox allow-scripts"],
+            false,
+            false,
+        ),
+    ] {
+        let policies = policies.into_iter().map(ContentSecurityPolicy::from).collect::<Vec<_>>();
+        assert_eq!(
+            content_security_policy_sandbox_allows_top_navigation(&policies, false),
+            without_activation,
+            "{policies:?}"
+        );
+        assert_eq!(
+            content_security_policy_sandbox_allows_top_navigation(&policies, true),
+            with_activation,
+            "{policies:?}"
+        );
+    }
+}
