@@ -2479,3 +2479,4 @@ mod hyperlink_audit_owner;
 mod svg_number_list_native_receivers;
 mod webtransport_stream_interface_exposure;
 mod window_restricted_accessors;
+mod window_scheduling_receivers;
