@@ -165,13 +165,13 @@ fn trusted_types_global_getter<'s>(
     let receiver = args.this();
     // Reject in the getter's realm before entering a valid receiver's realm.
     // Borrowing a getter changes neither its TypeError realm nor its brand check.
-    let valid_receiver = if args.data().is_true() {
-        super::super::window_receiver::is_window_receiver(scope, receiver)
-    } else {
-        let global = scope.get_current_context().global(scope);
-        receiver.strict_equals(global.into())
-    };
-    if !valid_receiver {
+    if args.data().is_true() {
+        if !super::super::window_receiver::require_same_origin_window_receiver(
+            scope, receiver, false,
+        ) {
+            return;
+        }
+    } else if !receiver.strict_equals(scope.get_current_context().global(scope).into()) {
         throw_type_error(
             scope,
             "trustedTypes getter called on incompatible receiver.",

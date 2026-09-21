@@ -15733,3 +15733,4 @@ mod websocket;
 mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
+mod window_restricted_accessors;

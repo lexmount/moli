@@ -711,9 +711,12 @@ fn worker_unsupported_constructor_callback(
 #[derive(Default, WebApiObject)]
 #[webapi(plain)]
 pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
+    window_receiver: bool,
+
     #[webapi(
         accessor_property,
         getter = global_caches_getter_callback,
+        data = self.window_receiver,
         enumerable
     )]
     caches: (),
