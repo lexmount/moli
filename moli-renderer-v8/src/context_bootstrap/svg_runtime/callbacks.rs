@@ -48,6 +48,76 @@ fn require_svg_receiver<'s>(
     false
 }
 
+pub(super) fn svg_element_owner_svg_element_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Ok((runtime_ptr, handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        webidl::throw_type_error(
+            scope,
+            "SVGElement.ownerSVGElement called on incompatible receiver.",
+        );
+        return;
+    };
+    let owner_handle = {
+        let runtime = unsafe { &*runtime_ptr };
+        let Some(node) = runtime.dom_host().node(handle) else {
+            rv.set_null();
+            return;
+        };
+        if node.namespace() != Some(crate::native_bridge::document::SVG_NS) {
+            webidl::throw_type_error(
+                scope,
+                "SVGElement.ownerSVGElement called on incompatible receiver.",
+            );
+            return;
+        }
+
+        // Only an outermost <svg> has the fragment-boundary exception.
+        // Other SVG elements still resolve their nearest ancestor <svg>.
+        if node.local_name() == Some("svg")
+            && node
+                .parent_node_id()
+                .and_then(|parent| runtime.dom_host().node(parent))
+                .is_none_or(|parent| {
+                    parent.namespace() != Some(crate::native_bridge::document::SVG_NS)
+                        || parent.local_name() == Some("foreignObject")
+                })
+        {
+            rv.set_null();
+            return;
+        }
+        let mut current = node.parent_node_id();
+        let mut owner = None;
+        while let Some(candidate) = current {
+            let Some(ancestor) = runtime.dom_host().node(candidate) else {
+                break;
+            };
+            if ancestor.namespace() == Some(crate::native_bridge::document::SVG_NS)
+                && ancestor.local_name() == Some("svg")
+            {
+                owner = Some(candidate);
+                break;
+            }
+            current = ancestor
+                .parent_node_id()
+                .or_else(|| runtime.dom_host().shadow_root_host(candidate));
+        }
+        owner
+    };
+
+    let Some(owner) = owner_handle.and_then(|owner| {
+        crate::native_bridge::document::detached_native_object_for_handle(scope, runtime_ptr, owner)
+    }) else {
+        rv.set_null();
+        return;
+    };
+    rv.set(owner.into());
+}
+
 pub(super) fn svg_rect_animated_length_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

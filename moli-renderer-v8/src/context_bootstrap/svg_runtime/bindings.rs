@@ -738,6 +738,16 @@ struct SvgMatrixTemplateAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::SVGElement, enumerable, receiver)]
+struct SvgElementPrototypeAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "ownerSVGElement",
+        getter = svg_element_owner_svg_element_getter
+    )]
+    owner_svg_element: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGGraphicsElement, enumerable)]
 struct SvgGraphicsElementPrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "transform", getter = svg_graphics_transform_getter)]
@@ -1045,6 +1055,11 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "SVGElement" => {
+            SvgElementPrototypeAccessorsDeclaration::initialize_prototype_template(
+                scope, prototype,
+            );
+        }
         "SVGGraphicsElement" => {
             SvgGraphicsElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
