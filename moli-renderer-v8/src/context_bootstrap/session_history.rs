@@ -435,6 +435,8 @@ pub(super) fn project_traversal<'s>(
     if !entries.contains_key(&SessionHistoryContextId::ROOT) {
         return None;
     }
+    let source = super::navigation_window::window_task_target_for_runtime_owner(scope, host, owner)?.dispatch_scope();
+    let root = binding.popup.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::LightweightPopup);
     let mut targets = Vec::new();
     for (&context, entry) in entries {
         let Some(owner) = owner_for_context(scope, host, context, binding.popup) else {
@@ -456,6 +458,10 @@ pub(super) fn project_traversal<'s>(
             continue;
         };
         if current_index != target_index {
+            let target = super::navigation_window::window_task_target_for_runtime_owner(scope, host, owner)?.dispatch_scope();
+            if !host.sandbox_allows_history_traversal(source, target, root) {
+                return Some(Vec::new());
+            }
             targets.push(super::navigation_traversal_execution::TraversalTarget {
                 owner,
                 history,
