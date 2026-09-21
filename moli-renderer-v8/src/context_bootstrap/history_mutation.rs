@@ -318,6 +318,9 @@ fn mutate_history_object<'s>(
     );
     pruned.extend(super::session_history::prune_views(scope, owner));
     sync_same_document_navigation_commit(scope, owner, url.as_str(), "historyApi", true);
+    // A currententrychange listener may immediately start another navigation.
+    // Its source Document and frame owner must already reflect this commit.
+    sync_child_navigation_entry_seed_from_owner(scope, owner);
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         dispatch_navigation_currententrychange(
             scope,
@@ -365,7 +368,6 @@ fn mutate_history_object<'s>(
     for entry in pruned {
         dispatch_navigation_entry_dispose(scope, entry);
     }
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
 }
 
 fn resolve_history_state_url(base_url: &url::Url, target: &str) -> Option<url::Url> {
