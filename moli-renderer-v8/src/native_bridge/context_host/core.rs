@@ -353,7 +353,6 @@ impl JsContextHost {
                 super::child_runtime_script_order::ChildRuntimeScriptOrder::default(),
             pending_child_external_classic_document_scripts: HashMap::new(),
             pending_child_modulepreload_work_awaiting_realm: VecDeque::new(),
-            active_child_browsing_context_host_loads: Vec::new(),
             character_data_utf16_overrides: HashMap::new(),
             child_meta_refresh_navigations: HashMap::new(),
             disconnected_shadow_roots: HashSet::new(),
