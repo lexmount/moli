@@ -1,7 +1,5 @@
 use super::history_runtime::cancel_pending_precommit_history_traversal;
-use super::location_navigation::{
-    LocationNavigationKind, NavigationNavigateHistoryKind, navigate_location_object,
-};
+use super::location_navigation::{LocationNavigationKind, NavigationNavigateHistoryKind};
 use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
 use super::navigation_cross_document::handle_navigation_navigate_cross_document;
 use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
