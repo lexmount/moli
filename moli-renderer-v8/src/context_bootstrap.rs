@@ -742,13 +742,13 @@ pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
 struct WorkerBase64OperationsDeclaration {
     #[webapi(
         method,
-        callback = self::window_runtime::window_btoa_callback,
+        callback = self::window_runtime::global_btoa_callback,
         length = 1
     )]
     btoa: (),
     #[webapi(
         method,
-        callback = self::window_runtime::window_atob_callback,
+        callback = self::window_runtime::global_atob_callback,
         length = 1
     )]
     atob: (),

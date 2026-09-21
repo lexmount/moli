@@ -160,6 +160,9 @@ pub(crate) fn window_match_media_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<MatchMediaArgs>(scope, &args) else {
         return;
     };

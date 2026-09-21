@@ -5,6 +5,42 @@ use crate::service_worker_runtime::ServiceWorkerNotificationEventKind;
 use crate::worker::WorkerGlobalKind;
 
 #[tokio::test]
+async fn worker_base64_operations_preserve_conversion_and_error_realms() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const results = [btoa('a'), atob('YQ=='), btoa.call(null, 'a'), atob.call(undefined, 'YQ==')];
+        for (const operation of [btoa, atob]) {
+            const marker = {};
+            try { operation({toString() { throw marker; }}); }
+            catch (error) { results.push(error === marker); }
+            try { operation(Symbol()); }
+            catch (error) { results.push(error instanceof TypeError); }
+        }
+        for (const operation of [() => btoa('\u0100'), () => atob('a')]) {
+            try { operation(); }
+            catch (error) { results.push(error.name, error instanceof DOMException); }
+        }
+        postMessage(results);
+        "#
+        .into(),
+        "test://worker-base64-receivers".into(),
+    );
+    let message = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker base64 result should arrive")
+        .expect("worker channel should stay open until the result");
+    handle.terminate_and_join();
+    let WorkerToParentMessage::Post(payload) = message else {
+        panic!("unexpected worker base64 result: {message:?}");
+    };
+    assert_eq!(
+        stringify_payload(&payload),
+        r#"["YQ==","a","YQ==","a",true,true,true,true,"InvalidCharacterError",true,"InvalidCharacterError",true]"#,
+    );
+}
+
+#[tokio::test]
 async fn dedicated_worker_agent_allows_blocking_atomics_wait() {
     ensure_v8();
     let mut handle = spawn_worker(
