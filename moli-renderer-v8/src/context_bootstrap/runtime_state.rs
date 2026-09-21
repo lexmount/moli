@@ -21,6 +21,7 @@ use super::{
         window_inner_width_getter, window_length_getter, window_outer_height_getter,
         window_parent_getter, window_self_getter, window_top_getter, window_window_getter,
     },
+    window_receiver::require_same_origin_window_receiver,
     window_runtime::{build_legacy_storage_info_object, window_noop_callback},
     window_template::install_window_named_properties_object,
 };
@@ -602,6 +603,9 @@ fn window_origin_replaceable_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let value = get_private_value(scope, args.this(), WINDOW_ORIGIN_RUNTIME_SLOT)
         .or_else(|| {
             let global = scope.get_current_context().global(scope);
@@ -616,6 +620,9 @@ fn window_scroll_x_replaceable_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let value = get_private_value(scope, args.this(), WINDOW_SCROLL_X_SLOT)
         .or_else(|| {
             let global = scope.get_current_context().global(scope);
@@ -631,6 +638,9 @@ fn window_screen_position_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(name) = callback_data_item(
         scope,
         &args,
@@ -676,8 +686,7 @@ fn replaceable_window_alias_set<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     name: &'static str,
 ) {
-    if !super::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Window setter called on incompatible receiver.");
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
     define_replaceable_window_property(scope, args.this(), name, args.get(0));
@@ -809,8 +818,7 @@ fn window_surface_replaceable_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !super::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Window setter called on incompatible receiver.");
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
     let Some(name) = callback_data_item(
@@ -831,8 +839,7 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
+    if !require_same_origin_window_receiver(scope, receiver, false) {
         return;
     }
     if child_context_handle_from_owner(scope, receiver).is_none()
@@ -854,15 +861,13 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+    if !require_same_origin_window_receiver(scope, receiver, false) {
         return;
     }
-    let next = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+    let Some(next) = args.get(0).to_string(scope) else {
+        return;
+    };
+    let next = next.to_rust_string_lossy(scope);
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
@@ -883,11 +888,7 @@ fn window_status_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(
-            scope,
-            "Window.status getter called on incompatible receiver.",
-        );
+    if !require_same_origin_window_receiver(scope, receiver, false) {
         return;
     }
     rv.set(
@@ -902,11 +903,7 @@ fn window_status_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(
-            scope,
-            "Window.status setter called on incompatible receiver.",
-        );
+    if !require_same_origin_window_receiver(scope, receiver, false) {
         return;
     }
     let Some(next) = args.get(0).to_string(scope) else {
