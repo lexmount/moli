@@ -67,6 +67,7 @@ const SETUP_TRAVERSAL: &str = r#"(async () => {
     globalThis.PopupDOMException = popup.DOMException;
     globalThis.events = [];
     globalThis.signals = [];
+    globalThis.cancellationFlags = [];
     globalThis.reasons = [];
     globalThis.states = {};
     globalThis.details = [];
@@ -79,7 +80,10 @@ const SETUP_TRAVERSAL: &str = r#"(async () => {
     popupNavigation.addEventListener('navigate', event => {
         events.push('navigate');
         signals.push(event.signal);
-        event.signal.addEventListener('abort', () => events.push('abort'));
+        event.signal.addEventListener('abort', () => {
+            events.push('abort');
+            cancellationFlags.push(event.defaultPrevented);
+        });
         const detail = {
             type: event.navigationType, cancelable: event.cancelable,
             canIntercept: event.canIntercept, userInitiated: event.userInitiated,
@@ -114,6 +118,7 @@ const SETUP_TRAVERSAL: &str = r#"(async () => {
         index: popup.closed ? null : popup.navigation.currentEntry.index,
         length: popup.closed ? null : popup.history.length,
         states: {...states}, aborted: signals.map(signal => signal.aborted),
+        cancellationFlags: [...cancellationFlags],
         errorIdentity: reasons.every(error => error === signals[0].reason && error instanceof PopupDOMException),
         reasons: reasons.length, shown: [...shown],
     });
@@ -230,6 +235,15 @@ async fn popup_cross_document_history_traversal_events_and_cancellation() {
                 "{method}/{action}: {snapshot}"
             );
             assert_eq!(snapshot["aborted"], json!([aborted]), "{snapshot}");
+            assert_eq!(
+                snapshot["cancellationFlags"],
+                if aborted {
+                    json!([action == "stop-dispatch"])
+                } else {
+                    json!([])
+                },
+                "{method}/{action}: {snapshot}"
+            );
             assert_eq!(snapshot["errorIdentity"], true, "{snapshot}");
             let states = if aborted && method != "history-back" {
                 json!({"committed": "AbortError", "finished": "AbortError"})
