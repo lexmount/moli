@@ -127,11 +127,6 @@ impl JsContextHost {
             .and_then(|entry| entry.visible_window_navigation_state())
     }
 
-    pub(crate) fn child_browsing_context_visible_url(&self, handle: DomHandle) -> Option<String> {
-        self.child_browsing_context_visible_window_navigation_state(handle)
-            .map(|state| state.href)
-    }
-
     pub(crate) fn sync_existing_child_browsing_context_runtime_surface_from_seed(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
