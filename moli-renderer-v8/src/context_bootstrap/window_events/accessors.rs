@@ -1,23 +1,16 @@
 use super::super::window_accessors::window_child_context_handle;
+use super::super::window_receiver::require_same_origin_window_receiver;
 use super::*;
 use crate::{
     document_runtime::EventTargetHandle,
     util::{context_host_ptr_from_global_bridge, context_host_ptr_from_window_object},
-    webidl,
 };
 
 fn require_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> bool {
-    if context_host_ptr_from_window_object(scope, args.this()).is_some() {
-        return true;
-    }
-    webidl::throw_type_error(
-        scope,
-        "Window event handler called on incompatible receiver.",
-    );
-    false
+    require_same_origin_window_receiver(scope, args.this(), false)
 }
 
 fn window_event_handler_name_from_data<'s>(
@@ -90,13 +83,15 @@ pub(in crate::context_bootstrap) fn window_event_handler_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_window_receiver(scope, &args) {
-        return;
-    }
     let Some(property_name) = window_event_handler_name_from_data(scope, args.data()) else {
         rv.set_null();
         return;
     };
+    let lenient_this =
+        crate::native_bridge::element::legacy_lenient_this_event_handler(&property_name);
+    if !require_same_origin_window_receiver(scope, args.this(), lenient_this) {
+        return;
+    }
     rv.set(
         window_event_handler_value(scope, args.this(), &property_name)
             .unwrap_or_else(|| v8::null(scope).into()),
@@ -108,10 +103,12 @@ pub(in crate::context_bootstrap) fn window_event_handler_setter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !require_window_receiver(scope, &args) {
-        return;
-    }
     if let Some(property_name) = window_event_handler_name_from_data(scope, args.data()) {
+        let lenient_this =
+            crate::native_bridge::element::legacy_lenient_this_event_handler(&property_name);
+        if !require_same_origin_window_receiver(scope, args.this(), lenient_this) {
+            return;
+        }
         set_window_event_handler_value(scope, args.this(), &property_name, args.get(0));
     }
     rv.set_undefined();

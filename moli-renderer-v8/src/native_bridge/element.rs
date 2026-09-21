@@ -275,6 +275,7 @@ pub(crate) use event_handlers::{
     event_handler_content_attribute_name, initialize_parser_inserted_body_window_event_handlers,
     resolve_window_event_handler_content_attribute,
     node_event_handler_getter_function, node_event_handler_setter_function,
+    legacy_lenient_this_event_handler,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::construct_focus_event;
