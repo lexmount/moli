@@ -15730,5 +15730,6 @@ mod webidl_fetch;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
+mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;

@@ -1,6 +1,5 @@
 use super::*;
 use crate::util::get_private_value;
-use crate::webidl;
 
 pub(super) fn window_hidden_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -156,20 +155,15 @@ pub(super) fn window_receiver<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if super::super::window_receiver::is_window_receiver(scope, receiver) {
-        return Some(receiver);
-    }
-    webidl::throw_type_error(scope, "Window getter called on incompatible receiver.");
-    None
+    super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false)
+        .then_some(receiver)
 }
 
 pub(super) fn same_origin_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let receiver = args.this();
-    super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false)
-        .then_some(receiver)
+    window_receiver(scope, args)
 }
 
 pub(crate) fn current_window_style_viewport(
