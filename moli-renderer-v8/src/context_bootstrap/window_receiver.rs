@@ -37,12 +37,12 @@ pub(crate) fn mark_window_receiver(
     set_private_value(scope, receiver, WINDOW_BRAND_SLOT, branded.into());
 }
 
-pub(in crate::context_bootstrap) fn require_same_origin_window_receiver<'s>(
+pub(crate) fn require_same_origin_window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     lenient_this: bool,
 ) -> bool {
-    // An extracted accessor bypasses WindowProxy's property access check.
+    // An extracted method or accessor bypasses WindowProxy's property access check.
     // Authorize native globals before reading slots, which can themselves
     // trigger V8's cross-origin fallback. Leniency only applies to objects
     // without the Window brand, never to a cross-origin Window.
@@ -59,7 +59,7 @@ pub(in crate::context_bootstrap) fn require_same_origin_window_receiver<'s>(
             return true;
         }
         if !lenient_this {
-            throw_type_error(scope, "Window getter called on incompatible receiver.");
+            throw_type_error(scope, "Window member called on incompatible receiver.");
         }
         return false;
     }
