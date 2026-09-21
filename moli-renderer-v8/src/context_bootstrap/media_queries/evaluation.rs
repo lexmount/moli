@@ -1,7 +1,7 @@
 use super::dispatch_media_query_list_event;
+use super::event::create_media_query_list_event;
 use crate::context_bootstrap::DEFAULT_WINDOW_SURFACE_PROFILE;
 use crate::context_bootstrap::current_window_style_viewport;
-use crate::context_bootstrap::events::initialize_event_object;
 use crate::context_bootstrap::{
     MEDIA_QUERY_LIST_MATCHES_SLOT, MEDIA_QUERY_LIST_MEDIA_SLOT, MEDIA_QUERY_LIST_ONCHANGE_SLOT,
     MEDIA_QUERY_LIST_REGISTRY_SLOT,
@@ -54,19 +54,6 @@ struct MediaQueryListPrototypeAccessorsDeclaration {
         enumerable
     )]
     onchange: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event)]
-struct MediaQueryListChangeEventObjectDeclaration {}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event)]
-struct MediaQueryListChangeEventPropertiesDeclaration {
-    #[webapi(data_property)]
-    media: String,
-    #[webapi(data_property)]
-    matches: bool,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -234,27 +221,11 @@ pub(crate) fn dispatch_media_query_list_change_events<'s>(
         if previous_matches == current_matches {
             continue;
         }
-        let event = media_query_list_change_event(scope, &media, current_matches);
+        let event = create_media_query_list_event(scope, &media, current_matches);
         let _ = dispatch_media_query_list_event(scope, mql, event);
         dispatched = true;
     }
     dispatched
-}
-
-fn media_query_list_change_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    media: &str,
-    matches: bool,
-) -> v8::Local<'s, v8::Object> {
-    let event = MediaQueryListChangeEventObjectDeclaration::new()
-        .bind(scope)
-        .expect("MediaQueryList change Event declaration should bind");
-    initialize_event_object(scope, event, "change", false, false);
-    crate::context_bootstrap::events::mark_event_trusted(scope, event);
-    MediaQueryListChangeEventPropertiesDeclaration::new(media.to_owned(), matches)
-        .initialize(scope, event)
-        .expect("MediaQueryList change Event properties should initialize object");
-    event
 }
 
 fn media_query_list_slot_value<'s>(

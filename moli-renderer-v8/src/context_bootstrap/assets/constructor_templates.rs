@@ -187,6 +187,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::PopStateEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PopStateEvent)
         }
+        ConstructorKind::MediaQueryListEvent => {
+            super::super::media_queries::build_media_query_list_event_template(scope)
+        }
         ConstructorKind::PageTransitionEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageTransitionEvent)
         }

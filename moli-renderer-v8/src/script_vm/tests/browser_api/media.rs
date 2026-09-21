@@ -3064,6 +3064,7 @@ async fn match_media_change_event_uses_event_prototype_and_declared_properties()
       targetIsMql: event.target === mql,
       currentTargetIsMql: event.currentTarget === mql,
       bubbles: event.bubbles,
+      isTrusted: event.isTrusted,
       cancelable: event.cancelable
     });
   });
@@ -3091,7 +3092,7 @@ async fn match_media_change_event_uses_event_prototype_and_declared_properties()
 
     assert_eq!(
         result,
-        r#"[{"tag":"[object Event]","ctor":"Event","protoCtor":"Event","keys":"type,target,srcElement,currentTarget,defaultPrevented,bubbles,cancelable,isTrusted,composed,eventPhase","type":"change","media":"(prefers-color-scheme: dark)","matches":true,"mediaEnumerable":false,"matchesEnumerable":false,"targetIsMql":true,"currentTargetIsMql":true,"bubbles":false,"cancelable":false}]"#
+        r#"[{"tag":"[object MediaQueryListEvent]","ctor":"MediaQueryListEvent","protoCtor":"MediaQueryListEvent","keys":"type,target,srcElement,currentTarget,defaultPrevented,bubbles,cancelable,isTrusted,composed,eventPhase","type":"change","media":"(prefers-color-scheme: dark)","matches":true,"mediaEnumerable":false,"matchesEnumerable":false,"targetIsMql":true,"currentTargetIsMql":true,"bubbles":false,"isTrusted":true,"cancelable":false}]"#
     );
 }
 

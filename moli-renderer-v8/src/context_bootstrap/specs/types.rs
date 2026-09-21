@@ -120,6 +120,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     Animation,
     KeyframeEffect,
     MediaQueryList,
+    MediaQueryListEvent,
     MediaSource,
     MediaError,
     TextTrack,
