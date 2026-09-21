@@ -56,6 +56,9 @@ pub(in crate::context_bootstrap) fn window_alert_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<WindowDialogMessageArgs>(scope, &args) else {
         return;
     };
@@ -107,6 +110,9 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -116,12 +122,8 @@ pub(crate) fn window_stop_callback<'s>(
         unsafe { &*host_ptr },
     ) {
         Ok(receiver) => receiver,
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
-            webidl::throw_type_error(scope, "Window.stop called on incompatible receiver.");
-            return;
-        }
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
-            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
     };
@@ -136,6 +138,9 @@ pub(in crate::context_bootstrap) fn window_confirm_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<WindowDialogMessageArgs>(scope, &args) else {
         return;
     };
@@ -149,6 +154,9 @@ pub(in crate::context_bootstrap) fn window_prompt_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<WindowPromptArgs>(scope, &args) else {
         return;
     };
@@ -163,11 +171,14 @@ pub(in crate::context_bootstrap) fn window_prompt_callback<'s>(
     rv.set(v8::null(scope).into());
 }
 
-pub(crate) fn window_const_false_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
+pub(crate) fn window_const_false_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     rv.set(v8::Boolean::new(scope, false).into());
 }
 
@@ -176,6 +187,9 @@ pub(crate) fn window_open_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<WindowOpenArgs>(scope, &args) else {
         return;
     };

@@ -15735,3 +15735,4 @@ mod window_event_receivers;
 mod window_execution_context;
 mod window_restricted_accessors;
 mod window_scheduling_receivers;
+mod window_sync_method_receivers;

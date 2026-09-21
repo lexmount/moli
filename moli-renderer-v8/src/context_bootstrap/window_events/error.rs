@@ -199,6 +199,9 @@ pub(in crate::context_bootstrap) fn window_report_error_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
@@ -209,12 +212,8 @@ pub(in crate::context_bootstrap) fn window_report_error_callback<'s>(
         unsafe { &*host_ptr },
     ) {
         Ok(receiver) => receiver,
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
-            throw_type_error(scope, "Illegal invocation");
-            return;
-        }
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
-            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
     };
