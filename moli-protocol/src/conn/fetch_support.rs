@@ -1152,7 +1152,13 @@ impl PausedDocumentTransfer {
             } => {
                 let navigation_state = navigation.clone();
                 let navigation = body
-                    .continue_navigation_async(conn, &navigation, response_code, response_headers)
+                    .continue_navigation_async(
+                        conn,
+                        document_navigation_token.as_ref(),
+                        &navigation,
+                        response_code,
+                        response_headers,
+                    )
                     .await;
                 Ok((document_navigation_token, navigation_state, navigation))
             }
@@ -1185,6 +1191,7 @@ impl PausedDocumentTransfer {
                 let navigation_state = navigation.clone();
                 let navigation = conn
                     .build_navigation_from_buffered_body_source_for_navigation_async(
+                        document_navigation_token.as_ref(),
                         &navigation,
                         navigation.requested_url.clone(),
                         response_code,
@@ -1316,6 +1323,7 @@ impl ActiveDocumentBodyStreamState {
         let final_url = self.response.final_url.clone();
         let navigation = conn
             .build_navigation_from_buffered_body_source_for_navigation_async(
+                self.document_navigation_token.as_ref(),
                 &self.navigation,
                 final_url,
                 response_code,
@@ -1490,6 +1498,7 @@ impl DocumentBodySource {
     pub(crate) async fn continue_navigation_async(
         self,
         conn: &mut CdpConnection,
+        token: Option<&DocumentNavigationToken>,
         navigation: &NavigationDispatchState,
         response_code: Option<u16>,
         response_headers: Vec<(String, Vec<u8>)>,
@@ -1503,6 +1512,7 @@ impl DocumentBodySource {
             } => {
                 if !has_response_override {
                     conn.build_navigation_from_buffered_raw_response_for_navigation_async(
+                        token,
                         navigation,
                         NetworkFetchResult::with_observation_journal(
                             response,
@@ -1521,6 +1531,7 @@ impl DocumentBodySource {
                         .expect("RawResponse body should remain materialized at the response override boundary");
                     let body = CapturedBody::from_bytes(body);
                     conn.build_navigation_from_buffered_body_source_for_navigation_async(
+                        token,
                         navigation,
                         final_url,
                         response_code.unwrap_or(status),
@@ -1544,6 +1555,7 @@ impl DocumentBodySource {
                 ..
             } => {
                 conn.build_navigation_from_streaming_raw_response_with_response_override_for_navigation_async(
+                    token,
                     navigation,
                     NetworkFetchResult::with_observation_journal(
                         response,
@@ -1564,6 +1576,7 @@ impl DocumentBodySource {
             } => {
                 if !has_response_override {
                     conn.build_navigation_from_captured_raw_response_for_navigation_async(
+                        token,
                         navigation,
                         head,
                         body,
@@ -1577,6 +1590,7 @@ impl DocumentBodySource {
                     let final_url = head.final_url.clone();
                     let request_cookie_report = head.request_cookie_report.clone();
                     conn.build_navigation_from_buffered_body_source_for_navigation_async(
+                        token,
                         navigation,
                         final_url,
                         response_code.unwrap_or(status),

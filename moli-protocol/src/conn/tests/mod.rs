@@ -1568,18 +1568,32 @@ fn navigation_background_event_sender_preserves_typed_sidecar_for_current_token(
 
 #[tokio::test]
 async fn materialized_navigation_completion_drops_stale_token() {
+    assert_stale_completion_retires_renderer_suspension(false).await;
+}
+
+#[tokio::test]
+async fn stale_navigation_completion_releases_renderer_after_current_navigation_finishes() {
+    assert_stale_completion_retires_renderer_suspension(true).await;
+}
+
+async fn assert_stale_completion_retires_renderer_suspension(finish_current_first: bool) {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
     browser_context.set_active_target_id("TID-nav");
     let stale = browser_context
         .start_document_navigation_for_active_target("LOADER-1".to_owned())
         .expect("active target should produce stale token");
-    let _current = browser_context
+    let current = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current token");
     conn.install_browser_context_fixture_for_test(browser_context);
     let state =
         materialized_navigation_test_state(Some(7), "LOADER-1", "https://example.test/stale");
+    let owner = state.owner.clone();
+    if finish_current_first {
+        conn.finish_renderer_document_navigation_for_owner(&owner, &current)
+            .unwrap();
+    }
     let navigation =
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "stale navigation should not emit".to_owned(),
@@ -1616,6 +1630,13 @@ async fn materialized_navigation_completion_drops_stale_token() {
         reply.get("method").is_none(),
         "stale completion must emit a command reply, not an event"
     );
+    assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &current));
+    if !finish_current_first {
+        assert!(conn.renderer_document_navigation_is_suspended_for_session_owner(None));
+        conn.finish_renderer_document_navigation_for_owner(&owner, &current)
+            .unwrap();
+    }
+    assert!(!conn.renderer_document_navigation_is_suspended_for_session_owner(None));
 }
 
 #[tokio::test]

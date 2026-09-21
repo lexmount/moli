@@ -181,16 +181,10 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
     session_history_position: Option<moli_session_history::SessionHistoryPosition>,
-    renderer_navigation: Option<(moli_core::page::RendererDevToolsTargetHandle, u64)>,
+    pub(crate) document_replacement: Option<moli_core::runtime::RendererDocumentReplacement>,
 }
 
 impl TargetNavigationLoadInputs {
-    pub(crate) fn prepare_to_replace_document(&self) {
-        if let Some((target, request_id)) = &self.renderer_navigation {
-            target.navigation_response_ready(*request_id);
-        }
-    }
-
     pub(crate) fn with_main_document_commit_seed(
         mut self,
         seed: RendererMainDocumentCommitSeed,
@@ -353,7 +347,7 @@ impl TargetNavigationLoadInputs {
                     .navigation_history_state
                     .position_after_navigation(),
             ),
-            renderer_navigation: target.runtime_slot().page_slot().renderer_navigation(),
+            document_replacement: None,
         }
     }
 
@@ -420,7 +414,7 @@ impl TargetNavigationLoadInputs {
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
             session_history_position: None,
-            renderer_navigation: None,
+            document_replacement: None,
         }
     }
 

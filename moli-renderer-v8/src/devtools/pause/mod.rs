@@ -24,7 +24,6 @@ use crate::runtime::{
 
 mod causality;
 mod loop_state;
-mod navigation;
 
 use causality::{
     RendererInspectorPauseCommandDispatch, RendererInspectorPauseCommandTransition,
@@ -35,7 +34,6 @@ pub(crate) use causality::{
 };
 use loop_state::RendererInspectorPausePhase;
 pub(crate) use loop_state::{RendererInspectorPauseExitReason, RendererInspectorPauseLoopPolicy};
-use navigation::RendererProvisionalLoad;
 
 #[derive(Clone)]
 pub(crate) struct RendererInspectorPauseBridge {
@@ -58,7 +56,7 @@ struct RendererInspectorPauseBridgeState {
     pause_loop_policy: RendererInspectorPauseLoopPolicy,
     quit_requested: bool,
     session_detach_arms: usize,
-    provisional_load: Option<RendererProvisionalLoad>,
+    document_replacements: usize,
     target_closed: bool,
     pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     paused_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
@@ -128,7 +126,7 @@ impl RendererInspectorPauseBridge {
                 pause_loop_policy: RendererInspectorPauseLoopPolicy::MainAndIo,
                 quit_requested: false,
                 session_detach_arms: 0,
-                provisional_load: None,
+                document_replacements: 0,
                 target_closed: false,
                 pending_prefaces: VecDeque::new(),
                 paused_sessions_awaiting_resumed: HashSet::new(),
@@ -151,7 +149,7 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
             .field("pause_loop_policy", &state.pause_loop_policy)
             .field("quit_requested", &state.quit_requested)
             .field("session_detach_arms", &state.session_detach_arms)
-            .field("provisional_load", &state.provisional_load)
+            .field("document_replacements", &state.document_replacements)
             .field("target_closed", &state.target_closed)
             .field("pending_prefaces", &state.pending_prefaces.len())
             .field(
@@ -364,6 +362,24 @@ impl RendererInspectorPauseBridge {
         Some(state.pause_loop_policy)
     }
 
+    pub(crate) fn begin_document_replacement(&self) -> bool {
+        let mut state = self.shared.state.lock();
+        if state.target_closed {
+            return false;
+        }
+        state.document_replacements += 1;
+        self.shared.pause_loop_wake.notify_all();
+        true
+    }
+
+    pub(crate) fn finish_document_replacement(&self) {
+        let mut state = self.shared.state.lock();
+        state.document_replacements = state
+            .document_replacements
+            .checked_sub(1)
+            .expect("document replacement scope must be balanced");
+    }
+
     pub(crate) fn wait_for_pause_work<T>(
         &self,
         mut claim: impl FnMut() -> Option<T>,
@@ -373,11 +389,8 @@ impl RendererInspectorPauseBridge {
             if state.target_closed {
                 return Err(RendererInspectorPauseExitReason::TargetClosed);
             }
-            if matches!(
-                state.provisional_load,
-                Some(RendererProvisionalLoad::ReplacingDocument(_))
-            ) {
-                return Err(RendererInspectorPauseExitReason::Navigation);
+            if state.document_replacements != 0 {
+                return Err(RendererInspectorPauseExitReason::DocumentReplacement);
             }
             if state.session_detach_arms != 0 {
                 return Err(RendererInspectorPauseExitReason::SessionDetached);

@@ -179,6 +179,8 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub(super) document_replacement:
+        Option<Arc<super::document_replacement::RendererDocumentReplacementScope>>,
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
     pub requested_url: Url,
@@ -1934,7 +1936,10 @@ impl RendererOwnerHandle {
     /// observes `Opened` before this release on success, while an early failure
     /// produces only the release. Never move this to the navigation completion
     /// channel: that independent channel cannot order against stream opening.
-    fn release_page_output_reservation(&self, reservation: RendererPageReservationToken) {
+    pub(super) fn release_page_output_reservation(
+        &self,
+        reservation: RendererPageReservationToken,
+    ) {
         if let Some(sender) = self
             .state
             .browser_context_runtime
@@ -2175,6 +2180,7 @@ impl RendererOwnerHandle {
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateStreamingRawPageRequest {
         RendererCreateStreamingRawPageRequest {
+            document_replacement: None,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
             requested_url,
@@ -7086,6 +7092,7 @@ impl RendererOwnerHandle {
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererCreateStreamingRawPageRequest {
+            document_replacement: _document_replacement,
             root_frame_id,
             main_document_commit,
             requested_url,

@@ -1,7 +1,7 @@
 use super::*;
 use crate::conn::{
-    CommandOwnerScope, NavigationLoadOutcome, NavigationNetworkError, NavigationNetworkErrorKind,
-    NavigationRequestLoadPolicy,
+    CommandOwnerScope, DocumentNavigationToken, NavigationLoadOutcome, NavigationNetworkError,
+    NavigationNetworkErrorKind, NavigationRequestLoadPolicy,
 };
 use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget};
 
@@ -45,7 +45,7 @@ fn failing_streamed_document(
 
 #[tokio::test]
 async fn fetch_body_materialization_preserves_error_type_and_request_identity() {
-    let (_ctx, navigation) = navigation_fixture();
+    let (_ctx, _token, navigation) = navigation_fixture();
     let (error, body) = failing_streamed_document(&navigation)
         .materialize_body_limited_async(1024)
         .await
@@ -75,7 +75,7 @@ async fn fetch_body_materialization_preserves_error_type_and_request_identity() 
 
 #[tokio::test]
 async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
-    let (_ctx, navigation) = navigation_fixture();
+    let (_ctx, _token, navigation) = navigation_fixture();
     let body = failing_streamed_document(&navigation);
     let transfer = crate::conn::PausedDocumentTransfer::pending(
         "fetch-typed-error".to_owned(),
@@ -102,12 +102,16 @@ async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
     assert!(format!("{error:#}").contains("failed to read page body from stream"));
 }
 
-fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
+fn navigation_fixture() -> (
+    TestContext,
+    DocumentNavigationToken,
+    NavigationDispatchState,
+) {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    browser_context
+    let token = browser_context
         .start_document_navigation_for_active_target("LID-test".to_owned())
         .expect("fixture navigation should start");
     ctx.conn
@@ -134,12 +138,137 @@ fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
         timestamp: 0.0,
         source_document_security: Default::default(),
     };
-    (ctx, navigation)
+    (ctx, token, navigation)
+}
+
+fn streaming_response_job(
+    conn: &mut CdpConnection,
+    token: &DocumentNavigationToken,
+    navigation: &NavigationDispatchState,
+) -> (
+    Option<crate::conn::runtime_load::BackgroundStreamingResponseNavigationLoadJob>,
+    moli_fetch::FetchCancelHandle,
+) {
+    let crate::conn::DocumentBodySource::StreamingRaw { response, .. } =
+        failing_streamed_document(navigation)
+    else {
+        unreachable!()
+    };
+    let cancellation = response.cancellation_handle();
+    let job = conn.background_streaming_response_navigation_load_job_for_navigation(
+        token,
+        navigation,
+        response,
+        Default::default(),
+        None,
+        Vec::new(),
+        Default::default(),
+    );
+    (job, cancellation)
+}
+
+#[tokio::test]
+async fn document_navigation_cancellation_requires_the_exact_pending_token() {
+    let (mut ctx, _, _) = navigation_fixture();
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+    let slot = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_target_mut()
+        .runtime_slot
+        .page_slot_mut();
+    let first = slot.start_document_navigation("TID-1".to_owned(), "LID-test".to_owned());
+    let first_cancellation = slot
+        .document_navigation_cancellation_handle(&first)
+        .unwrap();
+    assert!(!first_cancellation.is_cancelled());
+    let current = slot.start_document_navigation("TID-1".to_owned(), "LID-test".to_owned());
+    assert!(first_cancellation.is_cancelled());
+
+    for mismatch in [
+        first,
+        DocumentNavigationToken {
+            target_id: "other target".to_owned(),
+            ..current.clone()
+        },
+        DocumentNavigationToken {
+            loader_id: "other loader".to_owned(),
+            ..current.clone()
+        },
+    ] {
+        assert!(
+            slot.document_navigation_cancellation_handle(&mismatch)
+                .is_none()
+        );
+    }
+    let current_cancellation = slot
+        .document_navigation_cancellation_handle(&current)
+        .unwrap();
+    assert!(!current_cancellation.is_cancelled());
+    assert!(slot.commit_pending_document_navigation_if_matches(&current));
+    assert!(
+        slot.document_navigation_cancellation_handle(&current)
+            .is_none()
+    );
+    assert!(!current_cancellation.is_cancelled());
+}
+
+#[tokio::test]
+async fn superseded_streaming_response_cannot_arm_the_current_navigation() {
+    let (mut ctx, stale, navigation) = navigation_fixture();
+    // Even reusing the target, loader and URL must not reuse a request's authority.
+    let current = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .start_document_navigation_for_active_target(navigation.loader_id.clone())
+        .unwrap();
+    let current_cancellation = ctx
+        .conn
+        .document_navigation_cancellation_handle(&current)
+        .unwrap();
+    assert_ne!(stale.request_id, current.request_id);
+
+    let (job, stale_cancellation) = streaming_response_job(&mut ctx.conn, &stale, &navigation);
+    assert!(
+        job.is_none(),
+        "stale responses must not create renderer preparation jobs"
+    );
+    assert!(stale_cancellation.is_cancelled());
+    assert!(!current_cancellation.is_cancelled());
+    assert!(!ctx.conn.has_inflight_background_navigation());
+
+    let (job, _) = streaming_response_job(&mut ctx.conn, &current, &navigation);
+    assert!(
+        job.is_some(),
+        "the matching response must still be accepted"
+    );
+    assert!(ctx.conn.has_inflight_background_navigation());
+}
+
+#[tokio::test]
+async fn duplicate_streaming_response_does_not_cancel_the_armed_navigation() {
+    let (mut ctx, token, navigation) = navigation_fixture();
+    let (first, first_cancellation) = streaming_response_job(&mut ctx.conn, &token, &navigation);
+    assert!(first.is_some());
+    let (duplicate, duplicate_cancellation) =
+        streaming_response_job(&mut ctx.conn, &token, &navigation);
+    assert!(
+        duplicate.is_none(),
+        "an already armed request must not spawn another job"
+    );
+    assert!(duplicate_cancellation.is_cancelled());
+    assert!(!first_cancellation.is_cancelled());
+    assert!(ctx.conn.has_inflight_background_navigation());
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn offline_navigation_loaders_preserve_typed_error_causes_through_context() {
-    let (mut ctx, mut navigation) = navigation_fixture();
+    let (mut ctx, token, mut navigation) = navigation_fixture();
     navigation.request_method = "POST".to_owned();
     navigation.request_headers =
         moli_fetch::RequestHeaders::from_bytes(vec![("x-request".to_owned(), vec![0xe9, 0xff])]);
@@ -161,6 +290,7 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
     let errors = [
         ctx.conn
             .load_navigation_request_via_runtime_with_network_events_for_navigation_async(
+                Some(&token),
                 &navigation,
                 Default::default(),
             )
@@ -211,7 +341,7 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_error_document_uses_typed_failure_request_after_context() {
-    let (mut ctx, navigation) = navigation_fixture();
+    let (mut ctx, token, navigation) = navigation_fixture();
     let unreachable_url = Url::parse("https://overridden.example/unreachable").unwrap();
     let request_headers = vec![("x-request".to_owned(), "overridden-request".to_owned())];
     let error = anyhow::Error::new(NavigationNetworkError {
@@ -224,7 +354,7 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
     .context("failed to continue intercepted navigation");
     let outcome = ctx
         .conn
-        .prepare_navigation_load_error_for_navigation_async(&navigation, error)
+        .prepare_navigation_load_error_for_navigation_async(Some(&token), &navigation, error)
         .await
         .expect("typed network failure should prepare an error document");
     let NavigationLoadOutcome::ResponseCommitReady(prepared) = outcome else {
@@ -247,7 +377,7 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn navigation_error_boundary_does_not_classify_display_text_as_network_failure() {
-    let (mut ctx, navigation) = navigation_fixture();
+    let (mut ctx, token, navigation) = navigation_fixture();
     for error in [
         anyhow::anyhow!(OFFLINE_ERROR_TEXT),
         anyhow::anyhow!(OFFLINE_ERROR_TEXT)
@@ -257,7 +387,7 @@ async fn navigation_error_boundary_does_not_classify_display_text_as_network_fai
         let expected_chain = format!("{error:#}");
         let error = ctx
             .conn
-            .prepare_navigation_load_error_for_navigation_async(&navigation, error)
+            .prepare_navigation_load_error_for_navigation_async(Some(&token), &navigation, error)
             .await
             .expect_err("a matching display string must remain a non-network error");
         assert!(error.downcast_ref::<NavigationNetworkError>().is_none());

@@ -331,22 +331,43 @@ async fn assert_delayed_navigation_while_paused(supersede: bool) {
 
 #[tokio::test]
 async fn navigation_cancellation_at_request_stage_preserves_the_paused_document_and_debugger() {
-    assert_intercepted_navigation_while_paused("Request", InterceptionAction::Cancel).await;
+    assert_intercepted_navigation_while_paused("Request", InterceptionAction::Cancel, None).await;
 }
 
 #[tokio::test]
 async fn navigation_cancellation_at_response_stage_preserves_the_paused_document_and_debugger() {
-    assert_intercepted_navigation_while_paused("Response", InterceptionAction::Cancel).await;
+    assert_intercepted_navigation_while_paused("Response", InterceptionAction::Cancel, None).await;
 }
 
 #[tokio::test]
 async fn navigation_continues_an_intercepted_response_while_debugger_is_paused() {
-    assert_intercepted_navigation_while_paused("Response", InterceptionAction::Continue).await;
+    assert_intercepted_navigation_while_paused("Response", InterceptionAction::Continue, None)
+        .await;
 }
 
 #[tokio::test]
 async fn navigation_fulfills_an_intercepted_response_while_debugger_is_paused() {
-    assert_intercepted_navigation_while_paused("Response", InterceptionAction::Fulfill).await;
+    assert_intercepted_navigation_while_paused("Response", InterceptionAction::Fulfill, None).await;
+}
+
+#[tokio::test]
+async fn stale_response_continuation_preserves_the_paused_document_and_debugger() {
+    assert_intercepted_navigation_while_paused(
+        "Response",
+        InterceptionAction::Cancel,
+        Some(InterceptionAction::Continue),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn stale_response_fulfillment_preserves_the_paused_document_and_debugger() {
+    assert_intercepted_navigation_while_paused(
+        "Response",
+        InterceptionAction::Cancel,
+        Some(InterceptionAction::Fulfill),
+    )
+    .await;
 }
 
 #[derive(Clone, Copy)]
@@ -356,9 +377,31 @@ enum InterceptionAction {
     Fulfill,
 }
 
+impl InterceptionAction {
+    fn command(self, request_id: serde_json::Value) -> (&'static str, serde_json::Value) {
+        match self {
+            Self::Cancel => (
+                "Fetch.failRequest",
+                json!({"requestId": request_id, "errorReason": "Aborted"}),
+            ),
+            Self::Continue => ("Fetch.continueResponse", json!({"requestId": request_id})),
+            Self::Fulfill => (
+                "Fetch.fulfillRequest",
+                json!({
+                    "requestId": request_id,
+                    "responseCode": 200,
+                    "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
+                    "body": "PHRpdGxlPmZ1bGZpbGxlZDwvdGl0bGU+"
+                }),
+            ),
+        }
+    }
+}
+
 async fn assert_intercepted_navigation_while_paused(
     request_stage: &str,
     action: InterceptionAction,
+    stale_response: Option<InterceptionAction>,
 ) {
     let (fixture_addr, fixture) = spawn_dedicated_fixture_server(
         Router::new().route(
@@ -413,32 +456,49 @@ async fn assert_intercepted_navigation_while_paused(
         message["method"] == "Fetch.requestPaused"
     })
     .await;
-    let request_id = intercepted
+    let mut request_id = intercepted
         .iter()
         .find(|message| message["method"] == "Fetch.requestPaused")
         .unwrap()["params"]["requestId"]
         .clone();
-    let (method, params) = match action {
-        InterceptionAction::Cancel => (
-            "Fetch.failRequest",
-            json!({"requestId": request_id, "errorReason": "Aborted"}),
-        ),
-        InterceptionAction::Continue => {
-            ("Fetch.continueResponse", json!({"requestId": request_id}))
-        }
-        InterceptionAction::Fulfill => (
-            "Fetch.fulfillRequest",
-            json!({
-                "requestId": request_id,
-                "responseCode": 200,
-                "responseHeaders": [{"name": "Content-Type", "value": "text/html"}],
-                "body": "PHRpdGxlPmZ1bGZpbGxlZDwvdGl0bGU+"
-            }),
-        ),
+    let navigation_id = if let Some(stale_action) = stale_response {
+        send_cdp_command_without_wait(
+            &mut socket,
+            20,
+            "Page.navigate",
+            Some(&session_id),
+            json!({"url": format!("http://{fixture_addr}/?replacement")}),
+        )
+        .await;
+        let replacement = recv_until_match(&mut socket, |message| {
+            message["method"] == "Fetch.requestPaused"
+        })
+        .await;
+        let replacement_id = replacement
+            .iter()
+            .find(|message| message["method"] == "Fetch.requestPaused")
+            .unwrap()["params"]["requestId"]
+            .clone();
+        assert_ne!(request_id, replacement_id);
+        let (method, params) = stale_action.command(request_id);
+        let stale = send_cdp_command(&mut socket, 21, method, Some(&session_id), params).await;
+        assert!(
+            stale
+                .iter()
+                .any(|message| message["id"] == 21 && message.get("error").is_none())
+        );
+        request_id = replacement_id;
+        20
+    } else {
+        9
     };
+    let (method, params) = action.command(request_id);
     let mut completed = send_cdp_command(&mut socket, 10, method, Some(&session_id), params).await;
-    if !completed.iter().any(|message| message["id"] == 9) {
-        completed.extend(recv_until_id(&mut socket, 9).await);
+    if !completed
+        .iter()
+        .any(|message| message["id"] == navigation_id)
+    {
+        completed.extend(recv_until_id(&mut socket, navigation_id).await);
     }
     assert!(
         completed
@@ -471,7 +531,7 @@ async fn assert_intercepted_navigation_while_paused(
             assert!(
                 completed
                     .iter()
-                    .any(|message| message["id"] == 9 && message.get("error").is_none())
+                    .any(|message| message["id"] == navigation_id && message.get("error").is_none())
             );
             if !completed
                 .iter()

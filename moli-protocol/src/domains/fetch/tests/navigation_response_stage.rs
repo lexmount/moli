@@ -840,6 +840,15 @@ async fn fulfill_request_commit_uses_configuration_added_while_paused_before_aut
 
 #[tokio::test(flavor = "multi_thread")]
 async fn interleaved_response_heads_only_commit_the_current_response() {
+    assert_interleaved_response_heads(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interleaved_response_heads_preserve_the_current_debugger_pause() {
+    assert_interleaved_response_heads(true).await;
+}
+
+async fn assert_interleaved_response_heads(pause_old_document: bool) {
     async fn first() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -874,6 +883,21 @@ async fn interleaved_response_heads_only_commit_the_current_response() {
         .enable_primary_network_events();
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
+    if pause_old_document {
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>old document</title>",
+            Some("SID-1"),
+        )
+        .await;
+        ctx.process_async(json!({
+            "id": 360,
+            "method": "Debugger.enable",
+            "sessionId": "SID-1"
+        }))
+        .await;
+        ctx.sent.clear();
+    }
+
     ctx.process_async(json!({
         "id": 364,
         "method": "Fetch.enable",
@@ -888,6 +912,23 @@ async fn interleaved_response_heads_only_commit_the_current_response() {
     }))
     .await;
     ctx.expect_result(364, json!({}), Some("SID-1"));
+
+    if pause_old_document {
+        ctx.process_async(json!({
+            "id": 361,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "expression": "setTimeout(() => { debugger; globalThis.resumedNormally = true; }, 0)"
+            }
+        }))
+        .await;
+        ctx.wait_for_scheduler_message("old document debugger pause", |message| {
+            message["method"] == "Debugger.paused"
+        })
+        .await;
+        ctx.sent.clear();
+    }
 
     ctx.process_async(json!({
         "id": 365,
@@ -947,11 +988,8 @@ async fn interleaved_response_heads_only_commit_the_current_response() {
     .await;
     ctx.expect_result(367, json!({}), Some("SID-1"));
     let superseded = take_response_by_id(&mut ctx, 365);
-    assert_eq!(superseded["error"]["code"], -32000);
-    assert_eq!(
-        superseded["error"]["message"],
-        "renderer channel navigation was superseded by a newer navigation"
-    );
+    assert!(superseded.get("error").is_none());
+    assert_eq!(superseded["result"]["errorText"], "net::ERR_ABORTED");
     assert_eq!(
         ctx.conn.browser_context.as_ref().and_then(|bc| bc
             .active_page_target()
@@ -960,6 +998,55 @@ async fn interleaved_response_heads_only_commit_the_current_response() {
         attachment_before_continue,
         "a superseded response head must not switch the renderer channel"
     );
+
+    if pause_old_document {
+        assert!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .loaded_page()
+                .unwrap()
+                .runtime_inspector_pause_active(),
+            "continuing stale A must not terminate the old document while B is intercepted"
+        );
+        ctx.process_async(json!({
+            "id": 368,
+            "method": "Fetch.failRequest",
+            "sessionId": "SID-1",
+            "params": { "requestId": second_request_id, "errorReason": "Aborted" }
+        }))
+        .await;
+        ctx.expect_result(368, json!({}), Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 369,
+            "method": "Debugger.resume",
+            "sessionId": "SID-1"
+        }))
+        .await;
+        ctx.expect_result(369, json!({}), Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 370,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "expression": "document.title + ':' + globalThis.resumedNormally",
+                "returnByValue": true
+            }
+        }))
+        .await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 370)["result"]["result"]["value"],
+            "old document:true"
+        );
+        assert!(
+            !ctx.sent
+                .iter()
+                .any(|message| message["method"] == "Page.frameNavigated")
+        );
+        server.abort();
+        return;
+    }
 
     ctx.process_async(json!({
         "id": 368,

@@ -84,24 +84,16 @@ pub(crate) struct PendingNavigationRequest {
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_completion_pending: bool,
     committed: bool,
-    renderer_target: Option<moli_core::page::RendererDevToolsTargetHandle>,
 }
 
 impl PendingNavigationRequest {
-    fn new(
-        token: DocumentNavigationToken,
-        renderer_target: Option<moli_core::page::RendererDevToolsTargetHandle>,
-    ) -> Self {
-        if let Some(target) = &renderer_target {
-            target.navigation_started(token.request_id.get());
-        }
+    fn new(token: DocumentNavigationToken) -> Self {
         Self {
             token,
             page_attachment_id: TargetPageAttachmentId::allocate(),
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
             committed: false,
-            renderer_target,
         }
     }
 
@@ -135,14 +127,7 @@ impl PendingNavigationRequest {
         self.cancellation_handles.clear();
     }
 
-    fn finish_renderer_navigation(&mut self) {
-        if let Some(target) = self.renderer_target.take() {
-            target.navigation_finished(self.token.request_id.get());
-        }
-    }
-
     fn cancel(&mut self) {
-        self.finish_renderer_navigation();
         for cancellation in self.cancellation_handles.drain(..) {
             cancellation.cancel();
         }
@@ -683,22 +668,8 @@ impl TargetPageSlot {
         };
         self.pending_renderer_page = None;
         self.cancel_pending_document_navigation();
-        let renderer_target = self.loaded_page().map(Page::renderer_devtools_target);
-        self.pending_navigation_request = Some(PendingNavigationRequest::new(
-            token.clone(),
-            renderer_target,
-        ));
+        self.pending_navigation_request = Some(PendingNavigationRequest::new(token.clone()));
         token
-    }
-
-    pub(crate) fn renderer_navigation(
-        &self,
-    ) -> Option<(moli_core::page::RendererDevToolsTargetHandle, u64)> {
-        let request = self.pending_navigation_request.as_ref()?;
-        Some((
-            request.renderer_target.clone()?,
-            request.token.request_id.get(),
-        ))
     }
 
     fn cancel_pending_document_navigation(&mut self) {
@@ -864,7 +835,6 @@ impl TargetPageSlot {
         };
         self.committed_document_navigation = Some(token.clone());
         request.committed = true;
-        request.finish_renderer_navigation();
         if !request.background_completion_pending {
             request.retire_without_cancellation();
             self.pending_navigation_request = None;

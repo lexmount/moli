@@ -91,7 +91,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
     target_context.set_active_target_id("TID-target");
     target_context.attach_active_session("SID-target");
     target_context.begin_active_target_initial_empty_document("about:blank".to_owned());
-    target_context
+    let token = target_context
         .start_document_navigation_for_active_target("LOADER-target".to_owned())
         .expect("target should accept its synthetic navigation");
     conn.push_inactive_browser_context_fixture_for_test(target_context);
@@ -128,6 +128,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
 
     let outcome = conn
         .build_navigation_from_buffered_body_source_for_navigation_async(
+            Some(&token),
             &navigation,
             requested_url,
             200,

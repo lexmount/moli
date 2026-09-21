@@ -74,6 +74,7 @@ async fn prepare_test_external_raw_document_with_content_type_and_reply_boundary
     runtime
         .prepare_streaming_raw_document_from_external_body(
             runtime.reserve_page_for_creation(),
+            None,
             url.clone(),
             url,
             None,

@@ -170,6 +170,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
                 } else {
                     let navigation = conn
                         .build_navigation_from_buffered_raw_response_for_navigation_async(
+                            pending.document_navigation_token.as_ref(),
                             &pending.navigation,
                             response,
                         )
@@ -224,6 +225,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
 
     let navigation = conn
         .load_navigation_request_via_runtime_with_network_events_for_navigation_async(
+            pending.document_navigation_token.as_ref(),
             &pending.navigation,
             network::MainDocumentBodyProgressSource::default(),
         )
@@ -324,6 +326,7 @@ pub(super) async fn cancel_navigation_auth_as_background_events_async(
         pending.intercept_response = false;
         let navigation = conn
             .build_navigation_from_buffered_raw_response_for_navigation_async(
+                pending.document_navigation_token.as_ref(),
                 &pending.navigation,
                 response,
             )
@@ -410,6 +413,7 @@ async fn complete_pending_fetch_navigation_result_into_buffer_async(
     let navigation = match navigation {
         Err(error) => {
             Box::pin(conn.prepare_navigation_load_error_for_navigation_async(
+                token.as_ref(),
                 &navigation_state,
                 error.context("failed to continue intercepted navigation"),
             ))
@@ -482,6 +486,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     if response_headers_indicate_attachment_download(&response_head.headers) {
         let navigation = conn
             .build_navigation_from_streaming_raw_response_for_navigation_async(
+                pending.document_navigation_token.as_ref(),
                 &pending.navigation,
                 response,
                 network::MainDocumentBodyProgressSource::default(),
@@ -495,6 +500,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     if !prepare_navigation_response_stage(conn, &mut pending, &response_head.final_url) {
         let navigation = conn
             .build_navigation_from_streaming_raw_response_for_navigation_async(
+                pending.document_navigation_token.as_ref(),
                 &pending.navigation,
                 response,
                 network::MainDocumentBodyProgressSource::default(),

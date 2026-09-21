@@ -239,11 +239,13 @@ impl RendererInspectorSessionExecutorLocal {
                 }
             }
         };
-        if exit_reason == crate::devtools::pause::RendererInspectorPauseExitReason::Navigation {
+        if exit_reason
+            == crate::devtools::pause::RendererInspectorPauseExitReason::DocumentReplacement
+        {
             // Like Chromium's UnpauseAndTerminate, unwind the paused old
             // document before preparing its replacement on the owner thread.
-            // Later pauses observe the same provisional-load state until its
-            // explicit commit/cancel notification. No debugger setting leaks
+            // Later pauses observe the same renderer preparation scope until
+            // it commits or is discarded. No debugger setting leaks
             // into the replacement document's Inspector restore snapshots.
             let sessions: Vec<_> = self
                 .sessions

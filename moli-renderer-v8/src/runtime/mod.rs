@@ -44,6 +44,7 @@ mod access;
 mod browser_context_runtime;
 mod document_lifecycle;
 mod document_lifecycle_turn;
+mod document_replacement;
 mod javascript_dialog;
 mod lifecycle_decision;
 mod main_document_ready_gate;
@@ -54,6 +55,7 @@ mod owner_deadline_index;
 mod owner_local;
 mod owner_local_store;
 mod owner_maintenance;
+pub use document_replacement::RendererDocumentReplacement;
 mod page;
 mod page_commands;
 mod page_context_cancel;
@@ -434,7 +436,6 @@ pub use crate::devtools::ingress::io::{
 pub use crate::devtools::ingress::main::{
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
-pub use crate::devtools::target::RendererDevToolsTargetHandle;
 pub(crate) use crate::renderer::PageVmInitStage;
 pub(crate) use crate::service_worker_runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,
