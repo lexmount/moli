@@ -2266,6 +2266,7 @@ mod audio_param_native_receivers;
 
 mod css_keyframes_mutations;
 mod css_keyframes_receivers;
+mod cross_origin_symbol_fallback;
 mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod device_events;
