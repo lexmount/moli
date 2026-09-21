@@ -3,6 +3,7 @@ use super::*;
 mod eval;
 mod rebind;
 mod seeds;
+mod url_alias;
 
 fn current_surface_state(scope: &mut v8::PinScope<'_, '_>) -> (bool, bool, bool) {
     let diagnostics = crate::context_bootstrap::window_lazy_surface_diagnostics(scope);
