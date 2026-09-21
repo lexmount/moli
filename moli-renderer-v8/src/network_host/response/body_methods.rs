@@ -4,6 +4,7 @@ mod text_json;
 use super::super::fetch_surface::{
     REQUEST_BODY_USED_SLOT, REQUEST_HEADERS_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
 };
+use super::super::headers::normalized_headers_entries;
 use super::*;
 use moli_web_mime::{
     is_form_urlencoded_mime, multipart_form_data_boundary, response_blob_mime_type,
@@ -183,6 +184,7 @@ fn body_headers<'s>(
         BodyReceiver::Request => request_slot_object(scope, object, REQUEST_HEADERS_SLOT)
             .map(|headers| headers_entries(scope, headers)),
     }
+    .map(|headers| normalized_headers_entries(&headers))
 }
 
 fn is_urlencoded_content_type(content_type: &str) -> bool {

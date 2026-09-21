@@ -1,4 +1,6 @@
-use super::headers::{build_headers_object, headers_entries, mark_headers_immutable};
+use super::headers::{
+    build_headers_object, headers_entries, mark_headers_immutable, normalized_headers_entries,
+};
 use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
 use super::*;
 use crate::context_bootstrap::readable_stream_disturbed;
@@ -459,7 +461,10 @@ fn response_content_type<'s>(
     response: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)?;
-    moli_web_mime::response_header_value(&headers_entries(scope, headers), "content-type")
+    moli_web_mime::response_header_value(
+        &normalized_headers_entries(&headers_entries(scope, headers)),
+        "content-type",
+    )
 }
 
 fn request_slot_attribute_getter_callback<'s>(

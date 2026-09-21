@@ -144,13 +144,13 @@ pub(in crate::network_host) fn set_headers_entries(
 }
 
 pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]) -> String {
-    let entries = normalized_headers_entries(entries);
+    // Keep the underlying header list intact. Request construction can refill
+    // this list under a different guard, which must see each original entry.
+    let entries = normalized_header_list(entries);
     serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_owned())
 }
 
-pub(in crate::network_host) fn normalized_headers_entries(
-    entries: &[(String, String)],
-) -> Vec<(String, String)> {
+fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)> {
     let mut normalized = Vec::<(String, String)>::new();
     for (name, value) in entries {
         let Some(lower) = normalized_header_name(name) else {
@@ -160,6 +160,18 @@ pub(in crate::network_host) fn normalized_headers_entries(
         if !is_valid_header_value(&value) {
             continue;
         }
+        normalized.push((lower, value));
+    }
+    normalized
+}
+
+// JS iteration and XHR's serialized response headers use sort-and-combine;
+// storage and internal Request copies must retain duplicate entries.
+pub(in crate::network_host) fn normalized_headers_entries(
+    entries: &[(String, String)],
+) -> Vec<(String, String)> {
+    let mut normalized = Vec::<(String, String)>::new();
+    for (lower, value) in normalized_header_list(entries) {
         if lower == "set-cookie" {
             normalized.push((lower, value));
             continue;
@@ -261,7 +273,32 @@ fn private_string_value<'s>(
 
 #[cfg(test)]
 mod tests {
-    use super::{HeadersGuard, header_allowed_by_guard, normalized_headers_entries};
+    use super::{
+        HeadersGuard, header_allowed_by_guard, headers_entries_json, normalized_headers_entries,
+    };
+
+    #[test]
+    fn headers_storage_preserves_duplicate_entries_and_order() {
+        let entries = [
+            ("X-Test".to_owned(), " one ".to_owned()),
+            ("Set-Cookie".to_owned(), "a=1".to_owned()),
+            ("x-test".to_owned(), String::new()),
+            ("set-cookie".to_owned(), "b=2".to_owned()),
+            ("X-TEST".to_owned(), "two".to_owned()),
+        ];
+        let stored: Vec<(String, String)> =
+            serde_json::from_str(&headers_entries_json(&entries)).unwrap();
+        assert_eq!(
+            stored,
+            vec![
+                ("x-test".to_owned(), "one".to_owned()),
+                ("set-cookie".to_owned(), "a=1".to_owned()),
+                ("x-test".to_owned(), String::new()),
+                ("set-cookie".to_owned(), "b=2".to_owned()),
+                ("x-test".to_owned(), "two".to_owned()),
+            ]
+        );
+    }
 
     #[test]
     fn normalized_headers_entries_keeps_set_cookie_values_separate() {

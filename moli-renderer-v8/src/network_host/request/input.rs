@@ -206,15 +206,9 @@ fn request_input_snapshot_from_private_slots<'s>(
             webidl::WebIdlError::custom_message("Failed to materialize request body")
         })?
     };
-    let headers = webidl::property_result(
-        scope,
-        object,
-        "headers",
-        webidl::Context::member("Request", "headers"),
-    )?
-    .map(|value| headers_entries_from_init(scope, value))
-    .transpose()?
-    .unwrap_or_default();
+    // Inherited headers are an internal list copy, unlike an explicit
+    // RequestInit.headers value, which undergoes WebIDL iterable conversion.
+    let headers = request_headers_entries(scope, object);
     let signal = request_slot_value(scope, object, REQUEST_SIGNAL_SLOT)
         .map(|value| request_signal_snapshot_from_value(scope, value))
         .transpose()?

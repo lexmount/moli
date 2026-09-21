@@ -1,4 +1,4 @@
-use super::super::store::headers_entries;
+use super::super::store::{headers_entries, normalized_headers_entries};
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
@@ -126,7 +126,7 @@ pub(in crate::network_host::headers) fn headers_for_each_callback<'s>(
         .this_arg
         .unwrap_or_else(|| v8::undefined(scope).into());
     let callback = parsed.callback.prepare(scope);
-    for (name, value) in headers_entries(scope, this) {
+    for (name, value) in normalized_headers_entries(&headers_entries(scope, this)) {
         let Some(name) = v8_string(scope, &name) else {
             continue;
         };
@@ -205,7 +205,7 @@ fn headers_iterator_next_callback<'s>(
         return;
     };
     let index = index_value.integer_value(scope).unwrap_or(0).max(0) as usize;
-    let entries = headers_entries(scope, target);
+    let entries = normalized_headers_entries(&headers_entries(scope, target));
     if index >= entries.len() {
         let result = HeadersIteratorResultDeclaration::new(true, v8::undefined(scope).into())
             .bind(scope)

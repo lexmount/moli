@@ -1,4 +1,4 @@
-async function noCorsFillProbe(base, transport = true) {
+async function noCorsFillProbe(base) {
   const checks = [];
   const check = (label, actual, wanted) => checks.push({label, actual, wanted, pass: actual === wanted});
   const cases = [];
@@ -35,23 +35,34 @@ async function noCorsFillProbe(base, transport = true) {
     check(label + '/inherited-mode', new Request(inherited, {headers: pairs}).headers.get(name), wanted);
     const cors = new Request(url, {headers: pairs});
     check(label + '/override', new Request(cors, {mode: 'no-cors', headers: pairs}).headers.get(name), wanted);
+    Object.defineProperty(cors.headers, Symbol.iterator, {
+      get() { throw new Error('Inherited headers must not use the JS iterator'); }
+    });
+    // Without init.headers, Request copies the underlying header list and
+    // appends each entry under the new guard (Fetch Request constructor).
+    check(label + '/inherited-headers', new Request(cors, {mode: 'no-cors'}).headers.get(name), wanted);
+    check(label + '/inherited-clone', new Request(cors.clone(), {mode: 'no-cors'}).headers.get(name), wanted);
+    const appendedCors = new Request(url);
+    for (const [key, value] of pairs) appendedCors.headers.append(key, value);
+    check(label + '/inherited-appended', new Request(appendedCors, {mode: 'no-cors'}).headers.get(name), wanted);
+    // Explicit init.headers is a HeadersInit union (sequence or record).
+    // WebIDL consumes Headers' JS iterator, whose values are combined already.
     check(label + '/headers-init', new Request(url, {mode: 'no-cors', headers: new Headers(pairs)}).headers.get(name), mergedWanted);
     check(label + '/cors', cors.headers.get(name), joined);
     check(label + '/response', new Response(null, {headers: pairs}).headers.get(name), joined);
     check(label + '/input-unchanged', JSON.stringify(pairs), original);
-    if (transport) {
-      for (const [kind, input, init] of [
-        ['direct', url, {mode: 'no-cors', headers: pairs}],
-        ['captured', request, undefined],
-        ['override', cors, {mode: 'no-cors', headers: pairs}],
-      ]) {
-        let actual;
-        try {
-          const response = await fetch(input, init);
-          actual = new Headers((await response.json()).headers).get(name);
-        } catch (error) { actual = String(error); }
-        check(label + '/fetch-' + kind, actual, wanted);
-      }
+    for (const [kind, input, init] of [
+      ['direct', url, {mode: 'no-cors', headers: pairs}],
+      ['captured', request, undefined],
+      ['override', cors, {mode: 'no-cors', headers: pairs}],
+      ['inherited', cors, {mode: 'no-cors'}],
+    ]) {
+      let actual;
+      try {
+        const response = await fetch(input, init);
+        actual = new Headers((await response.json()).headers).get(name);
+      } catch (error) { actual = String(error); }
+      check(label + '/fetch-' + kind, actual, wanted);
     }
     const reset = name === 'Content-Type' ? 'text/plain' : 'reset';
     request.headers.set(name, reset);

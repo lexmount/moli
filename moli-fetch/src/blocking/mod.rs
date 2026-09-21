@@ -698,8 +698,16 @@ pub(crate) fn configure_easy(
 
     let mut has_content_type_header = false;
     for (name, value) in outgoing_headers.iter() {
-        has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-        let mut header_line = format!("{name}:").into_bytes();
+        let is_content_type = name.eq_ignore_ascii_case("content-type");
+        has_content_type_header |= is_content_type;
+        let mut header_line = name.as_bytes().to_vec();
+        // curl sends an empty field for `Name;`, but removes it for `Name:`.
+        // Empty Content-Type remains the internal upload-default suppression marker.
+        header_line.push(if value.is_empty() && !is_content_type {
+            b';'
+        } else {
+            b':'
+        });
         if !value.is_empty() {
             header_line.push(b' ');
             header_line.extend_from_slice(value);
