@@ -16641,16 +16641,22 @@ addEventListener("message", event => {{
   const middle = frames[0];
   const grandchild = middle[0];
   const adopted = grandchild.document.adoptNode(document.createElement("button"));
+  // Names are filtered against the middle Window's origin, even though the
+  // indexed grandchild is same-origin with the caller.
+  const probe = callback => {
+    try { return callback(); }
+    catch (error) { return `${error.name}:${error instanceof DOMException}`; }
+  };
   return JSON.stringify({
     middleLength: middle.length,
     grandchildIsWindow: grandchild.window === grandchild,
     grandchildTopIsTop: grandchild.top === window,
     adoptedIntoGrandchild: adopted.ownerDocument === grandchild.document,
-    namedVisible: "liveNested" in middle,
-    namedOwn: Object.prototype.hasOwnProperty.call(middle, "liveNested"),
-    namedMatchesIndexed: middle.liveNested === grandchild,
+    namedVisible: probe(() => "liveNested" in middle),
+    namedOwn: probe(() => Object.prototype.hasOwnProperty.call(middle, "liveNested")),
+    namedMatchesIndexed: probe(() => middle.liveNested === grandchild),
     namedDescriptorMatches:
-      Object.getOwnPropertyDescriptor(middle, "liveNested").value === grandchild
+      probe(() => Object.getOwnPropertyDescriptor(middle, "liveNested").value === grandchild)
   });
 })()
 "#,
@@ -16658,7 +16664,7 @@ addEventListener("message", event => {{
         .expect("top should traverse the cross-origin middle Window index");
     assert_eq!(
         result,
-        r#"{"middleLength":1,"grandchildIsWindow":true,"grandchildTopIsTop":true,"adoptedIntoGrandchild":true,"namedVisible":true,"namedOwn":true,"namedMatchesIndexed":true,"namedDescriptorMatches":true}"#
+        r#"{"middleLength":1,"grandchildIsWindow":true,"grandchildTopIsTop":true,"adoptedIntoGrandchild":true,"namedVisible":"SecurityError:true","namedOwn":"SecurityError:true","namedMatchesIndexed":"SecurityError:true","namedDescriptorMatches":"SecurityError:true"}"#
     );
     assert_eq!(
         server.finish_targets().await,

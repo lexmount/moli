@@ -15786,6 +15786,7 @@ mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod close_watchers;
 mod cross_origin_window_indexes;
+mod cross_origin_window_names;
 mod dom_elements;
 mod dom_xhr;
 mod element_click;
