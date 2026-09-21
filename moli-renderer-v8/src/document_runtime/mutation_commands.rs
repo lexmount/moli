@@ -2228,6 +2228,17 @@ fn execute_committed_inline_classic_script(
     committed: crate::host::CommittedInlineClassicScript,
 ) {
     let (node, host_script_handle, source) = committed.into_parts();
+    // An inserted script executes in its Document's main world, including
+    // when a child or isolated world performed the insertion.
+    let default_context = unsafe { &*host_ptr }
+        .page_default_context(scope)
+        .expect("top-level inline script execution requires the page main-world context");
+    let scope = &mut v8::ContextScope::new(scope, default_context);
+    let script_url = runtime.document.url().clone();
+    let base_url = runtime
+        .dom_host
+        .document_base_url_for_handle(runtime.dom_host.document_handle())
+        .unwrap_or_else(|| script_url.clone());
     let nonce =
         crate::host::script_element_nonce_for_csp(&runtime.dom_host, node).map(str::to_owned);
     let request = crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
@@ -2240,19 +2251,25 @@ fn execute_committed_inline_classic_script(
     ) else {
         return;
     };
-    let Some(source) = v8::String::new(scope, &source) else {
-        return;
-    };
-    let Some(script) = v8::Script::compile(scope, source, None) else {
-        return;
-    };
+    // Parse errors are reported by running the classic script too. Keep
+    // currentScript set through both compilation and synchronous error reporting,
+    // and contain the exception so the inserting DOM operation can continue.
     unsafe { &mut *host_ptr }.push_current_inline_script(node);
-    let run_result = crate::script_execution::execute_compiled_script(scope, script);
+    let run_result = crate::script_vm::execute_source_text_on_current_stack(
+        scope,
+        &source,
+        Some(&script_url),
+        Some(&base_url),
+        0,
+        nonce.as_deref(),
+        true,
+    );
     unsafe { &mut *host_ptr }.pop_current_inline_script(node);
-    if run_result.is_some() {
-        let _ = runtime.enqueue_script_event_lifecycle_work(
-            crate::host::ScriptEventKind::Load,
-            &host_script_handle,
+    if let Err(error) = run_result {
+        debug!(
+            host_script_handle,
+            %error,
+            "dynamic inline classic script execution failed"
         );
     }
 }

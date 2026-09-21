@@ -15704,6 +15704,7 @@ mod cross_origin_window_indexes;
 mod cross_origin_window_names;
 mod dom_elements;
 mod dom_xhr;
+mod dynamic_inline_scripts;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;
