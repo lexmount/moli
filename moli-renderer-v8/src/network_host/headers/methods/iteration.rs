@@ -126,11 +126,18 @@ pub(in crate::network_host::headers) fn headers_for_each_callback<'s>(
         .this_arg
         .unwrap_or_else(|| v8::undefined(scope).into());
     let callback = parsed.callback.prepare(scope);
-    for (name, value) in normalized_headers_entries(&headers_entries(scope, this)) {
-        let Some(name) = v8_string(scope, &name) else {
+    let mut index = 0;
+    loop {
+        // Script can change both the values and the sorted pair order.
+        let entries = normalized_headers_entries(&headers_entries(scope, this));
+        let Some((name, value)) = entries.get(index) else {
+            break;
+        };
+        index += 1;
+        let Some(name) = v8_string(scope, name) else {
             continue;
         };
-        let Some(value) = v8_string(scope, &value) else {
+        let Some(value) = v8_string(scope, value) else {
             continue;
         };
         if invoke_synchronous_webidl_callback_function(
