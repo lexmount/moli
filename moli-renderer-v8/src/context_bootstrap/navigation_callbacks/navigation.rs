@@ -1,7 +1,7 @@
 use super::super::navigation_activation::{
     clear_navigation_transition, install_navigation_transition,
-    navigation_transition_matches_resolver, precommit_transition_resolver_from_event, reject_navigation_transition_committed,
-    resolve_navigation_transition_committed,
+    navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
+    reject_navigation_transition_committed, resolve_navigation_transition_committed,
 };
 use super::super::navigation_events::{
     dispatch_popstate_event, finish_navigation_precommit, navigation_precommit_redirect,
@@ -1399,6 +1399,7 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
     resolved_value: v8::Local<'s, v8::Value>,
     filename: &str,
 ) {
+    let _execution = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     let attempt_id = begin_navigation_attempt(scope, "intercept-settlement")
         .map(|attempt_id| v8::BigInt::new_from_u64(scope, attempt_id.raw()));
     let filename_value = v8_string(scope, filename).unwrap_or_else(|| v8::String::empty(scope));

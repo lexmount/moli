@@ -5,7 +5,7 @@ use super::events::{
 use super::location_history_storage::{
     NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
 };
-use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
+use super::location_runtime::location_href_slot;
 use super::media_queries::dispatch_simple_event_target_event;
 use super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
@@ -29,7 +29,7 @@ use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
     replace_navigation_unload_event_active, runtime_window_dispatch_scope,
     runtime_window_is_global, runtime_window_owner, should_dispatch_hash_change,
-    window_location_for_holder, window_navigation_for_holder, window_task_target_for_runtime_owner,
+    window_location_for_holder, window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::document_runtime::EventTargetHandle;
@@ -1189,86 +1189,16 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
     form_data: Option<v8::Local<'s, v8::Value>>,
     can_intercept: bool,
 ) -> bool {
-    if let Some(filename) = download_request {
-        return super::navigation_download::dispatch_download_navigation_event(
-            scope,
-            owner,
-            href,
-            source_element,
-            user_initiated,
-            filename,
-        );
-    }
-    let Some(navigation) = window_navigation_for_holder(scope, owner) else {
-        return true;
-    };
-    let context = navigation
-        .get_creation_context(scope)
-        .unwrap_or_else(|| scope.get_current_context());
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let Ok(event_ctor) =
-        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
-    else {
-        return true;
-    };
-    let current_href = window_location_for_holder(scope, owner)
-        .and_then(|location| location_href_slot(scope, location))
-        .unwrap_or_default();
-    let next_url = url::Url::parse(href).ok();
-    let current_url = url::Url::parse(&current_href).ok();
-    let same_document = if navigation_type == "reload" {
-        false
-    } else {
-        next_url
-            .as_ref()
-            .is_some_and(|next| is_same_document_fragment_navigation(current_url.as_ref(), next))
-    };
-    let hash_change =
-        navigation_type != "reload" && should_dispatch_hash_change(&current_href, href);
-    let destination = create_navigation_destination(scope, href, same_document, -1, None);
-    let signal = create_navigation_abort_signal(scope);
-    let init = NavigateEventInitDeclaration {
-        navigation_type: v8_string(scope, navigation_type)
-            .map(v8::Local::<v8::Value>::from)
-            .unwrap_or_else(|| v8str(scope, "push").into()),
-        destination,
-        can_intercept,
+    super::navigation_interception::dispatch_cross_document_navigation_event(
+        scope,
+        owner,
+        href,
+        navigation_type,
+        source_element,
         user_initiated,
-        hash_change,
-        signal,
-        form_data: form_data.unwrap_or_else(|| v8::null(scope).into()),
-        download_request: download_request
-            .and_then(|value| v8_string(scope, value))
-            .map(v8::Local::<v8::Value>::from)
-            .unwrap_or_else(|| v8::null(scope).into()),
-        info: v8::undefined(scope).into(),
-        source_element: source_element
-            .map(v8::Local::<v8::Value>::from)
-            .unwrap_or_else(|| v8::null(scope).into()),
-        cancelable: true,
-    }
-    .bind(scope)
-    .expect("NavigateEvent init declaration should bind");
-    let Some(event) =
-        event_ctor.new_instance(scope, &[v8str(scope, "navigate").into(), init.into()])
-    else {
-        return true;
-    };
-    mark_event_trusted(scope, event);
-    set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_SYNTHETIC_SLOT, false);
-    set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
-    set_navigate_event_private_bool(
-        scope,
-        event,
-        NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT,
-        true,
-    );
-    dispatch_simple_event_target_event(
-        scope,
-        navigation,
-        NAVIGATION_EVENT_LISTENERS_SLOT,
-        "navigate",
-        event,
+        download_request,
+        form_data,
+        can_intercept,
     )
 }
 

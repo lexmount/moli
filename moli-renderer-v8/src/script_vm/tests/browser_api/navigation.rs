@@ -3617,6 +3617,9 @@ async fn navigation_cancellation_uses_dispatch_state_instead_of_author_cancelabi
 async fn navigation_intercept_handlers_preserve_cancellation_and_committed_entry() {
     for api in [
         "location-fragment",
+        "location-cross-document",
+        "location-replace",
+        "location-reload",
         "navigate-fragment",
         "navigate-cross-document",
         "reload",
