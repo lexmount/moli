@@ -20,7 +20,13 @@ impl JsContextHost {
         {
             return self
                 .child_browsing_context_direct_host_handles(handle)
-                .len();
+                .into_iter()
+                .filter(|child| {
+                    self.dom_host()
+                        .node(*child)
+                        .is_some_and(|node| node.flags().in_document_tree())
+                })
+                .count();
         }
         self.child_browsing_context_snapshot_markup(handle)
             .map(|snapshot| {
@@ -54,6 +60,11 @@ impl JsContextHost {
             return self
                 .child_browsing_context_direct_host_handles(handle)
                 .into_iter()
+                .filter(|child| {
+                    self.dom_host()
+                        .node(*child)
+                        .is_some_and(|node| node.flags().in_document_tree())
+                })
                 .enumerate()
                 .filter_map(|(index, child_handle)| {
                     self.dom_host()
