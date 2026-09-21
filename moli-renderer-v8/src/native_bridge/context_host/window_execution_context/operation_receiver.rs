@@ -12,6 +12,22 @@ pub(crate) enum WindowOperationReceiverCaptureError {
     CrossOrigin,
 }
 
+impl WindowOperationReceiverCaptureError {
+    /// Ordinary operation functions report receiver errors in their own realm.
+    /// Cross-origin WindowProxy/Location access surfaces have a separate error path.
+    pub(crate) fn throw(self, scope: &mut v8::PinScope<'_, '_>) {
+        match self {
+            Self::IllegalInvocation => crate::util::throw_type_error(scope, "Illegal invocation"),
+            Self::CrossOrigin => crate::native_bridge::throw_dom_exception(
+                scope,
+                "SecurityError",
+                18,
+                "Blocked access to a cross-origin Window.",
+            ),
+        }
+    }
+}
+
 /// Window receiver frozen at the start of a WebIDL operation.
 ///
 /// Blink separates three phases in generated Window bindings:
