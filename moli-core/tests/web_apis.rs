@@ -1,3 +1,6 @@
+#[path = "web_apis/pipe_disturbed.rs"]
+mod pipe_disturbed;
+
 use moli_test_support as support;
 
 use anyhow::Result;
