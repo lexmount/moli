@@ -26,6 +26,9 @@ async function headersForEachProbe() {
     ['append-existing', initial, (headers, key) => {
       if (key === 'a') headers.append('b', 'tail');
     }, [['a', '1'], ['b', '2, tail'], ['c', '3']]],
+    ['append-empty-duplicate', [['b', ''], ['a', '1'], ['B', '2']], (headers, key) => {
+      if (key === 'a') headers.append('b', '');
+    }, [['a', '1'], ['b', ', 2, ']]],
     ['insert-before', [['b', '2'], ['c', '3']], (headers, key) => {
       if (key === 'b' && !headers.has('a')) headers.append('a', '1');
     }, [['b', '2'], ['b', '2'], ['c', '3']]],
@@ -60,6 +63,42 @@ async function headersForEachProbe() {
     }, receiver);
     check(label, seen, wanted);
     check(label + '/callback-contract', [argumentsMatch, result === undefined], [true, true]);
+  }
+
+  // Every active cursor shares the refreshed view and keeps its own index.
+  {
+    const headers = new Headers(initial);
+    const entries = headers.entries();
+    const keys = headers.keys();
+    const values = headers.values();
+    const iterable = headers[Symbol.iterator]();
+    check('shared-view/first', [entries.next().value, keys.next().value, values.next().value, iterable.next().value],
+      [['a', '1'], 'a', '1', ['a', '1']]);
+    const seen = [];
+    headers.forEach((value, key) => {
+      seen.push([key, value]);
+      if (key === 'a') { headers.delete('b'); headers.append('d', '4'); }
+      if (key === 'c') headers.set('d', '40');
+    });
+    check('shared-view/forEach', seen, [['a', '1'], ['c', '3'], ['d', '40']]);
+    check('shared-view/entries', Array.from(entries), [['c', '3'], ['d', '40']]);
+    check('shared-view/keys', Array.from(keys), ['c', 'd']);
+    check('shared-view/values', Array.from(values), ['3', '40']);
+    check('shared-view/iterable', Array.from(iterable), [['c', '3'], ['d', '40']]);
+  }
+
+  // Returned pairs must not expose mutable cache storage.
+  {
+    const headers = new Headers(initial);
+    const first = headers.entries().next().value;
+    first[0] = 'changed';
+    first[1] = 'changed';
+    first.length = 0;
+    check('shared-view/fresh-pairs', Array.from(headers), initial);
+    const seen = [];
+    headers.forEach((value, key) => seen.push([key, value]));
+    check('shared-view/unchanged-callback-values', seen, initial);
+    check('shared-view/private', Reflect.ownKeys(headers), []);
   }
 
   // Reentrant calls have independent positions and observe the same live list.

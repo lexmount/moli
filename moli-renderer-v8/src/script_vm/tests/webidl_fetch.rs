@@ -7081,8 +7081,120 @@ async fn headers_for_each_visits_live_entries_in_window_and_worker() {
             .filter(|check| check["pass"] != true)
             .collect();
         assert_eq!(result["state"], "pass", "worker={worker}: {failures:?}");
-        assert_eq!(checks.len(), 34, "worker={worker}");
+        assert_eq!(checks.len(), 45, "worker={worker}");
     }
+}
+
+#[test]
+fn headers_iteration_reuses_its_view_until_storage_changes() {
+    enum CacheState {
+        Absent,
+        Reused,
+        Rebuilt,
+    }
+
+    fn assert_cache(vm: &ScriptVm, expected: CacheState) {
+        vm.renderer_document_isolate
+            .with_entered_renderer_document_isolate(|isolate| {
+                let scope = std::pin::pin!(v8::HandleScope::new(isolate));
+                let scope = &mut scope.init();
+                let context = v8::Local::new(scope, &vm.page_default_context);
+                let scope = &mut v8::ContextScope::new(scope, context);
+                let global = context.global(scope);
+                let headers = global
+                    .get(scope, v8str(scope, "cacheHeaders").into())
+                    .unwrap();
+                let headers = v8::Local::<v8::Object>::try_from(headers).unwrap();
+                let view =
+                    crate::util::get_private_value(scope, headers, "__lmHeadersIterationView");
+                let previous =
+                    crate::util::get_private_value(scope, global, "__testHeadersIterationView");
+                match expected {
+                    CacheState::Absent => assert!(view.is_none()),
+                    CacheState::Reused => assert!(view.unwrap().strict_equals(previous.unwrap())),
+                    CacheState::Rebuilt => {
+                        let view = view.expect("iteration should materialize a view");
+                        assert!(!previous.is_some_and(|previous| view.strict_equals(previous)));
+                    }
+                }
+                if let Some(view) = view {
+                    crate::util::set_private_value(
+                        scope,
+                        global,
+                        "__testHeadersIterationView",
+                        view,
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    let mut vm = new_storage_test_vm("https://headers-iteration-cache.test/");
+    vm.eval(
+        r#"
+globalThis.cacheHeaders = new Headers(Array.from({length: 1024}, (_, i) =>
+  ['x-' + String(1023 - i).padStart(4, '0'), String(i)]));
+globalThis.cacheIterator = cacheHeaders.entries();
+"#,
+    )
+    .unwrap();
+    assert_cache(&vm, CacheState::Absent);
+    vm.eval("cacheIterator.next()").unwrap();
+    assert_cache(&vm, CacheState::Rebuilt);
+
+    // Read-only visits reuse the view; mutations that leave storage unchanged
+    // also preserve it. Inspect identity instead of relying on timing limits.
+    for script in [
+        "cacheHeaders.forEach(() => {});",
+        "Array.from(cacheIterator);",
+        "Array.from(cacheHeaders); Array.from(cacheHeaders.keys()); Array.from(cacheHeaders.values());",
+        "cacheHeaders.forEach((value, name, owner) => { if (name === 'x-0000') owner.forEach(() => {}); });",
+        "cacheHeaders.delete('absent'); cacheHeaders.set('x-0000', '1023');",
+    ] {
+        vm.eval(script).unwrap();
+        assert_cache(&vm, CacheState::Reused);
+    }
+
+    for script in [
+        "cacheHeaders.append('x-tail', 'tail');",
+        "cacheHeaders.set('x-tail', 'new');",
+        "cacheHeaders.delete('x-tail');",
+    ] {
+        vm.eval(script).unwrap();
+        assert_cache(&vm, CacheState::Absent);
+        vm.eval("cacheHeaders.forEach(() => {});").unwrap();
+        assert_cache(&vm, CacheState::Rebuilt);
+        vm.eval("Array.from(cacheHeaders);").unwrap();
+        assert_cache(&vm, CacheState::Reused);
+    }
+
+    vm.eval("globalThis.cacheHeaders = new Headers(); cacheHeaders.forEach(() => {});")
+        .unwrap();
+    assert_cache(&vm, CacheState::Rebuilt);
+    vm.eval("Array.from(cacheHeaders);").unwrap();
+    assert_cache(&vm, CacheState::Reused);
+    vm.eval("cacheHeaders.append('a', '1');").unwrap();
+    assert_cache(&vm, CacheState::Absent);
+    assert_eq!(
+        vm.eval("JSON.stringify(Array.from(cacheHeaders))").unwrap(),
+        r#"[["a","1"]]"#
+    );
+    assert_cache(&vm, CacheState::Rebuilt);
+
+    vm.eval(
+        r#"
+globalThis.cacheHeaders = new Request('https://headers-iteration-cache.test/', {
+  mode: 'no-cors', headers: {accept: 'text/plain'}
+}).headers;
+cacheHeaders.forEach(() => {});
+"#,
+    )
+    .unwrap();
+    assert_cache(&vm, CacheState::Rebuilt);
+    vm.eval("cacheHeaders.append('x-blocked', 'ignored'); Array.from(cacheHeaders);")
+        .unwrap();
+    assert_cache(&vm, CacheState::Reused);
 }
 
 #[tokio::test]
@@ -7117,6 +7229,9 @@ async fn headers_for_each_uses_callback_relevant_realm() {
 (() => {
   const child = __headersCallbackFrame.contentWindow;
   const headers = new Headers([['X-Realm', 'ok']]);
+  // Materialize the shared view in the child before iterating in the parent.
+  const childPair = child.Headers.prototype.entries.call(headers).next().value;
+  const parentPair = headers.entries().next().value;
   child.__headersOwner = headers;
   child.__headersSeen = [];
   child.__headersRealmMarker = 'child';
@@ -7136,6 +7251,10 @@ async fn headers_for_each_uses_callback_relevant_realm() {
   headers.forEach(callback, { receiverMarker: 'parent-this' });
   return JSON.stringify({
     callbackRealm: Object.getPrototypeOf(callback) === child.Function.prototype,
+    pairRealms: [
+      Object.getPrototypeOf(childPair) === child.Array.prototype,
+      Object.getPrototypeOf(parentPair) === Array.prototype,
+    ],
     seen: child.__headersSeen,
   });
 })()
@@ -7145,7 +7264,7 @@ async fn headers_for_each_uses_callback_relevant_realm() {
 
     assert_eq!(
         result,
-        r#"{"callbackRealm":true,"seen":["child:parent-this:x-realm:ok:true","child:parent-this:x-tail:tail:true"]}"#
+        r#"{"callbackRealm":true,"pairRealms":[true,true],"seen":["child:parent-this:x-realm:ok:true","child:parent-this:x-tail:tail:true"]}"#
     );
 }
 

@@ -131,16 +131,22 @@ pub(in crate::network_host::headers) fn header_append_allowed_by_guard(
     }
 }
 
-pub(in crate::network_host) fn set_headers_entries(
-    scope: &mut v8::PinScope<'_, '_>,
-    obj: v8::Local<'_, v8::Object>,
+pub(in crate::network_host) fn set_headers_entries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    obj: v8::Local<'s, v8::Object>,
     entries: &[(String, String)],
 ) {
     let json = headers_entries_json(entries);
     let Some(json) = v8_string(scope, &json) else {
         return;
     };
+    if get_private_value(scope, obj, HEADERS_ENTRIES_SLOT)
+        .is_some_and(|previous| previous.strict_equals(json.into()))
+    {
+        return;
+    }
     set_private_value(scope, obj, HEADERS_ENTRIES_SLOT, json.into());
+    super::iteration::invalidate_headers_iteration_view(scope, obj);
 }
 
 pub(in crate::network_host) fn headers_entries_json(entries: &[(String, String)]) -> String {
@@ -170,23 +176,22 @@ fn normalized_header_list(entries: &[(String, String)]) -> Vec<(String, String)>
 pub(in crate::network_host) fn normalized_headers_entries(
     entries: &[(String, String)],
 ) -> Vec<(String, String)> {
-    let mut normalized = Vec::<(String, String)>::new();
-    for (lower, value) in normalized_header_list(entries) {
-        if lower == "set-cookie" {
-            normalized.push((lower, value));
-            continue;
-        }
-        if let Some((_, existing)) = normalized
-            .iter_mut()
-            .find(|(entry_name, _)| *entry_name == lower)
+    let mut entries = normalized_header_list(entries);
+    // Stable sorting preserves the order of duplicate values, including
+    // separate Set-Cookie fields. Combine adjacent names in one linear pass.
+    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let mut normalized = Vec::<(String, String)>::with_capacity(entries.len());
+    for (name, value) in entries {
+        if name != "set-cookie"
+            && let Some((last_name, existing)) = normalized.last_mut()
+            && *last_name == name
         {
             existing.push_str(", ");
             existing.push_str(&value);
         } else {
-            normalized.push((lower, value));
+            normalized.push((name, value));
         }
     }
-    normalized.sort_by(|(left, _), (right, _)| left.cmp(right));
     normalized
 }
 
@@ -303,18 +308,21 @@ mod tests {
     #[test]
     fn normalized_headers_entries_keeps_set_cookie_values_separate() {
         let normalized = normalized_headers_entries(&[
-            ("Set-Cookie".to_owned(), "a=1".to_owned()),
-            ("set-cookie".to_owned(), "b=2".to_owned()),
             ("X-Test".to_owned(), "one".to_owned()),
-            ("x-test".to_owned(), "two".to_owned()),
+            ("Set-Cookie".to_owned(), "a=1".to_owned()),
+            ("x-test".to_owned(), String::new()),
+            ("Accept".to_owned(), "text/plain".to_owned()),
+            ("set-cookie".to_owned(), "b=2".to_owned()),
+            ("X-TEST".to_owned(), "two".to_owned()),
         ]);
 
         assert_eq!(
             normalized,
             vec![
+                ("accept".to_owned(), "text/plain".to_owned()),
                 ("set-cookie".to_owned(), "a=1".to_owned()),
                 ("set-cookie".to_owned(), "b=2".to_owned()),
-                ("x-test".to_owned(), "one, two".to_owned()),
+                ("x-test".to_owned(), "one, , two".to_owned()),
             ]
         );
     }

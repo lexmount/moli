@@ -64,4 +64,5 @@ pub(in crate::network_host) fn initialize_headers_object<'s>(
     )
     .initialize(scope, object)
     .expect("Headers storage declaration should initialize");
+    super::iteration::invalidate_headers_iteration_view(scope, object);
 }

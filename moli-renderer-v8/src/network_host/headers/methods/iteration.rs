@@ -1,4 +1,4 @@
-use super::super::store::{headers_entries, normalized_headers_entries};
+use super::super::store::headers_iteration_view;
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
@@ -128,18 +128,17 @@ pub(in crate::network_host::headers) fn headers_for_each_callback<'s>(
     let callback = parsed.callback.prepare(scope);
     let mut index = 0;
     loop {
-        // Script can change both the values and the sorted pair order.
-        let entries = normalized_headers_entries(&headers_entries(scope, this));
-        let Some((name, value)) = entries.get(index) else {
+        // Release old cached views after a mutating callback, while preserving
+        // the cursor across any changes to values or sorted pair order.
+        let step_scope = std::pin::pin!(v8::HandleScope::new(&mut *scope));
+        let scope = &mut step_scope.init();
+        let Some(entries) = headers_iteration_view(scope, this) else {
+            return;
+        };
+        let Some((name, value)) = entries.get(scope, index) else {
             break;
         };
         index += 1;
-        let Some(name) = v8_string(scope, name) else {
-            continue;
-        };
-        let Some(value) = v8_string(scope, value) else {
-            continue;
-        };
         if invoke_synchronous_webidl_callback_function(
             scope,
             &callback,
@@ -212,7 +211,9 @@ fn headers_iterator_next_callback<'s>(
         return;
     };
     let index = index_value.integer_value(scope).unwrap_or(0).max(0) as usize;
-    let entries = normalized_headers_entries(&headers_entries(scope, target));
+    let Some(entries) = headers_iteration_view(scope, target) else {
+        return;
+    };
     if index >= entries.len() {
         let result = HeadersIteratorResultDeclaration::new(true, v8::undefined(scope).into())
             .bind(scope)
@@ -221,25 +222,13 @@ fn headers_iterator_next_callback<'s>(
         return;
     }
 
-    let (name, value) = &entries[index];
-    let value = match kind_name.as_str() {
-        "keys" => v8_string(scope, name).map(Into::into),
-        "values" => v8_string(scope, value).map(Into::into),
-        _ => {
-            let Some(name) = v8_string(scope, name) else {
-                rv.set_null();
-                return;
-            };
-            let Some(value) = v8_string(scope, value) else {
-                rv.set_null();
-                return;
-            };
-            Some(v8::Array::new_with_elements(scope, &[name.into(), value.into()]).into())
-        }
-    };
-    let Some(value) = value else {
-        rv.set_null();
+    let Some((name, value)) = entries.get(scope, index) else {
         return;
+    };
+    let value = match kind_name.as_str() {
+        "keys" => name.into(),
+        "values" => value.into(),
+        _ => v8::Array::new_with_elements(scope, &[name.into(), value.into()]).into(),
     };
 
     set_private_value(
