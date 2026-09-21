@@ -3867,6 +3867,11 @@ fn child_explicit_open_can_reacquire_parent_while_main_load_is_dispatching() {
         store.finish_current_main_document_load_dispatch(main_owner),
         Some(MainDocumentLoadCompletionState::WaitingForDescendants)
     );
+    assert_eq!(
+        store.current_document_is_completely_loaded(main_owner.document_owner()),
+        Some(true),
+        "descendant work started during load must not extend the parent's initial load"
+    );
     assert!(
         store
             .begin_child_frame_parent_document_load(child_handle)
