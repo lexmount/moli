@@ -3698,7 +3698,7 @@ mod tests {
             document_url,
             request_url.clone(),
             "POST".to_owned(),
-            vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+            vec![("Content-Type".to_owned(), "text/plain".to_owned())].into(),
             Some("body".to_owned()),
             SubresourceResourceType::Fetch,
             SubresourceRequestInitiatorType::Script,
