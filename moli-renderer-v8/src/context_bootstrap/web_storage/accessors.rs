@@ -1,30 +1,12 @@
 use super::helpers::storage_access_allows_web_storage_for_window;
 use super::*;
-use crate::{util::context_host_ptr_from_window_object, webidl};
-fn window_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    property: &'static str,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let window = args.this();
-    if context_host_ptr_from_window_object(scope, window).is_some() {
-        return Some(window);
-    }
-    webidl::throw_type_error(
-        scope,
-        &format!("Window.{property} getter called on incompatible receiver."),
-    );
-    None
-}
 
 pub(in crate::context_bootstrap) fn window_local_storage_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(window) = window_receiver(scope, &args, "localStorage") else {
-        return;
-    };
+    let window = args.this();
     if !storage_access_allows_web_storage_for_window(scope, window) {
         throw_web_storage_security_error(scope, "localStorage");
         return;
@@ -41,9 +23,7 @@ pub(in crate::context_bootstrap) fn window_session_storage_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(window) = window_receiver(scope, &args, "sessionStorage") else {
-        return;
-    };
+    let window = args.this();
     if !storage_access_allows_web_storage_for_window(scope, window) {
         throw_web_storage_security_error(scope, "sessionStorage");
         return;

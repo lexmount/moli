@@ -28,14 +28,13 @@ struct WindowHistoryAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
+#[webapi(plain, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowNavigationAccessorDeclaration {
     #[webapi(
         accessor_property,
         getter = window_navigation_getter,
         setter = window_navigation_setter,
-        enumerable
-    )]
+        enumerable, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     navigation: (),
 }
 

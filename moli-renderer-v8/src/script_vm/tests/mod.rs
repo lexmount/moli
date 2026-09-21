@@ -32,6 +32,7 @@ mod touch_native_receivers;
 #[cfg(feature = "devtools")]
 mod touch_snapshot;
 mod visual_viewport_receiver;
+mod webtransport_stream_interface_exposure;
 mod writable_stream_native_receivers;
 #[cfg(feature = "devtools")]
 use super::MouseDispatchCompletion;
@@ -2487,7 +2488,6 @@ mod websocket;
 mod websocket_close_info_numbers;
 
 mod websocket_stream_dictionary;
-mod webtransport_stream_interface_exposure;
 
 mod window_cross_origin_getters;
 mod window_event_receivers;
@@ -2504,7 +2504,6 @@ mod window_receiver_access;
 mod worklet_interfaces;
 
 mod resource_initiator;
-mod string_timers;
 
 mod history_replace_forward;
 
@@ -2516,21 +2515,18 @@ mod body_mime_consolidation;
 
 mod websocket_close_dictionary;
 
-mod response_blob_mime;
-
 mod intersection_target_order;
 mod observer_element_arguments;
 mod report_body_interface_exposure;
-
-mod media_device_interfaces;
+mod response_blob_mime;
 
 mod dom_rect_factory_descriptors;
+mod media_device_interfaces;
 
 mod document_range_factory_realm;
 
 mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
-
 mod resize_observer_entries;
 
 mod encoded_video_chunk;
@@ -2557,8 +2553,7 @@ mod sqlite_web_storage;
 
 mod dynamic_inline_scripts;
 mod native_request_url_provenance;
-mod svg_number_list_native_receivers;
-mod webtransport_stream_interface_exposure;
+mod window_restricted_accessors;
 
 mod svg_legacy_rectangle_contracts;
 

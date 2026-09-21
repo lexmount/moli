@@ -840,7 +840,21 @@ pub(in crate::context_bootstrap) struct GlobalCachesAccessorDeclaration {
     #[webapi(
         accessor_property,
         getter = global_caches_getter_callback,
+        data = false,
         enumerable
+    )]
+    caches: (),
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(plain, receiver = crate::context_bootstrap::is_window_receiver)]
+pub(in crate::context_bootstrap) struct WindowCachesAccessorDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = global_caches_getter_callback,
+        data = true,
+        enumerable,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver
     )]
     caches: (),
 }

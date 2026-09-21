@@ -160,8 +160,7 @@ struct WindowLegacySurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         setter = window_surface_replaceable_setter,
         data = self.navigator_slot,
-        setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("clientInformation").unwrap())
-    )]
+        setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("clientInformation").unwrap()), setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     client_information: (),
     #[webapi(
@@ -170,8 +169,7 @@ struct WindowLegacySurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         setter = window_surface_replaceable_setter,
         data = self.external_slot,
-        setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("external").unwrap())
-    )]
+        setter_data = callback_data_index_value(scope, window_surface_replaceable_name_index("external").unwrap()), setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     external: (),
 }
@@ -211,8 +209,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         setter = window_surface_replaceable_setter,
         data = self.navigation_slot,
-        setter_data = self.navigation_name
-    )]
+        setter_data = self.navigation_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     navigation: (),
     #[webapi(
@@ -229,8 +226,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         setter = window_surface_replaceable_setter,
         data = self.screen_slot,
-        setter_data = self.screen_name
-    )]
+        setter_data = self.screen_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     screen: (),
     #[webapi(
@@ -263,8 +259,7 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         setter = window_surface_replaceable_setter,
         data = self.performance_slot,
-        setter_data = self.performance_name
-    )]
+        setter_data = self.performance_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     performance: (),
     #[webapi(
@@ -273,21 +268,18 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         getter = window_surface_slot_getter,
         setter = window_surface_replaceable_setter,
         data = self.visual_viewport_slot,
-        setter_data = self.visual_viewport_name
-    )]
+        setter_data = self.visual_viewport_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     visual_viewport: (),
     #[webapi(
         accessor_property = "localStorage",
         enumerable,
-        getter = window_local_storage_getter
-    )]
+        getter = window_local_storage_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     local_storage: (),
     #[webapi(
         accessor_property = "sessionStorage",
         enumerable,
-        getter = window_session_storage_getter
-    )]
+        getter = window_session_storage_getter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     session_storage: (),
     #[webapi(
         accessor_property = "indexedDB",
@@ -301,15 +293,13 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         accessor_property,
         enumerable,
         getter = window_name_runtime_getter,
-        setter = window_name_runtime_setter
-    )]
+        setter = window_name_runtime_setter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     name: (),
     #[webapi(
         accessor_property,
         enumerable,
         getter = window_status_runtime_getter,
-        setter = window_status_runtime_setter
-    )]
+        setter = window_status_runtime_setter, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     status: (),
 }
 
@@ -359,76 +349,66 @@ struct WindowAdditionalReplaceableAccessorsDeclaration<'scope> {
         accessor_property,
         getter = window_origin_replaceable_getter,
         setter = window_surface_replaceable_setter,
-        setter_data = self.origin_name
-    )]
+        setter_data = self.origin_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     origin: (),
     #[webapi(
         accessor_property = "innerWidth",
         getter = window_inner_width_getter,
         setter = window_surface_replaceable_setter,
-        setter_data = self.inner_width_name
-    )]
+        setter_data = self.inner_width_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     inner_width: (),
     #[webapi(
         accessor_property,
         getter = window_length_getter,
         setter = window_surface_replaceable_setter,
-        setter_data = self.length_name
-    )]
+        setter_data = self.length_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     #[webapi(receiver_access_check = "setter")]
     length: (),
     #[webapi(
         accessor_property,
         getter = window_event_getter,
         setter = window_surface_replaceable_setter,
-        setter_data = self.event_name
-    )]
+        setter_data = self.event_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     event: (),
     #[webapi(
         accessor_property = "outerHeight",
         getter = window_outer_height_getter,
         setter = window_surface_replaceable_setter,
-        setter_data = self.outer_height_name
-    )]
+        setter_data = self.outer_height_name, setter_access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     outer_height: (),
     #[webapi(
         accessor_property = "scrollX",
         getter = window_scroll_x_replaceable_getter,
         setter = window_surface_replaceable_setter,
-        setter_data = self.scroll_x_name
-    )]
+        setter_data = self.scroll_x_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_x: (),
     #[webapi(
         accessor_property = "screenLeft",
         getter = window_screen_position_getter,
         data = self.screen_left_name,
         setter = window_surface_replaceable_setter,
-        setter_data = self.screen_left_name
-    )]
+        setter_data = self.screen_left_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     screen_left: (),
     #[webapi(
         accessor_property = "screenTop",
         getter = window_screen_position_getter,
         data = self.screen_top_name,
         setter = window_surface_replaceable_setter,
-        setter_data = self.screen_top_name
-    )]
+        setter_data = self.screen_top_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     screen_top: (),
     #[webapi(
         accessor_property = "screenX",
         getter = window_screen_position_getter,
         data = self.screen_x_name,
         setter = window_surface_replaceable_setter,
-        setter_data = self.screen_x_name
-    )]
+        setter_data = self.screen_x_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     screen_x: (),
     #[webapi(
         accessor_property = "screenY",
         getter = window_screen_position_getter,
         data = self.screen_y_name,
         setter = window_surface_replaceable_setter,
-        setter_data = self.screen_y_name
-    )]
+        setter_data = self.screen_y_name, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     screen_y: (),
 }
 
@@ -735,10 +715,6 @@ fn replaceable_window_alias_set<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     name: &'static str,
 ) {
-    if !super::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Window setter called on incompatible receiver.");
-        return;
-    }
     define_replaceable_window_property(scope, args.this(), name, args.get(0));
 }
 
@@ -908,10 +884,6 @@ fn window_surface_replaceable_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    if !super::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Window setter called on incompatible receiver.");
-        return;
-    }
     let Some(name) = callback_data_item(
         scope,
         &args,
@@ -930,10 +902,6 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
-        return;
-    }
     if child_context_handle_from_owner(scope, receiver).is_none()
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
     {
@@ -953,15 +921,10 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+    let Some(next) = args.get(0).to_string(scope) else {
         return;
-    }
-    let next = args
-        .get(0)
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+    };
+    let next = next.to_rust_string_lossy(scope);
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
         if let Some(handle) = child_context_handle_from_owner(scope, receiver) {
@@ -982,13 +945,6 @@ fn window_status_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(
-            scope,
-            "Window.status getter called on incompatible receiver.",
-        );
-        return;
-    }
     rv.set(
         get_private_value(scope, receiver, WINDOW_STATUS_RUNTIME_SLOT)
             .unwrap_or_else(|| v8::String::empty(scope).into()),
@@ -1001,13 +957,6 @@ fn window_status_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
-    if !super::is_window_receiver(scope, receiver) {
-        throw_type_error(
-            scope,
-            "Window.status setter called on incompatible receiver.",
-        );
-        return;
-    }
     let Some(next) = args.get(0).to_string(scope) else {
         return;
     };
