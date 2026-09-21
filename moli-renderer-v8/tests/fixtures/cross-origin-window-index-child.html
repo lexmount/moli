@@ -1,0 +1,52 @@
+<!doctype html><body>child<script>
+let cachedParent, cachedTarget, cachedPostMessage, cachedLengthGetter;
+function observe(fn) {try {const value=fn();return value===undefined?'undefined':value;}catch(e){return e.name;}}
+onmessage = e => {
+ if (!e.data || e.data.kind !== 'probe') return;
+ const p = parent;
+ if (!cachedParent) cachedParent = p;
+ if(e.data.phase==='initial') {
+  cachedTarget = observe(()=>p[0]);
+  cachedPostMessage = p.postMessage;
+  cachedLengthGetter = Object.getOwnPropertyDescriptor(p,'length').get;
+ }
+ const inCallerRealm = fn => Object.getPrototypeOf(fn) === Function.prototype &&
+  fn.constructor === Function && fn.constructor('return globalThis')() === window;
+ const descriptor = key => {const d=Object.getOwnPropertyDescriptor(p,key);return d && [typeof d.value,d.writable,d.enumerable,d.configurable];};
+ const result = {
+  length:observe(()=>p.length),
+  prototype:observe(()=>Object.getPrototypeOf(p)===null),
+  extensible:observe(()=>Object.isExtensible(p)),
+  preventExtensions:observe(()=>Reflect.preventExtensions(p)),
+  samePrototype:observe(()=>Reflect.setPrototypeOf(p,null)),
+  differentPrototype:observe(()=>Reflect.setPrototypeOf(p,{})),
+  borrowMessage:observe(()=>{postMessage.call(p,{kind:'borrowed',phase:e.data.phase},'*');return true;}),
+  keys:observe(()=>Reflect.ownKeys(p).filter(x=>typeof x==='string' && /^\d+$/.test(x))),
+  ownIndex:observe(()=>p[e.data.selfIndex]===window),
+  parentIdentity:observe(()=>p===cachedParent && e.source===p && p.frames===p && p.self===p && p.window===p && p.parent===top && p.top===top),
+  descriptor:observe(()=>descriptor('0')),
+  named:observe(()=>p.target===p[0]),
+  namedDescriptor:observe(()=>descriptor('target')),
+  has:observe(()=> '0' in p),
+  missing:observe(()=>p[99]),missingHas:observe(()=>99 in p),missingDescriptor:observe(()=>descriptor('99')),
+  nonIndex:observe(()=>p['01']),
+  document:observe(()=>typeof p.document),
+  deniedDescriptor:observe(()=>descriptor('document')),
+  missingNamedDescriptor:observe(()=>descriptor('noSuchWindow')),
+  set:observe(()=>Reflect.set(p,'0',null)),define:observe(()=>Reflect.defineProperty(p,'0',{value:null})),delete:observe(()=>Reflect.deleteProperty(p,'0')),
+  focus:observe(()=>{p.focus();return 'ok';}),
+  methodRealm:observe(()=>inCallerRealm(p.postMessage)),
+  getterRealm:observe(()=>inCallerRealm(Object.getOwnPropertyDescriptor(p,'length').get)),
+  locationGetterRealm:observe(()=>inCallerRealm(Object.getOwnPropertyDescriptor(p,'location').get)),
+  locationSetterRealm:observe(()=>inCallerRealm(Object.getOwnPropertyDescriptor(p,'location').set)),
+  methodIdentity:observe(()=>p.postMessage===cachedPostMessage),
+  getterIdentity:observe(()=>Object.getOwnPropertyDescriptor(p,'length').get===cachedLengthGetter),
+  cachedIdentity:observe(()=>cachedTarget===p[0]),
+  targetFrame:observe(()=>p[0].frameElement===null),
+  targetDocument:observe(()=>p[0].document.body.textContent.trim().startsWith('child')),
+  peerFrame:observe(()=>p[e.data.peerIndex].frameElement===null),
+  peerDocument:observe(()=>p[e.data.peerIndex].document.body.textContent.trim().startsWith('child'))
+ };
+ e.source.postMessage({kind:'result',result},'*');
+};
+</script>
