@@ -32,3 +32,20 @@ pub(crate) use surface::{
     sync_window_location_history_navigation_runtime_surface, sync_window_location_runtime_state,
 };
 pub(in crate::context_bootstrap) use surface::{window_location_setter, window_navigation_setter};
+
+pub(in crate::context_bootstrap) fn put_forward_location_href<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+) {
+    // [PutForwards=href] gets the receiver's Location and assigns the original
+    // value. Its href setter owns conversion, the exception realm, and navigation.
+    let Some(location) = receiver.get(scope, v8str(scope, "location").into()) else {
+        return;
+    };
+    let Ok(location) = v8::Local::<v8::Object>::try_from(location) else {
+        crate::webidl::throw_type_error(scope, "Cannot assign href to a null Location.");
+        return;
+    };
+    let _ = access::set_location_href(scope, location, value);
+}

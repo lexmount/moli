@@ -79,15 +79,6 @@ pub(in crate::context_bootstrap) fn document_location_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
-    if crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-        .is_err()
-    {
-        webidl::throw_type_error(
-            scope,
-            "Document.location getter called on incompatible receiver.",
-        );
-        return;
-    }
     match object_location_slot_value(scope, receiver).filter(|value| !value.is_undefined()) {
         Some(value) => rv.set(value),
         None => rv.set_null(),
@@ -97,34 +88,9 @@ pub(in crate::context_bootstrap) fn document_location_getter<'s>(
 pub(in crate::context_bootstrap) fn document_location_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let receiver = args.this();
-    if crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, receiver)
-        .is_err()
-    {
-        webidl::throw_type_error(
-            scope,
-            "Document.location setter called on incompatible receiver.",
-        );
-        return;
-    }
-    let Some(location) = object_location_slot_value(scope, receiver)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let value = args.get(0);
-    let href = match value.is_null_or_undefined() {
-        true => String::new(),
-        false => match value.to_string(scope) {
-            Some(value) => value.to_rust_string_lossy(scope),
-            None => return,
-        },
-    };
-    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
-    rv.set_undefined();
+    super::super::location_runtime::put_forward_location_href(scope, args.this(), args.get(0));
 }
 
 fn object_location_slot_value<'s>(
