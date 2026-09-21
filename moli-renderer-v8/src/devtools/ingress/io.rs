@@ -529,7 +529,9 @@ impl RendererInspectorIoIngress {
         &self,
         pause_bridge: &crate::devtools::pause::RendererInspectorPauseBridge,
     ) -> Option<RendererInspectorIoCommand> {
-        pause_bridge.wait_for_pause_work(|| self.claim_for_pause())
+        pause_bridge
+            .wait_for_pause_work(|| self.claim_for_pause())
+            .ok()
     }
 
     fn claim_next(

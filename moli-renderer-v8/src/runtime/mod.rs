@@ -434,6 +434,7 @@ pub use crate::devtools::ingress::io::{
 pub use crate::devtools::ingress::main::{
     RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
+pub use crate::devtools::target::RendererDevToolsTargetHandle;
 pub(crate) use crate::renderer::PageVmInitStage;
 pub(crate) use crate::service_worker_runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerClientFocus,

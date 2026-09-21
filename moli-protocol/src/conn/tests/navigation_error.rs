@@ -40,7 +40,6 @@ fn failing_streamed_document(
         response,
         network_observation_journal: Default::default(),
         body_progress_source: Default::default(),
-        prepared_document: None,
     }
 }
 

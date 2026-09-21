@@ -530,27 +530,9 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
         network_extra_info_available,
     );
     out.extend_background_events_after_messages(response_extra_info_events);
-    let prepared_document = match conn
-        .prepare_paused_streaming_response_navigation_async(
-            &pending.navigation,
-            response.response(),
-            network_observation_journal,
-            body_progress_source.clone(),
-        )
-        .await
-    {
-        Ok(prepared_document) => prepared_document,
-        Err(error) => {
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn,
-                out,
-                pending,
-                Err(error),
-            )
-            .await;
-            return;
-        }
-    };
+    // Keep only the response until the client accepts it. Preparing a renderer
+    // here would wait on the old document's debugger pause before we could even
+    // publish Fetch.requestPaused. Continue/fulfill owns document replacement.
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
     conn.register_pending_fetch_response_navigation_for_owner(
         &pending.navigation.owner,
@@ -564,7 +546,6 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
             response,
             network_observation_journal,
             body_progress_source,
-            prepared_document: prepared_document.map(Box::new),
         },
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(

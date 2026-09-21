@@ -495,95 +495,6 @@ impl Drop for ResponseCommitReady {
     }
 }
 
-pub struct PausedResponsePreparedDocument {
-    prepared_page: PreparedDocumentPage,
-    renderer_body_tx: mpsc::Sender<Vec<u8>>,
-    renderer_completion_tx: oneshot::Sender<anyhow::Result<()>>,
-    body_progress_source: MainDocumentBodyProgressSource,
-    body_network_progress_state: MainDocumentBodyNetworkProgress,
-    requested_url: Url,
-    final_url: Url,
-    request_method: String,
-    request_headers: moli_fetch::RequestHeaders,
-    response_status: u16,
-    response_headers: Vec<(String, Vec<u8>)>,
-    response_from_cache: bool,
-    negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
-    network_observation_journal: NetworkObservationJournal,
-    timing_started: Option<std::time::Instant>,
-    main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
-}
-
-impl std::fmt::Debug for PausedResponsePreparedDocument {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("PausedResponsePreparedDocument")
-            .field("requested_url", &self.requested_url)
-            .field("final_url", &self.final_url)
-            .field(
-                "renderer_devtools_agent_token",
-                &self.prepared_page.renderer_devtools_agent_token(),
-            )
-            .finish_non_exhaustive()
-    }
-}
-
-impl PausedResponsePreparedDocument {
-    #[cfg(test)]
-    pub(crate) fn renderer_devtools_agent_token(
-        &self,
-    ) -> moli_core::page::RendererDevToolsAgentToken {
-        self.prepared_page.renderer_devtools_agent_token()
-    }
-
-    pub(crate) fn resume_streaming(
-        self,
-        response: StreamingRawResponse,
-        body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> NavigationLoadOutcome {
-        let network_extra_info_available = !self.network_observation_journal.is_empty();
-        self.body_progress_source.emit_response_metadata(
-            &self.request_method,
-            &self.request_headers.to_byte_strings(),
-            response.request_cookie_report.as_ref(),
-            &response.redirect_chain,
-            &self.final_url,
-            self.response_status,
-            &self.response_headers,
-            &response.cookie_set_reports,
-            &self.network_observation_journal,
-            network_extra_info_available,
-            self.response_from_cache,
-            self.negotiated_http_version,
-        );
-        let body_capture_task = spawn_streaming_body_capture(
-            response,
-            None,
-            self.renderer_body_tx,
-            self.renderer_completion_tx,
-        );
-        let ready = ResponseCommitReady {
-            prepared_page: Some(self.prepared_page),
-            body_capture: Some(ResponseCommitBodyCapture::Pending(body_capture_task)),
-            body_completion_sink,
-            body_progress_source: self.body_progress_source,
-            body_network_progress_state: Some(self.body_network_progress_state),
-            synthetic_body: false,
-            requested_url: self.requested_url,
-            final_url: self.final_url,
-            request_method: self.request_method,
-            request_headers: self.request_headers,
-            response_status: self.response_status,
-            response_headers: self.response_headers,
-            response_from_cache: self.response_from_cache,
-            timing_started: self.timing_started,
-            main_document_commit: self.main_document_commit,
-            network_error_page: None,
-        };
-        NavigationLoadOutcome::response_commit_ready(ready)
-    }
-}
-
 async fn first_nonempty_response_body_chunk(
     response: &mut StreamingRawResponse,
 ) -> anyhow::Result<Option<Vec<u8>>> {
@@ -1387,6 +1298,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         None
     };
 
+    load_inputs.prepare_to_replace_document();
     if response_headers_indicate_xml_document(&response_headers) {
         let redirected = response.redirected;
         let mut body_writer = CapturedBodyWriter::default();
@@ -1644,145 +1556,6 @@ impl CdpConnection {
         moli_site::same_site_urls(page.final_url(), final_url, true)
             .then(|| page.idle_override())
             .flatten()
-    }
-
-    pub(crate) async fn prepare_paused_streaming_response_navigation_async(
-        &mut self,
-        navigation: &NavigationDispatchState,
-        response: &StreamingRawResponse,
-        network_observation_journal: &NetworkObservationJournal,
-        body_progress_source: MainDocumentBodyProgressSource,
-    ) -> anyhow::Result<Option<PausedResponsePreparedDocument>> {
-        if super::downloads::response_headers_indicate_download(&response.headers)
-            || response_headers_indicate_xml_document(&response.headers)
-            || response_status_may_use_http_error_page(response.status)
-        {
-            return Ok(None);
-        }
-        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
-        if load_inputs.browser_context_id.is_none() {
-            return Ok(None);
-        }
-        let requested_url = navigation.requested_url.clone();
-        let network_extra_info_available = !network_observation_journal.is_empty();
-        let request_method = navigation.request_method.clone();
-        let request_headers = navigation.request_headers.clone();
-        let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
-        let final_url = response.final_url.clone();
-        let response_status = response.status;
-        let response_headers = response.headers.clone();
-        let response_cookie_reports = response.cookie_set_reports.clone();
-        let response_from_cache = response.from_cache;
-        let negotiated_http_version = response.negotiated_http_version;
-        let initial_request_cookie_report = response.request_cookie_report.clone();
-        let redirect_chain = response
-            .redirect_chain
-            .clone()
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        let network_events = CompletedMainDocumentNetworkEvents::new(
-            request_method.clone(),
-            request_headers.to_byte_strings(),
-            initial_request_cookie_report,
-            response_status,
-            response_headers.clone(),
-            response_cookie_reports.clone(),
-            redirect_chain.clone(),
-            network_extra_info_available,
-            response_from_cache,
-        )
-        .with_negotiated_http_version(negotiated_http_version)
-        .with_network_observation_journal(network_observation_journal.clone());
-        let body_network_progress_state =
-            body_progress_source.body_network_progress_for_completed_events(network_events);
-        let (renderer_body_tx, renderer_body_rx) =
-            mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
-        let (renderer_completion_tx, renderer_completion_rx) = oneshot::channel();
-        let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(
-            renderer_body_rx,
-            renderer_completion_rx,
-        );
-        let shared_resource_runtime =
-            self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
-        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
-        if let Some(resource_runtime) = shared_resource_runtime {
-            engine
-                .adopt_registered_resource_runtime(resource_runtime)
-                .context("failed to update navigation runtime policy")?;
-        }
-        let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-            load_inputs.fetch_subresource_interception;
-        let page_storage = load_inputs.page_storage_handles();
-        let main_document_commit = load_inputs
-            .main_document_commit_for_final_url(&final_url, None)
-            .map(Arc::new);
-        let page_reservation =
-            self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
-        let prepared_page = engine
-            .prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-                page_reservation,
-                page_storage.into_navigation_storage(),
-                requested_url.clone(),
-                final_url.clone(),
-                load_inputs.navigation_initiator_url.clone(),
-                response.redirected,
-                redirect_chain.len(),
-                response_status,
-                response_headers.clone(),
-                raw_body,
-                load_inputs.document_start_scripts.clone(),
-                load_inputs.runtime_bindings.clone(),
-                load_inputs
-                    .runtime_inspector_session_restore_snapshots
-                    .clone(),
-                load_inputs.extra_http_headers.clone(),
-                load_inputs.script_execution_disabled,
-                load_inputs.bypass_content_security_policy,
-                load_inputs.emulated_media.clone(),
-                load_inputs.viewport_surface,
-                load_inputs.network_offline,
-                load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                PageVmInitStage::DomContentLoaded,
-                RendererReplyBoundary::DocumentCommit,
-                load_inputs.root_frame_id.clone(),
-                CommittedDocumentResourceSource::Synthetic,
-                None,
-                main_document_commit.as_deref().cloned(),
-            )
-            .await
-            .with_context(|| format!(
-                    "failed to prepare response-stage page `{}`",
-                    requested_url
-                ))?;
-        if let Some(started) = timing_started {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url = %requested_url,
-                stage = "response_stage_document_prepared",
-                elapsed_ms = started.elapsed().as_millis(),
-            );
-        }
-        Ok(Some(PausedResponsePreparedDocument {
-            prepared_page,
-            renderer_body_tx,
-            renderer_completion_tx,
-            body_progress_source,
-            body_network_progress_state,
-            requested_url,
-            final_url,
-            request_method,
-            request_headers,
-            response_status,
-            response_headers,
-            response_from_cache,
-            negotiated_http_version,
-            network_observation_journal: network_observation_journal.clone(),
-            timing_started,
-            main_document_commit,
-        }))
     }
 
     pub(crate) fn start_initial_document_page_ensure_for_owner(
@@ -3825,6 +3598,7 @@ async fn prepare_captured_document_response_with_engine_async(
     synthetic_body: bool,
     reply_boundary: RendererReplyBoundary,
 ) -> anyhow::Result<ResponseCommitReady> {
+    load_inputs.prepare_to_replace_document();
     let network_extra_info_available = !network_observation_journal.is_empty();
     body_progress_source.emit_response_metadata(
         &request_method,

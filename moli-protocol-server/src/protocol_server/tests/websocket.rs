@@ -1,6 +1,8 @@
 use super::*;
 use std::path::Path;
 
+mod navigation_debugger;
+
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],
     method: &str,

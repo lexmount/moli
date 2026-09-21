@@ -36,6 +36,10 @@ impl TargetPageAttachmentId {
 pub(crate) struct NavigationRequestId(NonZeroU64);
 
 impl NavigationRequestId {
+    pub(crate) fn get(self) -> u64 {
+        self.0.get()
+    }
+
     pub(crate) fn allocate() -> Self {
         Self(allocate_nonzero_u64(
             &NEXT_NAVIGATION_REQUEST_ID,

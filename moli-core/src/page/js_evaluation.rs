@@ -594,6 +594,11 @@ impl Page {
         self.handle.runtime_inspector_pause_active()
     }
 
+    #[doc(hidden)]
+    pub fn renderer_devtools_target(&self) -> super::RendererDevToolsTargetHandle {
+        self.handle.renderer_devtools_target()
+    }
+
     pub fn start_runtime_protocol_message_with_context_resolution(
         &self,
         action: String,

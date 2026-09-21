@@ -24,6 +24,7 @@ use crate::runtime::{
 
 mod causality;
 mod loop_state;
+mod navigation;
 
 use causality::{
     RendererInspectorPauseCommandDispatch, RendererInspectorPauseCommandTransition,
@@ -32,8 +33,9 @@ use causality::{
 pub(crate) use causality::{
     RendererInspectorPauseCommandOutputRoute, RendererInspectorPauseNotificationRoute,
 };
-pub(crate) use loop_state::RendererInspectorPauseLoopPolicy;
 use loop_state::RendererInspectorPausePhase;
+pub(crate) use loop_state::{RendererInspectorPauseExitReason, RendererInspectorPauseLoopPolicy};
+use navigation::RendererProvisionalLoad;
 
 #[derive(Clone)]
 pub(crate) struct RendererInspectorPauseBridge {
@@ -56,6 +58,7 @@ struct RendererInspectorPauseBridgeState {
     pause_loop_policy: RendererInspectorPauseLoopPolicy,
     quit_requested: bool,
     session_detach_arms: usize,
+    provisional_load: Option<RendererProvisionalLoad>,
     target_closed: bool,
     pending_prefaces: VecDeque<RendererInspectorPausePreface>,
     paused_sessions_awaiting_resumed: HashSet<(RendererDevToolsAgentToken, DevToolsSessionKey)>,
@@ -125,6 +128,7 @@ impl RendererInspectorPauseBridge {
                 pause_loop_policy: RendererInspectorPauseLoopPolicy::MainAndIo,
                 quit_requested: false,
                 session_detach_arms: 0,
+                provisional_load: None,
                 target_closed: false,
                 pending_prefaces: VecDeque::new(),
                 paused_sessions_awaiting_resumed: HashSet::new(),
@@ -147,6 +151,7 @@ impl std::fmt::Debug for RendererInspectorPauseBridge {
             .field("pause_loop_policy", &state.pause_loop_policy)
             .field("quit_requested", &state.quit_requested)
             .field("session_detach_arms", &state.session_detach_arms)
+            .field("provisional_load", &state.provisional_load)
             .field("target_closed", &state.target_closed)
             .field("pending_prefaces", &state.pending_prefaces.len())
             .field(
@@ -359,14 +364,29 @@ impl RendererInspectorPauseBridge {
         Some(state.pause_loop_policy)
     }
 
-    pub(crate) fn wait_for_pause_work<T>(&self, mut claim: impl FnMut() -> Option<T>) -> Option<T> {
+    pub(crate) fn wait_for_pause_work<T>(
+        &self,
+        mut claim: impl FnMut() -> Option<T>,
+    ) -> Result<T, RendererInspectorPauseExitReason> {
         let mut state = self.shared.state.lock();
         loop {
-            if state.target_closed || state.quit_requested || state.session_detach_arms != 0 {
-                return None;
+            if state.target_closed {
+                return Err(RendererInspectorPauseExitReason::TargetClosed);
+            }
+            if matches!(
+                state.provisional_load,
+                Some(RendererProvisionalLoad::ReplacingDocument(_))
+            ) {
+                return Err(RendererInspectorPauseExitReason::Navigation);
+            }
+            if state.session_detach_arms != 0 {
+                return Err(RendererInspectorPauseExitReason::SessionDetached);
+            }
+            if state.quit_requested {
+                return Err(RendererInspectorPauseExitReason::Resumed);
             }
             if let Some(work) = claim() {
-                return Some(work);
+                return Ok(work);
             }
             self.shared.pause_loop_wake.wait(&mut state);
         }

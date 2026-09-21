@@ -71,6 +71,16 @@ pub(crate) enum FailedNavigationDocumentPolicy {
 }
 
 impl FailedNavigationDocumentPolicy {
+    fn for_navigation_error(error_text: &str) -> Self {
+        // Fetch.failRequest supplies the CDP reason "Aborted", while the
+        // transport supplies net::ERR_ABORTED. Both cancel the provisional
+        // load without discarding the currently committed document.
+        match error_text {
+            "Aborted" | moli_fetch::NET_ERR_ABORTED_ERROR_TEXT => Self::PreserveCommittedDocument,
+            _ => Self::InvalidateCommittedDocument,
+        }
+    }
+
     pub(crate) fn invalidates_committed_document(self) -> bool {
         matches!(self, Self::InvalidateCommittedDocument)
     }
@@ -350,11 +360,12 @@ fn materialize_navigation_load_outcome(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
         NavigationLoadOutcome::NetworkFailure(error_text) => {
+            let document_policy = FailedNavigationDocumentPolicy::for_navigation_error(&error_text);
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,
                 error_text,
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+                document_policy,
                 FailedNavigationResponseMode::CdpErrorTextResult,
             ))
         }
@@ -378,11 +389,12 @@ pub(crate) fn materialize_navigation_load_result(
                 Some(blocked) => blocked.to_string(),
                 None => format!("{error:#}"),
             };
+            let document_policy = FailedNavigationDocumentPolicy::for_navigation_error(&error_text);
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,
                 error_text,
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+                document_policy,
                 FailedNavigationResponseMode::ProtocolError,
             ))
         }

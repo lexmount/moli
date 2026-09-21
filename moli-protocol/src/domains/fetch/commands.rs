@@ -1872,30 +1872,8 @@ fn continue_streaming_document_response_in_background(
         response,
         network_observation_journal,
         body_progress_source,
-        prepared_document,
     } = pending;
     let cancellation = response.cancellation_handle();
-    if response_code.is_none()
-        && response_headers.is_empty()
-        && let Some(prepared_document) = prepared_document
-    {
-        conn.arm_background_navigation_completion(&document_navigation_token, Some(cancellation));
-        tokio::task::spawn_local(async move {
-            let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
-                sender.clone(),
-                document_navigation_token.clone(),
-                navigation.clone(),
-            );
-            let navigation_result =
-                prepared_document.resume_streaming(response, Some(body_completion_sink));
-            let _ = sender.send(page::BackgroundNavigationCompletion::new(
-                document_navigation_token,
-                navigation,
-                Ok(navigation_result),
-            ));
-        });
-        return;
-    }
     let job = conn.background_streaming_response_navigation_load_job_for_navigation(
         &navigation,
         response,

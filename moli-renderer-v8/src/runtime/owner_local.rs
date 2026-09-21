@@ -271,6 +271,11 @@ impl RendererPageHandle {
         self.devtools_target.pause_ref().is_pause_active()
     }
 
+    #[doc(hidden)]
+    pub fn renderer_devtools_target(&self) -> super::RendererDevToolsTargetHandle {
+        self.devtools_target.clone()
+    }
+
     /// Enqueues the DevTools IO-agent script policy without borrowing the
     /// owner-resident `PageVm` that may currently be executing JavaScript.
     #[doc(hidden)]

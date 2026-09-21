@@ -93,7 +93,8 @@ impl Drop for RendererDevToolsTargetShutdownRegistration {
 /// only ingress and lifecycle coordination; all V8 session access remains in
 /// the renderer-local Inspector executor.
 #[derive(Clone)]
-pub(crate) struct RendererDevToolsTargetHandle {
+#[doc(hidden)]
+pub struct RendererDevToolsTargetHandle {
     pause: RendererInspectorPauseBridge,
     main: RendererInspectorMainIngress,
     io: RendererInspectorIoIngress,

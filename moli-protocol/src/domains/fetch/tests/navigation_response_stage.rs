@@ -72,16 +72,15 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         .as_str()
         .expect("response-stage request id")
         .to_owned();
-    let prepared_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
-        })
-        .expect("final response head should reserve a renderer agent before continueResponse");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&response_request_id)
+    );
     assert!(
         ctx.conn
             .browser_context
@@ -106,19 +105,6 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         Some("SID-1"),
     );
 
-    {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .expect("loaded page");
-        assert_eq!(
-            page.renderer_devtools_agent_token(),
-            prepared_agent,
-            "continueResponse must commit the exact agent reserved at the response head"
-        );
-    }
     assert!(
         loaded_page_html_for_test(&mut ctx)
             .await
@@ -165,11 +151,7 @@ async fn assert_empty_http_error_response_stage(ctx: &mut TestContext, url: &str
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| {
-                bc.active_page_target()
-                    .fetch_owner
-                    .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
-            })
+            .and_then(|bc| bc.loaded_page())
             .is_none(),
         "an empty HTTP error must be classified from its body after continueResponse"
     );
@@ -857,7 +839,7 @@ async fn fulfill_request_commit_uses_configuration_added_while_paused_before_aut
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn interleaved_response_heads_only_commit_the_current_prepared_document() {
+async fn interleaved_response_heads_only_commit_the_current_response() {
     async fn first() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -919,16 +901,15 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_str()
         .expect("first response-stage request id")
         .to_owned();
-    let first_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&first_request_id)
-        })
-        .expect("first response head should reserve a renderer agent");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&first_request_id)
+    );
 
     ctx.process_async(json!({
         "id": 366,
@@ -942,17 +923,15 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_str()
         .expect("second response-stage request id")
         .to_owned();
-    let second_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&second_request_id)
-        })
-        .expect("second response head should reserve a renderer agent");
-    assert_ne!(first_agent, second_agent);
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&second_request_id)
+    );
 
     let attachment_before_continue = ctx.conn.browser_context.as_ref().and_then(|bc| {
         bc.active_page_target()
@@ -1003,8 +982,6 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .as_ref()
         .and_then(|bc| bc.loaded_page())
         .expect("current navigation should commit a page");
-    assert_eq!(page.renderer_devtools_agent_token(), second_agent);
-    assert_ne!(page.renderer_devtools_agent_token(), first_agent);
     let html = page
         .serialize_html_async()
         .await
@@ -1802,16 +1779,12 @@ async fn fail_request_at_response_stage_aborts_navigation() {
             .current_renderer_attachment()
     });
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|bc| {
-                bc.active_page_target()
-                    .fetch_owner
-                    .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
-            })
-            .is_some(),
-        "response head should own a prepared candidate before cancellation"
+        ctx.conn.browser_context.as_ref().is_some_and(|bc| {
+            bc.active_page_target()
+                .fetch_owner
+                .pending_fetch_response_transfer_is_pending_for_test(&response_request_id)
+        }),
+        "response head should retain its pending transfer before cancellation"
     );
 
     ctx.process_async(json!({
@@ -1834,14 +1807,14 @@ async fn fail_request_at_response_stage_aborts_navigation() {
             .runtime_slot
             .current_renderer_attachment(),
         attachment_before_cancel,
-        "canceling a response-stage candidate must not switch the renderer channel"
+        "canceling a response-stage transfer must not switch the renderer channel"
     );
 
     server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once() {
+async fn fulfill_request_at_response_stage_replaces_the_network_response_once() {
     async fn handler() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1891,16 +1864,15 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
         .as_str()
         .expect("response-stage request id")
         .to_owned();
-    let network_agent = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
-        })
-        .expect("network response head should reserve a renderer agent");
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .pending_fetch_response_transfer_is_pending_for_test(&request_id)
+    );
 
     ctx.process_async(json!({
         "id": 371,
@@ -1927,11 +1899,6 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
         .as_ref()
         .and_then(|bc| bc.loaded_page())
         .expect("synthetic response should commit a page");
-    assert_ne!(
-        page.renderer_devtools_agent_token(),
-        network_agent,
-        "fulfillRequest must discard the prepared network response candidate"
-    );
     let html = page
         .serialize_html_async()
         .await

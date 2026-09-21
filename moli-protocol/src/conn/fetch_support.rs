@@ -7,7 +7,7 @@ use url::Url;
 use super::body_spool::ensure_materialize_limit;
 use super::{
     CapturedBody, CapturedBodyWriter, CdpConnection, CommandOwnerScope, DocumentNavigationToken,
-    NavigationDispatchState, NavigationLoadOutcome, PausedResponsePreparedDocument,
+    NavigationDispatchState, NavigationLoadOutcome,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
@@ -790,7 +790,6 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
     pub(crate) response: StreamingRawResponse,
     pub(crate) network_observation_journal: NetworkObservationJournal,
     pub(crate) body_progress_source: MainDocumentBodyProgressSource,
-    pub(crate) prepared_document: Option<Box<PausedResponsePreparedDocument>>,
 }
 
 impl PausedDocumentTransfer {
@@ -816,23 +815,6 @@ impl PausedDocumentTransfer {
 
     pub(crate) fn is_pending(&self) -> bool {
         matches!(self.state, PausedDocumentTransferState::Pending { .. })
-    }
-
-    #[cfg(test)]
-    pub(crate) fn prepared_renderer_agent_token(
-        &self,
-    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
-        match &self.state {
-            PausedDocumentTransferState::Pending {
-                body:
-                    DocumentBodySource::StreamingRaw {
-                        prepared_document: Some(prepared_document),
-                        ..
-                    },
-                ..
-            } => Some(prepared_document.renderer_devtools_agent_token()),
-            _ => None,
-        }
     }
 
     fn owner_session_id(&self) -> Option<&str> {
@@ -879,7 +861,6 @@ impl PausedDocumentTransfer {
                 response,
                 network_observation_journal,
                 body_progress_source,
-                prepared_document: _,
             } => Ok(PendingFetchResponseOpenedBodyStream {
                 handle: handle.clone(),
                 buffered_bytes: None,
@@ -1010,7 +991,6 @@ impl PausedDocumentTransfer {
                         response,
                         network_observation_journal,
                         body_progress_source,
-                        prepared_document,
                     },
             } => {
                 let Some(document_navigation_token) = document_navigation_token else {
@@ -1026,7 +1006,6 @@ impl PausedDocumentTransfer {
                                 response,
                                 network_observation_journal,
                                 body_progress_source,
-                                prepared_document,
                             },
                         },
                     }));
@@ -1037,7 +1016,6 @@ impl PausedDocumentTransfer {
                     response,
                     network_observation_journal,
                     body_progress_source,
-                    prepared_document,
                 })
             }
             state => Err(Box::new(Self {
@@ -1383,7 +1361,6 @@ pub enum DocumentBodySource {
         response: StreamingRawResponse,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
-        prepared_document: Option<Box<PausedResponsePreparedDocument>>,
     },
     CapturedRaw {
         requested_url: Url,
@@ -1564,12 +1541,8 @@ impl DocumentBodySource {
                 response,
                 network_observation_journal,
                 body_progress_source,
-                prepared_document,
                 ..
             } => {
-                if !has_response_override && let Some(prepared_document) = prepared_document {
-                    return Ok(prepared_document.resume_streaming(response, None));
-                }
                 conn.build_navigation_from_streaming_raw_response_with_response_override_for_navigation_async(
                     navigation,
                     NetworkFetchResult::with_observation_journal(
@@ -1666,7 +1639,6 @@ impl DocumentBodySource {
                 response,
                 network_observation_journal,
                 body_progress_source,
-                prepared_document: _,
             } => {
                 let preserved_head = response.head();
                 let (head, body) = match capture_streaming_raw_response(response).await {
