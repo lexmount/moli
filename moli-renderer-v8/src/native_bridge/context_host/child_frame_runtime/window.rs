@@ -1813,7 +1813,7 @@ fn install_live_cross_origin_child_window_surface<'s>(
 ) {
     install_cross_origin_window_identity_slots(scope, window, handle, indexed_parent, parent, top);
     install_cross_origin_window_index_slots(scope, window, child_frame_count, indexed_parent, top);
-    install_cross_origin_symbol_slots(scope, window, "Window");
+    install_cross_origin_symbol_slots(scope, window);
     set_cross_origin_window_backing_slot(
         scope,
         window,
@@ -1889,7 +1889,7 @@ fn build_detached_cross_origin_window_index_proxy<'s>(
     install_cross_origin_window_accessors(scope, window);
     install_cross_origin_window_methods(scope, window);
     install_cross_origin_denied_accessors(scope, window, CROSS_ORIGIN_DENIED_WINDOW_PROPERTIES);
-    install_cross_origin_symbol_slots(scope, window, "Window");
+    install_cross_origin_symbol_slots(scope, window);
     let Some(proxy) = wrap_cross_origin_window_with_has_trap(scope, window) else {
         return window;
     };
@@ -1969,7 +1969,7 @@ fn build_cross_origin_top_level_window_proxy<'s>(
     install_cross_origin_window_accessors(scope, window);
     install_cross_origin_window_methods(scope, window);
     install_cross_origin_denied_accessors(scope, window, CROSS_ORIGIN_DENIED_WINDOW_PROPERTIES);
-    install_cross_origin_symbol_slots(scope, window, "Window");
+    install_cross_origin_symbol_slots(scope, window);
     let Some(proxy) = wrap_cross_origin_window_with_has_trap(scope, window) else {
         return window;
     };
@@ -2205,7 +2205,7 @@ pub(super) fn build_cross_origin_location_proxy<'s>(
         CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
         v8::Number::new(scope, handle.index() as f64).into(),
     );
-    install_cross_origin_symbol_slots(scope, target, "Location");
+    install_cross_origin_symbol_slots(scope, target);
     for name in CROSS_ORIGIN_LOCATION_DENIED_PROPERTIES {
         let _ = define_function_accessor_property(
             scope,
@@ -2241,7 +2241,7 @@ fn build_detached_cross_origin_location_proxy<'s>(
         CROSS_ORIGIN_LOCATION_PROXY_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    install_cross_origin_symbol_slots(scope, target, "Location");
+    install_cross_origin_symbol_slots(scope, target);
     for name in CROSS_ORIGIN_LOCATION_DENIED_PROPERTIES {
         let _ = define_function_accessor_property(
             scope,
@@ -2332,17 +2332,12 @@ fn install_cross_origin_location_methods<'s>(
 fn install_cross_origin_symbol_slots(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
-    to_string_tag: &'static str,
 ) {
-    let tag_value = v8str(scope, to_string_tag).into();
-    let _ = object.define_own_property(
-        scope,
-        v8::Symbol::get_to_string_tag(scope).into(),
-        tag_value,
-        cross_origin_property_attributes(),
-    );
+    // CrossOriginPropertyFallback exposes undefined for all three symbols;
+    // the interface's normal toStringTag is only visible to same-origin code.
     let undefined = v8::undefined(scope).into();
     for symbol in [
+        v8::Symbol::get_to_string_tag(scope),
         v8::Symbol::get_has_instance(scope),
         v8::Symbol::get_is_concat_spreadable(scope),
     ] {
@@ -2385,7 +2380,7 @@ fn install_top_window_cross_origin_access_surface<'s>(
     set_cross_origin_object_slot(scope, surface, "then", v8::undefined(scope).into());
     install_cross_origin_window_accessors(scope, surface);
     install_cross_origin_window_methods(scope, surface);
-    install_cross_origin_symbol_slots(scope, surface, "Window");
+    install_cross_origin_symbol_slots(scope, surface);
     retain_window_cross_origin_access_surface(scope, window, surface);
 }
 
@@ -2478,7 +2473,7 @@ fn window_cross_origin_caller_surface<'s>(
     install_cross_origin_window_accessors(scope, surface);
     install_cross_origin_window_methods(scope, surface);
     set_cross_origin_object_slot(scope, surface, "then", v8::undefined(scope).into());
-    install_cross_origin_symbol_slots(scope, surface, "Window");
+    install_cross_origin_symbol_slots(scope, surface);
     surface.set_prototype(scope, v8::null(scope).into())?;
     // Every exposed function traces this surface through callback data. The
     // weak cache preserves identity without keeping removed realms alive.
