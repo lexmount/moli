@@ -597,7 +597,7 @@ fn event_handler_event_type(name: &str) -> Option<&str> {
         .map(canonical_event_handler_event_type)
 }
 
-fn legacy_lenient_this_event_handler(name: &str) -> bool {
+pub(crate) fn legacy_lenient_this_event_handler(name: &str) -> bool {
     matches!(name, "onmouseenter" | "onmouseleave" | "onreadystatechange")
 }
 
