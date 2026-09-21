@@ -1002,6 +1002,14 @@ impl JsContextHost {
             let mut owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
             parser.finish(&mut owner)
         };
+        if self
+            .dom_host()
+            .document_content_type_for_handle(document_handle)
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain"))
+        {
+            self.dom_host_mut()
+                .set_html_quirks_mode_for_parser_document(document_handle, QuirksMode::NoQuirks);
+        }
         self.queue_live_child_parser_discovery_signals(
             child_handle,
             document_handle,
