@@ -1731,14 +1731,12 @@ fn install_cross_origin_window_named_slots<'s>(
 
 fn is_cross_origin_named_child_slot_name(name: &str) -> bool {
     !name.is_empty()
-        && name.parse::<u32>().is_err()
-        && !CROSS_ORIGIN_DENIED_WINDOW_PROPERTIES.contains(&name)
+        && crate::native_bridge::collections::array_index_property_name(name).is_none()
         && !CROSS_ORIGIN_WINDOW_NOOP_METHODS.contains(&name)
         && !matches!(
             name,
             "window"
                 | "self"
-                | "globalThis"
                 | "top"
                 | "parent"
                 | "frames"
@@ -1747,7 +1745,6 @@ fn is_cross_origin_named_child_slot_name(name: &str) -> bool {
                 | "closed"
                 | "opener"
                 | "postMessage"
-                | "then"
         )
 }
 
@@ -2504,9 +2501,6 @@ fn child_window_cross_origin_named_getter<'s>(
         return v8::Intercepted::kNo;
     };
     if let Some(value) = child_window_cross_origin_named_child_value(scope, surface, key) {
-        let Some(value) = value else {
-            return v8::Intercepted::kNo;
-        };
         rv.set(value);
         return v8::Intercepted::kYes;
     }
@@ -2550,10 +2544,7 @@ fn child_window_cross_origin_named_query<'s>(
     let Some(surface) = window_cross_origin_access_surface(scope, args.holder()) else {
         return v8::Intercepted::kNo;
     };
-    if let Some(value) = child_window_cross_origin_named_child_value(scope, surface, key) {
-        if value.is_none() {
-            return v8::Intercepted::kNo;
-        }
+    if child_window_cross_origin_named_child_value(scope, surface, key).is_some() {
         rv.set_int32(cross_origin_named_property_attributes().as_u32() as i32);
         return v8::Intercepted::kYes;
     }
@@ -2589,10 +2580,6 @@ fn child_window_cross_origin_named_descriptor<'s>(
         return v8::Intercepted::kYes;
     };
     if let Some(value) = child_window_cross_origin_named_child_value(scope, surface, key) {
-        let Some(value) = value else {
-            throw_cross_origin_location_security_error(scope);
-            return v8::Intercepted::kYes;
-        };
         let Ok(descriptor) =
             CrossOriginPropertyDescriptorDeclaration::new(value, false, false, true).bind(scope)
         else {
@@ -2622,27 +2609,25 @@ fn child_window_cross_origin_named_child_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     surface: v8::Local<'s, v8::Object>,
     key: v8::Local<'s, v8::Name>,
-) -> Option<Option<v8::Local<'s, v8::Value>>> {
+) -> Option<v8::Local<'s, v8::Value>> {
     let key = v8::Local::<v8::String>::try_from(key).ok()?;
     let key_name = key.to_rust_string_lossy(scope);
     if !is_cross_origin_named_child_slot_name(&key_name) {
         return None;
     }
     if cross_origin_window_has_discarded_child_browsing_context(scope, surface) {
-        return Some(None);
+        return None;
     }
     let parent_handle = child_handle_from_object(scope, surface);
     if parent_handle.is_none() && !is_cross_origin_top_window_proxy(scope, surface) {
         return None;
     }
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let child_handle =
-        unsafe { &*host_ptr }.child_browsing_context_named_child_handle(parent_handle, &key_name);
-    Some(child_handle.and_then(|child_handle| {
-        unsafe { &mut *host_ptr }
-            .child_browsing_context_window_proxy_for_top(scope, child_handle)
-            .map(Into::into)
-    }))
+    let child_handle = unsafe { &*host_ptr }
+        .child_browsing_context_named_child_handle(parent_handle, &key_name)?;
+    unsafe { &mut *host_ptr }
+        .child_browsing_context_window_proxy_for_top(scope, child_handle)
+        .map(Into::into)
 }
 
 fn child_window_cross_origin_indexed_getter<'s>(

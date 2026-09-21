@@ -1,5 +1,6 @@
 use super::*;
 use crate::dom::native::Node;
+use crate::native_bridge::context_host::OwnerDispatchScope;
 use std::collections::HashSet;
 
 impl JsContextHost {
@@ -255,7 +256,7 @@ impl JsContextHost {
             Some(parent) => self.child_browsing_context_child_frame_handles(parent),
             None => self.top_level_child_browsing_context_handles_in_frame_tree_order(),
         };
-        handles.into_iter().find(|handle| {
+        let first = handles.into_iter().find(|handle| {
             self.dom_host()
                 .node(*handle)
                 .is_some_and(|node| node.flags().in_document_tree())
@@ -263,7 +264,14 @@ impl JsContextHost {
                     .child_browsing_contexts
                     .get(handle)
                     .is_some_and(|entry| entry.matches_browsing_context_name(key))
-        })
+        })?;
+        // The target-name property set selects the first child for each name
+        // before filtering by origin. A cross-origin first match must not
+        // expose a later same-origin duplicate, and document.domain does not
+        // relax this same-origin check.
+        let parent_scope = parent.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
+        self.window_scopes_have_same_origin(parent_scope, OwnerDispatchScope::Child(first))
+            .then_some(first)
     }
 
     fn child_browsing_context_handle_by_name_in_document_order_from_document(
