@@ -2320,6 +2320,7 @@ mod hyperlink_null_url_protocol;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
+mod joint_history;
 mod lazy_storage;
 
 mod svg_matrix_native_receivers;
