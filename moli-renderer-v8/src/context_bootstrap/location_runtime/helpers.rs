@@ -5,13 +5,9 @@ pub(super) fn v8_value_to_string<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
 ) -> Option<String> {
-    if value.is_null_or_undefined() {
-        Some(String::new())
-    } else {
-        value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-    }
+    value
+        .to_string(scope)
+        .map(|value| value.to_rust_string_lossy(scope))
 }
 
 pub(super) fn set_return_string(
