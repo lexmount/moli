@@ -361,9 +361,19 @@ pub(super) unsafe extern "C" fn promise_reject_callback(message: v8::PromiseReje
 
     match message.get_event() {
         v8::PromiseRejectEvent::PromiseRejectWithNoHandler => {
-            let Some(realm) =
-                unsafe { &*host_ptr }.current_runtime_window_execution_context_binding(scope)
+            let host = unsafe { &*host_ptr };
+            // Reporting a rejection must not read a retired global: V8 can
+            // throw on that access and replace the operation's original error.
+            // Resolve retirement from native context slots before popup or
+            // child scope markers are consulted by the binding lookup.
+            let Some(identity) = host.window_execution_context_identity_for_access_check(context)
             else {
+                return;
+            };
+            if !host.window_execution_context_identity_is_current(identity) {
+                return;
+            }
+            let Some(realm) = host.current_runtime_window_execution_context_binding(scope) else {
                 return;
             };
             let promise = message.get_promise();

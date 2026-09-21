@@ -104,7 +104,8 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(
         method = "createImageBitmap",
         length = 1,
-        callback = window_create_image_bitmap_callback
+        callback = window_create_image_bitmap_callback,
+        returns_promise
     )]
     create_image_bitmap: (),
 

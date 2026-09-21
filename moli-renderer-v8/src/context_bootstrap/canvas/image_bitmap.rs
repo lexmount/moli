@@ -79,6 +79,9 @@ pub(crate) fn window_create_image_bitmap_callback<'s>(
         throw_type_error(scope, "createImageBitmap is not a constructor");
         return;
     }
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         rv.set_undefined();
         return;
