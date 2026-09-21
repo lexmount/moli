@@ -41,7 +41,7 @@ from html import escape as html_escape
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, parse_qsl, unquote, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlparse, urlsplit, urlunsplit
 
 from .any_js import (
     ANY_JS_DEDICATED_WORKER_GLOBAL,
@@ -1610,6 +1610,19 @@ class FetchStash:
             return self._values.pop(parsed_key, None)
 
 
+def _directory_listing_body(directory: Path, path: str) -> bytes:
+    items = [] if path == "/" else ['<li><a href="../">..</a></li>']
+    for entry in sorted(directory.iterdir(), key=lambda entry: entry.name):
+        suffix = "/" if entry.is_dir() else ""
+        link = quote(entry.name, safe="") + suffix
+        items.append(f'<li><a href="{link}">{html_escape(entry.name)}{suffix}</a></li>')
+    title = f"Directory listing for {html_escape(path)}"
+    return (
+        f'<!doctype html>\n<meta charset="utf-8">\n<title>{title}</title>\n'
+        f'<h1>{title}</h1>\n<ul>\n' + "\n".join(items) + "\n</ul>\n"
+    ).encode("utf-8")
+
+
 def _make_handler(
     wpt_root: Path,
     results_store: "ResultsStore",
@@ -2012,7 +2025,7 @@ def _make_handler(
                 )
                 return
             cleaned = _legacy_wpt_resource_alias(path) or path.lstrip("/")
-            if not cleaned or ".." in cleaned.split("/"):
+            if ".." in cleaned.split("/"):
                 self.send_error(404)
                 return
             is_any_js_window_wrapper = (
@@ -2041,11 +2054,24 @@ def _make_handler(
                 self.send_error(404)
                 return
             if file_path.is_dir():
-                index = file_path / "index.html"
-                if not index.exists():
-                    self.send_error(404)
+                # wptserve lists directories, including the WPT root. Tests may
+                # fetch "/" without depending on a checkout-specific index file.
+                if not parsed.path.endswith("/"):
+                    self._send_bytes(
+                        None,
+                        b"",
+                        emit_body=emit_body,
+                        status_code=301,
+                        extra_headers=[("Location", parsed._replace(path=parsed.path + "/").geturl())],
+                    )
                     return
-                file_path = index
+                try:
+                    body = _directory_listing_body(file_path, path)
+                except OSError:
+                    self.send_error(500)
+                    return
+                self._send_bytes("text/html; charset=utf-8", body, emit_body=emit_body)
+                return
             try:
                 body = file_path.read_bytes()
             except OSError:
