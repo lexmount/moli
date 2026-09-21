@@ -7,7 +7,6 @@ pub(super) struct ParsedWindowFetchInput {
     pub(super) method: String,
     pub(super) body: Option<Vec<u8>>,
     pub(super) headers: Vec<(String, String)>,
-    pub(super) suppress_default_content_type: bool,
     pub(super) request_mode: moli_fetch::RequestMode,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
     pub(super) redirect_mode: moli_fetch::RequestRedirectMode,
@@ -53,17 +52,9 @@ pub(super) fn parse_window_fetch_input<'s>(
         } else {
             inherited.headers.clone()
         };
-        let suppress_default_content_type = if init.body_present {
-            if !init.headers_present {
-                append_default_body_content_type(&mut headers, init.body_content_type.as_deref());
-            }
-            init.suppress_default_content_type
-                || (body.is_some()
-                    && init.body_content_type.is_none()
-                    && !has_header(&headers, "content-type"))
-        } else {
-            body.is_some() && !has_header(&headers, "content-type")
-        };
+        if init.body_present && !init.headers_present {
+            append_default_body_content_type(&mut headers, init.body_content_type.as_deref());
+        }
         let inherited_credentials = request_object_credentials_mode(scope, req_obj)?;
         let request_mode = init
             .request_mode
@@ -90,7 +81,6 @@ pub(super) fn parse_window_fetch_input<'s>(
             method,
             body,
             headers,
-            suppress_default_content_type,
             request_mode,
             credentials_mode,
             redirect_mode,
@@ -123,7 +113,6 @@ pub(super) fn parse_window_fetch_input<'s>(
             method: init.method,
             body: init.body,
             headers,
-            suppress_default_content_type: init.suppress_default_content_type,
             request_mode,
             credentials_mode,
             redirect_mode,

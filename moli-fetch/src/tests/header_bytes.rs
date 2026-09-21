@@ -54,6 +54,64 @@ async fn fetch_in_mode(
 }
 
 #[tokio::test]
+async fn request_content_type_distinguishes_absent_empty_and_nonempty_in_all_transports()
+-> Result<()> {
+    let cases = [
+        ("GET", None),
+        ("POST", None),
+        ("POST", Some("")),
+        ("POST", Some("body")),
+        ("PUT", None),
+        ("PUT", Some("body")),
+        ("PATCH", Some("body")),
+        ("DELETE", Some("body")),
+    ];
+    for mode in ["buffered", "html", "raw"] {
+        for content_type in [Some(""), None, Some("application/custom")] {
+            let server = ScriptedHttpServer::spawn(
+                cases.iter().map(|_| ScriptedResponse::ok("ok")).collect(),
+            );
+            let client =
+                FetchClient::new(&FetchConfig::default(), new_shared_browser_cookie_store());
+            for (method, body) in cases {
+                let mut headers = vec![("X-Test".to_owned(), String::new())];
+                if let Some(value) = content_type {
+                    headers.push(("cOnTeNt-TyPe".to_owned(), value.to_owned()));
+                }
+                let recorder = NetworkObservationRecorder::default();
+                let request =
+                    Request::new(method, &server.url(), body.map(str::to_owned), headers)?
+                        .with_network_observation_recorder(recorder.clone());
+                fetch_in_mode(&client, request, mode).await?;
+                let journal = recorder.snapshot();
+                let observed = journal.final_request_observation().unwrap().headers();
+                assert_eq!(
+                    observed
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
+                        .map(|(_, value)| value.as_str()),
+                    content_type,
+                    "{mode}, {method}, body={body:?}: {observed:?}"
+                );
+            }
+            let requests = server.requests();
+            server.shutdown();
+            assert!(client.shutdown().is_clean());
+            assert_eq!(requests.len(), cases.len());
+            for (request, (method, body)) in requests.iter().zip(cases) {
+                assert_eq!(
+                    request_head_header_value(request, "content-type"),
+                    content_type,
+                    "{mode}, {method}, body={body:?}: {request}"
+                );
+                assert_eq!(request_head_header_value(request, "x-test"), Some(""));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn http_header_bytes_survive_all_transports_and_observation() -> Result<()> {
     let bytes: Vec<u8> = (0x80..=0xff).collect();
     let value: String = bytes.iter().copied().map(char::from).collect();

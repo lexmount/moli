@@ -698,16 +698,10 @@ pub(crate) fn configure_easy(
 
     let mut has_content_type_header = false;
     for (name, value) in outgoing_headers.iter() {
-        let is_content_type = name.eq_ignore_ascii_case("content-type");
-        has_content_type_header |= is_content_type;
+        has_content_type_header |= name.eq_ignore_ascii_case("content-type");
         let mut header_line = name.as_bytes().to_vec();
         // curl sends an empty field for `Name;`, but removes it for `Name:`.
-        // Empty Content-Type remains the internal upload-default suppression marker.
-        header_line.push(if value.is_empty() && !is_content_type {
-            b';'
-        } else {
-            b':'
-        });
+        header_line.push(if value.is_empty() { b';' } else { b':' });
         if !value.is_empty() {
             header_line.push(b' ');
             header_line.extend_from_slice(value);
@@ -728,13 +722,10 @@ pub(crate) fn configure_easy(
                 .context("failed to build cache validation request header")?;
         }
     }
-    if (request.method.eq_ignore_ascii_case("POST")
-        || (request.method == "PUT" && request.body.is_none()))
-        && !has_content_type_header
-    {
-        // libcurl otherwise synthesizes `Content-Type: application/x-www-form-urlencoded`
-        // for POST bodies and bodyless PUT requests. Browser requests only send Content-Type when
-        // BodyInit or caller headers produce one, so suppress curl's transport default.
+    if !has_content_type_header {
+        // BodyInit and caller headers determine whether Content-Type is present.
+        // Suppress libcurl's upload default only in the curl header list, keeping
+        // this transport instruction distinct from an explicit empty header.
         headers
             .append("Content-Type:")
             .context("failed to suppress curl default content-type")?;

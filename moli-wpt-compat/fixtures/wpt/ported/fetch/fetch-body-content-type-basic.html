@@ -236,4 +236,62 @@ promise_test(async function () {
     "fetch(Request) should preserve inherited explicit BufferSource Content-Type",
   );
 }, "fetch() inherits Request body headers without adding transport defaults");
+
+async function contentTypeVariants(url) {
+  const results = [];
+  const bodies = [
+    ["no body", undefined, null],
+    ["text", "hello", "text/plain;charset=UTF-8"],
+    ["bytes", new Uint8Array([1, 2, 3]), null],
+    ["untyped Blob", new Blob(["hello"]), null],
+    ["typed Blob", new Blob(["hello"], { type: "text/custom" }), "text/custom"],
+  ];
+  for (const [label, body, defaultType] of bodies) {
+    for (const contentType of [null, "", "application/custom"]) {
+      const headers = contentType === null ? {} : { "cOnTeNt-TyPe": contentType };
+      const init = { method: "POST", headers, body };
+      const expected = contentType === null ? defaultType : contentType;
+      const description = label + "/" + JSON.stringify(contentType);
+      const direct = await fetch(url, init);
+      results.push(["fetch/" + description, (await direct.json()).content_type, expected]);
+      const inherited = await fetch(new Request(url, init));
+      results.push(["fetch(Request)/" + description, (await inherited.json()).content_type, expected]);
+      const xhrType = await new Promise(function (resolve, reject) {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", url);
+        if (contentType !== null) xhr.setRequestHeader("cOnTeNt-TyPe", contentType);
+        xhr.responseType = "json";
+        xhr.onload = function () { resolve(xhr.response.content_type); };
+        xhr.onerror = function () { reject(new Error("XHR failed for " + description)); };
+        xhr.send(body);
+      });
+      results.push(["XHR/" + description, xhrType, expected]);
+    }
+  }
+  return results;
+}
+
+promise_test(async function () {
+  for (const [label, actual, expected] of await contentTypeVariants(ECHO_BODY_HEX_URL)) {
+    assert_equals(actual, expected, label);
+  }
+}, "Window fetch and XHR distinguish absent, empty and nonempty Content-Type on the wire");
+
+promise_test(async function (t) {
+  const url = new URL(ECHO_BODY_HEX_URL, location.href).href;
+  const source = "(" + contentTypeVariants.toString() + ")(" + JSON.stringify(url) + ")" +
+    ".then(results => postMessage({results}), error => postMessage({error: String(error)}));";
+  const workerUrl = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+  t.add_cleanup(function () { URL.revokeObjectURL(workerUrl); });
+  const worker = new Worker(workerUrl);
+  t.add_cleanup(function () { worker.terminate(); });
+  const message = await new Promise(function (resolve, reject) {
+    worker.onmessage = resolve;
+    worker.onerror = function (event) { reject(new Error(event.message)); };
+  });
+  assert_equals(message.data.error, undefined, "worker requests complete");
+  for (const [label, actual, expected] of message.data.results) {
+    assert_equals(actual, expected, label);
+  }
+}, "Worker fetch and XHR distinguish absent, empty and nonempty Content-Type on the wire");
 </script>
