@@ -11,6 +11,7 @@ use super::{
     context_bootstrap::is_simple_event_target,
     context_bootstrap::mark_event_trusted,
     context_bootstrap::performance_slot_number,
+    context_bootstrap::require_same_origin_window_receiver,
     context_bootstrap::set_event_trusted,
     context_bootstrap::simple_event_target_add_event_listener_callback,
     context_bootstrap::simple_event_target_dispatch_event_callback,
@@ -634,6 +635,9 @@ pub(super) fn window_set_timeout_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     rv.set_uint32(0);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
@@ -679,6 +683,9 @@ pub(super) fn window_set_interval_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     rv.set_uint32(0);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
@@ -817,8 +824,7 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
     let id_val = args.get(0);
@@ -831,8 +837,7 @@ pub(super) fn window_cancel_animation_frame_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
     let Some(parsed) = webidl::parse_args::<WindowCancelAnimationFrameArgs>(scope, &args) else {
@@ -846,8 +851,7 @@ pub(super) fn window_cancel_idle_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
-        throw_type_error(scope, "Illegal invocation");
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
         return;
     }
     let Some(parsed) = webidl::parse_args::<WindowCancelIdleCallbackArgs>(scope, &args) else {
@@ -876,6 +880,9 @@ pub(super) fn window_request_animation_frame_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     rv.set_uint32(0);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
@@ -918,6 +925,9 @@ pub(super) fn window_request_idle_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     rv.set_uint32(0);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
