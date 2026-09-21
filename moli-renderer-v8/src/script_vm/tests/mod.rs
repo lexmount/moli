@@ -15711,6 +15711,7 @@ mod fetch_request_guard;
 mod frame_element_security;
 mod headers_list;
 mod history_referrer;
+mod history_replace_forward;
 mod http_fixture;
 mod indexed_db;
 mod inspector_unwrap;

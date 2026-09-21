@@ -442,10 +442,9 @@ pub fn cross_document_navigation_seed(
         .iter()
         .find(|entry| entry.history_index == current_index)
         .cloned();
-    entries.retain(|entry| entry.history_index <= current_index);
-
     let (destination_entry, destination_index) = match mutation {
         NavigationHistoryMutation::Push => {
+            entries.retain(|entry| entry.history_index <= current_index);
             let next_index = current_index + 1;
             let entry = navigation_history_entry(
                 destination_url.as_str(),
@@ -935,6 +934,46 @@ mod tests {
                 .and_then(|activation| activation.navigation_type.as_deref()),
             Some("replace")
         );
+    }
+
+    #[test]
+    fn cross_document_navigation_seed_replace_preserves_forward_history() {
+        let entries = (0..4)
+            .map(|index| {
+                let mut entry = navigation_history_entry(
+                    &format!("https://example.test/page-{index}"),
+                    index,
+                    index,
+                    NavigationHistoryDocumentId::allocate(),
+                    NavigationHistoryEntryId::allocate(),
+                    NavigationHistoryEntryKey::allocate(),
+                    Some(format!("{{\"classic\":{index}}}")),
+                    Some(format!("{{\"navigation\":{index}}}")),
+                );
+                entry.referrer_policy = Some("no-referrer".to_owned());
+                entry
+            })
+            .collect::<Vec<_>>();
+        for destination in [
+            "https://example.test/replaced",
+            "https://other.test/replaced",
+        ] {
+            let seed = cross_document_navigation_seed(
+                entries.clone(),
+                1,
+                1,
+                &Url::parse(destination).unwrap(),
+                NavigationHistoryMutation::Replace,
+            );
+            assert_eq!(seed.current_index, 1);
+            assert_eq!(seed.entries.len(), entries.len());
+            assert_eq!(seed.entries[0], entries[0]);
+            assert_eq!(seed.entries[2..], entries[2..]);
+            assert_eq!(seed.entries[1].url, destination);
+            assert_ne!(seed.entries[1].document_id, entries[1].document_id);
+            assert_ne!(seed.entries[1].id, entries[1].id);
+            assert_eq!(seed.activation.as_ref().unwrap().entry, seed.entries[1]);
+        }
     }
 
     #[test]
