@@ -567,8 +567,12 @@ pub(super) fn cancel_active_navigation_event<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default();
     clear_navigation_active_navigate_event(scope, navigation);
-    if crate::context_bootstrap::event_bool_attribute(scope, event, "cancelable") {
-        let _ = crate::context_bootstrap::event_backing(scope, event).define_own_property(
+    // Aborting a navigation cancels an event that is still being dispatched,
+    // including iframe traversals whose events are not author-cancelable.
+    // A precommit handler runs after dispatch, so aborting there must leave
+    // the event's canceled flag unchanged.
+    if super::events::event_is_dispatching(scope, event) {
+        let _ = event_backing(scope, event).define_own_property(
             scope,
             v8str(scope, "defaultPrevented").into(),
             v8::Boolean::new(scope, true).into(),
