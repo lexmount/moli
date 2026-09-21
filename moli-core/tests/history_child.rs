@@ -5422,7 +5422,16 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
               const named = win.nestedNamed;\
               const indexed = win[0];\
               const descriptor = Object.getOwnPropertyDescriptor(win, 'nestedNamed');\
-              const documentDescriptor = Object.getOwnPropertyDescriptor(win, 'document');\
+              const probe = operation => {\
+                try { return operation(); }\
+                catch (error) { return `${error && error.name}:${error instanceof DOMException}`; }\
+              };\
+              const documentDescriptor = probe(() => {\
+                const d = Object.getOwnPropertyDescriptor(win, 'document');\
+                return {enumerable:d.enumerable, configurable:d.configurable, writable:d.writable,\
+                  getterType:typeof d.get, setterType:typeof d.set, valueType:typeof d.value,\
+                  matchesIndexed:d.value === win[1]};\
+              });\
               const focusDescriptor = Object.getOwnPropertyDescriptor(win, 'focus');\
               let documentAccess;\
               try {\
@@ -5473,7 +5482,7 @@ async fn cross_origin_window_proxy_exposes_named_child_frames() -> Result<()> {
     assert_eq!(
         before,
         Some(
-            r#"{"hasNamed":true,"ownNamed":true,"hasDocumentCollision":true,"hasFocusCollision":true,"sameAsIndexed":true,"documentDescriptor":{"enumerable":false,"configurable":true,"getterType":"undefined","setterType":"undefined","valueType":"object"},"focusDescriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"function"},"documentAccess":"read","focusType":"function","namedSelf":true,"namedWindow":true,"namedFrames":true,"namedParent":true,"namedTop":true,"namedLength":0,"descriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"object"}}"#
+            r#"{"hasNamed":true,"ownNamed":true,"hasDocumentCollision":true,"hasFocusCollision":true,"sameAsIndexed":true,"documentDescriptor":{"enumerable":false,"configurable":true,"writable":false,"getterType":"undefined","setterType":"undefined","valueType":"object","matchesIndexed":true},"focusDescriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"function"},"documentAccess":"read","focusType":"function","namedSelf":true,"namedWindow":true,"namedFrames":true,"namedParent":true,"namedTop":true,"namedLength":0,"descriptor":{"enumerable":false,"configurable":true,"writable":false,"valueType":"object"}}"#
                 .to_owned(),
         ),
         "{}",
