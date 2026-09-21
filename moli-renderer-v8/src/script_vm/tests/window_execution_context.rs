@@ -111,7 +111,7 @@ fn strict_window_binding_resolves_registry_policy_and_rejects_retired_realm() {
 }
 
 #[test]
-fn borrowed_fetch_enforces_cross_origin_receiver_before_entering_its_realm() {
+fn borrowed_fetch_rejects_cross_origin_receiver_before_entering_its_realm() {
     let mut vm = new_storage_test_vm("https://fetch-accessing-origin.test/");
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Fetch));
     vm.exec(
@@ -130,17 +130,32 @@ fn borrowed_fetch_enforces_cross_origin_receiver_before_entering_its_realm() {
         vm.eval(
             r#"
             (() => {
-              try {
-                fetch.call(__crossOriginFetchFrame.contentWindow, "/blocked");
-                return "no-throw";
-              } catch (error) {
-                return `${error && error.name}:${error instanceof DOMException}`;
-              }
+              globalThis.__crossOriginFetchResult = "pending";
+              globalThis.__crossOriginFetchConversions = 0;
+              const input = {toString() { __crossOriginFetchConversions++; return "/blocked"; }};
+              const promise = fetch.call(__crossOriginFetchFrame.contentWindow, input);
+              promise.then(
+                () => { __crossOriginFetchResult = "resolved"; },
+                error => {
+                  __crossOriginFetchResult = `${error && error.name}:${error instanceof DOMException}`;
+                }
+              );
+              return Object.getPrototypeOf(promise) === Promise.prototype;
             })()
             "#,
         )
         .expect("cross-origin Fetch receiver probe should evaluate"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__crossOriginFetchResult")
+            .expect("cross-origin Fetch rejection should be observable"),
         "SecurityError:true"
+    );
+    assert_eq!(
+        vm.eval("String(__crossOriginFetchConversions)").unwrap(),
+        "0",
+        "cross-origin authorization must precede argument conversion"
     );
     assert!(
         vm.take_pending_subresource_fetch_infos().is_empty(),

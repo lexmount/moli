@@ -235,7 +235,7 @@ use websockets::WebSocketConnectionState;
 pub(crate) use window_execution_context::{
     DetachedWindowFetchContext, WindowEnvironmentSettings, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
-    WindowFetchContext, WindowOperationReceiver, WindowOperationReceiverCaptureError,
+    WindowFetchContext, WindowOperationReceiver,
     WindowTaskTarget,
 };
 use window_execution_context::{
