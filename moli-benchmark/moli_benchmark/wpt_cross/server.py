@@ -37,11 +37,14 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from html import escape as html_escape
 from email.utils import formatdate
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, unquote, urlparse, urlsplit, urlunsplit
+
+from .pipes import WptPipeError, parse_pipe_commands
 
 from .any_js import (
     ANY_JS_DEDICATED_WORKER_GLOBAL,
@@ -795,6 +798,12 @@ _TRICKLE_PIPE_RE = re.compile(r"(?:^|[|,])trickle\(d([0-9]+(?:\.[0-9]+)?)\)(?:$|
 _HEADER_PIPE_RE = re.compile(r"^header\(([^,()]+),([^()]*)\)$")
 _STATUS_PIPE_RE = re.compile(r"^status\(([0-9]{3})\)$")
 _GET_TEMPLATE_RE = re.compile(rb"\{\{GET\[([^\]\r\n]+)\]\}\}")
+_REQUEST_TEMPLATE_RE = re.compile(
+    rb"\{\{(?:GET\[(?P<query>[^\]\r\n]+)\]|"
+    rb"headers\[(?P<header>[^\]\r\n]+)\]|"
+    rb"(?i:header_or_default)\(\s*(?P<optional_header>[^,()]+?)\s*,"
+    rb"\s*(?P<default>[^()]*)\))\}\}",
+)
 _UUID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*):uuid\(\)\}\}")
 _ID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
@@ -806,13 +815,19 @@ _EMPTY_WASM_MODULE = b"\0asm\1\0\0\0"
 
 
 def _pipe_requests_template_substitution(query: str) -> bool:
-    for name, value in parse_qsl(query, keep_blank_values=True):
-        if name != "pipe":
-            continue
-        for command in value.split("|"):
-            if command.strip() == "sub":
-                return True
-    return False
+    return any(name == "sub" for name, _ in parse_pipe_commands(query))
+
+
+def _template_escape_type(file_name: str, query: str) -> str:
+    # Filename substitution runs before explicit pipes in wptserve. Markup
+    # filenames escape HTML; scripts and other resources preserve raw values.
+    if ".sub." in file_name:
+        markup_extensions = {".html", ".htm", ".xht", ".xhtml", ".xml", ".svg"}
+        return "html" if Path(file_name).suffix in markup_extensions else "none"
+    for name, args in parse_pipe_commands(query):
+        if name == "sub":
+            return args[0] if args else "html"
+    return "html"
 
 
 def _needs_wpt_template_substitution(file_name: str, body: bytes, query: str = "") -> bool:
@@ -991,7 +1006,11 @@ def _valid_static_response_header(name: str, value: str) -> bool:
     return bool(_HTTP_TOKEN_RE.match(name)) and "\r" not in value and "\n" not in value
 
 
-def _sidecar_response_headers(file_path: Path) -> list[tuple[str, str]]:
+def _sidecar_response_headers(
+    file_path: Path,
+    *,
+    substitute: Callable[[bytes], bytes] | None = None,
+) -> list[tuple[str, str]]:
     """Return immediate-directory and file-specific WPT sidecar headers."""
 
     sidecars: list[Path] = []
@@ -1014,9 +1033,12 @@ def _sidecar_response_headers(file_path: Path) -> list[tuple[str, str]]:
     headers: list[tuple[str, str]] = []
     for sidecar in sidecars:
         try:
-            lines = sidecar.read_bytes().decode("latin-1").splitlines()
+            body = sidecar.read_bytes()
         except OSError:
             continue
+        if substitute is not None and sidecar.name.endswith(".sub.headers"):
+            body = substitute(body)
+        lines = body.decode("latin-1").splitlines()
         for line in lines:
             stripped = line.strip()
             if (
@@ -1174,31 +1196,30 @@ def _static_response_headers(
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
 ) -> list[tuple[str, str]]:
-    headers = _apply_header_operations(
-        _sidecar_response_headers(file_path),
+    template_ids: dict[bytes, bytes] = {}
+
+    def substitute(body: bytes) -> bytes:
+        assert port is not None
+        return _substitute_wpt_template_variables(
+            body,
+            port=port,
+            alternate_port=alternate_port,
+            remote_port=remote_port,
+            query=query,
+            request_path=request_path,
+            request_hostname=request_hostname,
+            primary_hostname=primary_hostname,
+            request_headers=request_headers,
+            template_ids=template_ids,
+            escape_type="none",
+        )
+
+    return _apply_header_operations(
+        _sidecar_response_headers(file_path, substitute=substitute if port is not None else None),
         _pipe_response_header_operations(query),
     )
-    if port is None:
-        return headers
-    template_ids: dict[bytes, bytes] = {}
-    return [
-        (
-            name,
-            _substitute_wpt_template_variables(
-                value.encode("latin-1"),
-                port=port,
-                alternate_port=alternate_port,
-                remote_port=remote_port,
-                query=query,
-                request_path=request_path,
-                request_hostname=request_hostname,
-                primary_hostname=primary_hostname,
-                template_ids=template_ids,
-            ).decode("latin-1"),
-        )
-        for name, value in headers
-    ]
 
 
 def _static_response_header_block(
@@ -1239,8 +1260,12 @@ def _substitute_wpt_template_variables(
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
     template_ids: dict[bytes, bytes] | None = None,
+    escape_type: str = "html",
 ) -> bytes:
+    if escape_type not in {"html", "none"}:
+        raise WptPipeError("Unknown template escape type")
     if alternate_port is None:
         alternate_port = port
     if remote_port is None:
@@ -1427,11 +1452,41 @@ def _substitute_wpt_template_variables(
         name.encode("utf-8", errors="replace"): value.encode("utf-8", errors="replace")
         for name, value in parse_qsl(query, keep_blank_values=True)
     }
-    body = _GET_TEMPLATE_RE.sub(
-        lambda match: get_params.get(match.group(1), b""),
-        body,
-    )
-    return body
+    normalized_request_headers: dict[str, str] = {}
+    for name, value in (request_headers or {}).items():
+        name = name.lower()
+        if name in normalized_request_headers:
+            normalized_request_headers[name] += ", " + value
+        else:
+            normalized_request_headers[name] = value
+
+    def replace_request_value(match: re.Match[bytes]) -> bytes:
+        parameter = match.group("query")
+        if parameter is not None:
+            return get_params.get(parameter, b"")
+        required_name = match.group("header")
+        if required_name is not None:
+            name = required_name.decode("utf-8", errors="replace").lower()
+        else:
+            name = match.group("optional_header").decode("utf-8", errors="replace").strip().lower()
+        if name in normalized_request_headers:
+            # HTTPMessage stores header octets as Latin-1 text. wptserve's
+            # template engine decodes the original header bytes as UTF-8.
+            try:
+                value = normalized_request_headers[name].encode("latin-1").decode("utf-8")
+            except UnicodeError as error:
+                raise WptPipeError("Template request header is not valid UTF-8") from error
+        elif required_name is not None:
+            raise WptPipeError("Missing template request header")
+        else:
+            value = match.group("default").decode("utf-8", errors="replace").strip()
+        if escape_type == "html":
+            value = html_escape(value, quote=True)
+        return value.encode("utf-8")
+
+    # Substitute request data in one pass, after configuration and UUID values,
+    # so a header or query value containing template syntax remains literal data.
+    return _REQUEST_TEMPLATE_RE.sub(replace_request_value, body)
 
 
 def _host_header_hostname(host_header: str | None) -> str:
@@ -1883,6 +1938,12 @@ def _make_handler(
                 return
 
         def _serve(self, *, emit_body: bool) -> None:
+            try:
+                self._serve_response(emit_body=emit_body)
+            except WptPipeError:
+                self.send_error(500, "Invalid WPT template or pipe")
+
+        def _serve_response(self, *, emit_body: bool) -> None:
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
             if self._serve_xhr_response_resource(emit_body=emit_body):
@@ -2104,8 +2165,11 @@ def _make_handler(
                     request_path=path,
                     request_hostname=_host_header_hostname(self.headers.get("Host")),
                     primary_hostname=primary_hostname,
+                    request_headers=self.headers,
+                    escape_type=_template_escape_type(file_path.name, parsed.query),
                 )
             static_header_context = {
+                "request_headers": self.headers,
                 "port": int(
                     getattr(
                         self.server,
