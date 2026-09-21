@@ -250,8 +250,7 @@ use websockets::WebSocketConnectionState;
 pub(crate) use window_execution_context::{
     DetachedWindowFetchContext, WindowEnvironmentSettings, WindowExecutionContextAccessPolicy,
     WindowExecutionContextBinding, WindowExecutionContextIdentity, WindowExecutionContextOwner,
-    WindowFetchContext, WindowOperationReceiver, WindowOperationReceiverCaptureError,
-    WindowTaskTarget,
+    WindowFetchContext, WindowOperationReceiver, WindowTaskTarget,
 };
 use window_execution_context::{
     WindowExecutionContextRealmRecords, WindowExecutionContextRealmRegistration,

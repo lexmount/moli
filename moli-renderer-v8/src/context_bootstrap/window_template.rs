@@ -138,8 +138,8 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     #[webapi(
         method = "createImageBitmap",
         length = 1,
-        callback = window_create_image_bitmap_callback
-    )]
+        callback = window_create_image_bitmap_callback,
+        returns_promise, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     create_image_bitmap: (),
 
     #[webapi(method, length = 0, callback = window_alert_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
