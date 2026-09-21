@@ -44,7 +44,6 @@ content-security-policy/webrtc/webrtc-blocked-explicit.html
 content-security-policy/webrtc/webrtc-blocked-unknown.html
 content-security-policy/worker-src/service-worker-src-child-fallback-blocked.https.sub.html
 cookiestore/serviceworker_cookieStore_subscriptions_reset.https.html
-cors/response-headers.htm
 css/css-animations/parsing/keyframe-selectors.html
 css/css-animations/stability/animation-event-destroy-renderer.html?animationiteration
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
@@ -52,6 +51,7 @@ css/css-cascade/all-prop-revert-layer-noop.html?include=2
 css/css-cascade/all-prop-revert-layer-noop.html?include=4
 css/css-cascade/all-prop-revert-layer-noop.html?include=5
 css/css-cascade/all-prop-revert-noop.html?include=2
+css/css-cascade/all-prop-revert-noop.html?include=4
 css/css-cascade/all-prop-revert-noop.html?include=5
 css/css-cascade/import-conditions.html
 css/css-cascade/layer-counter-style-override.html
@@ -196,7 +196,6 @@ css/css-flexbox/alignment/flex-align-baseline-table-002.html
 css/css-flexbox/alignment/flex-align-baseline-table-003.html
 css/css-flexbox/alignment/multiline-align-self.html
 css/css-flexbox/aspect-ratio-intrinsic-size-005.html
-css/css-flexbox/aspect-ratio-intrinsic-size-007.html
 css/css-flexbox/auto-margins-001.html
 css/css-flexbox/balance/balance-001.html
 css/css-flexbox/balance/balance-002.html
@@ -248,6 +247,7 @@ css/css-flexbox/dynamic-isize-change-004.html
 css/css-flexbox/fieldset-baseline-alignment.html
 css/css-flexbox/flex-aspect-ratio-img-column-011.html
 css/css-flexbox/flex-aspect-ratio-img-column-017.html
+css/css-flexbox/flex-aspect-ratio-img-row-015.html
 css/css-flexbox/flex-baseline-overflow-hidden.html
 css/css-flexbox/flex-basis-009.html
 css/css-flexbox/flex-basis-013.html
@@ -283,7 +283,6 @@ css/css-flexbox/flexbox-align-self-horiz-003.xhtml
 css/css-flexbox/flexbox-align-self-horiz-004.xhtml
 css/css-flexbox/flexbox-align-self-vert-001.xhtml
 css/css-flexbox/flexbox-align-self-vert-002.xhtml
-css/css-flexbox/flexbox-align-self-vert-004.xhtml
 css/css-flexbox/flexbox-align-self-vert-rtl-001.xhtml
 css/css-flexbox/flexbox-align-self-vert-rtl-002.xhtml
 css/css-flexbox/flexbox-align-self-vert-rtl-003.xhtml
@@ -420,9 +419,6 @@ css/css-flexbox/select-as-flex-item-with-overflow.html
 css/css-flexbox/shrinking-column-flexbox.html
 css/css-flexbox/stretched-child-shrink-on-relayout.html
 css/css-flexbox/svg-root-as-flex-item-002.html
-css/css-flexbox/svg-root-as-flex-item-003.html
-css/css-flexbox/svg-root-as-flex-item-004.html
-css/css-flexbox/svg-root-as-flex-item-005.html
 css/css-flexbox/table-as-item-fixed-min-width-3.html
 css/css-flexbox/table-as-item-large-intrinsic-size.html
 css/css-flexbox/table-as-item-stretch-cross-size-5.html
@@ -513,8 +509,9 @@ css/css-grid/abspos/orthogonal-positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-001.html
 css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
+css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
+css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -1839,6 +1836,8 @@ css/css-sizing/inheritance-002.html
 css/css-sizing/intrinsic-height-abspos-stretch-percentage-child.html
 css/css-sizing/intrinsic-percent-non-replaced-006.html
 css/css-sizing/intrinsic-percent-replaced-011.html
+css/css-sizing/intrinsic-percent-replaced-015.html
+css/css-sizing/intrinsic-percent-replaced-016.html
 css/css-sizing/intrinsic-percent-replaced-020.html
 css/css-sizing/intrinsic-percent-replaced-022.html
 css/css-sizing/intrinsic-percent-replaced-023.html
@@ -1868,7 +1867,6 @@ css/css-sizing/percentage-height-replaced-content-in-auto-cb.html
 css/css-sizing/range-percent-intrinsic-size-1.html
 css/css-sizing/range-percent-intrinsic-size-2.html
 css/css-sizing/range-percent-intrinsic-size-2a.html
-css/css-sizing/replaced-aspect-ratio-stretch-fit-002.html
 css/css-sizing/replaced-aspect-ratio-stretch-fit-003.html
 css/css-sizing/replaced-element-transferred-size-flex.html
 css/css-sizing/responsive-iframe/parsing/frame-sizing-computed.html
@@ -1931,10 +1929,7 @@ css/css-sizing/stretch/stretch-inline-size-002.html
 css/css-sizing/stretch/stretch-inline-size-003.html
 css/css-sizing/stretch/stretch-table-001.html
 css/css-sizing/svg-intrinsic-size-001.html
-css/css-sizing/svg-intrinsic-size-002.html
 css/css-sizing/svg-intrinsic-size-003.html
-css/css-sizing/svg-intrinsic-size-004.html
-css/css-sizing/svg-intrinsic-size-006.html
 css/css-sizing/svg-no-ar-max-height-min-content.html
 css/css-sizing/svg-no-ar-min-height-min-content.html
 css/css-sizing/vert-block-size-small-or-larger-than-container-with-min-or-max-content-1.html
@@ -2384,6 +2379,7 @@ css/cssom-view/elementFromPoint-003.html
 css/cssom-view/elementFromPoint-dynamic-anon-box.html
 css/cssom-view/elementFromPoint.html
 css/cssom-view/elementFromPosition.html
+css/cssom-view/elementsFromPoint-iframes.html
 css/cssom-view/elementsFromPoint-inline-htb-rtl.html
 css/cssom-view/elementsFromPoint-inline-vlr-rtl.html
 css/cssom-view/elementsFromPoint-inline-vrl-ltr.html
@@ -3193,8 +3189,6 @@ html/semantics/scripting-1/the-script-element/module/crossorigin.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/alpha/base-url-worker-importScripts.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/code-cache-base-url.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/dynamic-imports-script-error.html
-html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-classic.html
-html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-nonce-module.html
 html/semantics/scripting-1/the-script-element/module/error-type-3.html
 html/semantics/scripting-1/the-script-element/module/errorhandling.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-1.html
@@ -3341,6 +3335,7 @@ navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigate-event/traverseTo-detach.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
+navigation-api/navigation-methods/return-value/back-204-205-download.html
 navigation-api/navigation-methods/return-value/navigate-pagehide.html
 navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-pagehide.html
 navigation-api/navigation-methods/return-value/navigate-rejection-order-pagehide-unserializablestate.html
@@ -3399,16 +3394,11 @@ requestidlecallback/callback-idle-periods.html
 requestidlecallback/deadline-max-rAF-dynamic.html
 requestidlecallback/deadline-max-rAF.html
 requestidlecallback/deadline-max-timeout-dynamic.html
-resource-timing/buffer-full-add-entries-during-callback.html
-resource-timing/buffer-full-add-then-clear.html
-resource-timing/buffer-full-inspect-buffer-during-callback.html
-resource-timing/buffer-full-then-increased.html
 resource-timing/cached-image-gets-single-entry.html
 resource-timing/iframe-sequence-of-events.html
 resource-timing/initiator-type/input.html
 resource-timing/initiator-type/link.html
 resource-timing/initiator-type/picture.html
-resource-timing/initiator-type/script.html
 resource-timing/initiator-type/style.html
 resource-timing/initiator-type/svg.html
 resource-timing/initiator-type/workers.html
@@ -3483,7 +3473,6 @@ service-workers/service-worker/fetch-request-xhr.https.html
 service-workers/service-worker/fetch-waits-for-activate.https.html
 service-workers/service-worker/getregistration.https.html
 service-workers/service-worker/getregistrations.https.html
-service-workers/service-worker/immutable-prototype-serviceworker.https.html
 service-workers/service-worker/import-scripts-cross-origin.https.html
 service-workers/service-worker/import-scripts-mime-types.https.html
 service-workers/service-worker/import-scripts-redirect.https.html
@@ -3772,8 +3761,14 @@ xhr/responsexml-media-type.htm
 xhr/responsexml-non-well-formed.htm
 xhr/send-receive-utf16.htm
 xhr/send-redirect-no-location.htm
+xhr/setrequestheader-allow-empty-value.htm
+xhr/setrequestheader-allow-whitespace-in-value.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
+xhr/setrequestheader-case-insensitive.htm
+xhr/setrequestheader-content-type.htm
+xhr/setrequestheader-header-allowed.htm
+xhr/setrequestheader-header-forbidden.htm
 xhr/status-async.htm
 xhr/status-basic.htm
 xml/xml-prolog-accepted-versions.html
