@@ -97,6 +97,9 @@ pub(crate) fn window_fetch_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         rv.set(make_rejected_promise(scope, "failed to get native bridge").into());
         return;
@@ -108,23 +111,8 @@ pub(crate) fn window_fetch_callback<'s>(
         unsafe { &*host_ptr },
     ) {
         Ok(receiver) => receiver,
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
-            // Promise-returning WebIDL operations convert callback-time
-            // TypeErrors into rejected promises in the current realm. Blink
-            // installs ExceptionToRejectPromiseScope before the brand check.
-            rv.set(
-                make_rejected_promise(
-                    scope,
-                    "Failed to execute 'fetch' on 'Window': Illegal invocation",
-                )
-                .into(),
-            );
-            return;
-        }
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
-            // V8's WindowProxy access check rejects a cross-origin receiver
-            // before the operation can switch to its relevant realm.
-            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
     };

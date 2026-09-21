@@ -21,7 +21,7 @@ mod settings;
 
 pub(crate) use binding::WindowExecutionContextBinding;
 pub(crate) use fetch::{DetachedWindowFetchContext, WindowFetchContext, WindowTaskTarget};
-pub(crate) use operation_receiver::{WindowOperationReceiver, WindowOperationReceiverCaptureError};
+pub(crate) use operation_receiver::WindowOperationReceiver;
 pub(crate) use registry::{
     WindowExecutionContextAccessPolicy, WindowExecutionContextIdentity, WindowExecutionContextOwner,
 };
