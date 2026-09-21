@@ -3,7 +3,7 @@ use super::location_runtime::{
     is_same_document_fragment_navigation, location_has_relevant_document, location_href_slot,
     resolve_location_navigation_target, sync_location_object,
 };
-use super::navigation_activation::{install_navigation_transition};
+use super::navigation_activation::install_navigation_transition;
 use super::navigation_callbacks::{
     cancel_active_intercepted_same_document_navigation,
     cancel_pending_precommit_same_document_navigation,
@@ -18,8 +18,8 @@ use super::navigation_events::{
     NavigationDispatchOutcome, cancel_active_navigation_event,
     dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data,
     dispatch_navigation_navigate_event_with_form_data_and_outcome,
-    dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event, finish_navigation_precommit,
-    queue_hash_change_for_runtime_owner,
+    dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event,
+    finish_navigation_precommit, queue_hash_change_for_runtime_owner,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_mutation::{
