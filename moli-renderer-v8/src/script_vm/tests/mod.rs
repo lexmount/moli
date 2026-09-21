@@ -15802,6 +15802,7 @@ mod indexed_db;
 mod inspector_unwrap;
 mod lazy_storage;
 mod lazy_window_surfaces;
+mod location_put_forwards;
 mod mouse_snapshot;
 mod no_cors_header_fill;
 mod observable;

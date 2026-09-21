@@ -100,30 +100,57 @@ fn location_proxy_set<'s>(
     let Ok(key) = v8::Local::<v8::Name>::try_from(args.get(1)) else {
         return;
     };
+    if let Some(value) =
+        set_cross_origin_location_property(scope, target, key, args.get(2), args.get(3))
+    {
+        rv.set_bool(value);
+    }
+}
+
+pub(super) fn set_location_href<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<bool> {
+    let key = v8str(scope, "href");
+    if !web_api_interfaces::Location::is_instance(scope, location) {
+        return location.set(scope, key.into(), value);
+    }
+    let target = location_target(scope, location);
+    // Native PutForwards runs in the outer setter's realm. Going through our
+    // Proxy trap would instead recover the incumbent author script's realm.
+    // Perform the Location operation here while preserving its actual receiver.
+    let caller = scope.get_current_context();
+    if target
+        .get_creation_context(scope)
+        .is_some_and(|owner| window_contexts_allow_access(caller, owner))
+    {
+        return target.set_with_receiver(scope, key.into(), value, location);
+    }
+    set_cross_origin_location_property(scope, target, key.into(), value, location.into())
+}
+
+fn set_cross_origin_location_property<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    key: v8::Local<'s, v8::Name>,
+    value: v8::Local<'s, v8::Value>,
+    receiver: v8::Local<'s, v8::Value>,
+) -> Option<bool> {
     if key != v8str(scope, "href") {
         crate::native_bridge::throw_cross_origin_location_security_error(scope);
-        return;
+        return None;
     }
-    let Some(surface) = surface_for(scope, target) else {
-        return;
-    };
-    let Some(descriptor) = surface
+    let surface = surface_for(scope, target)?;
+    let descriptor = surface
         .get_own_property_descriptor(scope, key)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(setter) = descriptor
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let setter = descriptor
         .get(scope, v8str(scope, "set").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        return;
-    };
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
     // Preserve Reflect.set's receiver. Interceptor callbacks only expose the
     // holder, and must not substitute it for a forged or author Proxy receiver.
-    if setter.call(scope, args.get(3), &[args.get(2)]).is_some() {
-        rv.set_bool(true);
-    }
+    setter.call(scope, receiver, &[value]).map(|_| true)
 }
 
 fn location_proxy_set_prototype<'s>(
