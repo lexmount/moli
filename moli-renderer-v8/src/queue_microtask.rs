@@ -9,6 +9,7 @@
 use moli_webidl_callback::invoke_webidl_callback_function;
 
 use crate::{
+    context_bootstrap::require_same_origin_window_receiver,
     exception_reporting::{CallbackExceptionLogLevel, invoke_callback_with_report},
     host::report_event_callback_exception,
     util::context_host_ptr_from_global_bridge,
@@ -35,6 +36,9 @@ pub(crate) fn window_queue_microtask_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<QueueMicrotaskArgs>(scope, &args) else {
         return;
     };
