@@ -890,12 +890,15 @@ impl DocumentLifecycleRecord {
         if self.load != DocumentLoadEventProgress::DispatchingMainLoad {
             return None;
         }
+        // Completing this Document's load/pageshow marks it completely loaded.
+        // A child navigation started by those callbacks can keep the parent's
+        // aggregate load completion pending without extending its initial load.
+        self.completely_loaded = true;
         if self.has_incomplete_child_frames() {
             self.load = DocumentLoadEventProgress::MainWindowLoadDispatched;
             return Some(MainDocumentLoadCompletionState::WaitingForDescendants);
         }
         self.load = DocumentLoadEventProgress::Dispatched;
-        self.completely_loaded = true;
         Some(MainDocumentLoadCompletionState::Completed)
     }
 
