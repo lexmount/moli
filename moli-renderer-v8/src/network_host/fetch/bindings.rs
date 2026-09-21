@@ -101,32 +101,11 @@ pub(crate) fn window_fetch_callback<'s>(
         return;
     };
 
-    let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
+    let receiver = crate::native_bridge::WindowOperationReceiver::capture_after_access_check(
         scope,
         args.this(),
         unsafe { &*host_ptr },
-    ) {
-        Ok(receiver) => receiver,
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
-            // Promise-returning WebIDL operations convert callback-time
-            // TypeErrors into rejected promises in the current realm. Blink
-            // installs ExceptionToRejectPromiseScope before the brand check.
-            rv.set(
-                make_rejected_promise(
-                    scope,
-                    "Failed to execute 'fetch' on 'Window': Illegal invocation",
-                )
-                .into(),
-            );
-            return;
-        }
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
-            // V8's WindowProxy access check rejects a cross-origin receiver
-            // before the operation can switch to its relevant realm.
-            crate::native_bridge::throw_cross_origin_location_security_error(scope);
-            return;
-        }
-    };
+    );
 
     if args.length() < 1 {
         // This validation precedes ScriptState::ForRelevantRealm in Blink's
