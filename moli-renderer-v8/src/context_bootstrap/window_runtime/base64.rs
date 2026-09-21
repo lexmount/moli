@@ -41,7 +41,7 @@ fn base64_decode(s: &str) -> std::result::Result<Vec<u8>, ()> {
     FORGIVING_BASE64.decode(compact).map_err(|_| ())
 }
 
-pub(in crate::context_bootstrap) fn window_btoa_callback<'s>(
+pub(in crate::context_bootstrap) fn global_btoa_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -66,7 +66,7 @@ pub(in crate::context_bootstrap) fn window_btoa_callback<'s>(
     }
 }
 
-pub(in crate::context_bootstrap) fn window_atob_callback<'s>(
+pub(in crate::context_bootstrap) fn global_atob_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -88,6 +88,28 @@ pub(in crate::context_bootstrap) fn window_atob_callback<'s>(
             );
         }
     }
+}
+
+pub(in crate::context_bootstrap) fn window_btoa_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
+    global_btoa_callback(scope, args, rv);
+}
+
+pub(in crate::context_bootstrap) fn window_atob_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
+    global_atob_callback(scope, args, rv);
 }
 
 fn throw_invalid_character_error(scope: &mut v8::PinScope<'_, '_>, message: &'static str) {

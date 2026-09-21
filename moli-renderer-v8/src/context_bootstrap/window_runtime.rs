@@ -8,7 +8,9 @@ mod performance;
 mod service_worker;
 mod structured_clone;
 
-pub(super) use base64::{window_atob_callback, window_btoa_callback};
+pub(super) use base64::{
+    global_atob_callback, global_btoa_callback, window_atob_callback, window_btoa_callback,
+};
 pub(super) use dialogs::entered_window_api_base_url;
 pub(super) use dialogs::{window_alert_callback, window_confirm_callback, window_prompt_callback};
 pub(crate) use dialogs::{
