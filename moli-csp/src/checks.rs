@@ -84,12 +84,15 @@ pub fn content_security_policy_sandbox_allows_modals(policies: &[ContentSecurity
 
 pub fn content_security_policy_sandbox_allows_top_navigation(
     policies: &[ContentSecurityPolicy],
+    user_activated: bool,
 ) -> bool {
     policies.iter().all(|policy| {
         directive_source_list(policy, SANDBOX).is_none_or(|sources| {
-            sources
-                .iter()
-                .any(|token| token.eq_ignore_ascii_case("allow-top-navigation"))
+            sources.iter().any(|token| {
+                token.eq_ignore_ascii_case("allow-top-navigation")
+                    || (user_activated
+                        && token.eq_ignore_ascii_case("allow-top-navigation-by-user-activation"))
+            })
         })
     })
 }
