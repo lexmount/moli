@@ -29,10 +29,7 @@ pub(crate) use document::{
     bind_current_child_window_document, retain_window_document_in_retired_realm,
 };
 pub(crate) use helpers::{current_window_style_viewport, window_host_ptr};
-pub(super) use helpers::{
-    window_child_context_handle, window_document_handle,
-    window_has_discarded_child_browsing_context,
-};
+pub(super) use helpers::{window_child_context_handle, window_document_handle};
 pub(super) use interceptors::{
     window_indexed_property_definer, window_indexed_property_deleter,
     window_indexed_property_descriptor, window_indexed_property_enumerator,

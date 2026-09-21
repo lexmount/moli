@@ -1,21 +1,14 @@
 use super::*;
-use crate::util::{context_host_ptr_from_window_object, get_private_value};
+use crate::util::get_private_value;
 use crate::webidl;
 
 fn window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-    member: &'static str,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let receiver = args.this();
-    if context_host_ptr_from_window_object(scope, receiver).is_some() {
-        return Some(receiver);
-    }
-    webidl::throw_type_error(
-        scope,
-        &format!("Window.{member} getter called on incompatible receiver."),
-    );
-    None
+    super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false)
+        .then_some(receiver)
 }
 
 pub(in crate::context_bootstrap) fn window_history_getter<'s>(
@@ -23,7 +16,7 @@ pub(in crate::context_bootstrap) fn window_history_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args, "history") else {
+    let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
     match object_window_slot_value(scope, receiver, WINDOW_HISTORY_SLOT)
@@ -39,7 +32,7 @@ pub(in crate::context_bootstrap) fn window_navigation_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args, "navigation") else {
+    let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
     match object_window_slot_value(scope, receiver, WINDOW_NAVIGATION_SLOT)
@@ -55,7 +48,15 @@ pub(in crate::context_bootstrap) fn window_location_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(receiver) = window_receiver(scope, &args, "location") else {
+    if crate::native_bridge::CrossOriginWindowAccessor::get_for_receiver(
+        scope,
+        args.this(),
+        crate::native_bridge::CrossOriginWindowProperty::Location,
+        &mut rv,
+    ) {
+        return;
+    }
+    let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
     let Some(value) = get_private_value(scope, receiver, WINDOW_LOCATION_SLOT)

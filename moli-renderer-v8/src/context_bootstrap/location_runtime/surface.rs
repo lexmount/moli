@@ -304,6 +304,17 @@ fn window_location_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
+    if let Some(accessor) =
+        crate::native_bridge::CrossOriginWindowAccessor::for_receiver(scope, window)
+    {
+        return accessor.get(
+            scope,
+            crate::native_bridge::CrossOriginWindowProperty::Location,
+        );
+    }
+    if !super::super::window_receiver::is_window_receiver(scope, window) {
+        return None;
+    }
     window_runtime_slot_value(scope, window, WINDOW_LOCATION_SLOT)
 }
 

@@ -116,6 +116,9 @@ pub(in crate::context_bootstrap) fn bound_callback_data_item<'s>(
     items: &'static [&'static str],
     context: &'static str,
 ) -> Option<(&'static str, Option<v8::Local<'s, v8::Value>>)> {
+    if !require_same_origin_window_receiver(scope, args.this(), false) {
+        return None;
+    }
     let data = v8::Local::<v8::Array>::try_from(args.data()).ok();
     let index = data
         .and_then(|data| data.get_index(scope, 0))

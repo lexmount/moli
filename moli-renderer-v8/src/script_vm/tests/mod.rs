@@ -2285,7 +2285,7 @@ mod webidl_fetch;
 mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
-mod webtransport_stream_interface_exposure;
+mod window_cross_origin_getters;
 mod window_event_receivers;
 mod window_execution_context;
 mod window_getter_consolidation;
@@ -2311,3 +2311,5 @@ mod dom_rect_structured_clone;
 mod domrect_receiver_consolidation;
 
 mod resize_observer_entries;
+
+mod webtransport_stream_interface_exposure;

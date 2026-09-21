@@ -73,6 +73,9 @@ pub(in crate::context_bootstrap) fn window_document_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if !super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false) {
+        return;
+    }
     let Some(context) = receiver.get_creation_context(scope) else {
         rv.set_null();
         return;
