@@ -63,13 +63,13 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = window_structured_clone_callback)]
     structured_clone: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_obsolete_noop_callback)]
     clear_immediate: (),
 
     #[webapi(method, length = 0, callback = window_stop_callback)]
     stop: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_obsolete_noop_callback)]
     print: (),
 
     #[webapi(method, length = 0, callback = window_open_callback)]
