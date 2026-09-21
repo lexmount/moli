@@ -18,8 +18,8 @@ use super::{
         ComputedStyleDescriptor, ComputedStylePseudoKey, ComputedStyleTargetKey,
         OwnerDispatchScope, PageScriptHost, PendingWindowMessage, PendingWindowMessageEndpoint,
         PendingWindowMessageSource, RuntimeObservableContextToken, WindowExecutionContextOwner,
-        WindowOperationReceiver, WindowOperationReceiverCaptureError, WindowTaskTarget,
-        active_child_window_handle, active_lightweight_popup_id,
+        WindowOperationReceiver, WindowTaskTarget, active_child_window_handle,
+        active_lightweight_popup_id, current_or_live_delegate_node_arg_handle,
         element::{
             ComputedStyleTargetContext, STYLE_DECLARATION_FORCED_EMPTY_COMPUTED_SLOT,
             STYLE_DECLARATION_PSEUDO_ELEMENT_SLOT, STYLE_DECLARATION_READ_DOCUMENT_SLOT,

@@ -9,21 +9,11 @@ pub(in crate::context_bootstrap) fn window_structured_clone_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let receiver = match crate::native_bridge::WindowOperationReceiver::capture_and_authorize(
+    let receiver = crate::native_bridge::WindowOperationReceiver::capture_after_access_check(
         scope,
         args.this(),
         unsafe { &*host_ptr },
-    ) {
-        Ok(receiver) => receiver,
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
-            throw_type_error(scope, "Illegal invocation");
-            return;
-        }
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
-            crate::native_bridge::throw_cross_origin_location_security_error(scope);
-            return;
-        }
-    };
+    );
 
     if args.length() < 1 {
         throw_type_error(
