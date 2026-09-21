@@ -2173,6 +2173,20 @@ fn window_message_endpoint_from_receiver<'s>(
         return Some(PendingWindowMessageEndpoint::ChildWindow(child_handle));
     }
 
+    // A cross-origin parent can be the real top WindowProxy. Borrowing a
+    // child's postMessage must still resolve the receiver's native identity,
+    // independently of the function's current realm.
+    let context = object.get_creation_context(scope)?;
+    if object.strict_equals(context.global(scope).into()) {
+        let host_ptr = crate::util::context_host_ptr_from_context_slot(context)?;
+        let host = unsafe { &*host_ptr };
+        let identity = host.window_execution_context_identity_for_access_check(context)?;
+        if identity.dispatch_scope() == OwnerDispatchScope::Top
+            && host.window_execution_context_identity_is_current(identity)
+        {
+            return Some(PendingWindowMessageEndpoint::TopWindow);
+        }
+    }
     None
 }
 
