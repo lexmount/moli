@@ -3,7 +3,13 @@ use super::helpers::{
     window_host_ptr, window_receiver,
 };
 use super::*;
-use crate::{native_bridge::lightweight_popup_id_from_window, util::v8str, webidl};
+use crate::{
+    native_bridge::{
+        CrossOriginWindowAccessor, CrossOriginWindowProperty, lightweight_popup_id_from_window,
+    },
+    util::v8str,
+    webidl,
+};
 
 fn window_inner_surface_dimension<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -92,6 +98,14 @@ fn set_receiver_window_alias<'s>(
     slot: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if CrossOriginWindowAccessor::get_for_receiver(
+        scope,
+        args.this(),
+        CrossOriginWindowProperty::Window,
+        &mut rv,
+    ) {
+        return;
+    }
     let Some(receiver) = window_receiver(scope, args) else {
         return;
     };
@@ -107,6 +121,14 @@ fn set_receiver_related_window_alias<'s>(
     slot: &'static str,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    let property = if slot == WINDOW_TOP_SLOT {
+        CrossOriginWindowProperty::Top
+    } else {
+        CrossOriginWindowProperty::Parent
+    };
+    if CrossOriginWindowAccessor::get_for_receiver(scope, args.this(), property, &mut rv) {
+        return;
+    }
     let Some(receiver) = window_receiver(scope, args) else {
         return;
     };
@@ -125,6 +147,14 @@ pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if CrossOriginWindowAccessor::get_for_receiver(
+        scope,
+        args.this(),
+        CrossOriginWindowProperty::Opener,
+        &mut rv,
+    ) {
+        return;
+    }
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
@@ -154,6 +184,14 @@ pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if CrossOriginWindowAccessor::get_for_receiver(
+        scope,
+        args.this(),
+        CrossOriginWindowProperty::Closed,
+        &mut rv,
+    ) {
+        return;
+    }
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };

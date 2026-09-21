@@ -10,6 +10,14 @@ pub(in crate::context_bootstrap) fn window_length_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if crate::native_bridge::CrossOriginWindowAccessor::get_for_receiver(
+        scope,
+        args.this(),
+        crate::native_bridge::CrossOriginWindowProperty::Length,
+        &mut rv,
+    ) {
+        return;
+    }
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };

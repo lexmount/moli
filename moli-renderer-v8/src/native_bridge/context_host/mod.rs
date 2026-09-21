@@ -186,9 +186,9 @@ use child_documents::{ChildDocumentParserStore, PendingChildDocumentNavigation};
 use child_events::ChildWindowEventListenerEntry;
 use child_frame_runtime::ChildWindowProxyRecords;
 pub(crate) use child_frame_runtime::{
-    cross_origin_lightweight_popup_id, is_cross_origin_location_proxy,
-    is_cross_origin_top_window_proxy, throw_cross_origin_location_security_error,
-    throw_cross_origin_type_error,
+    CrossOriginWindowAccessor, CrossOriginWindowProperty, cross_origin_lightweight_popup_id,
+    is_cross_origin_location_proxy, is_cross_origin_top_window_proxy,
+    throw_cross_origin_location_security_error, throw_cross_origin_type_error,
 };
 pub(crate) use child_frame_snapshots::{
     ChildBrowsingContextDocumentSnapshot, ChildBrowsingContextFrameSnapshot,

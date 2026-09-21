@@ -30,6 +30,81 @@ use std::{
 // the realm after its browsing context is destroyed.
 struct WindowCrossOriginAccessSurface(v8::Weak<v8::Object>);
 
+#[derive(Clone, Copy)]
+pub(crate) enum CrossOriginWindowProperty {
+    Window,
+    Location,
+    Closed,
+    Length,
+    Top,
+    Opener,
+    Parent,
+}
+
+impl CrossOriginWindowProperty {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Window => "window",
+            Self::Location => "location",
+            Self::Closed => "closed",
+            Self::Length => "length",
+            Self::Top => "top",
+            Self::Opener => "opener",
+            Self::Parent => "parent",
+        }
+    }
+}
+
+/// The native cross-origin surface of an exact WindowProxy receiver. Borrowed
+/// IDL accessors use it without performing an author-visible property lookup
+/// on the Window or reading its private slots from the accessing realm.
+pub(crate) struct CrossOriginWindowAccessor<'s> {
+    surface: v8::Local<'s, v8::Object>,
+}
+
+impl<'s> CrossOriginWindowAccessor<'s> {
+    pub(crate) fn for_receiver(
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Object>,
+    ) -> Option<Self> {
+        let context = receiver.get_creation_context(scope)?;
+        if !receiver.strict_equals(context.global(scope).into())
+            || super::super::window_contexts_allow_access(scope.get_current_context(), context)
+        {
+            return None;
+        }
+        // Only native Window realms install this context slot. A copied bridge
+        // property, inherited Window prototype, or author Proxy cannot supply it.
+        context.get_slot::<WindowCrossOriginAccessSurface>()?;
+        let surface = window_cross_origin_access_surface(scope, receiver)?;
+        Some(Self { surface })
+    }
+
+    pub(crate) fn get(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        property: CrossOriginWindowProperty,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        self.surface
+            .get(scope, v8str(scope, property.name()).into())
+    }
+
+    pub(crate) fn get_for_receiver(
+        scope: &mut v8::PinScope<'s, '_>,
+        receiver: v8::Local<'s, v8::Object>,
+        property: CrossOriginWindowProperty,
+        rv: &mut v8::ReturnValue<'_, v8::Value>,
+    ) -> bool {
+        let Some(accessor) = Self::for_receiver(scope, receiver) else {
+            return false;
+        };
+        if let Some(value) = accessor.get(scope, property) {
+            rv.set(value);
+        }
+        true
+    }
+}
+
 #[derive(Clone, Default)]
 struct WindowCrossOriginCallerSurfaces(Rc<RefCell<Vec<WindowCrossOriginCallerSurface>>>);
 
@@ -2407,13 +2482,20 @@ fn window_cross_origin_access_surface<'s>(
         .get_slot::<WindowCrossOriginAccessSurface>()?
         .0
         .to_local(scope)?;
-    if let Some(location) = crate::context_bootstrap::window_location_for_holder(scope, holder) {
-        set_private_value(
-            scope,
-            surface,
-            CROSS_ORIGIN_WINDOW_LOCATION_SLOT,
-            location.into(),
-        );
+    {
+        // Only native slot reads run in the target realm. Exposed accessor
+        // functions below are still created and invoked in the caller's realm.
+        let target_scope = &mut v8::ContextScope::new(scope, context);
+        if let Some(location) =
+            crate::context_bootstrap::window_location_for_holder(target_scope, holder)
+        {
+            set_private_value(
+                target_scope,
+                surface,
+                CROSS_ORIGIN_WINDOW_LOCATION_SLOT,
+                location.into(),
+            );
+        }
     }
     window_cross_origin_caller_surface(scope, surface)
 }
@@ -3068,7 +3150,9 @@ fn live_location_for_cross_origin_window<'s>(
     let host = unsafe { &mut *host_ptr };
     let owner = host.current_window_execution_context_owner(dispatch_scope)?;
     let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
-    crate::context_bootstrap::window_location_for_holder(scope, context.global(scope))
+    let target_scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(target_scope);
+    crate::context_bootstrap::window_location_for_holder(target_scope, global)
 }
 
 fn cross_origin_window_location_getter_callback<'s>(
