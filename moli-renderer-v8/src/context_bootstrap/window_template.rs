@@ -88,23 +88,22 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(
         method,
         length = 1,
-        callback = window_host::window_get_computed_style_callback
-    )]
+        callback = window_host::window_get_computed_style_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     get_computed_style: (),
 
-    #[webapi(method, length = 1, callback = window_structured_clone_callback)]
+    #[webapi(method, length = 1, callback = window_structured_clone_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     structured_clone: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_obsolete_noop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     clear_immediate: (),
 
     #[webapi(method, length = 0, callback = window_stop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     stop: (),
 
-    #[webapi(method, length = 0, callback = window_noop_callback)]
+    #[webapi(method, length = 0, callback = window_obsolete_noop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     print: (),
 
-    #[webapi(method, length = 0, callback = window_open_callback)]
+    #[webapi(method, length = 0, callback = window_open_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     open: (),
 
     #[webapi(method, length = 0, callback = window_close_callback)]
@@ -119,17 +118,17 @@ struct WindowEarlyTemplateMethodsDeclaration {
     #[webapi(receiver_access_check = false)]
     blur: (),
 
-    #[webapi(method, length = 0, callback = window_const_false_callback)]
+    #[webapi(method, length = 0, callback = window_const_false_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     find: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowObsoleteTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, callback = window_obsolete_noop_callback)]
+    #[webapi(method, length = 0, callback = window_obsolete_noop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     capture_events: (),
 
-    #[webapi(method, length = 0, callback = window_obsolete_noop_callback)]
+    #[webapi(method, length = 0, callback = window_obsolete_noop_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     release_events: (),
 }
 
@@ -143,25 +142,25 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     )]
     create_image_bitmap: (),
 
-    #[webapi(method, length = 0, callback = window_alert_callback)]
+    #[webapi(method, length = 0, callback = window_alert_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     alert: (),
 
-    #[webapi(method, length = 0, callback = window_confirm_callback)]
+    #[webapi(method, length = 0, callback = window_confirm_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     confirm: (),
 
-    #[webapi(method, length = 0, callback = window_prompt_callback)]
+    #[webapi(method, length = 0, callback = window_prompt_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     prompt: (),
 
-    #[webapi(method, length = 1, callback = window_report_error_callback)]
+    #[webapi(method, length = 1, callback = window_report_error_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     report_error: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_to: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_to_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll: (),
 
-    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback)]
+    #[webapi(method, length = 0, callback = window_host::window_scroll_by_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     scroll_by: (),
 
     #[webapi(
@@ -196,24 +195,24 @@ struct WindowPostNetworkTemplateMethodsDeclaration {
     )]
     cancel_idle_callback: (),
 
-    #[webapi(method, length = 1, callback = window_btoa_callback)]
+    #[webapi(method, length = 1, callback = window_btoa_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     btoa: (),
 
-    #[webapi(method, length = 1, callback = window_atob_callback)]
+    #[webapi(method, length = 1, callback = window_atob_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     atob: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowSelectionTemplateMethodsDeclaration {
-    #[webapi(method, length = 0, callback = window_get_selection_callback)]
+    #[webapi(method, length = 0, callback = window_get_selection_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     get_selection: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::Window, enumerable, receiver_access_check, receiver = crate::context_bootstrap::is_window_receiver)]
 struct WindowMediaTemplateMethodsDeclaration {
-    #[webapi(method, length = 1, callback = window_match_media_callback)]
+    #[webapi(method, length = 1, callback = window_match_media_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     match_media: (),
 }
 

@@ -144,8 +144,7 @@ struct WindowComputedStyleMethodDeclaration {
         method,
         enumerable,
         length = 1,
-        callback = window_host::window_get_computed_style_callback
-    )]
+        callback = window_host::window_get_computed_style_callback, access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
     get_computed_style: (),
 }
 

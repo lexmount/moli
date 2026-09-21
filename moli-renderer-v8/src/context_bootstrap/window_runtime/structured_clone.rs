@@ -15,12 +15,8 @@ pub(in crate::context_bootstrap) fn window_structured_clone_callback<'s>(
         unsafe { &*host_ptr },
     ) {
         Ok(receiver) => receiver,
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::IllegalInvocation) => {
-            throw_type_error(scope, "Illegal invocation");
-            return;
-        }
-        Err(crate::native_bridge::WindowOperationReceiverCaptureError::CrossOrigin) => {
-            crate::native_bridge::throw_cross_origin_location_security_error(scope);
+        Err(error) => {
+            error.throw(scope);
             return;
         }
     };
