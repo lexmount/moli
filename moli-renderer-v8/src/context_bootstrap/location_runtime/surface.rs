@@ -39,7 +39,7 @@ struct WindowNavigationAccessorDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(plain)]
+#[webapi(fragment = crate::web_api_interfaces::Document)]
 struct DocumentLocationAccessorDeclaration {
     #[webapi(
         accessor_property,
@@ -227,20 +227,7 @@ pub(in crate::context_bootstrap) fn window_location_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let receiver = args.this();
-    let Some(location) = window_location_slot_value(scope, receiver)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        webidl::throw_type_error(
-            scope,
-            "Window.location setter called on incompatible receiver.",
-        );
-        return;
-    };
-    let Some(href) = super::helpers::v8_value_to_string(scope, args.get(0)) else {
-        return;
-    };
-    navigate_location_object(scope, location, LocationNavigationKind::Assign, Some(href));
+    put_forward_location_href(scope, args.this(), args.get(0));
 }
 
 fn window_location_slot_value<'s>(
