@@ -3573,7 +3573,7 @@ impl ScriptVm {
         mut pending: PendingSubresourceFetchState,
         request_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         response_status_text: Option<String>,
         skip_fetch_security_validation: bool,

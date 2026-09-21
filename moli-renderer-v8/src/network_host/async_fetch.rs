@@ -879,6 +879,10 @@ mod tests {
     use url::Url;
 
     async fn read_http_request_text(stream: &mut tokio::net::TcpStream) -> Result<String> {
+        Ok(String::from_utf8(read_http_request_bytes(stream).await?)?)
+    }
+
+    async fn read_http_request_bytes(stream: &mut tokio::net::TcpStream) -> Result<Vec<u8>> {
         let mut request = Vec::new();
         let mut byte = [0_u8; 1];
         loop {
@@ -888,7 +892,7 @@ mod tests {
             }
             request.push(byte[0]);
             if request.ends_with(b"\r\n\r\n") {
-                return Ok(String::from_utf8(request)?);
+                return Ok(request);
             }
         }
     }
@@ -1297,8 +1301,10 @@ mod tests {
         let addr = listener.local_addr()?;
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let request = read_http_request_text(&mut stream).await.unwrap();
-            assert!(request.starts_with("GET /image.png HTTP/1.1"));
+            let request = read_http_request_bytes(&mut stream).await.unwrap();
+            assert!(request.starts_with(b"GET /image.png HTTP/1.1"));
+            let header = b"\r\nX-Image-Bytes: \xff\xe9\xc3\xa9\r\n";
+            assert!(request.windows(header.len()).any(|bytes| bytes == header));
             stream
                 .write_all(
                     concat!(
@@ -1322,7 +1328,11 @@ mod tests {
         let loader = loader_owner.handle();
         let request_url = Url::parse(&format!("http://{addr}/image.png"))?;
         let document_url = Url::parse(&format!("http://{addr}/page"))?;
-        let request = Request::get(request_url.as_str())?
+        let request_headers = moli_fetch::RequestHeaders::from_bytes(vec![(
+            "X-Image-Bytes".to_owned(),
+            vec![0xff, 0xe9, 0xc3, 0xa9],
+        )]);
+        let request = Request::new("GET", request_url.as_str(), None, request_headers.clone())?
             .with_initiator_url(&document_url)
             .with_request_origin(moli_url::WebOrigin::from_url(&document_url))
             .with_request_mode(RequestMode::NoCors)
@@ -1346,7 +1356,7 @@ mod tests {
             },
             request_url,
             "GET".to_owned(),
-            Vec::new(),
+            request_headers.clone(),
             None,
         );
 
@@ -1356,6 +1366,7 @@ mod tests {
             anyhow::bail!("image transport must emit one buffered terminal completion");
         };
         assert_eq!(completion.internal_id, 75);
+        assert_eq!(completion.request_headers, request_headers);
         let response = completion
             .result
             .as_ref()

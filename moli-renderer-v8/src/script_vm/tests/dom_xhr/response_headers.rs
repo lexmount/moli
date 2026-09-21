@@ -77,7 +77,8 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
                                 "body".to_owned(),
                                 b"body".to_vec(),
                             ),
-                        ),
+                        )
+                        .into(),
                     },
                 )
                 .unwrap();
