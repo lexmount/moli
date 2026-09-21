@@ -699,15 +699,7 @@ pub(crate) fn configure_easy(
     let mut has_content_type_header = false;
     for (name, value) in outgoing_headers.iter() {
         has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-        let mut header_line = name.as_bytes().to_vec();
-        // curl sends an empty field for `Name;`, but removes it for `Name:`.
-        header_line.push(if value.is_empty() { b';' } else { b':' });
-        if !value.is_empty() {
-            header_line.push(b' ');
-            header_line.extend_from_slice(value);
-        }
-        headers
-            .append_bytes(&header_line)
+        append_curl_request_header(&mut headers, name, value)
             .context("failed to build request header")?;
     }
     if let Some(validation_headers) = validation_headers {
@@ -715,19 +707,14 @@ pub(crate) fn configure_easy(
         let validation_headers = crate::RequestHeaders::from_byte_strings(&validation_headers)?;
         for (name, value) in validation_headers.iter() {
             has_content_type_header |= name.eq_ignore_ascii_case("content-type");
-            let mut line = format!("{name}: ").into_bytes();
-            line.extend_from_slice(value);
-            headers
-                .append_bytes(&line)
+            append_curl_request_header(&mut headers, name, value)
                 .context("failed to build cache validation request header")?;
         }
     }
     if !has_content_type_header {
         // BodyInit and caller headers determine whether Content-Type is present.
-        // Suppress libcurl's upload default only in the curl header list, keeping
-        // this transport instruction distinct from an explicit empty header.
-        headers
-            .append("Content-Type:")
+        // Suppress libcurl's upload default when neither supplies one.
+        suppress_curl_generated_header(&mut headers, "Content-Type")
             .context("failed to suppress curl default content-type")?;
     }
 
@@ -773,6 +760,25 @@ pub(crate) fn configure_easy(
     easy.http_headers(headers)
         .context("failed to attach curl request headers")?;
     Ok(outgoing_headers.to_byte_strings())
+}
+
+fn append_curl_request_header(headers: &mut List, name: &str, value: &[u8]) -> Result<()> {
+    let mut line = name.as_bytes().to_vec();
+    if value.is_empty() {
+        // CURLOPT_HTTPHEADER interprets `Name:` as header removal.
+        // `Name;` is libcurl's syntax for sending an explicit empty value.
+        line.push(b';');
+    } else {
+        line.extend_from_slice(b": ");
+        line.extend_from_slice(value);
+    }
+    headers.append_bytes(&line)?;
+    Ok(())
+}
+
+fn suppress_curl_generated_header(headers: &mut List, name: &str) -> Result<()> {
+    headers.append(&format!("{name}:"))?;
+    Ok(())
 }
 
 fn configure_proxy_headers<H: Handler>(
