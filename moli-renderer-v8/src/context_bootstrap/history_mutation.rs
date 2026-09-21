@@ -313,6 +313,9 @@ fn mutate_history_object<'s>(
             HistoryMutationKind::Replace => SameDocumentHistoryUpdate::Replace,
         }),
     );
+    // A currententrychange listener may immediately start another navigation.
+    // Its source Document and frame owner must already reflect this commit.
+    sync_child_navigation_entry_seed_from_owner(scope, owner);
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         refresh_navigation_destination_indexes(scope, navigation, history);
         dispatch_navigation_currententrychange(
@@ -356,7 +359,6 @@ fn mutate_history_object<'s>(
             );
         }
     }
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
 }
 
 fn resolve_history_state_url(base_url: &url::Url, target: &str) -> Option<url::Url> {

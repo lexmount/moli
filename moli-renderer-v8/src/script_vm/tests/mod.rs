@@ -15710,6 +15710,7 @@ mod fetch_referrer;
 mod fetch_request_guard;
 mod frame_element_security;
 mod headers_list;
+mod history_referrer;
 mod http_fixture;
 mod indexed_db;
 mod inspector_unwrap;
