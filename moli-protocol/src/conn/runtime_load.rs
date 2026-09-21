@@ -89,7 +89,7 @@ async fn prepare_browser_owned_error_page_navigation_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     unreachable_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     error_text: String,
     body: CapturedBody,
     reply_boundary: RendererReplyBoundary,
@@ -136,7 +136,7 @@ async fn prepare_network_error_page_navigation_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     unreachable_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     error_text: String,
     reply_boundary: RendererReplyBoundary,
 ) -> anyhow::Result<NavigationLoadOutcome> {
@@ -297,7 +297,7 @@ pub struct ResponseCommitReady {
     requested_url: Url,
     final_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     response_status: u16,
     response_headers: Vec<(String, String)>,
     response_from_cache: bool,
@@ -504,7 +504,7 @@ pub struct PausedResponsePreparedDocument {
     requested_url: Url,
     final_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     response_status: u16,
     response_headers: Vec<(String, String)>,
     response_from_cache: bool,
@@ -544,7 +544,7 @@ impl PausedResponsePreparedDocument {
         let network_extra_info_available = !self.network_observation_journal.is_empty();
         self.body_progress_source.emit_response_metadata(
             &self.request_method,
-            &self.request_headers,
+            &self.request_headers.to_byte_strings(),
             response.request_cookie_report.as_ref(),
             &response.redirect_chain,
             &self.final_url,
@@ -726,7 +726,7 @@ pub(crate) struct BackgroundNavigationLoadJob {
     method: String,
     raw_url: String,
     body: Option<Vec<u8>>,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     body_progress_source: MainDocumentBodyProgressSource,
     /// Browser-context transport/cache state shared with the resident engine.
     ///
@@ -742,7 +742,7 @@ pub(crate) struct BackgroundStreamingResponseNavigationLoadJob {
     load_inputs: TargetNavigationLoadInputs,
     requested_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     response: StreamingRawResponse,
     network_observation_journal: NetworkObservationJournal,
     response_code: Option<u16>,
@@ -957,7 +957,7 @@ impl BackgroundNavigationLoadJob {
                                 request_context
                                     .request_body()
                                     .and_then(|body| std::str::from_utf8(body).ok()),
-                                request_context.request_headers(),
+                                &request_context.request_headers().to_byte_strings(),
                                 request_context.redirect_chain(),
                                 failure.observation_journal(),
                             );
@@ -1199,7 +1199,7 @@ async fn load_inline_html_navigation_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     method: &str,
     raw_url: &str,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     reply_boundary: RendererReplyBoundary,
 ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
     let source = inline_html_navigation_source(raw_url)?;
@@ -1249,7 +1249,7 @@ async fn load_data_url_navigation_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     method: &str,
     raw_url: &str,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     reply_boundary: RendererReplyBoundary,
 ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
     let source = decoded_data_url_navigation_response(raw_url)?;
@@ -1289,7 +1289,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     requested_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     mut response: StreamingRawResponse,
     network_observation_journal: NetworkObservationJournal,
     response_code: Option<u16>,
@@ -1327,7 +1327,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         .collect::<Vec<_>>();
     let network_events = CompletedMainDocumentNetworkEvents::new(
         request_method.clone(),
-        request_headers.clone(),
+        request_headers.to_byte_strings(),
         initial_request_cookie_report.clone(),
         response_status,
         response_headers.clone(),
@@ -1353,7 +1353,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         load_inputs.fetch_subresource_interception;
     body_progress_source.emit_response_metadata(
         &request_method,
-        &request_headers,
+        &request_headers.to_byte_strings(),
         initial_request_cookie_report.as_ref(),
         &response.redirect_chain,
         &final_url,
@@ -1585,11 +1585,16 @@ impl CdpConnection {
         &self,
         navigation: &NavigationDispatchState,
     ) -> TargetNavigationLoadInputs {
-        apply_navigation_request_load_policy(
+        let mut inputs = apply_navigation_request_load_policy(
             self.navigation_load_inputs_for_owner(&navigation.owner),
             navigation.request_load_policy,
         )
-        .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(navigation))
+        .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(
+            navigation,
+        ));
+        inputs.redirect_headers = navigation.redirect_headers.clone();
+        inputs.redirect_chain = navigation.redirect_chain.clone();
+        inputs
     }
 
     pub(crate) fn prepared_document_commit_configuration_for_owner(
@@ -1695,7 +1700,7 @@ impl CdpConnection {
             .collect::<Vec<_>>();
         let network_events = CompletedMainDocumentNetworkEvents::new(
             request_method.clone(),
-            request_headers.clone(),
+            request_headers.to_byte_strings(),
             initial_request_cookie_report,
             response_status,
             response_headers.clone(),
@@ -2290,7 +2295,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         self.load_navigation_request_via_runtime_with_network_events_async(
             None,
@@ -2310,7 +2315,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         body_progress_source: MainDocumentBodyProgressSource,
         request_load_policy: NavigationRequestLoadPolicy,
     ) -> anyhow::Result<NavigationLoadOutcome> {
@@ -2384,7 +2389,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         if load_inputs.browser_context_id.is_none() {
@@ -2722,7 +2727,7 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         method: &str,
         raw_url: &str,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
     ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
         load_inline_html_navigation_with_engine_async(
             self.standalone_navigation_engine.ensure_mut(),
@@ -2743,7 +2748,7 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         method: &str,
         raw_url: &str,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         reply_boundary: RendererReplyBoundary,
     ) -> Option<anyhow::Result<NavigationLoadOutcome>> {
         load_inline_html_navigation_with_engine_async(
@@ -2768,7 +2773,7 @@ impl CdpConnection {
         &mut self,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: String,
@@ -2796,7 +2801,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: String,
@@ -2856,7 +2861,7 @@ impl CdpConnection {
         &mut self,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: String,
@@ -2914,7 +2919,7 @@ impl CdpConnection {
         requested_url: Url,
         final_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: CapturedBody,
@@ -2954,7 +2959,7 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
         response_headers: Vec<(String, String)>,
         response_body: String,
@@ -3018,7 +3023,7 @@ impl CdpConnection {
         let network_progress = MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
             CompletedMainDocumentNetworkEvents::new(
                 request_method.clone(),
-                request_headers.clone(),
+                request_headers.to_byte_strings(),
                 initial_request_cookie_report.clone(),
                 response_status,
                 response_headers.clone(),
@@ -3057,7 +3062,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> anyhow::Result<NetworkFetchResult<NavigationResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
@@ -3084,20 +3089,16 @@ impl CdpConnection {
             .with_context(|| format!("failed to fetch page `{raw_url}`"))
     }
 
-    pub(crate) async fn fetch_navigation_auth_raw_response_for_owner_async(
+    pub(crate) async fn fetch_navigation_auth_raw_response_for_navigation_async(
         &mut self,
-        owner: &CommandOwnerScope,
-        request_load_policy: NavigationRequestLoadPolicy,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        navigation: &NavigationDispatchState,
         auth: SubresourceAuthCredentials,
     ) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
-        let load_inputs = apply_navigation_request_load_policy(
-            self.navigation_load_inputs_for_owner(owner),
-            request_load_policy,
-        );
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
+        let method = &navigation.request_method;
+        let raw_url = navigation.requested_url.as_str();
+        let body = navigation.clone_request_body_bytes();
+        let request_headers = navigation.request_headers.clone();
         validate_navigation_network_request(&load_inputs, method, raw_url, &request_headers)?;
 
         let mut request = Request::new_browser_bytes(
@@ -3111,6 +3112,8 @@ impl CdpConnection {
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
         .with_context(|| format!("failed to build request for `{raw_url}`"))?
+        .with_redirect_headers(load_inputs.redirect_headers.clone())
+        .with_redirect_chain(load_inputs.redirect_chain.clone())
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3138,7 +3141,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         body: Option<String>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
@@ -3153,26 +3156,18 @@ impl CdpConnection {
         .await
     }
 
-    pub(crate) async fn fetch_navigation_streaming_raw_response_for_owner_async(
+    pub(crate) async fn fetch_navigation_streaming_raw_response_for_navigation_async(
         &mut self,
-        owner: &CommandOwnerScope,
-        request_load_policy: NavigationRequestLoadPolicy,
-        method: &str,
-        raw_url: &str,
-        body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        navigation: &NavigationDispatchState,
         auth: Option<SubresourceAuthCredentials>,
     ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
-        let load_inputs = apply_navigation_request_load_policy(
-            self.navigation_load_inputs_for_owner(owner),
-            request_load_policy,
-        );
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.fetch_navigation_streaming_raw_response_with_load_inputs_async(
             &load_inputs,
-            method,
-            raw_url,
-            body,
-            request_headers,
+            &navigation.request_method,
+            navigation.requested_url.as_str(),
+            navigation.clone_request_body_bytes(),
+            navigation.request_headers.clone(),
             auth,
         )
         .await
@@ -3184,7 +3179,7 @@ impl CdpConnection {
         method: &str,
         raw_url: &str,
         body: Option<Vec<u8>>,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         auth: Option<SubresourceAuthCredentials>,
     ) -> anyhow::Result<NetworkFetchResult<StreamingRawResponse>> {
         validate_navigation_network_request(load_inputs, method, raw_url, &request_headers)?;
@@ -3200,6 +3195,8 @@ impl CdpConnection {
                 .map_or(moli_url::WebOrigin::Opaque, moli_url::WebOrigin::from_url),
         )
         .with_context(|| format!("failed to build request for `{raw_url}`"))?
+        .with_redirect_headers(load_inputs.redirect_headers.clone())
+        .with_redirect_chain(load_inputs.redirect_chain.clone())
         .with_top_level_navigation_cookie_context()
         .with_page_network_policy()
         .with_browser_navigation_kind(load_inputs.browser_navigation_kind);
@@ -3226,7 +3223,7 @@ impl CdpConnection {
         &mut self,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<NavigationResponse>,
     ) -> anyhow::Result<LoadedNavigation> {
         self.build_navigation_from_network_response_for_session_owner_async(
@@ -3244,7 +3241,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<NavigationResponse>,
     ) -> anyhow::Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(session_id);
@@ -3316,7 +3313,7 @@ impl CdpConnection {
         let network_progress = MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
             CompletedMainDocumentNetworkEvents::new(
                 request_method.clone(),
-                request_headers.clone(),
+                request_headers.to_byte_strings(),
                 initial_request_cookie_report.clone(),
                 response_status,
                 response_headers.clone(),
@@ -3361,7 +3358,7 @@ impl CdpConnection {
         &mut self,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: RawResponse,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         self.build_navigation_from_buffered_raw_response_for_session_owner_async(
@@ -3379,7 +3376,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<RawResponse>,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         let owner = CommandOwnerScope::capture(self, session_id);
@@ -3418,7 +3415,7 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<RawResponse>,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         let (response, network_observation_journal) =
@@ -3480,7 +3477,7 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         head: ResponseHead,
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
@@ -3549,7 +3546,7 @@ impl CdpConnection {
         &mut self,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: StreamingRawResponse,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> anyhow::Result<NavigationLoadOutcome> {
@@ -3569,7 +3566,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> anyhow::Result<NavigationLoadOutcome> {
@@ -3640,7 +3637,7 @@ impl CdpConnection {
         load_inputs: &TargetNavigationLoadInputs,
         requested_url: Url,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<StreamingRawResponse>,
         response_code: Option<u16>,
         response_headers_override: Vec<(String, String)>,
@@ -3715,7 +3712,7 @@ impl CdpConnection {
     fn build_download_from_raw_response(
         &self,
         request_method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: RawResponse,
         network_observation_journal: NetworkObservationJournal,
     ) -> DownloadNavigation {
@@ -3729,7 +3726,7 @@ impl CdpConnection {
         let final_url = head.final_url;
         let network_events = CompletedMainDocumentNetworkEvents::new(
             request_method,
-            request_headers,
+            request_headers.to_byte_strings(),
             head.request_cookie_report,
             head.status,
             head.headers,
@@ -3768,7 +3765,7 @@ async fn prepare_navigation_from_captured_raw_response_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     requested_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     head: ResponseHead,
     body: CapturedBody,
     body_progress_source: MainDocumentBodyProgressSource,
@@ -3784,7 +3781,7 @@ async fn prepare_navigation_from_captured_raw_response_with_engine_async(
     {
         body_progress_source.emit_response_metadata(
             &request_method,
-            &request_headers,
+            &request_headers.to_byte_strings(),
             head.request_cookie_report.as_ref(),
             &head.redirect_chain,
             &head.final_url,
@@ -3837,7 +3834,7 @@ async fn prepare_captured_document_response_with_engine_async(
     load_inputs: &TargetNavigationLoadInputs,
     requested_url: Url,
     request_method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     head: ResponseHead,
     body: CapturedBody,
     body_progress_source: MainDocumentBodyProgressSource,
@@ -3849,7 +3846,7 @@ async fn prepare_captured_document_response_with_engine_async(
     let network_extra_info_available = !network_observation_journal.is_empty();
     body_progress_source.emit_response_metadata(
         &request_method,
-        &request_headers,
+        &request_headers.to_byte_strings(),
         head.request_cookie_report.as_ref(),
         &head.redirect_chain,
         &head.final_url,
@@ -3880,7 +3877,7 @@ async fn prepare_captured_document_response_with_engine_async(
         .body_network_progress_for_completed_events(
             CompletedMainDocumentNetworkEvents::new(
                 request_method.clone(),
-                request_headers.clone(),
+                request_headers.to_byte_strings(),
                 initial_request_cookie_report,
                 response_status,
                 response_headers.clone(),
@@ -3969,7 +3966,7 @@ fn validate_navigation_network_request(
     load_inputs: &TargetNavigationLoadInputs,
     method: &str,
     raw_url: &str,
-    request_headers: &[(String, String)],
+    request_headers: &moli_fetch::RequestHeaders,
 ) -> anyhow::Result<()> {
     ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
     if load_inputs.network_offline {
@@ -3979,7 +3976,7 @@ fn validate_navigation_network_request(
             kind: NavigationNetworkErrorKind::InternetDisconnected,
             unreachable_url: requested_url,
             request_method: method.to_owned(),
-            request_headers: request_headers.to_vec(),
+            request_headers: request_headers.clone(),
         }
         .into());
     }

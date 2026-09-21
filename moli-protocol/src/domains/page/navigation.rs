@@ -2654,13 +2654,10 @@ fn start_navigate_to_url_command_with_background_policy(
 }
 
 fn overlay_navigation_request_headers(
-    base: &mut Vec<(String, String)>,
-    overlay: Vec<(String, String)>,
+    base: &mut moli_fetch::RequestHeaders,
+    overlay: moli_fetch::RequestHeaders,
 ) {
-    for (name, value) in overlay {
-        base.retain(|(existing_name, _)| !existing_name.eq_ignore_ascii_case(&name));
-        base.push((name, value));
-    }
+    base.overlay(overlay);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2726,6 +2723,8 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
     let mut navigation_state = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: command_id,
         owner: owner.clone(),
         result_projection,
@@ -2740,7 +2739,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             .as_deref()
             .map(|body| String::from_utf8_lossy(body).into_owned()),
         request_body_bytes: request_body,
-        request_headers,
+        request_headers: moli_fetch::RequestHeaders::from_utf8(request_headers),
         request_load_policy,
         timestamp,
         source_document_security: NavigationSourceDocumentSecurityContext::new(

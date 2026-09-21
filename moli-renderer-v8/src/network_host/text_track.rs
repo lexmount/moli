@@ -135,7 +135,7 @@ pub(crate) fn start_text_track_resource_fetch(
             url: request_url.clone(),
             websocket_socket_id: None,
             method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Default::default(),
             request_body: None,
             request_body_bytes: None,
             resource_type: SubresourceResourceType::TextTrack,
@@ -187,7 +187,7 @@ pub(crate) fn start_text_track_resource_fetch(
                     internal_id,
                     request_url,
                     request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
+                    request_headers: Default::default(),
                     request_body: None,
                     response_status_text: None,
                     skip_fetch_security_validation: false,
@@ -217,7 +217,7 @@ pub(crate) fn start_text_track_resource_fetch(
         },
         request_url,
         "GET".to_owned(),
-        Vec::new(),
+        Default::default(),
         None,
     );
     Ok(TextTrackResourceFetchStart::Pending)

@@ -1066,7 +1066,7 @@ struct SubresourceNetworkRecordInner {
     request_handle: Option<SubresourceNetworkRequestHandle>,
     websocket_socket_id: Option<u64>,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     request_body_bytes: Option<Vec<u8>>,
     resource_type: SubresourceResourceType,
@@ -1099,7 +1099,7 @@ pub struct SubresourceRequestStarted {
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     request_body_bytes: Option<Vec<u8>>,
     keepalive: bool,
@@ -1187,7 +1187,7 @@ impl SubresourceRequestStarted {
         document_url: Url,
         url: Url,
         method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         resource_type: SubresourceResourceType,
         request_initiator_type: SubresourceRequestInitiatorType,
@@ -1241,7 +1241,7 @@ impl SubresourceRequestStarted {
         &self.method
     }
 
-    pub fn request_headers(&self) -> &[(String, String)] {
+    pub fn request_headers(&self) -> &moli_fetch::RequestHeaders {
         &self.request_headers
     }
 
@@ -2126,7 +2126,7 @@ impl SubresourceNetworkRecord {
         document_url: Url,
         url: Url,
         method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         resource_type: SubresourceResourceType,
         request_cookie_report: Option<StoredCookieQueryReport>,
@@ -2160,7 +2160,7 @@ impl SubresourceNetworkRecord {
         document_url: Url,
         url: Url,
         method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         resource_type: SubresourceResourceType,
         request_cookie_report: Option<StoredCookieQueryReport>,
@@ -2207,7 +2207,7 @@ impl SubresourceNetworkRecord {
         document_url: Url,
         url: Url,
         method: String,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         request_body: Option<String>,
         resource_type: SubresourceResourceType,
         error_text: String,
@@ -2317,7 +2317,7 @@ impl SubresourceNetworkRecord {
         &self.inner.method
     }
 
-    pub fn request_headers(&self) -> &[(String, String)] {
+    pub fn request_headers(&self) -> &moli_fetch::RequestHeaders {
         &self.inner.request_headers
     }
 
@@ -2395,7 +2395,7 @@ pub struct PendingSubresourceFetchInfo {
     pub url: Url,
     pub websocket_socket_id: Option<u64>,
     pub method: String,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
     pub request_body_bytes: Option<Vec<u8>>,
     pub resource_type: SubresourceResourceType,
@@ -2408,7 +2408,7 @@ pub struct PendingSubresourceResponseInfo {
     pub url: Url,
     pub final_url: Url,
     pub method: String,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
     pub resource_type: SubresourceResourceType,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
@@ -2426,7 +2426,7 @@ pub struct PendingSubresourceAuthInfo {
     pub internal_id: u64,
     pub url: Url,
     pub method: String,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub request_body: Option<String>,
     pub resource_type: SubresourceResourceType,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
@@ -3581,7 +3581,7 @@ mod tests {
             test_url("/"),
             test_url("/asset.js"),
             "GET".to_owned(),
-            vec![("accept".to_owned(), "*/*".to_owned())],
+            vec![("accept".to_owned(), "*/*".to_owned())].into(),
             None,
             SubresourceResourceType::Script,
             "network failed".to_owned(),
@@ -3811,7 +3811,7 @@ mod tests {
             document_url.clone(),
             test_url("/api"),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             "network failed".to_owned(),
@@ -3860,7 +3860,7 @@ mod tests {
             document_url,
             test_url("/image.png"),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Image,
             SubresourceRequestInitiatorType::Parser,
@@ -3918,7 +3918,7 @@ mod tests {
             document_url.clone(),
             test_url("/api"),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             "network failed".to_owned(),
@@ -4097,7 +4097,7 @@ mod tests {
             Url::parse("https://example.test/page").unwrap(),
             Url::parse("https://example.test/api").unwrap(),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             None,
@@ -4129,7 +4129,7 @@ mod tests {
             Url::parse("https://example.test/page").unwrap(),
             Url::parse("https://api.example.test/v1/orders/42").unwrap(),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             None,
@@ -4167,7 +4167,7 @@ mod tests {
             Url::parse("https://example.test/page").unwrap(),
             Url::parse("https://example.test/api").unwrap(),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             None,
@@ -4325,7 +4325,7 @@ mod tests {
             Url::parse("https://example.test/page").unwrap(),
             Url::parse("https://example.test/api").unwrap(),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             None,
@@ -4341,7 +4341,7 @@ mod tests {
             Url::parse("https://example.test/page").unwrap(),
             Url::parse("https://example.test/api").unwrap(),
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             SubresourceResourceType::Fetch,
             None,

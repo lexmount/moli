@@ -8856,7 +8856,7 @@ fn maps_network_set_extra_headers_to_shared_network_command() {
     );
     assert!(command.browser_context_ids.is_empty());
     assert_eq!(
-        command.headers,
+        command.headers.to_byte_strings(),
         vec![
             (
                 "some_header_name".to_owned(),
@@ -8995,7 +8995,10 @@ fn bound_network_set_extra_headers_outcome_carries_shared_command() {
     };
     assert!(command.target_ids.is_empty());
     assert!(command.browser_context_ids.is_empty());
-    assert_eq!(command.headers, vec![("x-test".to_owned(), "1".to_owned())]);
+    assert_eq!(
+        command.headers.to_byte_strings(),
+        vec![("x-test".to_owned(), "1".to_owned())]
+    );
 }
 
 #[test]
@@ -9039,20 +9042,85 @@ fn bound_network_add_data_collector_outcome_carries_shared_command() {
 }
 
 #[test]
-fn rejects_unsupported_network_set_extra_headers_base64_value() {
+fn maps_network_set_extra_headers_with_opaque_bytes_and_utf8_values() {
     let command = super::parse_bidi_command(json!({
-        "id": 99,
-        "method": "network.setExtraHeaders",
-        "params": {
-            "headers": [{"name": "x-test", "value": {"type": "base64", "value": "MQ=="}}]
-        }
+        "id": 99, "method": "network.setExtraHeaders",
+        "params": {"headers": [
+            {"name": "X-Raw", "value": {"type": "string", "value": "old"}},
+            {"name": "x-raw", "value": {"type": "base64", "value": "6f8="}},
+            {"name": "x-utf8", "value": {"type": "string", "value": "é"}}
+        ]}
     }))
     .expect("BiDi command");
     let context = super::BidiDevToolsCommandContext::new("bidi-session-1");
+    let shared =
+        super::devtools_command_from_bidi_command(&command, &context).expect("byte headers");
+    let moli_protocol::devtools_runtime::DevToolsCommand::SetExtraHeaders(command) = shared else {
+        panic!("expected SetExtraHeaders");
+    };
+    assert_eq!(
+        command.headers,
+        moli_header_field::HeaderFields::from_bytes(vec![
+            ("x-raw".into(), vec![0xe9, 0xff]),
+            ("x-utf8".into(), vec![0xc3, 0xa9]),
+        ])
+    );
+}
 
-    let error = super::devtools_command_from_bidi_command(&command, &context)
-        .expect_err("base64 extra header should fail validation");
-    assert_eq!(error.code, super::BidiErrorCode::UnsupportedOperation);
+#[test]
+fn bidi_cookie_overrides_preserve_opaque_and_utf8_bytes() {
+    use moli_protocol::devtools_runtime::DevToolsCommand;
+    let context = super::BidiDevToolsCommandContext::new("bidi-session-1");
+    for method in [
+        "network.continueRequest",
+        "network.continueResponse",
+        "network.provideResponse",
+    ] {
+        let mut params = json!({"request": "REQ-raw", "cookies": [
+            {"name": "raw", "value": {"type": "base64", "value": "6f8="}},
+            {"name": "utf8", "value": {"type": "string", "value": "é"}}
+        ]});
+        if method != "network.continueRequest" {
+            params["cookies"][0]["path"] = json!("/");
+            params["cookies"][0]["httpOnly"] = json!(true);
+            params["cookies"][0]["secure"] = json!(true);
+        }
+        let command =
+            super::parse_bidi_command(json!({"id": 100, "method": method, "params": params}))
+                .unwrap();
+        let shared = super::devtools_command_from_bidi_command(&command, &context)
+            .expect("non-UTF8 cookie value must be accepted");
+        let headers = match shared {
+            DevToolsCommand::ContinueInterceptedRequest(command) => command.headers.unwrap(),
+            DevToolsCommand::ContinueInterceptedResponse(command) => {
+                moli_header_field::HeaderFields::from_byte_strings(
+                    &command.response_headers.unwrap(),
+                )
+                .unwrap()
+            }
+            DevToolsCommand::FulfillInterceptedRequest(command) => {
+                moli_header_field::HeaderFields::from_byte_strings(&command.response_headers)
+                    .unwrap()
+            }
+            _ => panic!("unexpected cookie dispatch"),
+        };
+        let expected = if method == "network.continueRequest" {
+            vec![("Cookie".into(), b"raw=\xe9\xff; utf8=\xc3\xa9".to_vec())]
+        } else {
+            vec![
+                (
+                    "Set-Cookie".into(),
+                    b"raw=\xe9\xff; Path=/; HttpOnly; Secure".to_vec(),
+                ),
+                ("Set-Cookie".into(), b"utf8=\xc3\xa9".to_vec()),
+            ]
+        };
+        assert_eq!(
+            headers,
+            moli_header_field::HeaderFields::from_bytes(expected),
+            "{method}"
+        );
+    }
 }
 
 #[test]
@@ -9090,7 +9158,7 @@ fn maps_network_continue_request_to_shared_fetch_command() {
     assert_eq!(command.post_data.as_deref(), Some("payload"));
     assert!(command.intercept_response);
     assert_eq!(
-        command.headers,
+        command.headers.map(|headers| headers.to_byte_strings()),
         Some(vec![
             ("X-Test".to_owned(), "1".to_owned()),
             ("Cookie".to_owned(), "sid=abc".to_owned()),
@@ -14770,5 +14838,31 @@ fn rejects_invalid_bidi_command_adapter_params() {
             .expect_err("non-object preload argument entries should fail")
             .code,
         super::BidiErrorCode::InvalidArgument
+    );
+}
+
+#[test]
+fn network_continue_request_preserves_header_bytes() {
+    let command = super::parse_bidi_command(json!({
+        "id": 100,
+        "method": "network.continueRequest",
+        "params": {"request": "REQ-raw", "headers": [
+            {"name": "X-Raw", "value": {"type": "base64", "value": "6f8="}},
+            {"name": "x-raw", "value": {"type": "string", "value": "é"}}
+        ]}
+    }))
+    .unwrap();
+    let context = super::BidiDevToolsCommandContext::new("bidi-session-1");
+    let moli_protocol::devtools_runtime::DevToolsCommand::ContinueInterceptedRequest(command) =
+        super::devtools_command_from_bidi_command(&command, &context).unwrap()
+    else {
+        panic!("expected request continuation");
+    };
+    assert_eq!(
+        command.headers.unwrap(),
+        moli_header_field::HeaderFields::from_bytes(vec![
+            ("X-Raw".to_owned(), vec![0xe9, 0xff]),
+            ("x-raw".to_owned(), vec![0xc3, 0xa9]),
+        ])
     );
 }

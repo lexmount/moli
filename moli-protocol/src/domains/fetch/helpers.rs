@@ -27,82 +27,74 @@ pub(crate) fn decode_base64_to_string(body: &str) -> Result<String, ()> {
     String::from_utf8(decoded).map_err(|_| ())
 }
 
+// The existing response consumers use WebIDL ByteString projections. Encode CDP
+// Unicode as UTF-8 and decode binary input losslessly at this adapter boundary.
 pub(super) fn response_headers_from_params(
     response_headers: Option<Vec<HeaderEntry>>,
-    binary_response_headers: Option<impl AsRef<str>>,
+    binary_response_headers: Option<&str>,
 ) -> Result<Vec<(String, String)>, ()> {
-    if let Some(binary_response_headers) = binary_response_headers {
-        parse_binary_response_headers(binary_response_headers.as_ref())
-    } else {
-        Ok(response_headers
-            .unwrap_or_default()
-            .into_iter()
-            .map(|header| (header.name, header.value))
-            .collect())
-    }
+    Ok(
+        response_headers_with_presence_from_params(response_headers, binary_response_headers)?
+            .unwrap_or_default(),
+    )
 }
 
 pub(super) fn response_headers_with_presence_from_params(
     response_headers: Option<Vec<HeaderEntry>>,
-    binary_response_headers: Option<impl AsRef<str>>,
+    binary_response_headers: Option<&str>,
 ) -> Result<Option<Vec<(String, String)>>, ()> {
-    if let Some(binary_response_headers) = binary_response_headers {
-        parse_binary_response_headers(binary_response_headers.as_ref()).map(Some)
+    if let Some(encoded) = binary_response_headers {
+        parse_binary_response_headers(encoded).map(|headers| Some(headers.to_byte_strings()))
     } else {
         Ok(response_headers.map(|headers| {
-            headers
-                .into_iter()
-                .map(|header| (header.name, header.value))
-                .collect()
+            moli_fetch::ResponseHeaders::from_utf8(
+                headers
+                    .into_iter()
+                    .map(|header| (header.name, header.value))
+                    .collect(),
+            )
+            .to_byte_strings()
         }))
     }
 }
 
-pub(crate) fn parse_binary_response_headers(encoded: &str) -> Result<Vec<(String, String)>, ()> {
+pub(crate) fn parse_binary_response_headers(
+    encoded: &str,
+) -> Result<moli_fetch::ResponseHeaders, ()> {
     let decoded = decode_base64_bytes(encoded)?;
     let mut headers = Vec::new();
     for entry in decoded.split(|byte| *byte == b'\0') {
         if entry.is_empty() {
             continue;
         }
-        let Some(separator) = entry.iter().position(|byte| *byte == b':') else {
-            return Err(());
-        };
+        let separator = entry.iter().position(|byte| *byte == b':').ok_or(())?;
         let (name, value) = entry.split_at(separator);
-        let name = trim_ascii(name);
-        let value = trim_ascii_start(&value[1..]);
-        if HeaderName::from_bytes(name).is_err() || HeaderValue::from_bytes(value).is_err() {
-            return Err(());
-        }
-        let name = String::from_utf8_lossy(name).trim().to_owned();
-        if name.is_empty() {
-            return Err(());
-        }
-        let value = String::from_utf8_lossy(value).to_string();
-        headers.push((name, value));
+        let name = trim_ows(name);
+        let value = trim_ows_start(&value[1..]);
+        HeaderName::from_bytes(name).map_err(|_| ())?;
+        HeaderValue::from_bytes(value).map_err(|_| ())?;
+        headers.push((
+            std::str::from_utf8(name).map_err(|_| ())?.to_owned(),
+            value.to_vec(),
+        ));
     }
-    Ok(headers)
+    Ok(moli_fetch::ResponseHeaders::from_bytes(headers))
 }
 
-fn trim_ascii(bytes: &[u8]) -> &[u8] {
-    trim_ascii_start(trim_ascii_end(bytes))
-}
-
-fn trim_ascii_start(bytes: &[u8]) -> &[u8] {
-    let start = bytes
-        .iter()
-        .position(|byte| !byte.is_ascii_whitespace())
-        .unwrap_or(bytes.len());
-    &bytes[start..]
-}
-
-fn trim_ascii_end(bytes: &[u8]) -> &[u8] {
+fn trim_ows(bytes: &[u8]) -> &[u8] {
     let end = bytes
         .iter()
-        .rposition(|byte| !byte.is_ascii_whitespace())
-        .map(|index| index + 1)
-        .unwrap_or(0);
-    &bytes[..end]
+        .rposition(|byte| !matches!(byte, b' ' | b'\t'))
+        .map_or(0, |index| index + 1);
+    trim_ows_start(&bytes[..end])
+}
+
+fn trim_ows_start(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t'))
+        .unwrap_or(bytes.len());
+    &bytes[start..]
 }
 
 pub(crate) fn decode_base64_bytes(input: &str) -> Result<Vec<u8>, ()> {
@@ -206,7 +198,7 @@ fn navigation_auth_required_parts(
         url: navigation.requested_url.as_str().to_owned(),
         document_url: Some(navigation.requested_url.as_str().to_owned()),
         method: Some(navigation.request_method.clone()),
-        request_headers: navigation.request_headers.clone(),
+        request_headers: navigation.request_headers.to_byte_strings(),
         request_body: navigation.request_body.clone(),
         request_initiator_type: None,
         bidi_request_initiator_type: None,
@@ -270,7 +262,7 @@ fn pending_subresource_auth_required_parts(
         url: pending.url.as_str().to_owned(),
         document_url: Some(pending.document_url.as_str().to_owned()),
         method: Some(pending.method.clone()),
-        request_headers: pending.request_headers.clone(),
+        request_headers: pending.request_headers.to_byte_strings(),
         request_body: pending.request_body.clone(),
         request_initiator_type: None,
         bidi_request_initiator_type: None,
@@ -345,7 +337,7 @@ fn navigation_response_stage_request_paused_parts(
         url: final_url.as_str().to_owned(),
         document_url: None,
         method: Some(navigation.request_method.clone()),
-        request_headers: navigation.request_headers.clone(),
+        request_headers: navigation.request_headers.to_byte_strings(),
         request_body: navigation.request_body.clone(),
         request_initiator_type: None,
         bidi_request_initiator_type: None,
@@ -407,7 +399,7 @@ fn pending_subresource_response_stage_request_paused_parts(
         url: pending.url.as_str().to_owned(),
         document_url: Some(pending.document_url.as_str().to_owned()),
         method: Some(pending.method.clone()),
-        request_headers: pending.request_headers.clone(),
+        request_headers: pending.request_headers.to_byte_strings(),
         request_body: pending.request_body.clone(),
         request_initiator_type: None,
         bidi_request_initiator_type: None,
@@ -502,7 +494,7 @@ pub(crate) fn request_paused_background_event(
         url: pending.navigation.requested_url.as_str().to_owned(),
         document_url: Some(pending.navigation.requested_url.as_str().to_owned()),
         method: Some(pending.navigation.request_method.clone()),
-        request_headers: pending.navigation.request_headers.clone(),
+        request_headers: pending.navigation.request_headers.to_byte_strings(),
         request_body: pending.navigation.request_body.clone(),
         request_initiator_type: None,
         bidi_request_initiator_type: None,

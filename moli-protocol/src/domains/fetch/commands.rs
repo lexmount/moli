@@ -169,10 +169,18 @@ fn build_cdp_continue_intercepted_request_command(
         None => None,
     };
     let headers = params.headers.map(|headers| {
-        headers
-            .into_iter()
-            .map(|header| (header.name, header.value))
-            .collect::<Vec<_>>()
+        let mut fields = moli_fetch::RequestHeaders::default();
+        for header in headers {
+            if let Some((_, value)) = fields
+                .iter_mut()
+                .find(|(name, _)| name.eq_ignore_ascii_case(&header.name))
+            {
+                *value = header.value.into_bytes();
+            } else {
+                fields.push((header.name, header.value.into_bytes()));
+            }
+        }
+        fields
     });
     let (browser_context_id, target_id) =
         devtools_fetch_owner_identity_for_session(conn, cmd.session_id);
@@ -225,18 +233,21 @@ fn start_devtools_continue_intercepted_request_command(
         &request_id,
     ) {
         let mut pending = pending;
-        // Resolve protocol Unicode strings before mixing them with the saved
-        // Fetch/XHR ByteStrings, including across multiple interception stages.
-        let command_headers = command.headers.clone().map(|headers| {
-            if matches!(
-                pending.resource_type,
-                SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
-            ) {
-                moli_fetch::RequestHeaders::from(headers).to_byte_strings()
-            } else {
-                headers
-            }
-        });
+        let command_headers =
+            command
+                .headers
+                .clone()
+                .map(|headers| match command.context.protocol {
+                    DevToolsProtocol::Cdp => moli_fetch::RequestHeaderOverride::current_request(
+                        headers,
+                        pending
+                            .request_stage_pause_state()
+                            .and_then(|chain| chain.header_override.as_ref()),
+                    ),
+                    DevToolsProtocol::WebDriverClassic | DevToolsProtocol::WebDriverBidi => {
+                        moli_fetch::RequestHeaderOverride::RedirectChain(headers)
+                    }
+                });
         if pending
             .request_stage_pause_state()
             .is_some_and(|chain| !chain.remaining_sessions.is_empty())
@@ -366,6 +377,14 @@ fn start_devtools_continue_intercepted_request_command(
             pending.navigation.set_request_body_text(body);
         }
         if let Some(headers) = command.headers.clone() {
+            if command.context.protocol == DevToolsProtocol::Cdp {
+                pending
+                    .navigation
+                    .redirect_headers
+                    .get_or_insert_with(|| pending.navigation.request_headers.clone());
+            } else {
+                pending.navigation.redirect_headers = None;
+            }
             pending.navigation.request_headers = headers;
         }
         pending.request_cookie_report = page::navigation_cookie_access_report(
@@ -841,17 +860,18 @@ pub(super) fn start_fulfill_request_command(
         },
         None => None,
     };
-    let response_headers =
-        match response_headers_from_params(params.response_headers, params.binary_response_headers)
-        {
-            Ok(headers) => headers,
-            Err(()) => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32602,
-                    "InvalidParams",
-                ));
-            }
-        };
+    let response_headers = match response_headers_from_params(
+        params.response_headers,
+        params.binary_response_headers.as_deref(),
+    ) {
+        Ok(headers) => headers,
+        Err(()) => {
+            return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
+    };
     let response_code = params.response_code.unwrap_or(200);
     let command = build_cdp_fulfill_intercepted_request_command(
         conn,
@@ -1449,7 +1469,10 @@ pub(super) fn start_continue_response_command(
     };
     let response_headers = match response_headers_with_presence_from_params(
         params.response_headers,
-        params.binary_response_headers,
+        params
+            .binary_response_headers
+            .as_ref()
+            .map(|headers| headers.as_ref()),
     ) {
         Ok(headers) => headers,
         Err(()) => {
@@ -1958,7 +1981,7 @@ mod protocol_neutral_tests {
         assert_eq!(command.method.as_deref(), Some("POST"));
         assert_eq!(command.post_data.as_deref(), Some("hello"));
         assert_eq!(
-            command.headers,
+            command.headers.map(|headers| headers.to_byte_strings()),
             Some(vec![("x-test".to_owned(), "1".to_owned())])
         );
         assert!(command.intercept_response);
@@ -2071,9 +2094,10 @@ mod protocol_neutral_tests {
             resource_type: SubresourceResourceType::Fetch,
             websocket_socket_id: None,
             request_stage_chain: Some(Box::new(PendingSubresourceFetchRequestStageChain {
+                header_override: None,
                 url: Url::parse("https://example.test/api").unwrap(),
                 method: "GET".to_owned(),
-                headers: vec![("x-old".to_owned(), "1".to_owned())],
+                headers: vec![("x-old".to_owned(), "1".to_owned())].into(),
                 body: None,
                 request_cookie_report: None,
                 remaining_sessions: vec![PendingSubresourceFetchRequestStage {
@@ -2180,7 +2204,10 @@ mod protocol_neutral_tests {
         );
         assert_eq!(method.as_deref(), Some("POST"));
         assert_eq!(body, Some(Some("body".to_owned())));
-        assert_eq!(headers, Some(vec![("x-new".to_owned(), "2".to_owned())]));
+        assert_eq!(
+            headers.map(|headers| headers.headers().to_byte_strings()),
+            Some(vec![("x-new".to_owned(), "2".to_owned())])
+        );
     }
 
     #[test]
@@ -2216,7 +2243,7 @@ mod protocol_neutral_tests {
             websocket_socket_id: None,
             url: Url::parse("https://example.test/api").unwrap(),
             method: "GET".to_owned(),
-            request_headers: vec![("accept".to_owned(), "application/json".to_owned())],
+            request_headers: vec![("accept".to_owned(), "application/json".to_owned())].into(),
             request_body: None,
             request_cookie_report: None,
             response_status: 200,
@@ -2351,9 +2378,10 @@ mod protocol_neutral_tests {
             resource_type: SubresourceResourceType::Fetch,
             websocket_socket_id: None,
             request_stage_chain: Some(Box::new(PendingSubresourceFetchRequestStageChain {
+                header_override: None,
                 url: Url::parse("https://example.test/api").unwrap(),
                 method: "GET".to_owned(),
-                headers: Vec::new(),
+                headers: Vec::new().into(),
                 body: None,
                 request_cookie_report: None,
                 remaining_sessions: vec![PendingSubresourceFetchRequestStage {

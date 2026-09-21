@@ -1263,7 +1263,7 @@ pub struct DevToolsSetExtraHeadersCommand {
     pub context: DevToolsCommandContext,
     pub target_ids: Vec<DevToolsTargetId>,
     pub browser_context_ids: Vec<DevToolsBrowserContextId>,
-    pub headers: Vec<(String, String)>,
+    pub headers: moli_fetch::RequestHeaders,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1312,7 +1312,7 @@ pub struct DevToolsContinueInterceptedRequestCommand {
     pub url: Option<String>,
     pub method: Option<String>,
     pub post_data: Option<String>,
-    pub headers: Option<Vec<(String, String)>>,
+    pub headers: Option<moli_fetch::RequestHeaders>,
     pub intercept_response: bool,
 }
 

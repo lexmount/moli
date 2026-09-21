@@ -33,6 +33,9 @@ pub(crate) struct Writer<'a> {
     preserved_spaces: String,
     breaks: usize,
     code: Option<String>,
+    // End of the last emitted Markdown code span in the local output. Only
+    // actual output after this position separates it from another code span.
+    markdown_code_end: Option<usize>,
     line_digits: Option<usize>,
     heading: bool,
     single_line_attributes: bool,
@@ -176,22 +179,10 @@ impl<'a> Writer<'a> {
         if text.is_empty() {
             return;
         }
-        // Adjacent code elements have separate HTML nodes but no text between
-        // them. Markdown code spans would merge or need an invented space.
-        if self.code.is_some() {
-            self.flush_code_html();
-        }
+        self.flush_code();
         if preformatted {
-            if !text.is_empty() {
-                if self.code.is_none() {
-                    self.prepare_inline('`');
-                    self.code = Some(String::new());
-                }
-                self.code
-                    .as_mut()
-                    .expect("initialized code buffer")
-                    .push_str(&text.replace("\r\n", " ").replace(['\n', '\r'], " "));
-            }
+            self.prepare_inline('`');
+            self.code = Some(text.replace("\r\n", " ").replace(['\n', '\r'], " "));
             return;
         }
         let content = text.trim_matches(char::is_whitespace);
@@ -265,6 +256,7 @@ impl<'a> Writer<'a> {
         self.flush_breaks();
         self.prefix
             .push_text(std::mem::take(&mut self.output).into());
+        self.markdown_code_end = None;
         self.prefix.append(output);
         self.line_digits = None;
         self.boundary(after);
@@ -439,6 +431,13 @@ impl<'a> Writer<'a> {
     }
 
     fn flush_code(&mut self) {
+        // Empty text/style events can flush code without adding a separator.
+        // Check the emitted tail after spaces and style markers have been
+        // materialized, so adjacent backtick runs cannot merge code values.
+        if self.markdown_code_end == Some(self.output.len()) {
+            self.flush_code_html();
+            return;
+        }
         if let Some(code) = self.code.take() {
             let fence = "`".repeat(longest_run(&code, '`') + 1);
             let padding = code.starts_with('`')
@@ -453,6 +452,7 @@ impl<'a> Writer<'a> {
                 self.output.push(' ');
             }
             self.output.push_str(&fence);
+            self.markdown_code_end = Some(self.output.len());
             self.line_digits = None;
         }
     }
@@ -476,6 +476,7 @@ impl<'a> Writer<'a> {
                 }
             }
             self.output.push_str("</code>");
+            self.markdown_code_end = None;
             self.line_digits = None;
         }
     }

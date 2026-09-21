@@ -3822,7 +3822,7 @@ fn page_report_capture_reuses_unchanged_network_report() {
                     document_url,
                     request_url.clone(),
                     "GET".to_owned(),
-                    Vec::new(),
+                    Vec::new().into(),
                     None,
                     SubresourceResourceType::Fetch,
                     None,

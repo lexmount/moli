@@ -955,7 +955,7 @@ async fn websocket_open_and_frames_record_network_trace_entries() {
             record
                 .request_headers()
                 .iter()
-                .any(|(name, _): &(String, String)| name.eq_ignore_ascii_case("origin"))
+                .any(|(name, _)| name.eq_ignore_ascii_case("origin"))
         );
         match record.outcome() {
             SubresourceNetworkOutcome::Success {

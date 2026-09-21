@@ -8,7 +8,7 @@ pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     document_url: Url,
     resolved_url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     send_body: Option<Vec<u8>>,
     credentials_mode: RequestCredentialsMode,
 }
@@ -549,6 +549,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         prepared.request_headers,
         prepared.credentials_mode,
         None,
+        None,
+        Vec::new(),
     );
 
     true
@@ -566,8 +568,7 @@ fn send_synchronous_worker_xhr(
         &prepared.method,
         prepared.resolved_url.as_str(),
         prepared.send_body.clone(),
-        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
-            .expect("prepared Fetch/XHR headers are ByteStrings"),
+        prepared.request_headers.clone(),
     ) {
         Ok(request) => {
             let mut request = request
@@ -1009,12 +1010,13 @@ pub(in crate::worker) fn drain_worker_xhr_completion(
                 return;
             };
             let response_head = response.head();
-            pending.network_record.clone().and_then(|record| {
+            pending.network_record.clone().and_then(|mut record| {
                 if record.handle_auth_requests
                     && matches!(response_head.status, 401 | 407)
                     && let Some(challenge) =
                         extract_subresource_auth_challenge(&response_head.headers)
                 {
+                    record.follow_redirects(&response_head);
                     let response_body = response.subresource_response_body();
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         head: response_head.clone(),
@@ -1191,7 +1193,8 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
         document_url,
         resolved_url,
         method,
-        request_headers,
+        request_headers: moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
+            .expect("validated worker XHR headers are ByteStrings"),
         send_body: prepared_body.body,
         credentials_mode,
     })

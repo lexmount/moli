@@ -865,7 +865,7 @@ pub(crate) struct JsContextHost {
     stored_document_start_scripts: Vec<crate::DocumentStartScript>,
     stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     app_manifest_link_change_epoch: u64,
-    extra_http_headers: Vec<(String, String)>,
+    extra_http_headers: moli_fetch::RequestHeaders,
     permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     protocol_user_gesture_activation_depth: usize,

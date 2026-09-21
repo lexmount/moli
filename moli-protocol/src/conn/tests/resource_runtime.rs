@@ -103,6 +103,8 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
 
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner,
         result_projection: NavigationResultProjection::Cdp(json!({
@@ -118,7 +120,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
         request_method: "GET".to_owned(),
         request_body: None,
         request_body_bytes: None,
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
@@ -606,7 +608,7 @@ async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_a
         .build_loaded_navigation_from_buffered_response_async(
             requested_url,
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -656,7 +658,7 @@ async fn rebuild_buffered_response_preserving_request_report_avoids_second_acces
         .build_loaded_navigation_from_buffered_response_async(
             requested_url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -674,7 +676,7 @@ async fn rebuild_buffered_response_preserving_request_report_avoids_second_acces
         .build_loaded_navigation_from_buffered_response_preserving_request_cookie_report_async(
             requested_url,
             "GET".into(),
-            vec![],
+            vec![].into(),
             204,
             vec![],
             String::new(),
@@ -716,7 +718,7 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![("set-cookie".into(), "theme=dark; Path=/".into())],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -798,7 +800,7 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
         .build_loaded_navigation_from_buffered_response_async(
             first_url,
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>one</body></html>".into(),
@@ -818,7 +820,7 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
         .build_loaded_navigation_from_buffered_response_async(
             second_url,
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>two</body></html>".into(),
@@ -848,7 +850,7 @@ async fn browser_context_storage_does_not_cross_context_switches() {
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>first</body></html>".into(),
@@ -868,7 +870,7 @@ async fn browser_context_storage_does_not_cross_context_switches() {
         .build_loaded_navigation_from_buffered_response_async(
             url,
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>second</body></html>".into(),
@@ -900,7 +902,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
         .build_loaded_navigation_from_buffered_response_async(
             first_url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>first</body></html>".into(),
@@ -927,7 +929,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
         .build_loaded_navigation_from_buffered_response_async(
             second_url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>same context</body></html>".into(),
@@ -951,7 +953,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
         .build_loaded_navigation_from_buffered_response_async(
             second_url,
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>other context</body></html>".into(),
@@ -981,7 +983,7 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![("set-cookie".into(), "theme=dark; Path=/".into())],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -1026,7 +1028,7 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![("set-cookie".into(), "theme=dark; Path=/".into())],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -1092,7 +1094,7 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
             .build_loaded_navigation_from_buffered_response_async(
                 url.clone(),
                 "GET".into(),
-                vec![],
+                vec![].into(),
                 200,
                 vec![("content-type".into(), "text/html".into())],
                 "<!doctype html><html><body><main id='ok'>ok</main></body></html>".into(),
@@ -3344,7 +3346,8 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
         inactive
             .active_page_target()
             .effective_policy()
-            .extra_headers(),
+            .extra_headers()
+            .to_byte_strings(),
         vec![("X-Test".to_owned(), "direct".to_owned())]
     );
     assert_eq!(
@@ -3471,7 +3474,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         vec!["*://blocked-background.test/*".to_owned()]
     );
     assert_eq!(
-        staged.effective_policy().extra_headers(),
+        staged.effective_policy().extra_headers().to_byte_strings(),
         vec![("X-Background".to_owned(), "direct".to_owned())]
     );
     assert_eq!(
@@ -3539,7 +3542,7 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
     let mut conn = CdpConnection::new();
     conn.browser_context = Some(BrowserContext::new("BID-1".into()));
     let outcome = conn
-        .load_navigation_request_via_runtime_async("GET", &start_url, None, Vec::new())
+        .load_navigation_request_via_runtime_async("GET", &start_url, None, Vec::new().into())
         .await
         .expect("streaming navigation should load");
     let mut navigation = commit_navigation_outcome_for_test(&mut conn, outcome).await;
@@ -3591,7 +3594,12 @@ async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
     let mut conn = CdpConnection::new();
 
     let outcome = conn
-        .load_navigation_request_via_runtime_async("GET", data_url, None, request_headers.clone())
+        .load_navigation_request_via_runtime_async(
+            "GET",
+            data_url,
+            None,
+            request_headers.clone().into(),
+        )
         .await
         .expect("data:image navigation should load without a network fetch");
     let navigation = commit_navigation_outcome_for_test(&mut conn, outcome).await;
@@ -3599,7 +3607,10 @@ async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
     assert_eq!(navigation.requested_url.as_str(), data_url);
     assert_eq!(navigation.final_url.as_str(), data_url);
     assert_eq!(navigation.request_method, "GET");
-    assert_eq!(navigation.request_headers, request_headers);
+    assert_eq!(
+        navigation.request_headers.to_byte_strings(),
+        request_headers
+    );
     assert_eq!(navigation.response_status, 200);
     assert_eq!(
         navigation.response_headers,
@@ -3703,7 +3714,7 @@ async fn streaming_navigation_feeds_parser_before_body_eof() {
     conn.browser_context = Some(BrowserContext::new("BID-1".into()));
     let mut navigation = tokio::time::timeout(std::time::Duration::from_secs(4), async {
         let outcome = conn
-            .load_navigation_request_via_runtime_async("GET", &page_url, None, Vec::new())
+            .load_navigation_request_via_runtime_async("GET", &page_url, None, Vec::new().into())
             .await
             .expect("streaming navigation should prepare");
         commit_navigation_outcome_for_test(&mut conn, outcome).await

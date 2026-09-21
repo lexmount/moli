@@ -10,9 +10,11 @@
 //! also admits MIME `tspecials` other than space, semicolon, and quote, matching
 //! Blink rather than defining another standards-compliance mode.
 
+mod fields;
 mod parameters;
 mod tokenizer;
 
+pub use fields::HeaderFields;
 pub use parameters::{split_outside_quoted_strings, unquote_parameter_value};
 pub use tokenizer::{HeaderFieldTokenMode, HeaderFieldTokenizer};
 

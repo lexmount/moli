@@ -326,3 +326,86 @@ async fn native_close_handshake_finishes_while_message_sink_is_blocked() {
     assert_close(&mut rx, 75, 1000, "", true).await;
     server.await.unwrap();
 }
+
+#[tokio::test]
+async fn native_handshake_preserves_opaque_header_bytes_and_duplicates() {
+    use moli_header_field::HeaderFields;
+    use tokio::io::AsyncReadExt;
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}/bytes", listener.local_addr().unwrap());
+    let (captured_tx, captured_rx) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut raw = Vec::new();
+        while !raw.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).await.unwrap();
+            raw.extend_from_slice(&byte);
+            assert!(raw.len() < 16 * 1024);
+        }
+        let headers: Vec<_> = raw
+            .split(|byte| *byte == b'\n')
+            .skip(1)
+            .filter_map(|line| {
+                let colon = line.iter().position(|byte| *byte == b':')?;
+                Some((&line[..colon], line[colon + 1..].trim_ascii()))
+            })
+            .collect();
+        let captured: Vec<_> = headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case(b"x-raw"))
+            .map(|(_, value)| value.to_vec())
+            .collect();
+        captured_tx.send(captured).unwrap();
+        let (_, key) = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(b"sec-websocket-key"))
+            .unwrap();
+        let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key);
+        let mut response = format!("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n").into_bytes();
+        response.extend_from_slice(b"x-raw: \xe9\xff\r\nx-raw: \xc3\xa9\r\n\r\n");
+        stream.write_all(&response).await.unwrap();
+        let mut socket = tokio_tungstenite::WebSocketStream::from_raw_socket(
+            stream,
+            tokio_tungstenite::tungstenite::protocol::Role::Server,
+            None,
+        )
+        .await;
+        assert!(matches!(socket.next().await, Some(Ok(Message::Close(_)))));
+        let _ = socket.flush().await;
+    });
+    let expected = vec![vec![0xe9, 0xff], vec![0xc3, 0xa9]];
+    let mut context = test_websocket_context();
+    context.extra_headers = HeaderFields::from_bytes(vec![
+        ("X-Raw".to_owned(), expected[0].clone()),
+        ("x-raw".to_owned(), expected[1].clone()),
+    ]);
+    let (tx, mut rx) = mpsc::channel(8);
+    let handle = spawn_standalone_connection(101, url, Vec::new(), context, tx);
+    let event = timeout(Duration::from_secs(3), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let Event::Open {
+        request_headers,
+        response_headers,
+        ..
+    } = event
+    else {
+        panic!("expected successful handshake: {event:?}")
+    };
+    for headers in [request_headers, response_headers] {
+        let values: Vec<_> = headers
+            .into_iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("x-raw"))
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(values, expected);
+    }
+    assert_eq!(captured_rx.await.unwrap(), expected);
+    handle.close(Some(1000), String::new()).unwrap();
+    assert_closing(&mut rx, 101).await;
+    assert_close(&mut rx, 101, 1000, "", true).await;
+    server.await.unwrap();
+}

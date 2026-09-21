@@ -140,9 +140,9 @@ pub fn spawn_failed_connection(
 
 pub fn spawn_synthetic_connection(
     socket_id: u64,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_header_field::HeaderFields,
     response_status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: moli_header_field::HeaderFields,
     event_tx: impl Into<EventSender>,
 ) -> (ConnectionHandle, SyntheticPeer) {
     let event_tx = event_tx.into();

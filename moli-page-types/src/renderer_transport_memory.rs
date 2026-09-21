@@ -146,7 +146,7 @@ impl PendingSubresourceFetchInfo {
             .saturating_add(url_charge(&self.document_url))
             .saturating_add(url_charge(&self.url))
             .saturating_add(string_charge(&self.method))
-            .saturating_add(headers_charge(&self.request_headers))
+            .saturating_add(request_headers_charge(&self.request_headers))
             .saturating_add(self.request_body.as_deref().map(string_charge).unwrap_or(0))
             .saturating_add(
                 self.request_body_bytes
@@ -165,7 +165,7 @@ impl PendingSubresourceContinueEvent {
             Self::ResponsePaused(response) => url_charge(&response.url)
                 .saturating_add(url_charge(&response.final_url))
                 .saturating_add(string_charge(&response.method))
-                .saturating_add(headers_charge(&response.request_headers))
+                .saturating_add(request_headers_charge(&response.request_headers))
                 .saturating_add(
                     response
                         .request_body
@@ -188,7 +188,7 @@ impl PendingSubresourceContinueEvent {
                 ),
             Self::AuthRequired(auth) => url_charge(&auth.url)
                 .saturating_add(string_charge(&auth.method))
-                .saturating_add(headers_charge(&auth.request_headers))
+                .saturating_add(request_headers_charge(&auth.request_headers))
                 .saturating_add(auth.request_body.as_deref().map(string_charge).unwrap_or(0))
                 .saturating_add(
                     auth.network_request_headers
@@ -234,6 +234,19 @@ fn url_charge(value: &Url) -> usize {
     string_charge(value.as_str())
 }
 
+fn request_headers_charge(headers: &moli_fetch::RequestHeaders) -> usize {
+    headers.iter().fold(
+        headers
+            .len()
+            .saturating_mul(std::mem::size_of::<(String, Vec<u8>)>()),
+        |total, (name, value)| {
+            total
+                .saturating_add(string_charge(name))
+                .saturating_add(value.len().saturating_mul(2))
+        },
+    )
+}
+
 fn headers_charge(headers: &[(String, String)]) -> usize {
     headers.iter().fold(
         headers
@@ -256,7 +269,7 @@ fn request_started_charge(request: &SubresourceRequestStarted) -> usize {
         .saturating_add(url_charge(&request.document_url))
         .saturating_add(url_charge(&request.url))
         .saturating_add(string_charge(&request.method))
-        .saturating_add(headers_charge(&request.request_headers))
+        .saturating_add(request_headers_charge(&request.request_headers))
         .saturating_add(
             request
                 .request_body
@@ -307,7 +320,7 @@ fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {
         .saturating_add(url_charge(&record.document_url))
         .saturating_add(url_charge(&record.url))
         .saturating_add(string_charge(&record.method))
-        .saturating_add(headers_charge(&record.request_headers))
+        .saturating_add(request_headers_charge(&record.request_headers))
         .saturating_add(
             record
                 .request_body

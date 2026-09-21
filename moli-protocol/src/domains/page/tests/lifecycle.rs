@@ -2982,7 +2982,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
                 network.network_enabled = true;
                 network.cache_disabled = true;
                 network.bypass_service_worker = true;
-                network.extra_headers = vec![("X-Test".into(), "1".into())];
+                network.extra_headers = vec![("X-Test".into(), "1".into())].into();
             },
         );
     bc.active_page_target_mut().css_enabled = true;

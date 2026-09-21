@@ -13,11 +13,22 @@ use taffy::{
 
 use crate::{LayoutReplacedKind, ReplacedMetrics, style::resolve_stylo_calc_value};
 
+/// Which margins the caller has already removed from the available space.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AvailableSpaceMargins {
+    Included,
+    /// Block and float parents remove physical horizontal margins only.
+    HorizontalExcluded,
+    /// Grid's final item layout removes margins in both physical axes.
+    Excluded,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ReplacedContext {
     inherent_size: Size<f32>,
     attribute_size: Size<Option<f32>>,
     inherent_ratio: Option<f32>,
+    svg_without_intrinsic_size: bool,
 }
 
 impl ReplacedContext {
@@ -103,6 +114,11 @@ impl ReplacedContext {
             inherent_size,
             attribute_size,
             inherent_ratio,
+            // Keep this distinction after computing the fallback object size.
+            // A viewBox supplies an aspect ratio, not natural dimensions.
+            svg_without_intrinsic_size: kind == LayoutReplacedKind::Svg
+                && metrics.intrinsic_width.is_none()
+                && metrics.intrinsic_height.is_none(),
         }
     }
 
@@ -111,6 +127,7 @@ impl ReplacedContext {
             inherent_size: size,
             attribute_size: Size::NONE,
             inherent_ratio: None,
+            svg_without_intrinsic_size: false,
         }
     }
 
@@ -229,9 +246,11 @@ pub(crate) fn measure_replaced(
     known_dimensions: Size<Option<f32>>,
     parent_size: Size<Option<f32>>,
     available_space: Size<AvailableSpace>,
+    available_space_margins: AvailableSpaceMargins,
     context: &ReplacedContext,
     resolved_aspect_ratio: Option<ResolvedAspectRatio>,
     style: &taffy::Style<Atom>,
+    writing_mode: taffy::WritingMode,
     sizing_mode: SizingMode,
     requested_axis: RequestedAxis,
 ) -> Size<f32> {
@@ -359,6 +378,76 @@ pub(crate) fn measure_replaced(
             padding_border_sum,
         )
         .unwrap_or(context.inherent_size)
+    } else if context.svg_without_intrinsic_size
+        && let Some(aspect_ratio) = resolved_aspect_ratio
+    {
+        // Blink's ComputeReplacedSizeInternal stretches the inline axis when
+        // only an aspect ratio is available. Falling back to a 300x150 object
+        // here makes a viewBox-only icon 150x150 even inside a 24px container.
+        // This is an auto-size fallback, not an available-space clamp: natural
+        // dimensions and definite author sizes above may still overflow.
+        let inline_axis = writing_mode.inline_axis();
+        let margin = style
+            .margin
+            .resolve_or_zero(parent_size.width, resolve_stylo_calc_value)
+            .sum_axes()
+            .get_abs(inline_axis);
+        let available_margin = match available_space_margins {
+            AvailableSpaceMargins::Excluded => 0.0,
+            AvailableSpaceMargins::HorizontalExcluded if writing_mode.is_horizontal() => 0.0,
+            _ => margin,
+        };
+        let available_inline_size = available_space
+            .get_abs(inline_axis)
+            .into_option()
+            .map(|size| size - available_margin)
+            .or_else(|| {
+                // Absolute layout asks for min/max-content sizes before its final
+                // fit-content pass. A ratio-only SVG still stretches against its
+                // definite containing block in these probes (unlike an in-flow
+                // SVG inside a shrink-to-fit container, which contributes zero).
+                if style.position != taffy::Position::Absolute {
+                    return None;
+                }
+                let insets = style
+                    .inset
+                    .resolve_or_zero(parent_size, resolve_stylo_calc_value);
+                parent_size
+                    .get_abs(inline_axis)
+                    // This fallback starts from the containing block, so
+                    // it still owns both the insets and the SVG's margins.
+                    .map(|size| size - insets.sum_axes().get_abs(inline_axis) - margin)
+            });
+        let inline_size = match available_inline_size {
+            Some(available) => (available - padding_border_sum.get_abs(inline_axis)).max(0.0),
+            // An unresolved percentage uses the default dimension for an
+            // intrinsic contribution; an auto inline size contributes zero.
+            None if style
+                .size
+                .get_abs(inline_axis)
+                .may_have_percentage_dependence() =>
+            {
+                if writing_mode.is_horizontal() {
+                    300.0
+                } else {
+                    150.0
+                }
+            }
+            None => 0.0,
+        };
+        let size = if writing_mode.is_horizontal() {
+            Size {
+                width: Some(inline_size),
+                height: None,
+            }
+        } else {
+            Size {
+                width: None,
+                height: Some(inline_size),
+            }
+        };
+        apply_aspect_ratio_to_content_size(size, Some(aspect_ratio), padding_border_sum)
+            .unwrap_or(context.inherent_size)
     } else {
         context.inherent_size
     };
@@ -532,6 +621,7 @@ mod tests {
                 width: AvailableSpace::MaxContent,
                 height: AvailableSpace::MaxContent,
             },
+            AvailableSpaceMargins::Included,
             &image_context(),
             style
                 .aspect_ratio
@@ -539,9 +629,67 @@ mod tests {
                 .or(Some(1.0))
                 .and_then(|ratio| ResolvedAspectRatio::new(ratio, style.box_sizing)),
             style,
+            taffy::WritingMode::HorizontalTb,
             SizingMode::InherentSize,
             RequestedAxis::Both,
         )
+    }
+
+    #[test]
+    fn viewbox_only_svg_stretches_the_logical_inline_axis() {
+        let context = ReplacedContext::for_element(
+            LayoutReplacedKind::Svg,
+            Some(ReplacedMetrics {
+                intrinsic_ratio: Some(2.0),
+                ..ReplacedMetrics::default()
+            }),
+        );
+        for (writing_mode, expected) in [
+            (
+                taffy::WritingMode::HorizontalTb,
+                Size {
+                    width: 24.0,
+                    height: 12.0,
+                },
+            ),
+            (
+                taffy::WritingMode::VerticalRl,
+                Size {
+                    width: 96.0,
+                    height: 48.0,
+                },
+            ),
+            (
+                taffy::WritingMode::VerticalLr,
+                Size {
+                    width: 96.0,
+                    height: 48.0,
+                },
+            ),
+        ] {
+            assert_eq!(
+                measure_replaced(
+                    Size::NONE,
+                    Size {
+                        width: Some(24.0),
+                        height: Some(48.0)
+                    },
+                    Size {
+                        width: AvailableSpace::Definite(24.0),
+                        height: AvailableSpace::Definite(48.0)
+                    },
+                    AvailableSpaceMargins::Included,
+                    &context,
+                    ResolvedAspectRatio::new(2.0, BoxSizing::ContentBox),
+                    &taffy::Style::default(),
+                    writing_mode,
+                    SizingMode::InherentSize,
+                    RequestedAxis::Both,
+                ),
+                expected,
+                "the SVG must derive its auto block size from its available inline size",
+            );
+        }
     }
 
     #[test]
@@ -569,9 +717,11 @@ mod tests {
                     width: AvailableSpace::MaxContent,
                     height: AvailableSpace::MaxContent,
                 },
+                AvailableSpaceMargins::Included,
                 &image_context(),
                 ResolvedAspectRatio::new(2.0, box_sizing),
                 &style,
+                taffy::WritingMode::HorizontalTb,
                 SizingMode::InherentSize,
                 RequestedAxis::Both,
             )

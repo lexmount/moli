@@ -222,7 +222,7 @@ async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_in
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![
                 ("set-cookie".into(), "theme=dark; Path=/app".into()),
@@ -314,7 +314,7 @@ async fn connection_clear_cookie_store_with_session_scope_invalidates_live_docum
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![
                 ("set-cookie".into(), "theme=dark; Path=/app".into()),
@@ -529,7 +529,7 @@ async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
             "<!doctype html><html><body>ok</body></html>".into(),
@@ -609,7 +609,7 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
             "<!doctype html><html><body>ok</body></html>".into(),

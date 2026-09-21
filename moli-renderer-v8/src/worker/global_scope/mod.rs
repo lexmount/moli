@@ -1101,7 +1101,7 @@ pub(super) struct PendingWorkerFetch {
     pub(super) load: ResourceLoadLease,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) network_request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
@@ -1193,14 +1193,37 @@ enum WorkerFetchResponseParts {
 
 #[derive(Clone)]
 pub(super) struct PendingWorkerFetchNetworkRecord {
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) internal_id: u64,
     pub(super) url: Url,
     pub(super) method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
     pub(super) intercept_response: bool,
     pub(super) handle_auth_requests: bool,
+}
+
+impl PendingWorkerFetchNetworkRecord {
+    fn follow_redirects(&mut self, head: &ResponseHead) {
+        if head.redirect_chain.is_empty() {
+            return;
+        }
+        let mut request = Request::get_with_url(self.url.clone())
+            .with_redirect_headers(self.redirect_headers.take());
+        request.method = std::mem::take(&mut self.method);
+        request.body = self.request_body.clone().map(String::into_bytes);
+        request.request_headers = std::mem::take(&mut self.request_headers);
+        for redirect in &head.redirect_chain {
+            request.apply_redirect_status(redirect.status);
+        }
+        self.url = head.final_url.clone();
+        self.method = request.method;
+        self.request_headers = request.request_headers;
+        if request.body.is_none() {
+            self.request_body = None;
+        }
+    }
 }
 
 pub(super) struct PendingWorkerXhr {
@@ -1211,7 +1234,7 @@ pub(super) struct PendingWorkerXhr {
     pub(super) request_paused: bool,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) network_request_handle: Option<SubresourceNetworkRequestHandle>,
     pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
@@ -1519,7 +1542,7 @@ pub(crate) struct WorkerGlobalState {
     /// Whether this worker global is a secure context for `[SecureContext]` APIs.
     pub(super) secure_context: bool,
     /// Network.setExtraHTTPHeaders headers inherited from the owning page/CDP session.
-    pub(super) extra_http_headers: Vec<(String, String)>,
+    pub(super) extra_http_headers: moli_fetch::RequestHeaders,
     /// Permission overrides inherited from the owning page/CDP session.
     pub(super) permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     /// Network.emulateNetworkConditions offline state inherited from the owning page/CDP session.
@@ -6583,17 +6606,12 @@ fn worker_url_blocked(patterns: &[String], url: &Url) -> bool {
 }
 
 fn merge_worker_request_headers(
-    context_headers: &[(String, String)],
-    request_headers: &[(String, String)],
-) -> Vec<(String, String)> {
-    // Worker Fetch/XHR headers are ByteStrings; page extra headers are UTF-8.
-    let mut merged = moli_fetch::RequestHeaders::from(context_headers.to_vec()).to_byte_strings();
-    for (name, value) in request_headers {
-        let lower = name.to_ascii_lowercase();
-        merged.retain(|(existing_name, _)| existing_name.to_ascii_lowercase() != lower);
-        merged.push((name.clone(), value.clone()));
-    }
-    merged
+    context_headers: &moli_fetch::RequestHeaders,
+    request_headers: &moli_fetch::RequestHeaders,
+) -> moli_fetch::RequestHeaders {
+    let mut headers = context_headers.clone();
+    headers.overlay(request_headers.clone());
+    headers
 }
 
 fn worker_post_message_callback<'s>(

@@ -505,6 +505,7 @@ impl PendingSubresourceExecutionContext {
 }
 
 pub(super) struct PendingSubresourceFetchState {
+    pub(super) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(super) request_origin: moli_url::WebOrigin,
     pub(super) info: PendingSubresourceFetchInfo,
     pub(super) load: crate::network::loads::ResourceLoadLease,
@@ -549,7 +550,7 @@ pub(super) struct PendingSubresourceResponseState {
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response: NavigationResponse,
 }
@@ -558,7 +559,7 @@ pub(super) struct PendingSubresourceAuthState {
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) intercept_response: bool,
     pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
@@ -569,7 +570,7 @@ pub(super) struct RunningSubresourceFetchState {
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) intercept_response: bool,
     pub(super) handle_auth_requests: bool,
@@ -580,7 +581,7 @@ pub(super) struct InFlightWorkerSubresourceFetchState {
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
 }
 
@@ -589,7 +590,7 @@ pub(super) struct AsyncSubresourceFetchCompletion {
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) response_status_text: Option<String>,
     pub(super) skip_fetch_security_validation: bool,
@@ -646,7 +647,7 @@ pub(super) struct AsyncSubresourceStreamingStarted {
     pub(super) internal_id: u64,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) head: moli_fetch::ResponseHead,
@@ -867,7 +868,7 @@ pub(super) struct StreamingSubresourceFetchState {
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
     pub(super) request_method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) request_body: Option<String>,
     pub(super) body_source_id: NetworkBodySourceId,
     pub(super) head: moli_fetch::ResponseHead,

@@ -185,7 +185,7 @@ pub struct LoadedNavigation {
     pub requested_url: Url,
     pub final_url: Url,
     pub request_method: String,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub response_status: u16,
     pub response_headers: Vec<(String, String)>,
     pub response_from_cache: bool,
@@ -294,6 +294,8 @@ impl NavigationResultProjection {
 
 #[derive(Debug, Clone)]
 pub struct NavigationDispatchState {
+    pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub navigate_id: Option<u64>,
     pub(crate) owner: CommandOwnerScope,
     pub(crate) result_projection: NavigationResultProjection,
@@ -309,7 +311,7 @@ pub struct NavigationDispatchState {
     /// Authoritative bytes used for transport. This differs from the text
     /// projection for multipart form data containing binary file payloads.
     pub request_body_bytes: Option<Vec<u8>>,
-    pub request_headers: Vec<(String, String)>,
+    pub request_headers: moli_fetch::RequestHeaders,
     pub request_load_policy: NavigationRequestLoadPolicy,
     pub timestamp: f64,
     pub(crate) source_document_security: NavigationSourceDocumentSecurityContext,

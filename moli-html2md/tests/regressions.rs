@@ -158,8 +158,16 @@ fn adjacent_code_elements_keep_distinct_values() {
 }
 
 #[test]
-fn empty_code_between_values_does_not_join_or_invent_code_text() {
-    for empty in ["<code></code>", "<code><!-- source note --></code>"] {
+fn empty_inline_elements_between_code_do_not_join_or_invent_text() {
+    for empty in [
+        "<code></code>",
+        "<code><!-- source note --></code>",
+        "<em></em>",
+        "<strong></strong>",
+        "<del></del>",
+        "<em><strong></strong></em>",
+        "<span></span>",
+    ] {
         let source = format!("<code>name</code>{empty}<code>string</code>");
         for preformatted in [false, true] {
             let result = markdown(&source, preformatted);
@@ -169,6 +177,82 @@ fn empty_code_between_values_does_not_join_or_invent_code_text() {
                 "{source}, preformatted={preformatted}: {result}"
             );
         }
+    }
+}
+
+#[test]
+fn code_remains_distinct_when_surrounding_styles_coalesce() {
+    for tag in ["em", "strong", "del"] {
+        let source = format!("<{tag}><code>name</code></{tag}><{tag}><code>string</code></{tag}>");
+        for preformatted in [false, true] {
+            let result = markdown(&source, preformatted);
+            assert_eq!(
+                rendered_html(&result),
+                format!("<p><{tag}><code>name</code><code>string</code></{tag}></p>\n"),
+                "{source}, preformatted={preformatted}: {result}"
+            );
+        }
+    }
+}
+
+#[test]
+fn actual_output_separates_markdown_code_spans() {
+    for (source, expected) in [
+        (
+            "<code>name</code><em> </em><code>string</code>",
+            "`name` `string`",
+        ),
+        (
+            "<code>name</code><strong>&nbsp;</strong><code>string</code>",
+            "`name`\u{a0}`string`",
+        ),
+        (
+            "<code>name</code><em>and</em><code>string</code>",
+            "`name`*and*`string`",
+        ),
+        (
+            "<em><code>name</code></em><code>string</code>",
+            "*`name`*`string`",
+        ),
+        (
+            "<code>name</code><em><code>string</code></em>",
+            "`name`*`string`*",
+        ),
+        (
+            "<code>name</code><a href='/a'></a><code>string</code>",
+            "`name`[](/a)`string`",
+        ),
+        (
+            "<code>name</code><img src='/i'><code>string</code>",
+            "`name`![](/i)`string`",
+        ),
+        (
+            "<code>name</code><br><code>string</code>",
+            "`name`  \n`string`",
+        ),
+        (
+            "<code>name</code><p></p><code>string</code>",
+            "`name`\n\n`string`",
+        ),
+        (
+            "<code>a</code><blockquote><code>b</code></blockquote>x<code>c</code>",
+            "`a`\n\n> `b`\n\nx`c`",
+        ),
+    ] {
+        for preformatted in [false, true] {
+            assert_eq!(
+                markdown(source, preformatted),
+                expected,
+                "{source}, preformatted={preformatted}"
+            );
+        }
+    }
+    for source in [
+        "<code>name </code><code>string</code>",
+        "<code>name</code><code> string</code>",
+        "<code>name</code><code> </code><code>string</code>",
+    ] {
+        assert_eq!(markdown(source, false), "`name` `string`", "{source}");
     }
 }
 
@@ -194,6 +278,16 @@ fn neighboring_code_values_keep_their_text_and_node_boundaries() {
             "<code>first</code><code></code><code>second</code>",
             true,
             "<p><code>first</code><code>second</code></p>\n",
+        ),
+        (
+            "<code>first</code><em></em><code>*[x]|&lt;&amp;&gt;`</code><strong></strong><code>third</code><del></del><code>fourth</code>",
+            false,
+            "<p><code>first</code><code>*[x]|&lt;&amp;&gt;`</code><code>third</code><code>fourth</code></p>\n",
+        ),
+        (
+            "<code>word</code><em></em><code> a  b </code>",
+            true,
+            "<p><code>word</code><code> a  b </code></p>\n",
         ),
     ] {
         let result = markdown(source, preformatted);

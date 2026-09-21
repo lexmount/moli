@@ -204,8 +204,7 @@ pub(super) fn spawn_network_fetch(
         &prepared.method,
         prepared.resolved_url.clone(),
         prepared.body.clone(),
-        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
-            .expect("prepared Fetch/XHR headers are ByteStrings"),
+        prepared.request_headers.clone(),
         prepared.request_origin.clone(),
     )
     .with_initiator_url(&prepared.document_url)

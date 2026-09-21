@@ -110,7 +110,7 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) document_fetch_event_session_id: Option<String>,
     pub(crate) inherited_security_origin: String,
     pub(crate) inherited_secure_context_type: String,
-    pub(crate) request_headers: Vec<(String, String)>,
+    pub(crate) request_headers: moli_fetch::RequestHeaders,
     pub(crate) document_fetch_request_stage: Option<FetchRequestStage>,
     pub(crate) document_fetch_response_stage_candidate: bool,
     pub(crate) document_auth_required: bool,
@@ -145,6 +145,8 @@ impl TargetNavigationStorageHandles {
 
 #[derive(Clone)]
 pub(crate) struct TargetNavigationLoadInputs {
+    pub(crate) redirect_chain: Vec<moli_fetch::RedirectInfo>,
+    pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub(crate) browser_context_id: Option<String>,
     storage_handles: TargetNavigationStorageHandles,
     pub(crate) root_frame_id: Option<String>,
@@ -163,7 +165,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) runtime_inspector_session_restore_snapshots:
         Vec<RendererInspectorSessionRestoreSnapshot>,
-    pub(crate) extra_http_headers: Vec<(String, String)>,
+    pub(crate) extra_http_headers: moli_fetch::RequestHeaders,
     pub(crate) script_execution_disabled: bool,
     pub(crate) bypass_content_security_policy: bool,
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
@@ -271,6 +273,8 @@ impl TargetNavigationLoadInputs {
             .expect("resolved Page target retains document activity");
 
         Self {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             browser_context_id: Some(browser_context.id.clone()),
             storage_handles: TargetNavigationStorageHandles::from_page_handles(
                 browser_context
@@ -367,6 +371,8 @@ impl TargetNavigationLoadInputs {
         renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
     ) -> Self {
         Self {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             browser_context_id: None,
             storage_handles: TargetNavigationStorageHandles::from_page_handles(page_handles),
             root_frame_id: None,
@@ -382,7 +388,7 @@ impl TargetNavigationLoadInputs {
             document_start_scripts: Vec::new(),
             runtime_bindings: Vec::new(),
             runtime_inspector_session_restore_snapshots: Vec::new(),
-            extra_http_headers: Vec::new(),
+            extra_http_headers: Default::default(),
             script_execution_disabled: false,
             bypass_content_security_policy: false,
             emulated_media: Default::default(),
@@ -413,20 +419,20 @@ impl TargetNavigationLoadInputs {
     }
 }
 
-fn apply_referrer_header(headers: &mut Vec<(String, String)>, referrer: Option<&str>) {
+fn apply_referrer_header(headers: &mut moli_fetch::RequestHeaders, referrer: Option<&str>) {
     let Some(referrer) = referrer else {
         return;
     };
     headers.retain(|(name, _)| !name.eq_ignore_ascii_case("referer"));
-    headers.push(("Referer".to_owned(), referrer.to_owned()));
+    headers.push(("Referer".to_owned(), referrer.as_bytes().to_vec()));
 }
 
-fn apply_user_agent_header(headers: &mut Vec<(String, String)>, user_agent: &str) {
+fn apply_user_agent_header(headers: &mut moli_fetch::RequestHeaders, user_agent: &str) {
     if !headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
     {
-        headers.push(("User-Agent".to_owned(), user_agent.to_owned()));
+        headers.push(("User-Agent".to_owned(), user_agent.as_bytes().to_vec()));
     }
 }
 
@@ -907,8 +913,8 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     pub(super) fn effective_extra_headers_for_target_policy(
         &self,
-        headers: Vec<(String, String)>,
-    ) -> Vec<(String, String)> {
+        headers: moli_fetch::RequestHeaders,
+    ) -> moli_fetch::RequestHeaders {
         self.browser_context
             .merged_extra_headers_for_target_policy(&headers)
     }
@@ -2873,7 +2879,7 @@ mod tests {
         assert!(
             preflight
                 .request_headers
-                .contains(&("User-Agent".to_owned(), "Moli/Test-UA".to_owned()))
+                .contains(&("User-Agent".to_owned(), b"Moli/Test-UA".to_vec()))
         );
         assert!(!active.has_captured_response_body_for_test("REQ-old"));
     }
@@ -3008,7 +3014,7 @@ mod tests {
         assert!(
             preflight
                 .request_headers
-                .contains(&("X-Owner".to_owned(), "background".to_owned()))
+                .contains(&("X-Owner".to_owned(), b"background".to_vec()))
         );
         assert!(
             preflight
@@ -3018,19 +3024,19 @@ mod tests {
         );
         assert!(preflight.request_headers.contains(&(
             "User-Agent".to_owned(),
-            "Browser-Context-Default-UA".to_owned()
+            b"Browser-Context-Default-UA".to_vec()
         )));
         assert!(
             !preflight
                 .request_headers
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("user-agent")
-                    && value == "Active-Only-UA")
+                    && value == b"Active-Only-UA")
         );
         assert!(
             preflight
                 .request_headers
-                .contains(&("Referer".to_owned(), "https://referrer.example/".to_owned()))
+                .contains(&("Referer".to_owned(), b"https://referrer.example/".to_vec()))
         );
     }
 
@@ -3179,7 +3185,7 @@ mod tests {
         assert!(
             inputs
                 .extra_http_headers
-                .contains(&("X-Owner".to_owned(), "background".to_owned()))
+                .contains(&("X-Owner".to_owned(), b"background".to_vec()))
         );
         assert!(
             inputs

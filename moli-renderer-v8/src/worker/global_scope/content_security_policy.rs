@@ -288,7 +288,7 @@ fn pause_worker_content_security_policy_report_for_fetch_interception(
         url: request.url.clone(),
         websocket_socket_id: None,
         method: request.method.clone(),
-        request_headers: request.request_headers.to_byte_strings(),
+        request_headers: request.request_headers.clone(),
         request_body: request_body.clone(),
         request_body_bytes,
         resource_type: SubresourceResourceType::CspReport,
@@ -549,6 +549,7 @@ pub(in crate::worker) fn continue_pending_worker_csp_report(
         continuation.headers.clone(),
     ) {
         Ok(request) => request
+            .with_redirect_headers(continuation.redirect_headers)
             .with_initiator_url(&pending.document_url)
             .with_request_origin(moli_url::WebOrigin::from_url(&pending.document_url))
             .with_resource_type(RequestResourceType::CspReport)
@@ -687,7 +688,7 @@ fn record_worker_content_security_policy_report_failure(
         document_url,
         request.url,
         request.method,
-        request.request_headers.to_byte_strings(),
+        request.request_headers.clone(),
         request_body,
         SubresourceResourceType::CspReport,
         message,
@@ -713,7 +714,7 @@ fn send_worker_content_security_policy_report_success(
         document_url,
         request.url,
         request.method,
-        request.request_headers.to_byte_strings(),
+        request.request_headers.clone(),
         request_body,
         SubresourceResourceType::CspReport,
         head.request_cookie_report.clone(),
@@ -751,7 +752,7 @@ fn send_worker_content_security_policy_report_failure(
         document_url,
         request.url,
         request.method,
-        request.request_headers.to_byte_strings(),
+        request.request_headers.clone(),
         request_body,
         SubresourceResourceType::CspReport,
         message,

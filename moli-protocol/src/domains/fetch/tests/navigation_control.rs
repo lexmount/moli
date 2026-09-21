@@ -4,9 +4,8 @@ use super::*;
 
 #[test]
 fn parse_binary_response_headers_decodes_nul_separated_header_block() {
-    let headers =
-        super::response_headers_from_params(None, Some("eC1iaW46IHllcwB4LXR3bzogMgA=".to_owned()))
-            .expect("binary response headers");
+    let headers = super::response_headers_from_params(None, Some("eC1iaW46IHllcwB4LXR3bzogMgA="))
+        .expect("binary response headers");
     assert_eq!(
         headers,
         vec![
@@ -20,14 +19,14 @@ fn parse_binary_response_headers_decodes_nul_separated_header_block() {
 fn parse_binary_response_headers_rejects_invalid_header_name() {
     let encoded = BASE64_STANDARD.encode(b"bad name: value");
 
-    assert!(super::response_headers_from_params(None, Some(encoded)).is_err());
+    assert!(super::response_headers_from_params(None, Some(&encoded)).is_err());
 }
 
 #[test]
 fn parse_binary_response_headers_rejects_invalid_header_value() {
     let encoded = BASE64_STANDARD.encode(b"x-test: bad\x01value");
 
-    assert!(super::response_headers_from_params(None, Some(encoded)).is_err());
+    assert!(super::response_headers_from_params(None, Some(&encoded)).is_err());
 }
 
 #[tokio::test]

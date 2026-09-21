@@ -11,10 +11,11 @@ impl JsContextHost {
     pub(crate) fn record_websocket_open(
         &mut self,
         socket_id: u64,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: moli_fetch::ResponseHeaders,
     ) {
+        let response_headers = response_headers.to_byte_strings();
         let cookie_set_reports =
             self.store_websocket_response_cookies(socket_id, &response_headers);
         let Some(state) = self.websockets.get_mut(&socket_id) else {
@@ -37,7 +38,7 @@ impl JsContextHost {
                 None,
                 SubresourceResourceType::WebSocket,
                 None,
-                Vec::new(),
+                Default::default(),
                 url,
                 response_status,
                 response_headers,
@@ -75,7 +76,7 @@ impl JsContextHost {
                 document_url,
                 url,
                 "GET".to_owned(),
-                Vec::new(),
+                Default::default(),
                 None,
                 SubresourceResourceType::WebSocket,
                 error_text,

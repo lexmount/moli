@@ -983,63 +983,33 @@ fn bidi_network_set_extra_headers_command(
     })
 }
 
-fn required_network_extra_headers(params: &Value) -> Result<Vec<(String, String)>, BidiError> {
-    let Some(value) = params.get("headers") else {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            "headers must be an array",
-        ));
-    };
-    let Some(headers) = value.as_array() else {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            "headers must be an array",
-        ));
-    };
-    let mut out = Vec::with_capacity(headers.len());
-    for header in headers {
-        let (name, value) = network_extra_header_pair(header)?;
-        out.retain(|(existing, _)| existing != &name);
+fn required_network_extra_headers(
+    params: &Value,
+) -> Result<moli_header_field::HeaderFields, BidiError> {
+    let headers = optional_network_headers(params, "headers")?.ok_or_else(|| {
+        BidiError::new(BidiErrorCode::InvalidArgument, "headers must be an array")
+    })?;
+    let mut out = moli_header_field::HeaderFields::default();
+    for (name, value) in headers {
+        if value.contains(&0)
+            || value.contains(&b'\n')
+            || value.contains(&b'\r')
+            || value
+                .first()
+                .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+            || value
+                .last()
+                .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            return Err(BidiError::new(
+                BidiErrorCode::InvalidArgument,
+                "header value is invalid",
+            ));
+        }
+        out.retain(|(existing, _)| !existing.eq_ignore_ascii_case(&name));
         out.push((name, value));
     }
     Ok(out)
-}
-
-fn network_extra_header_pair(value: &Value) -> Result<(String, String), BidiError> {
-    let Some(header) = value.as_object() else {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            "headers entries must be objects",
-        ));
-    };
-    let name = required_object_string(header, "name")?;
-    validate_network_header_name(name, "header name")?;
-    let value = required_network_extra_header_value(required_object_value(header, "value")?)?;
-    Ok((name.to_owned(), value))
-}
-
-fn required_network_extra_header_value(value: &Value) -> Result<String, BidiError> {
-    let Some(value) = value.as_object() else {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            "value must be a network bytes value",
-        ));
-    };
-    let type_name = required_object_string(value, "type")?;
-    if type_name != "string" {
-        return Err(BidiError::new(
-            BidiErrorCode::UnsupportedOperation,
-            "Only string headers values are supported",
-        ));
-    }
-    let raw = required_object_string(value, "value")?;
-    if raw.contains(['\0', '\n', '\r']) || raw.trim() != raw {
-        return Err(BidiError::new(
-            BidiErrorCode::InvalidArgument,
-            "header value is invalid",
-        ));
-    }
-    Ok(raw.to_owned())
 }
 
 fn bidi_network_continue_request_command(
@@ -1079,7 +1049,7 @@ fn bidi_network_continue_response_command(
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(request),
         response_code: optional_network_status_code(&command.params)?,
-        response_headers,
+        response_headers: response_headers.map(|headers| headers.to_byte_strings()),
         response_phrase: optional_string(&command.params, "reasonPhrase")?.map(str::to_owned),
         auth_credentials: optional_network_auth_credentials(&command.params)?,
     })
@@ -1172,7 +1142,7 @@ fn bidi_network_provide_response_command(
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(request),
         response_code: optional_network_status_code(&command.params)?.unwrap_or(200),
-        response_headers: headers,
+        response_headers: headers.to_byte_strings(),
         body: optional_network_bytes(&command.params, "body")?,
         response_phrase: optional_string(&command.params, "reasonPhrase")?.map(str::to_owned),
     })
@@ -1243,7 +1213,7 @@ fn required_network_bytes(value: &Value, field: &str) -> Result<Vec<u8>, BidiErr
 fn optional_network_headers(
     params: &Value,
     field: &str,
-) -> Result<Option<Vec<(String, String)>>, BidiError> {
+) -> Result<Option<moli_header_field::HeaderFields>, BidiError> {
     let Some(value) = params.get(field) else {
         return Ok(None);
     };
@@ -1257,10 +1227,10 @@ fn optional_network_headers(
     for header in headers {
         out.push(network_header_pair(header, field)?);
     }
-    Ok(Some(out))
+    Ok(Some(moli_header_field::HeaderFields::from_bytes(out)))
 }
 
-fn network_header_pair(value: &Value, field: &str) -> Result<(String, String), BidiError> {
+fn network_header_pair(value: &Value, field: &str) -> Result<(String, Vec<u8>), BidiError> {
     let Some(header) = value.as_object() else {
         return Err(BidiError::new(
             BidiErrorCode::InvalidArgument,
@@ -1269,24 +1239,24 @@ fn network_header_pair(value: &Value, field: &str) -> Result<(String, String), B
     };
     let name = required_object_string(header, "name")?;
     validate_network_header_name(name, "header name")?;
-    let value = required_network_bytes_value(required_object_value(header, "value")?, "value")?;
+    let value = required_network_bytes(required_object_value(header, "value")?, "value")?;
     Ok((name.to_owned(), value))
 }
 
 fn apply_network_request_cookies(
-    headers: &mut Option<Vec<(String, String)>>,
+    headers: &mut Option<moli_header_field::HeaderFields>,
     params: &Value,
 ) -> Result<(), BidiError> {
     let Some(cookie_header) = optional_network_request_cookie_header(params)? else {
         return Ok(());
     };
-    let headers = headers.get_or_insert_with(Vec::new);
+    let headers = headers.get_or_insert_with(Default::default);
     headers.retain(|(name, _)| !name.eq_ignore_ascii_case("cookie"));
     headers.push(("Cookie".to_owned(), cookie_header));
     Ok(())
 }
 
-fn optional_network_request_cookie_header(params: &Value) -> Result<Option<String>, BidiError> {
+fn optional_network_request_cookie_header(params: &Value) -> Result<Option<Vec<u8>>, BidiError> {
     let Some(cookies) = params.get("cookies") else {
         return Ok(None);
     };
@@ -1296,17 +1266,24 @@ fn optional_network_request_cookie_header(params: &Value) -> Result<Option<Strin
             "cookies must be an array",
         ));
     };
-    let mut values = Vec::with_capacity(cookies.len());
+    let mut header = Vec::new();
     for cookie in cookies {
+        if !header.is_empty() {
+            header.extend_from_slice(b"; ");
+        }
         let (name, value) = network_cookie_name_value(cookie)?;
-        values.push(format!("{name}={value}"));
+        header.extend_from_slice(name.as_bytes());
+        header.push(b'=');
+        header.extend(value);
     }
-    Ok(Some(values.join("; ")))
+    Ok(Some(header))
 }
 
-fn network_response_cookie_headers(params: &Value) -> Result<Vec<(String, String)>, BidiError> {
+fn network_response_cookie_headers(
+    params: &Value,
+) -> Result<moli_header_field::HeaderFields, BidiError> {
     let Some(cookies) = params.get("cookies") else {
-        return Ok(Vec::new());
+        return Ok(Default::default());
     };
     let Some(cookies) = cookies.as_array() else {
         return Err(BidiError::new(
@@ -1318,10 +1295,10 @@ fn network_response_cookie_headers(params: &Value) -> Result<Vec<(String, String
     for cookie in cookies {
         headers.push(("Set-Cookie".to_owned(), network_set_cookie_header(cookie)?));
     }
-    Ok(headers)
+    Ok(moli_header_field::HeaderFields::from_bytes(headers))
 }
 
-fn network_cookie_name_value(value: &Value) -> Result<(String, String), BidiError> {
+fn network_cookie_name_value(value: &Value) -> Result<(String, Vec<u8>), BidiError> {
     let Some(cookie) = value.as_object() else {
         return Err(BidiError::new(
             BidiErrorCode::InvalidArgument,
@@ -1330,11 +1307,11 @@ fn network_cookie_name_value(value: &Value) -> Result<(String, String), BidiErro
     };
     let name = required_object_string(cookie, "name")?;
     validate_network_cookie_name(name)?;
-    let value = required_network_bytes_value(required_object_value(cookie, "value")?, "value")?;
+    let value = required_network_bytes(required_object_value(cookie, "value")?, "value")?;
     Ok((name.to_owned(), value))
 }
 
-fn network_set_cookie_header(value: &Value) -> Result<String, BidiError> {
+fn network_set_cookie_header(value: &Value) -> Result<Vec<u8>, BidiError> {
     let Some(cookie) = value.as_object() else {
         return Err(BidiError::new(
             BidiErrorCode::InvalidArgument,
@@ -1342,7 +1319,9 @@ fn network_set_cookie_header(value: &Value) -> Result<String, BidiError> {
         ));
     };
     let (name, value) = network_cookie_name_value(value)?;
-    let mut header = format!("{name}={value}");
+    let mut header = name.into_bytes();
+    header.push(b'=');
+    header.extend(value);
     for field in ["domain", "expiry", "path"] {
         if let Some(value) = optional_object_string(cookie, field)? {
             let attribute = match field {
@@ -1351,11 +1330,11 @@ fn network_set_cookie_header(value: &Value) -> Result<String, BidiError> {
                 "path" => "Path",
                 _ => unreachable!(),
             };
-            header.push_str(&format!("; {attribute}={value}"));
+            header.extend_from_slice(format!("; {attribute}={value}").as_bytes());
         }
     }
     if let Some(max_age) = optional_object_uint(cookie, "maxAge")? {
-        header.push_str(&format!("; Max-Age={max_age}"));
+        header.extend_from_slice(format!("; Max-Age={max_age}").as_bytes());
     }
     if let Some(same_site) = optional_object_string(cookie, "sameSite")? {
         if !matches!(
@@ -1367,13 +1346,13 @@ fn network_set_cookie_header(value: &Value) -> Result<String, BidiError> {
                 "sameSite must be strict, lax, or none",
             ));
         }
-        header.push_str(&format!("; SameSite={same_site}"));
+        header.extend_from_slice(format!("; SameSite={same_site}").as_bytes());
     }
     if optional_object_bool(cookie, "httpOnly")?.unwrap_or(false) {
-        header.push_str("; HttpOnly");
+        header.extend_from_slice(b"; HttpOnly");
     }
     if optional_object_bool(cookie, "secure")?.unwrap_or(false) {
-        header.push_str("; Secure");
+        header.extend_from_slice(b"; Secure");
     }
     Ok(header)
 }

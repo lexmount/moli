@@ -4,8 +4,8 @@
     "reason": "Moli fences bare pre elements as well as pre/code, preserving preformatted text. Turndown only recognizes a pre/code pair."
   },
   "extra_adjacent_code": {
-    "markdown": "<code>a</code>`b`",
-    "reason": "Adjacent code elements retain their semantic boundary without an invented space. Inline HTML preserves the first boundary because adjacent Markdown code spans would merge. Turndown joins their delimiters into one code span whose text contains two extra backticks."
+    "markdown": "`a`<code>b</code>",
+    "reason": "Adjacent code elements retain their semantic boundary without an invented space. Inline HTML preserves the second code element when it immediately follows an emitted Markdown code span. Turndown joins their delimiters into one code span whose text contains two extra backticks."
   },
   "extra_code_nested_format": {
     "markdown": "`ab`",

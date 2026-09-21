@@ -176,9 +176,12 @@ pub(crate) async fn run_websocket_connection(
     crate::session::run_open_session(socket_id, connection, command_rx, event_tx).await
 }
 
-fn response_header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+fn response_header<'a>(
+    headers: &'a moli_header_field::HeaderFields,
+    name: &str,
+) -> Option<&'a str> {
     headers
         .iter()
         .find(|(key, _)| key.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
+        .and_then(|(_, value)| std::str::from_utf8(value).ok())
 }

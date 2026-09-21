@@ -72,7 +72,7 @@ fn page_loader_fork_shares_backend_but_isolates_mutable_policy() {
             .with_site_for_cookies_url(&Url::parse("https://parent.test/").unwrap())
             .with_top_frame_origin_url(&Url::parse("https://parent.test/").unwrap()),
     );
-    parent.set_extra_http_headers(&[("x-page".to_owned(), "parent".to_owned())]);
+    parent.set_extra_http_headers(&vec![("x-page".to_owned(), "parent".to_owned())].into());
     let page = parent.fork_with_isolated_page_network_policy();
 
     assert!(parent.shares_resource_runtime_with(&page));
@@ -85,7 +85,7 @@ fn page_loader_fork_shares_backend_but_isolates_mutable_policy() {
     assert!(page.browser_site_context().is_none());
 
     page.set_network_offline(true);
-    page.set_extra_http_headers(&[("x-page".to_owned(), "child".to_owned())]);
+    page.set_extra_http_headers(&vec![("x-page".to_owned(), "child".to_owned())].into());
 
     assert!(!parent.page_network_policy().snapshot().network_offline());
     assert!(page.page_network_policy().snapshot().network_offline());
@@ -360,10 +360,13 @@ async fn read_http_request_text(stream: &mut tokio::net::TcpStream) -> std::io::
 #[test]
 fn merge_loader_network_policy_headers_uses_header_name_keys_and_request_order() {
     let policy = super::PageNetworkPolicy::default();
-    policy.set_extra_http_headers(&[
-        ("X-Test".to_owned(), "context".to_owned()),
-        ("Accept".to_owned(), "text/html".to_owned()),
-    ]);
+    policy.set_extra_http_headers(
+        &vec![
+            ("X-Test".to_owned(), "context".to_owned()),
+            ("Accept".to_owned(), "text/html".to_owned()),
+        ]
+        .into(),
+    );
     let mut request = browser_navigation_request("https://example.test/headers")
         .unwrap()
         .with_page_network_policy();
@@ -1552,7 +1555,9 @@ async fn loader_applies_network_policy_only_to_opt_in_requests() -> Result<()> {
     });
 
     let loader = ResourceRequestClient::new(&FetchConfig::default())?;
-    loader.set_extra_http_headers(&[("x-cdp-test".to_owned(), "loader-policy".to_owned())]);
+    loader.set_extra_http_headers(
+        &vec![("x-cdp-test".to_owned(), "loader-policy".to_owned())].into(),
+    );
 
     let plain = loader
         .fetch(browser_navigation_request(&format!("http://{addr}/plain"))?)

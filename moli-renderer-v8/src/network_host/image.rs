@@ -398,7 +398,7 @@ pub(crate) fn start_image_element_resource_fetch(
         loader,
         request,
         Some(cancel_handle),
-        request_headers,
+        request_headers.to_byte_strings(),
         internal_id,
         AsyncSubresourceNetworkContext {
             frame_id,
@@ -409,7 +409,7 @@ pub(crate) fn start_image_element_resource_fetch(
         },
         request_url,
         "GET".to_owned(),
-        Vec::new(),
+        Default::default(),
         None,
     );
     Ok(ImageElementResourceFetchStart::Pending)

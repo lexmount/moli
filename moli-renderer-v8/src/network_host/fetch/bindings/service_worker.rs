@@ -85,8 +85,7 @@ pub(super) fn dispatch_service_worker_fetch(
         client_id,
         prepared.resolved_url.clone(),
         prepared.method.clone(),
-        moli_fetch::RequestHeaders::from_byte_strings(&prepared.request_headers)
-            .expect("prepared Fetch/XHR headers are ByteStrings"),
+        prepared.request_headers.clone(),
         prepared.body.clone(),
         ServiceWorkerRequestDestination::Empty,
         prepared.request_mode,

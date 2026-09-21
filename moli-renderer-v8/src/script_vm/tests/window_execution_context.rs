@@ -513,7 +513,7 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
         internal_id: completion_id,
         request_url: completion_url.clone(),
         request_method: "GET".to_owned(),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_body: None,
         response_status_text: Some("OK".to_owned()),
         skip_fetch_security_validation: true,

@@ -95,21 +95,23 @@ pub(crate) async fn open_websocket_connection(
 }
 
 fn actual_request_headers(raw: &[u8]) -> Result<http::HeaderMap, String> {
-    let raw = std::str::from_utf8(raw)
-        .map_err(|error| format!("invalid WebSocket request headers: {error}"))?;
-    let mut lines = raw.split("\r\n");
-    if !lines.next().is_some_and(|line| line.starts_with("GET ")) {
+    if !raw.starts_with(b"GET ") {
         return Err("WebSocket native request headers are missing".to_owned());
     }
     let mut headers = http::HeaderMap::new();
-    for line in lines.take_while(|line| !line.is_empty()) {
-        let (name, value) = line
-            .split_once(':')
-            .ok_or("invalid WebSocket request header")?;
-        let name = http::header::HeaderName::from_bytes(name.as_bytes())
+    for line in raw.split(|byte| *byte == b'\n').skip(1) {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        if line.is_empty() {
+            continue;
+        }
+        let separator = line
+            .iter()
+            .position(|byte| *byte == b':')
+            .ok_or_else(|| "malformed WebSocket request header".to_owned())?;
+        let (name, value) = line.split_at(separator);
+        let name = http::header::HeaderName::from_bytes(name).map_err(|error| error.to_string())?;
+        let value = http::header::HeaderValue::from_bytes(value[1..].trim_ascii())
             .map_err(|error| error.to_string())?;
-        let value =
-            http::header::HeaderValue::from_str(value.trim()).map_err(|error| error.to_string())?;
         headers.append(name, value);
     }
     Ok(headers)

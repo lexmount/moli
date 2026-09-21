@@ -845,7 +845,7 @@ dependencies = [
 [[package]]
 name = "curl"
 version = "0.4.49"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#f28fe3049962d1be917c2d4064f1c6574b331fac"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#bcd4d9f9d7dcd4ec68cfa42f80e9e1f872d87229"
 dependencies = [
  "curl-sys",
  "libc",
@@ -859,7 +859,7 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#f28fe3049962d1be917c2d4064f1c6574b331fac"
+source = "git+https://github.com/lexmount/curl-rust?branch=moli#bcd4d9f9d7dcd4ec68cfa42f80e9e1f872d87229"
 dependencies = [
  "brotlic-sys",
  "cc",
@@ -2589,7 +2589,9 @@ dependencies = [
  "cidr",
  "crossbeam-channel",
  "curl",
+ "curl-sys",
  "moli-dns-resolver",
+ "moli-header-field",
  "openssl-sys",
  "parking_lot",
  "rcgen",
@@ -2659,6 +2661,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-curl",
  "moli-dns-resolver",
+ "moli-header-field",
  "moli-http-cache",
  "moli-trace",
  "moli-url",
@@ -2699,6 +2702,9 @@ dependencies = [
 [[package]]
 name = "moli-header-field"
 version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
 
 [[package]]
 name = "moli-html-input-temporal"
@@ -3010,6 +3016,7 @@ name = "moli-protocol-webdriver-bidi"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "moli-header-field",
  "moli-protocol",
  "serde_json",
  "url",
@@ -3421,6 +3428,7 @@ dependencies = [
  "http",
  "moli-crypto",
  "moli-curl",
+ "moli-header-field",
  "moli-url",
  "openssl",
  "rcgen",

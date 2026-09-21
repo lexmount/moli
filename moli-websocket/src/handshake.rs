@@ -10,12 +10,14 @@ fn derive_accept_key(key: &[u8]) -> String {
 pub(crate) type HandshakeResponse = http::Response<()>;
 
 pub(crate) fn parse_handshake_response(raw_headers: &[u8]) -> Result<HandshakeResponse, String> {
-    let headers = std::str::from_utf8(raw_headers)
-        .map_err(|error| format!("WebSocket handshake response is not UTF-8: {error}"))?;
-    let mut lines = headers.split("\r\n");
+    let mut lines = raw_headers
+        .split(|byte| *byte == b'\n')
+        .map(|line| line.strip_suffix(b"\r").unwrap_or(line));
     let status_line = lines
         .next()
         .ok_or_else(|| "WebSocket handshake response is missing status line".to_owned())?;
+    let status_line = std::str::from_utf8(status_line)
+        .map_err(|error| format!("WebSocket handshake status is not ASCII: {error}"))?;
     let mut status_parts = status_line.splitn(3, ' ');
     let version = status_parts.next().unwrap_or_default();
     if version != "HTTP/1.1" && version != "HTTP/1.0" {
@@ -36,16 +38,17 @@ pub(crate) fn parse_handshake_response(raw_headers: &[u8]) -> Result<HandshakeRe
         if line.is_empty() {
             continue;
         }
-        let Some((name, value)) = line.split_once(':') else {
+        let Some(separator) = line.iter().position(|byte| *byte == b':') else {
             return Err(format!(
-                "WebSocket handshake response has malformed header `{line}`"
+                "WebSocket handshake response has malformed header {line:?}"
             ));
         };
-        let name =
-            http::header::HeaderName::from_bytes(name.trim().as_bytes()).map_err(|error| {
-                format!("WebSocket handshake response has invalid header name: {error}")
-            })?;
-        let value = http::header::HeaderValue::from_str(value.trim()).map_err(|error| {
+        let (name, value) = line.split_at(separator);
+        let value = value[1..].trim_ascii();
+        let name = http::header::HeaderName::from_bytes(name).map_err(|error| {
+            format!("WebSocket handshake response has invalid header name: {error}")
+        })?;
+        let value = http::header::HeaderValue::from_bytes(value).map_err(|error| {
             format!("WebSocket handshake response has invalid header value: {error}")
         })?;
         response.headers_mut().append(name, value);

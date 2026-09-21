@@ -292,7 +292,7 @@ impl TestContext {
                 session_id,
                 requested_url,
                 "GET".into(),
-                Vec::new(),
+                Vec::new().into(),
                 200,
                 Vec::new(),
                 response_body,

@@ -71,7 +71,7 @@ pub(crate) fn navigator_send_beacon_callback<'s>(
     let mut request_headers = Vec::new();
     append_default_body_content_type(&mut request_headers, body_content_type.as_deref());
     request_headers = filter_headers_for_guard(&request_headers, HeadersGuard::RequestNoCors);
-    request_headers =
+    let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let request_body_text = request_body_text(&body);
     let request_cookie_report = observe_subresource_request_cookie_report(
@@ -207,7 +207,7 @@ pub(crate) fn send_link_audit_ping(
     if document_url.scheme() == "http" || moli_url::same_origin(&document_url, &ping_url) {
         request_headers.push(("Ping-From".to_owned(), document_url.as_str().to_owned()));
     }
-    request_headers =
+    let request_headers =
         merge_subresource_request_headers(host.extra_http_headers(), &request_headers);
     let request_body = Some("PING".to_owned());
     let request_cookie_report = observe_subresource_request_cookie_report(

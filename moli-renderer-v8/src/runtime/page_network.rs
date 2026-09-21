@@ -136,8 +136,8 @@ impl PageVm {
             .set_fetch_subresource_interception(enabled, resource_type);
     }
 
-    pub(crate) fn set_extra_http_headers(&mut self, headers: &[(String, String)]) {
-        self.extra_http_headers = headers.to_vec();
+    pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {
+        self.extra_http_headers = headers.clone();
         self.vm_mut().set_extra_http_headers(headers);
     }
 
@@ -286,7 +286,7 @@ impl PageVm {
         url: Option<Url>,
         method: Option<String>,
         body: Option<Option<String>>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<moli_fetch::RequestHeaderOverride>,
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<crate::PendingSubresourceContinueOutcome> {

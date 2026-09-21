@@ -28,7 +28,7 @@ impl CorsPreflightNetworkObserver {
     pub(in crate::network_host) fn send_preflight_success(
         &self,
         request_url: url::Url,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         response: &ResponseHead,
     ) {
         self.send_record(
@@ -61,7 +61,7 @@ impl CorsPreflightNetworkObserver {
     pub(in crate::network_host) fn send_preflight_failure(
         &self,
         request_url: url::Url,
-        request_headers: Vec<(String, String)>,
+        request_headers: moli_fetch::RequestHeaders,
         error_text: String,
     ) {
         self.send_record(SubresourceNetworkRecord::failure(

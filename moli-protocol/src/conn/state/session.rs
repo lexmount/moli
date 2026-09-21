@@ -204,7 +204,10 @@ impl PageTargetHost {
     }
 }
 
-fn overlay_extra_headers(effective: &mut Vec<(String, String)>, layer: &[(String, String)]) {
+fn overlay_extra_headers(
+    effective: &mut moli_fetch::RequestHeaders,
+    layer: &moli_fetch::RequestHeaders,
+) {
     for (name, value) in layer {
         effective.retain(|(existing, _)| !existing.eq_ignore_ascii_case(name));
         effective.push((name.clone(), value.clone()));
@@ -219,7 +222,7 @@ pub(crate) struct EffectiveTargetPolicy {
     cache_disabled: bool,
     bypass_service_worker: bool,
     blocked_url_patterns: Vec<String>,
-    extra_headers: Vec<(String, String)>,
+    extra_headers: moli_fetch::RequestHeaders,
     browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     renderer_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
 }
@@ -249,7 +252,7 @@ impl EffectiveTargetPolicy {
         &self.blocked_url_patterns
     }
 
-    pub(crate) fn extra_headers(&self) -> &[(String, String)] {
+    pub(crate) fn extra_headers(&self) -> &moli_fetch::RequestHeaders {
         &self.extra_headers
     }
 
@@ -545,7 +548,7 @@ pub(crate) struct TargetNetworkPolicyState {
     network_offline: bool,
     base_browser_identity: super::BaseBrowserIdentityOverrideState,
     // Target-scoped headers contributed by WebDriver BiDi.
-    base_extra_headers: Vec<(String, String)>,
+    base_extra_headers: moli_fetch::RequestHeaders,
 }
 
 impl TargetNetworkPolicyState {
@@ -571,14 +574,14 @@ impl TargetNetworkPolicyState {
         self.network_offline = network_offline;
     }
 
-    pub(crate) fn replace_base_extra_headers(&mut self, extra_headers: Vec<(String, String)>) {
+    pub(crate) fn replace_base_extra_headers(&mut self, extra_headers: moli_fetch::RequestHeaders) {
         self.base_extra_headers = extra_headers;
     }
 
     #[cfg(test)]
     pub(crate) fn push_extra_header(&mut self, header: (String, String)) {
         let mut headers = self.base_extra_headers.clone();
-        headers.push(header);
+        headers.push((header.0, header.1.into_bytes()));
         self.replace_base_extra_headers(headers);
     }
 

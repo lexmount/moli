@@ -314,6 +314,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
         if !remaining_sessions.is_empty() {
             pending.request_stage_chain =
                 Some(Box::new(PendingSubresourceFetchRequestStageChain {
+                    header_override: None,
                     url: info.url.clone(),
                     method: info.method.clone(),
                     headers: info.request_headers.clone(),
@@ -338,7 +339,7 @@ async fn prepare_subresource_fetch_pause_sources_async(
             &pending,
             &info.url,
             &info.method,
-            &info.request_headers,
+            &info.request_headers.to_byte_strings(),
             info.request_body.as_deref(),
             info.request_cookie_report.as_ref(),
         );
@@ -520,7 +521,7 @@ pub(super) fn next_chained_subresource_request_pause_event(
         &pending,
         &url,
         &method,
-        &headers,
+        &headers.to_byte_strings(),
         body.as_deref(),
         request_cookie_report.as_ref(),
     );
@@ -617,7 +618,7 @@ mod tests {
             url: Url::parse(url).unwrap(),
             websocket_socket_id: None,
             method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_body: None,
             request_body_bytes: None,
             resource_type: SubresourceResourceType::Fetch,

@@ -1,0 +1,40 @@
+<head>
+<style>
+html,body{margin:0;background:white}
+.button{display:flex;align-items:center;justify-content:center;width:48px;height:48px;background:#eee}
+.icon{width:24px;height:24px;color:#222}
+.case{position:absolute;left:100px;width:24px;height:24px}
+svg{vertical-align:top}
+</style>
+</head>
+<body>
+<div class=button><span class=icon><svg id=plus viewBox="0 0 24 24"><path fill="currentColor" d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7z"/></svg></span></div>
+<a style="position:absolute;left:60px;top:0;display:block;box-sizing:border-box;width:40px;height:40px;padding:8px"><svg id=padded-parent viewBox="0 0 24 24"><circle cx=12 cy=12 r=8/></svg></a>
+<div class=case style="top:60px"><svg id=wide viewBox="0 0 20 10"></svg></div>
+<div class=case style="top:100px"><svg id=no-ratio></svg></div>
+<div class=case style="top:260px"><svg id=width width=80 viewBox="0 0 10 10"></svg></div>
+<div class=case style="top:350px"><svg id=css-height style="height:32px" viewBox="0 0 10 10"></svg></div>
+<div class=case style="top:390px"><svg id=margin style="margin:0 2px;border:1px solid;padding:2px" viewBox="0 0 20 10"></svg></div>
+<div class=case style="top:420px"><svg id=css-ratio style="aspect-ratio:2/1"></svg></div>
+<div class=case style="top:450px"><svg id=percent width="100%" viewBox="0 0 10 10"></svg></div>
+<div class=case style="top:480px"><svg id=min style="min-width:40px" viewBox="0 0 10 10"></svg></div>
+<div class=case style="top:530px"><svg id=max style="max-width:20px" viewBox="0 0 10 10"></svg></div>
+<div style="position:absolute;left:420px;top:0;width:64px"><svg id=absolute style="position:absolute;left:0;top:0" viewBox="0 0 10 10"></svg></div>
+<div style="position:absolute;left:500px;top:0;width:64px"><svg id=absolute-left style="position:absolute;left:10px;top:0" viewBox="0 0 10 10"></svg></div>
+<div style="position:absolute;left:580px;top:0;width:64px"><svg id=absolute-right style="position:absolute;right:10px;top:0" viewBox="0 0 10 10"></svg></div>
+<div style="position:absolute;left:660px;top:0;width:64px"><svg id=absolute-insets style="position:absolute;left:10px;right:10px;top:0" viewBox="0 0 10 10"></svg></div>
+<div style="position:absolute;left:740px;top:0;width:64px"><svg id=absolute-margin style="position:absolute;left:10px;top:0;margin:0 3px" viewBox="0 0 10 10"></svg></div>
+<div style="position:absolute;left:420px;top:80px"><span style="display:inline-block"><svg id=shrink viewBox="0 0 10 10"></svg></span></div>
+<div style="position:absolute;left:420px;top:100px"><span style="display:inline-block"><svg id=shrink-percent width="100%" viewBox="0 0 10 10"></svg></span></div>
+<div style="position:absolute;left:200px;top:0;width:100px"><svg id=block-margin style="display:block;margin:0 10px" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:200px;top:90px;width:100px"><svg id=block-padding-margin style="display:block;margin:0 10px;border:1px solid;padding:2px" viewBox="0 0 2 1"></svg></div>
+<div style="position:absolute;left:200px;top:140px;width:100px"><svg id=block-percent-margin style="display:block;margin:0 10%" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:200px;top:230px;width:100px"><svg id=block-negative-margin style="display:block;margin:0 -10px" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:200px;top:360px;width:100px"><svg id=block-auto-margin style="display:block;margin:0 auto" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:200px;top:470px;width:100px"><svg id=block-visible-margin style="display:block;overflow:visible;margin:0 10px" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:310px;top:0;width:100px"><svg id=float-margin style="float:left;margin:0 10px" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:310px;top:90px;width:100px"><div></div><svg id=block-float-margin style="float:left;margin:0 10px" viewBox="0 0 1 1"></svg><div></div></div>
+<div style="position:absolute;left:310px;top:180px;width:100px">x<svg id=inline-float-margin style="float:left;margin:0 10px" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:310px;top:290px;width:100px;display:flex;flex-direction:column;align-items:flex-start"><svg id=flex-margin style="float:left;margin:0 10px" viewBox="0 0 1 1"></svg></div>
+<div style="position:absolute;left:310px;top:380px;width:100px;display:grid;align-items:start;justify-items:start"><svg id=grid-margin style="margin:0 10px" viewBox="0 0 1 1"></svg></div>
+</body>

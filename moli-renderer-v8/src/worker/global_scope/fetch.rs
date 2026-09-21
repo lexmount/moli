@@ -11,7 +11,7 @@ pub(in crate::worker) fn record_worker_subresource_failure(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     error_text: String,
@@ -35,7 +35,7 @@ pub(in crate::worker) fn record_worker_subresource_failure_with_handle(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     error_text: String,
@@ -63,7 +63,7 @@ pub(in crate::worker) fn record_worker_subresource_success(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     head: ResponseHead,
@@ -90,7 +90,7 @@ pub(in crate::worker) fn record_worker_subresource_success_with_handle(
     document_url: Url,
     url: Url,
     method: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     request_body: Option<String>,
     resource_type: SubresourceResourceType,
     network_request_headers: Option<Vec<(String, String)>>,
@@ -149,7 +149,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    mut headers: Vec<(String, String)>,
+    mut headers: moli_fetch::RequestHeaders,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     redirect_mode: RequestRedirectMode,
@@ -158,6 +158,8 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
     suppress_default_content_type: bool,
     allow_headers_first: bool,
+    redirect_headers: Option<moli_fetch::RequestHeaders>,
+    redirect_chain: Vec<moli_fetch::RedirectInfo>,
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
@@ -174,22 +176,23 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                 None,
             )
         } else {
-            let cors_preflight_request_headers = headers.clone();
+            let cors_preflight_request_headers = headers.to_byte_strings();
             if suppress_default_content_type {
                 // An empty header value is intentional: the fetch transport serializes this
                 // as `Content-Type:` so the HTTP stack does not synthesize its own upload default.
-                headers.push(("Content-Type".to_owned(), String::new()));
+                headers.push(("Content-Type".to_owned(), Vec::new()));
             }
             match Request::new_browser_bytes(
                 &method,
                 resolved_url.as_str(),
                 body,
-                moli_fetch::RequestHeaders::from_byte_strings(&headers)
-                    .expect("prepared worker Fetch headers are ByteStrings"),
+                headers.clone(),
                 moli_url::WebOrigin::from_url(&document_url),
             ) {
                 Ok(request) => {
                     let mut request = request
+                        .with_redirect_headers(redirect_headers)
+                        .with_redirect_chain(redirect_chain)
                         .with_initiator_url(&document_url)
                         .with_request_mode(request_mode)
                         .with_credentials_mode(credentials_mode)
@@ -388,7 +391,7 @@ fn spawn_worker_fetch_service_worker(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    headers: Vec<(String, String)>,
+    headers: moli_fetch::RequestHeaders,
     request_mode: RequestMode,
     credentials_mode: RequestCredentialsMode,
     redirect_mode: RequestRedirectMode,
@@ -404,7 +407,7 @@ fn spawn_worker_fetch_service_worker(
             resulting_client_id: None,
             url: resolved_url.clone(),
             method: method.clone(),
-            headers: headers.clone(),
+            headers: headers.to_byte_strings(),
             body: body.clone(),
             destination: ServiceWorkerRequestDestination::Empty,
             request_mode,
@@ -414,7 +417,7 @@ fn spawn_worker_fetch_service_worker(
             is_reload: false,
             metadata: request_metadata.clone(),
         },
-        cors_preflight_request_headers: headers.clone(),
+        cors_preflight_request_headers: headers.to_byte_strings(),
         request_cookie_report: None,
         network_context: AsyncSubresourceNetworkContext {
             frame_id: None,
@@ -464,6 +467,8 @@ fn spawn_worker_fetch_service_worker(
                 None,
                 suppress_default_content_type,
                 true,
+                None,
+                Vec::new(),
             ),
             Ok(ServiceWorkerDirectFetchResult::Response(response)) => {
                 let _ = completion_tx.send(WorkerFetchEvent::Completion(Box::new(
@@ -509,23 +514,26 @@ pub(in crate::worker) fn spawn_worker_xhr_network(
     resolved_url: Url,
     method: String,
     body: Option<Vec<u8>>,
-    headers: Vec<(String, String)>,
+    headers: moli_fetch::RequestHeaders,
     credentials_mode: RequestCredentialsMode,
     auth: Option<crate::protocol_types::SubresourceAuthCredentials>,
+    redirect_headers: Option<moli_fetch::RequestHeaders>,
+    redirect_chain: Vec<moli_fetch::RedirectInfo>,
 ) {
     tokio::task::spawn_local(async move {
         let loader = load.request_client();
-        let cors_preflight_request_headers = headers.clone();
+        let cors_preflight_request_headers = headers.to_byte_strings();
         let request = Request::new_browser_bytes(
             &method,
             resolved_url.as_str(),
             body,
-            moli_fetch::RequestHeaders::from_byte_strings(&headers)
-                .expect("prepared worker XHR headers are ByteStrings"),
+            headers.clone(),
             moli_url::WebOrigin::from_url(&document_url),
         )
         .map(|request| {
             let mut request = request
+                .with_redirect_headers(redirect_headers)
+                .with_redirect_chain(redirect_chain)
                 .with_initiator_url(&document_url)
                 .with_credentials_mode(credentials_mode)
                 .with_network_partition_key(network_partition_key.clone())
@@ -615,6 +623,29 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingFetchContinue,
 ) {
+    let redirect_chain = if request.auth.is_some() {
+        state
+            .borrow()
+            .pending_fetches
+            .get(&request.fetch_id)
+            .and_then(|pending| pending.paused_response.as_ref())
+            .map(|response| response.head.redirect_chain.clone())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let redirect_headers = if !redirect_chain.is_empty() {
+        None
+    } else if request.auth.is_some() {
+        state
+            .borrow()
+            .pending_fetches
+            .get(&request.fetch_id)
+            .and_then(|pending| pending.network_record.as_ref())
+            .and_then(|record| record.redirect_headers.clone())
+    } else {
+        request.redirect_headers.clone()
+    };
     let allow_headers_first = !request.intercept_response && !request.handle_auth_requests;
     let (
         load,
@@ -647,16 +678,21 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
             .network_record
             .as_ref()
             .and_then(|record| record.initial_network_request_headers.clone());
-        pending.network_record = Some(PendingWorkerFetchNetworkRecord {
-            internal_id: request.internal_id,
-            url: request.url.clone(),
-            method: request.method.clone(),
-            request_headers: request.headers.clone(),
-            request_body: request.body.clone(),
-            initial_network_request_headers,
-            intercept_response: request.intercept_response,
-            handle_auth_requests: request.handle_auth_requests,
-        });
+        // Authentication retries use the challenged URL, but Network events
+        // still describe the original request and its complete redirect chain.
+        if request.auth.is_none() || pending.network_record.is_none() {
+            pending.network_record = Some(PendingWorkerFetchNetworkRecord {
+                redirect_headers: redirect_headers.clone(),
+                internal_id: request.internal_id,
+                url: request.url.clone(),
+                method: request.method.clone(),
+                request_headers: request.headers.clone(),
+                request_body: request.body.clone(),
+                initial_network_request_headers,
+                intercept_response: request.intercept_response,
+                handle_auth_requests: request.handle_auth_requests,
+            });
+        }
         (
             pending.load.clone(),
             completion_tx,
@@ -697,6 +733,8 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         auth,
         false,
         allow_headers_first,
+        redirect_headers,
+        redirect_chain,
     );
 }
 
@@ -714,6 +752,7 @@ pub(in crate::worker) fn fail_pending_worker_fetch(
         {
             pending.network_request_handle = request.network_request_handle;
             pending.network_record = Some(PendingWorkerFetchNetworkRecord {
+                redirect_headers: None,
                 internal_id: request.internal_id,
                 url: request.url,
                 method: request.method,
@@ -777,6 +816,7 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch(
         pending.network_request_handle = request.network_request_handle;
         if request.internal_id != 0 {
             pending.network_record = Some(PendingWorkerFetchNetworkRecord {
+                redirect_headers: None,
                 internal_id: request.internal_id,
                 url: request.url.clone(),
                 method: request.method.clone(),
@@ -907,6 +947,29 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingXhrContinue,
 ) {
+    let redirect_chain = if request.auth.is_some() {
+        state
+            .borrow()
+            .pending_xhrs
+            .get(&request.xhr_id)
+            .and_then(|pending| pending.paused_response.as_ref())
+            .map(|response| response.head.redirect_chain.clone())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let redirect_headers = if !redirect_chain.is_empty() {
+        None
+    } else if request.auth.is_some() {
+        state
+            .borrow()
+            .pending_xhrs
+            .get(&request.xhr_id)
+            .and_then(|pending| pending.network_record.as_ref())
+            .and_then(|record| record.redirect_headers.clone())
+    } else {
+        request.redirect_headers.clone()
+    };
     let (
         load,
         completion_tx,
@@ -935,16 +998,21 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
             .network_record
             .as_ref()
             .and_then(|record| record.initial_network_request_headers.clone());
-        pending.network_record = Some(PendingWorkerFetchNetworkRecord {
-            internal_id: request.internal_id,
-            url: request.url.clone(),
-            method: request.method.clone(),
-            request_headers: request.headers.clone(),
-            request_body: request.body.clone(),
-            initial_network_request_headers,
-            intercept_response: request.intercept_response,
-            handle_auth_requests: request.handle_auth_requests,
-        });
+        // Authentication retries use the challenged URL, but Network events
+        // still describe the original request and its complete redirect chain.
+        if request.auth.is_none() || pending.network_record.is_none() {
+            pending.network_record = Some(PendingWorkerFetchNetworkRecord {
+                redirect_headers: redirect_headers.clone(),
+                internal_id: request.internal_id,
+                url: request.url.clone(),
+                method: request.method.clone(),
+                request_headers: request.headers.clone(),
+                request_body: request.body.clone(),
+                initial_network_request_headers,
+                intercept_response: request.intercept_response,
+                handle_auth_requests: request.handle_auth_requests,
+            });
+        }
         (
             pending.load.clone(),
             completion_tx,
@@ -975,6 +1043,8 @@ pub(in crate::worker) fn continue_pending_worker_xhr(
         headers,
         credentials_mode,
         auth,
+        redirect_headers,
+        redirect_chain,
     );
 }
 
@@ -993,6 +1063,7 @@ pub(in crate::worker) fn fail_pending_worker_xhr(
             pending.request_paused = false;
             pending.network_request_handle = request.network_request_handle;
             pending.network_record = Some(PendingWorkerFetchNetworkRecord {
+                redirect_headers: None,
                 internal_id: request.internal_id,
                 url: request.url,
                 method: request.method,
@@ -1054,6 +1125,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
         pending.network_request_handle = request.network_request_handle;
         if request.internal_id != 0 {
             pending.network_record = Some(PendingWorkerFetchNetworkRecord {
+                redirect_headers: None,
                 internal_id: request.internal_id,
                 url: request.url.clone(),
                 method: request.method.clone(),
@@ -1177,7 +1249,7 @@ pub(in crate::worker) fn record_worker_websocket_subresource_failure(
     socket_id: u64,
     document_url: Url,
     url: Url,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     error_text: String,
 ) {
     let _ = state
@@ -1495,7 +1567,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                 socket_id,
                 &socket_url,
                 &loader,
-                response_headers,
+                &response_headers.to_byte_strings(),
             );
             parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
                 WorkerWebSocketLifecycleEvent::Open {
@@ -1517,7 +1589,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                     Vec::new(),
                     socket_url.clone(),
                     *response_status,
-                    response_headers.clone(),
+                    response_headers.to_byte_strings(),
                     String::new(),
                     cookie_set_reports,
                 )
@@ -1556,7 +1628,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                         document_url.clone(),
                         socket_url.clone(),
                         "GET".to_owned(),
-                        Vec::new(),
+                        Default::default(),
                         None,
                         SubresourceResourceType::WebSocket,
                         message.clone(),
@@ -1986,7 +2058,11 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             return;
         }
     };
-    let headers = merge_worker_request_headers(&extra_http_headers, &request_headers);
+    let headers = merge_worker_request_headers(
+        &extra_http_headers,
+        &moli_fetch::RequestHeaders::from_byte_strings(&request_headers)
+            .expect("validated worker Fetch headers are ByteStrings"),
+    );
     if let Some(signal) = signal
         && worker_abort_signal_aborted(scope, signal)
     {
@@ -2294,6 +2370,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                 None,
                 suppress_default_content_type,
                 true,
+                None,
+                Vec::new(),
             );
         }
 
@@ -2745,12 +2823,13 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
             let Some(pending) = state_ref.pending_fetches.get_mut(&completion.fetch_id) else {
                 return;
             };
-            pending.network_record.clone().and_then(|record| {
+            pending.network_record.clone().and_then(|mut record| {
                 if record.handle_auth_requests
                     && matches!(response_head.status, 401 | 407)
                     && let Some(challenge) =
                         extract_subresource_auth_challenge(&response_head.headers)
                 {
+                    record.follow_redirects(&response_head);
                     let response_body = response.subresource_response_body();
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         head: response_head.clone(),

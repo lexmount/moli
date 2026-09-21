@@ -69,7 +69,7 @@ fn pending_subresource_fetch_auth(
         websocket_socket_id: None,
         url: Url::parse("https://example.test/protected.json").unwrap(),
         method: "GET".to_owned(),
-        request_headers: vec![("accept".to_owned(), "application/json".to_owned())],
+        request_headers: vec![("accept".to_owned(), "application/json".to_owned())].into(),
         request_body: None,
         request_cookie_report: None,
         challenge: FetchAuthChallenge {
@@ -1062,6 +1062,8 @@ async fn disable_clears_fetch_state() {
             interception_session_id: Some("SID-1".to_owned()),
             document_navigation_token: None,
             navigation: crate::conn::NavigationDispatchState {
+                redirect_chain: Vec::new(),
+                redirect_headers: None,
                 navigate_id: Some(1),
                 owner: crate::conn::CommandOwnerScope::for_route(
                     crate::conn::CdpSessionRoute::Browser,
@@ -1078,7 +1080,7 @@ async fn disable_clears_fetch_state() {
                 request_method: "POST".to_owned(),
                 request_body: Some("payload".to_owned()),
                 request_body_bytes: Some(b"payload".to_vec()),
-                request_headers: vec![("x-auth".to_owned(), "1".to_owned())],
+                request_headers: vec![("x-auth".to_owned(), "1".to_owned())].into(),
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                 timestamp: 0.0,
                 source_document_security: Default::default(),
@@ -1102,6 +1104,8 @@ async fn disable_clears_fetch_state() {
                 response_stage_request_id: "INT-1".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_route(
                         crate::conn::CdpSessionRoute::Browser,
@@ -1118,7 +1122,7 @@ async fn disable_clears_fetch_state() {
                     request_method: "POST".to_owned(),
                     request_body: Some("payload".to_owned()),
                     request_body_bytes: Some(b"payload".to_vec()),
-                    request_headers: vec![("x-auth".to_owned(), "1".to_owned())],
+                    request_headers: vec![("x-auth".to_owned(), "1".to_owned())].into(),
                     request_load_policy:
                         crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                     timestamp: 0.0,
@@ -1328,6 +1332,8 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 response_stage_request_id: "INT-8".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1342,7 +1348,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     request_method: "GET".to_owned(),
                     request_body: None,
                     request_body_bytes: None,
-                    request_headers: Vec::new(),
+                    request_headers: Vec::new().into(),
                     request_load_policy:
                         crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                     timestamp: 0.0,
@@ -1403,6 +1409,8 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 response_stage_request_id: "INT-9".to_owned(),
                 document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
+                    redirect_chain: Vec::new(),
+                    redirect_headers: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1417,7 +1425,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                     request_method: "GET".to_owned(),
                     request_body: None,
                     request_body_bytes: None,
-                    request_headers: Vec::new(),
+                    request_headers: Vec::new().into(),
                     request_load_policy:
                         crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                     timestamp: 0.0,
@@ -1575,6 +1583,8 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
         interception_session_id: Some("SID-1".to_owned()),
         document_navigation_token: None,
         navigation: crate::conn::NavigationDispatchState {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
             result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1589,7 +1599,7 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
             request_method: "POST".to_owned(),
             request_body: Some("payload".to_owned()),
             request_body_bytes: Some(b"payload".to_vec()),
-            request_headers: vec![("x-test".to_owned(), "yes".to_owned())],
+            request_headers: vec![("x-test".to_owned(), "yes".to_owned())].into(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 0.0,
             source_document_security: Default::default(),

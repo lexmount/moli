@@ -2305,7 +2305,7 @@ mod tests {
             websocket_socket_id: None,
             url: test_url("auth"),
             method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_body: None,
             request_cookie_report: None,
             challenge: FetchAuthChallenge {
@@ -2349,7 +2349,7 @@ mod tests {
             websocket_socket_id: None,
             url: test_url("response"),
             method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_body: None,
             request_cookie_report: None,
             response_status: 200,
@@ -2374,6 +2374,8 @@ mod tests {
             response_stage_request_id: request_id.to_owned(),
             document_navigation_token: None,
             navigation: NavigationDispatchState {
+                redirect_chain: Vec::new(),
+                redirect_headers: None,
                 navigate_id: Some(1),
                 owner: owner_session_id
                     .map(crate::conn::CommandOwnerScope::for_session)
@@ -2394,7 +2396,7 @@ mod tests {
                 request_method: "GET".to_owned(),
                 request_body: None,
                 request_body_bytes: None,
-                request_headers: Vec::new(),
+                request_headers: Vec::new().into(),
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
                 timestamp: 0.0,
                 source_document_security: Default::default(),
@@ -2423,9 +2425,10 @@ mod tests {
 
         let mut pending_b = pending_subresource_fetch(2, Some("SID-B"));
         pending_b.request_stage_chain = Some(Box::new(PendingSubresourceFetchRequestStageChain {
+            header_override: None,
             url: test_url("api"),
             method: "GET".to_owned(),
-            headers: Vec::new(),
+            headers: Vec::new().into(),
             body: None,
             request_cookie_report: None,
             remaining_sessions: vec![
@@ -2593,9 +2596,10 @@ mod tests {
         );
         network_owned_pending.request_stage_chain =
             Some(Box::new(PendingSubresourceFetchRequestStageChain {
+                header_override: None,
                 url: test_url("api"),
                 method: "GET".to_owned(),
-                headers: Vec::new(),
+                headers: Vec::new().into(),
                 body: None,
                 request_cookie_report: None,
                 remaining_sessions: vec![

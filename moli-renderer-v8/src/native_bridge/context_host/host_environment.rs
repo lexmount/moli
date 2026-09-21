@@ -699,8 +699,8 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn set_extra_http_headers(&mut self, headers: &[(String, String)]) {
-        self.extra_http_headers = headers.to_vec();
+    pub(crate) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {
+        self.extra_http_headers = headers.clone();
         if let Some(resource_loader) = self.current_main_document_resource_loader() {
             resource_loader
                 .request_client()
@@ -713,7 +713,7 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn extra_http_headers(&self) -> &[(String, String)] {
+    pub(crate) fn extra_http_headers(&self) -> &moli_fetch::RequestHeaders {
         &self.extra_http_headers
     }
 

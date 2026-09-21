@@ -1163,7 +1163,7 @@ impl Browser {
             document_start_scripts,
             vec![],
             vec![],
-            vec![],
+            Default::default(),
             false,
             Vec::new(),
             false,

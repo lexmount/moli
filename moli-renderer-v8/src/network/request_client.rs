@@ -995,7 +995,7 @@ impl ResourceRequestClient {
         self.resource_runtime.client().cookie_store()
     }
 
-    pub fn set_extra_http_headers(&self, headers: &[(String, String)]) {
+    pub fn set_extra_http_headers(&self, headers: &moli_fetch::RequestHeaders) {
         self.page_network_policy.set_extra_http_headers(headers);
     }
 

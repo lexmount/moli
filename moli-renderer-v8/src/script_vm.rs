@@ -4928,7 +4928,7 @@ impl ScriptVm {
         self.document_runtime.clear_cookie_store();
     }
 
-    pub(super) fn set_extra_http_headers(&mut self, headers: &[(String, String)]) {
+    pub(super) fn set_extra_http_headers(&mut self, headers: &moli_fetch::RequestHeaders) {
         self._context_host
             .borrow_mut()
             .set_extra_http_headers(headers);

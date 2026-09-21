@@ -114,6 +114,8 @@ fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     let navigation = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner: CommandOwnerScope::for_session("SID-1"),
         result_projection: NavigationResultProjection::Cdp(json!({
@@ -128,7 +130,7 @@ fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
         request_method: "GET".to_owned(),
         request_body: None,
         request_body_bytes: None,
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_load_policy: NavigationRequestLoadPolicy::BrowserInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
@@ -140,7 +142,8 @@ fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
 async fn offline_navigation_loaders_preserve_typed_error_causes_through_context() {
     let (mut ctx, mut navigation) = navigation_fixture();
     navigation.request_method = "POST".to_owned();
-    navigation.request_headers = vec![("x-request".to_owned(), "offline".to_owned())];
+    navigation.request_headers =
+        moli_fetch::RequestHeaders::from_bytes(vec![("x-request".to_owned(), vec![0xe9, 0xff])]);
     ctx.process_async(json!({
         "id": 2,
         "method": "Network.emulateNetworkConditions",
@@ -173,13 +176,8 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
             .await
             .expect_err("offline streaming response fetch must fail"),
         ctx.conn
-            .fetch_navigation_auth_raw_response_for_owner_async(
-                &navigation.owner,
-                navigation.request_load_policy,
-                method,
-                url,
-                None,
-                headers.clone(),
+            .fetch_navigation_auth_raw_response_for_navigation_async(
+                &navigation,
                 SubresourceAuthCredentials {
                     target: SubresourceAuthTarget::Server,
                     scheme: SubresourceAuthScheme::Basic,
@@ -221,7 +219,7 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
         kind: NavigationNetworkErrorKind::InternetDisconnected,
         unreachable_url: unreachable_url.clone(),
         request_method: "POST".to_owned(),
-        request_headers: request_headers.clone(),
+        request_headers: request_headers.clone().into(),
     })
     .context("failed to load document")
     .context("failed to continue intercepted navigation");
@@ -240,7 +238,7 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
         .expect("error document should commit");
     assert_eq!(loaded.requested_url, unreachable_url);
     assert_eq!(loaded.request_method, "POST");
-    assert_eq!(loaded.request_headers, request_headers);
+    assert_eq!(loaded.request_headers, request_headers.into());
     let error_page = loaded
         .network_error_page
         .expect("network error page metadata");

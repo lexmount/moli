@@ -1085,7 +1085,7 @@ mod tests {
             runtime_inspector_session_restore_snapshots: vec![],
             runtime_isolated_worlds: vec![],
             permission_overrides: vec![],
-            extra_http_headers: vec![],
+            extra_http_headers: Default::default(),
             navigator_identity: Default::default(),
             document_policy_container: Default::default(),
             document_default_language: None,

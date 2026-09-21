@@ -670,7 +670,7 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) cache_disabled: bool,
     pub(crate) bypass_service_worker: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
-    pub(crate) extra_headers: Vec<(String, String)>,
+    pub(crate) extra_headers: moli_fetch::RequestHeaders,
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
 
@@ -739,7 +739,7 @@ pub(crate) struct DevToolsNetworkPolicyAggregate {
     pub(crate) cache_disabled: bool,
     pub(crate) bypass_service_worker: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
-    pub(crate) extra_headers: Vec<(String, String)>,
+    pub(crate) extra_headers: moli_fetch::RequestHeaders,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1223,7 +1223,8 @@ mod tests {
         primary.extra_headers = vec![
             ("X-Primary".to_owned(), "primary".to_owned()),
             ("X-Shared".to_owned(), "primary".to_owned()),
-        ];
+        ]
+        .into();
 
         let attached_b = &mut sessions.ensure_attached("SID-b").network_session_state;
         attached_b.network_enabled = true;
@@ -1231,18 +1232,19 @@ mod tests {
         attached_b.extra_headers = vec![
             ("X-B".to_owned(), "b".to_owned()),
             ("x-shared".to_owned(), "b".to_owned()),
-        ];
+        ]
+        .into();
 
         let attached_a = &mut sessions.ensure_attached("SID-a").network_session_state;
         attached_a.network_enabled = false;
         attached_a.cache_disabled = true;
-        attached_a.extra_headers = vec![("X-Ignored".to_owned(), "a".to_owned())];
+        attached_a.extra_headers = vec![("X-Ignored".to_owned(), "a".to_owned())].into();
 
         let policy = sessions.effective_network_policy();
         assert!(policy.cache_disabled);
         assert!(policy.bypass_service_worker);
         assert_eq!(
-            policy.extra_headers,
+            policy.extra_headers.to_byte_strings(),
             vec![
                 ("X-Primary".to_owned(), "primary".to_owned()),
                 ("x-shared".to_owned(), "b".to_owned()),
@@ -1255,7 +1257,7 @@ mod tests {
         assert!(policy.cache_disabled);
         assert!(!policy.bypass_service_worker);
         assert_eq!(
-            policy.extra_headers,
+            policy.extra_headers.to_byte_strings(),
             vec![
                 ("X-Primary".to_owned(), "primary".to_owned()),
                 ("X-Shared".to_owned(), "primary".to_owned()),

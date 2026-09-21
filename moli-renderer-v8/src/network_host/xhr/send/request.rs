@@ -22,7 +22,7 @@ pub(super) struct PreparedXhrSendRequest {
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) resolved_url: url::Url,
     pub(super) method: String,
-    pub(super) request_headers: Vec<(String, String)>,
+    pub(super) request_headers: moli_fetch::RequestHeaders,
     pub(super) cors_preflight_request_headers: Vec<(String, String)>,
     pub(super) send_body: Option<Vec<u8>>,
     pub(super) credentials_mode: moli_fetch::RequestCredentialsMode,
@@ -201,7 +201,7 @@ fn xhr_request_headers(
     xhr: v8::Local<'_, v8::Object>,
     default_content_type: Option<String>,
     suppress_default_content_type: bool,
-) -> (Vec<(String, String)>, Vec<(String, String)>) {
+) -> (moli_fetch::RequestHeaders, Vec<(String, String)>) {
     let author_headers = xhr_author_request_headers(
         scope,
         xhr,

@@ -27,7 +27,7 @@ use crate::{
         VerticalStaticEdge, flex_main_axis_static_edge, physical_static_position_from_logical,
         resolve_absolute_axis_margins,
     },
-    replaced::measure_replaced,
+    replaced::{AvailableSpaceMargins, measure_replaced},
     style::{InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
     world::InlineStaticPosition,
@@ -2080,6 +2080,32 @@ where
         let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
 
         if let Some(context) = replaced_context {
+            // In-flow block children and floats receive space after their
+            // horizontal margins. Grid's final item layout (including its
+            // two-axis abspos measurement) removes margins in both axes;
+            // its single-axis track contributions still include them.
+            // Atomic inlines and flex items use margin-inclusive space.
+            // Select by the actual parent algorithm: flex/grid items are also
+            // blockified and ignore their authored float.
+            let parent_is_grid = layout_box.layout_parent.is_some_and(|parent| {
+                self.boxes[parent.index()]
+                    .style
+                    .display()
+                    .is_grid_container()
+            });
+            let available_space_margins =
+                if parent_is_grid && inputs.axis == taffy::RequestedAxis::Both {
+                    AvailableSpaceMargins::Excluded
+                } else if style.position != taffy::Position::Absolute
+                    && (box_is_effectively_floated(self, id)
+                        || layout_box
+                            .layout_parent
+                            .is_none_or(|parent| original_parent_uses_block_layout(self, parent)))
+                {
+                    AvailableSpaceMargins::HorizontalExcluded
+                } else {
+                    AvailableSpaceMargins::Included
+                };
             // `measure_replaced` is the complete CSS replaced-element sizing
             // algorithm ported from Blitz: it resolves preferred/min/max
             // sizes and returns a border-box size. Taffy's generic leaf
@@ -2091,9 +2117,11 @@ where
                 inputs.known_dimensions,
                 inputs.parent_size,
                 inputs.available_space,
+                available_space_margins,
                 &context,
                 resolved_aspect_ratio,
                 &style,
+                writing_mode,
                 inputs.sizing_mode,
                 inputs.axis,
             );
@@ -2811,20 +2839,14 @@ where
                     let margin = style
                         .margin
                         .resolve_or_zero(child_inputs.parent_size.width, resolve_stylo_calc_value);
-                    // A non-replaced float's formatting-context algorithm
-                    // owns its content size; pass it the slot remaining after
-                    // margins just like Taffy's block-float parent does. A
-                    // replaced leaf retains Taffy's intrinsic-size adapter,
-                    // which consumes the full slot and subtracts its margin.
-                    let layout_inputs = if self.boxes[child.index()].is_replaced() {
-                        child_inputs
-                    } else {
-                        LayoutInput {
-                            available_space: child_inputs
-                                .available_space
-                                .map_width(|width| width.maybe_sub(margin.left + margin.right)),
-                            ..child_inputs
-                        }
+                    // All floats receive the space remaining after horizontal
+                    // margins, matching Taffy's block-float parent. Replaced
+                    // measurement carries this ownership explicitly.
+                    let layout_inputs = LayoutInput {
+                        available_space: child_inputs
+                            .available_space
+                            .map_width(|width| width.maybe_sub(margin.left + margin.right)),
+                        ..child_inputs
                     };
                     let output = self.compute_child_layout(child.to_taffy(), layout_inputs);
                     let state = breaker.state_mut();

@@ -1395,7 +1395,7 @@ mod tests {
                 document_url,
                 request_url,
                 "POST".to_owned(),
-                Vec::new(),
+                Vec::new().into(),
                 None,
                 SubresourceResourceType::Fetch,
                 SubresourceRequestInitiatorType::Script,

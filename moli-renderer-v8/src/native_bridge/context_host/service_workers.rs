@@ -637,7 +637,7 @@ impl JsContextHost {
                 creator_secure_context,
             ),
             permission_overrides: self.permission_overrides().to_vec(),
-            extra_http_headers: self.extra_http_headers().to_vec(),
+            extra_http_headers: self.extra_http_headers().clone(),
             network_offline: self.network_offline(),
             blocked_url_patterns: self.blocked_url_patterns().to_vec(),
             network_partition_key: None,

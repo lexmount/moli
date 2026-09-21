@@ -261,7 +261,7 @@ impl JsContextHost {
             stored_document_start_scripts: Vec::new(),
             stored_runtime_bindings: Vec::new(),
             app_manifest_link_change_epoch: 0,
-            extra_http_headers: Vec::new(),
+            extra_http_headers: Default::default(),
             permission_overrides: Vec::new(),
             idle_override: None,
             protocol_user_gesture_activation_depth: 0,

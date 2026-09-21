@@ -829,7 +829,7 @@ mod tests {
             internal_id,
             request_url: Url::parse("https://example.test/api").unwrap(),
             request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Vec::new().into(),
             request_body: None,
             response_status_text: None,
             skip_fetch_security_validation: false,

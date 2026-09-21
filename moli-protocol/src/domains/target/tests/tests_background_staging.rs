@@ -2100,7 +2100,8 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
             active
                 .active_page_target()
                 .effective_policy()
-                .extra_headers(),
+                .extra_headers()
+                .to_byte_strings(),
             vec![("X-Target".into(), "A".into())]
         );
         let staged = active
@@ -2108,7 +2109,7 @@ async fn same_context_background_session_can_stage_its_own_extra_headers_before_
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
         assert_eq!(
-            staged.effective_policy().extra_headers(),
+            staged.effective_policy().extra_headers().to_byte_strings(),
             vec![("X-Target".into(), "B".into())]
         );
     }
@@ -2309,7 +2310,8 @@ async fn same_context_background_session_can_clear_its_own_extra_headers_before_
             active
                 .active_page_target()
                 .effective_policy()
-                .extra_headers(),
+                .extra_headers()
+                .to_byte_strings(),
             vec![("X-Target".into(), "A".into())]
         );
         let staged = active

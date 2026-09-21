@@ -510,7 +510,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
         document_url,
         request_url.clone(),
         "GET".to_owned(),
-        Vec::new(),
+        Vec::new().into(),
         None,
         SubresourceResourceType::Fetch,
         SubresourceRequestInitiatorType::Script,
@@ -669,6 +669,8 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
 
     let requested_url = Url::parse("http://127.0.0.1:1/post").unwrap();
     let navigation_state = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
         result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -683,7 +685,7 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
         request_method: "POST".to_owned(),
         request_body: Some("username=alice&pw=s3cret".to_owned()),
         request_body_bytes: Some(b"username=alice&pw=s3cret".to_vec()),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),
@@ -758,6 +760,8 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
 
     let requested_url = Url::parse("http://127.0.0.1:1/upload").unwrap();
     let navigation_state = NavigationDispatchState {
+        redirect_chain: Vec::new(),
+        redirect_headers: None,
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
         result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -772,7 +776,7 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
         request_method: "POST".to_owned(),
         request_body: Some(multipart_text.to_owned()),
         request_body_bytes: Some(transport_bytes.clone()),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
         source_document_security: Default::default(),

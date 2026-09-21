@@ -334,7 +334,7 @@ impl JsContextHost {
                 document_url,
                 request_url,
                 "GET".to_owned(),
-                Vec::new(),
+                Default::default(),
                 None,
                 resource_type,
                 response.request_cookie_report.clone(),
@@ -358,7 +358,7 @@ impl JsContextHost {
                 document_url,
                 request_url,
                 "GET".to_owned(),
-                Vec::new(),
+                Default::default(),
                 None,
                 resource_type,
                 error_text.clone(),
@@ -384,7 +384,7 @@ impl JsContextHost {
             document_url,
             request_url,
             "GET".to_owned(),
-            Vec::new(),
+            Vec::new().into(),
             None,
             resource_type,
             request_initiator_type,
@@ -587,6 +587,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -625,6 +626,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
@@ -661,6 +663,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
@@ -695,6 +698,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
@@ -732,6 +736,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
@@ -768,6 +773,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
@@ -805,6 +811,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin: moli_url::WebOrigin::from_url(&info.document_url),
                 info,
                 load,
@@ -861,6 +868,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -915,6 +923,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load: load.clone(),
@@ -968,6 +977,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1038,6 +1048,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1154,6 +1165,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1209,6 +1221,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1248,6 +1261,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1288,6 +1302,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1324,6 +1339,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1364,6 +1380,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1403,6 +1420,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1438,6 +1456,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             info.internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -1476,6 +1495,7 @@ impl JsContextHost {
         self.pending_subresource_fetches.insert(
             internal_id,
             PendingSubresourceFetchState {
+                redirect_headers: None,
                 request_origin,
                 info,
                 load,
@@ -2873,10 +2893,10 @@ impl JsContextHost {
         {
             self.record_pending_subresource_auth(PendingSubresourceAuthState {
                 pending: in_flight.pending,
-                request_url: in_flight.request_url,
-                request_method: in_flight.request_method,
-                request_headers: in_flight.request_headers,
-                request_body: in_flight.request_body,
+                request_url: info.url.clone(),
+                request_method: info.method.clone(),
+                request_headers: info.request_headers.clone(),
+                request_body: info.request_body.clone(),
                 intercept_response: info.intercept_response,
                 initial_network_request_headers: info.network_request_headers.clone(),
                 response: navigation_response_from_subresource_body(

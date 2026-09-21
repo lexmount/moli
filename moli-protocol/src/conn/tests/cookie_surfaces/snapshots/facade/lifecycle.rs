@@ -77,7 +77,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
             "GET".into(),
-            vec![],
+            vec![].into(),
             200,
             vec![],
             "<!doctype html><html><body>ok</body></html>".into(),

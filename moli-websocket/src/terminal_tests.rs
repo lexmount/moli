@@ -65,9 +65,9 @@ async fn synthetic_terminal_discards_commands_before_blocked_delivery() {
             98,
             receiver,
             sink,
-            Vec::new(),
+            Vec::new().into(),
             101,
-            Vec::new(),
+            Vec::new().into(),
         ));
         assert!(matches!(next(&mut events).await, Event::Open { .. }));
         let first = next(&mut events).await;

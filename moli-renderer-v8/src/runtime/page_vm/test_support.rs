@@ -678,7 +678,7 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         runtime_inspector_session_restore_snapshots: Vec::new(),
         runtime_isolated_worlds: Vec::new(),
         permission_overrides: Vec::new(),
-        extra_http_headers: Vec::new(),
+        extra_http_headers: Default::default(),
         navigator_identity: Default::default(),
         document_policy_container: Default::default(),
         document_default_language: None,

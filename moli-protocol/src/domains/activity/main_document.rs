@@ -933,6 +933,8 @@ mod tests {
 
     fn navigation_state() -> NavigationDispatchState {
         NavigationDispatchState {
+            redirect_chain: Vec::new(),
+            redirect_headers: None,
             navigate_id: Some(77),
             owner: CommandOwnerScope::for_session("SID-nav"),
             result_projection: NavigationResultProjection::Cdp(
@@ -947,7 +949,7 @@ mod tests {
             request_method: "GET".to_owned(),
             request_body: None,
             request_body_bytes: None,
-            request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
+            request_headers: vec![("Accept".to_owned(), "text/html".to_owned())].into(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
             timestamp: 12.5,
             source_document_security: Default::default(),

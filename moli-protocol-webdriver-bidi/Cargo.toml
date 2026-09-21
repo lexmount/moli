@@ -6,6 +6,7 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22"
+moli-header-field = { path = "../moli-header-field" }
 moli-protocol = { path = "../moli-protocol" }
 serde_json = "1.0.145"
 url = "2.5.7"

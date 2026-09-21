@@ -1920,7 +1920,7 @@ __streamingXhr.send();
         internal_id,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_body: None,
         body_source_id,
         head: response_head,
@@ -2018,6 +2018,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(&document_url),
                             info: crate::types::PendingSubresourceFetchInfo {
                                 internal_id,
@@ -2027,7 +2028,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 url: request_url.clone(),
                                 websocket_socket_id: None,
                                 method: "GET".to_owned(),
-                                request_headers: Vec::new(),
+                                request_headers: Vec::new().into(),
                                 request_body: None,
                                 request_body_bytes: None,
                                 resource_type: crate::types::SubresourceResourceType::Xhr,
@@ -2053,7 +2054,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                         },
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
+                        request_headers: Vec::new().into(),
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
@@ -2167,6 +2168,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
 
                 context_host.borrow_mut().restore_pending_subresource_fetch(
                     super::PendingSubresourceFetchState {
+                        redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
                         info: crate::types::PendingSubresourceFetchInfo {
                             internal_id,
@@ -2176,7 +2178,7 @@ async fn async_subresource_failure_network_error_override_preserves_fetch_reject
                             url: request_url.clone(),
                             websocket_socket_id: None,
                             method: "GET".to_owned(),
-                            request_headers: Vec::new(),
+                            request_headers: Vec::new().into(),
                             request_body: None,
                             request_body_bytes: None,
                             resource_type: crate::types::SubresourceResourceType::Fetch,
@@ -2219,7 +2221,7 @@ __swNonStreamFailurePromise.then(
         internal_id,
         request_url: request_url.clone(),
         request_method: "GET".to_owned(),
-        request_headers: Vec::new(),
+        request_headers: Vec::new().into(),
         request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
@@ -2302,6 +2304,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
                                 &(Url::parse("https://streaming-fetch-body-error.test/")
                                     .expect("document URL should parse")),
@@ -2317,7 +2320,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                                 url: request_url.clone(),
                                 websocket_socket_id: None,
                                 method: "GET".to_owned(),
-                                request_headers: Vec::new(),
+                                request_headers: Vec::new().into(),
                                 request_body: None,
                                 request_body_bytes: None,
                                 resource_type: crate::types::SubresourceResourceType::Fetch,
@@ -2341,7 +2344,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                         },
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
+                        request_headers: Vec::new().into(),
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
@@ -2462,6 +2465,7 @@ fn install_streaming_fetch_response_fixture(
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
+                        redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(&document_url),
                         info: crate::types::PendingSubresourceFetchInfo {
                             internal_id,
@@ -2471,7 +2475,7 @@ fn install_streaming_fetch_response_fixture(
                             url: request_url.clone(),
                             websocket_socket_id: None,
                             method: "GET".to_owned(),
-                            request_headers: Vec::new(),
+                            request_headers: Vec::new().into(),
                             request_body: None,
                             request_body_bytes: None,
                             resource_type: crate::types::SubresourceResourceType::Fetch,
@@ -2495,7 +2499,7 @@ fn install_streaming_fetch_response_fixture(
                     },
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
+                    request_headers: Vec::new().into(),
                     request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {
@@ -2564,6 +2568,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                     .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending: super::PendingSubresourceFetchState {
+                            redirect_headers: None,
                             request_origin: moli_url::WebOrigin::from_url(
                                 &(Url::parse("https://streaming-fetch-body-cancel.test/")
                                     .expect("document URL should parse")),
@@ -2579,7 +2584,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                                 url: request_url.clone(),
                                 websocket_socket_id: None,
                                 method: "GET".to_owned(),
-                                request_headers: Vec::new(),
+                                request_headers: Vec::new().into(),
                                 request_body: None,
                                 request_body_bytes: None,
                                 resource_type: crate::types::SubresourceResourceType::Fetch,
@@ -2603,7 +2608,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                         },
                         request_url: request_url.clone(),
                         request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
+                        request_headers: Vec::new().into(),
                         request_body: None,
                         body_source_id,
                         head: moli_fetch::ResponseHead {
@@ -3192,6 +3197,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                 .record_streaming_subresource_fetch(super::StreamingSubresourceFetchState {
                     response_filter: None,
                     pending: super::PendingSubresourceFetchState {
+                        redirect_headers: None,
                         request_origin: moli_url::WebOrigin::from_url(
                             &(Url::parse("https://xhr-streaming-materialize-error.test/")
                                 .expect("document URL should parse")),
@@ -3207,7 +3213,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                             url: request_url.clone(),
                             websocket_socket_id: None,
                             method: "GET".to_owned(),
-                            request_headers: Vec::new(),
+                            request_headers: Vec::new().into(),
                             request_body: None,
                             request_body_bytes: None,
                             resource_type: crate::types::SubresourceResourceType::Xhr,
@@ -3233,7 +3239,7 @@ async fn streaming_xhr_materialization_failure_errors_body_source_before_close()
                     },
                     request_url: request_url.clone(),
                     request_method: "GET".to_owned(),
-                    request_headers: Vec::new(),
+                    request_headers: Vec::new().into(),
                     request_body: None,
                     body_source_id,
                     head: moli_fetch::ResponseHead {

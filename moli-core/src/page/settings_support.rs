@@ -113,10 +113,10 @@ impl Page {
 
     pub async fn set_extra_http_headers_async(
         &mut self,
-        headers: &[(String, String)],
+        headers: &moli_fetch::RequestHeaders,
     ) -> Result<()> {
         self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetExtraHttpHeaders(headers.to_vec()),
+            RendererPageCommand::SetExtraHttpHeaders(headers.clone()),
             "set extra HTTP headers",
         )
         .await
@@ -124,9 +124,9 @@ impl Page {
 
     pub fn start_set_extra_http_headers(
         &self,
-        headers: &[(String, String)],
+        headers: &moli_fetch::RequestHeaders,
     ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetExtraHttpHeaders(headers.to_vec()))
+        self.start_page_command(RendererPageCommand::SetExtraHttpHeaders(headers.clone()))
     }
 
     pub fn finish_set_extra_http_headers(
@@ -144,14 +144,14 @@ impl Page {
 
     pub async fn set_network_request_policy_async(
         &mut self,
-        extra_http_headers: &[(String, String)],
+        extra_http_headers: &moli_fetch::RequestHeaders,
         bypass_service_worker: bool,
         cache_disabled: bool,
         blocked_url_patterns: &[String],
     ) -> Result<()> {
         self.dispatch_unit_page_command_async(
             RendererPageCommand::SetNetworkRequestPolicy {
-                extra_http_headers: extra_http_headers.to_vec(),
+                extra_http_headers: extra_http_headers.clone(),
                 bypass_service_worker,
                 cache_disabled,
                 blocked_url_patterns: blocked_url_patterns.to_vec(),
@@ -163,13 +163,13 @@ impl Page {
 
     pub fn start_set_network_request_policy(
         &self,
-        extra_http_headers: &[(String, String)],
+        extra_http_headers: &moli_fetch::RequestHeaders,
         bypass_service_worker: bool,
         cache_disabled: bool,
         blocked_url_patterns: &[String],
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::SetNetworkRequestPolicy {
-            extra_http_headers: extra_http_headers.to_vec(),
+            extra_http_headers: extra_http_headers.clone(),
             bypass_service_worker,
             cache_disabled,
             blocked_url_patterns: blocked_url_patterns.to_vec(),

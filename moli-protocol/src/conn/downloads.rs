@@ -192,7 +192,7 @@ struct PreparedNavigationDownload {
 struct PendingDownloadOwnerContext {
     browser_context_id: String,
     frame_id: String,
-    request_headers: Vec<(String, String)>,
+    request_headers: moli_fetch::RequestHeaders,
     initiator_url: Option<Url>,
 }
 
@@ -411,7 +411,7 @@ impl CdpConnection {
 
         let mut request = Request::get(&activation.url)
             .map_err(|error| format!("invalid download url: {error}"))?;
-        request.request_headers = owner.request_headers.into();
+        request.request_headers = owner.request_headers;
         request = request
             .with_top_level_navigation_cookie_context()
             .with_page_network_policy()
@@ -1542,9 +1542,9 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-download".to_owned());
         browser_context.set_active_target_id("TID-active");
         browser_context.default_extra_headers =
-            vec![("X-Context-Default".to_owned(), "default".to_owned())];
+            vec![("X-Context-Default".to_owned(), "default".to_owned())].into();
         browser_context.global_extra_headers =
-            vec![("X-Context-Global".to_owned(), "global".to_owned())];
+            vec![("X-Context-Global".to_owned(), "global".to_owned())].into();
 
         let mut background = PageTargetHost::with_url(
             "TID-background".to_owned(),
@@ -1562,7 +1562,7 @@ mod tests {
             .expect("background session must resolve its Page target");
         assert_eq!(owner.frame_id, "TID-background");
         assert_eq!(
-            owner.request_headers,
+            owner.request_headers.to_byte_strings(),
             [
                 ("X-Context-Global".to_owned(), "global".to_owned()),
                 ("X-Context-Default".to_owned(), "default".to_owned()),
