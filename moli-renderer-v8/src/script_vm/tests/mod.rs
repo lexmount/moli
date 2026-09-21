@@ -2275,3 +2275,4 @@ mod observer_element_arguments;
 mod media_device_interfaces;
 mod dom_rect_factory_descriptors;
 mod window_restricted_accessors;
+mod window_scheduling_receivers;
