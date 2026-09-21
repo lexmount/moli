@@ -152,6 +152,9 @@ pub(super) fn window_get_selection_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::require_same_origin_window_receiver(scope, args.this(), false) {
+        return;
+    }
     if let Some(selection) = selection_value_for_window(scope, args.this()) {
         rv.set(selection.into());
     } else {
