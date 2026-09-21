@@ -2,7 +2,7 @@ use super::events::{
     construct_original_before_unload_event, construct_original_event,
     construct_original_page_transition_event, run_navigate_event_precommit_handlers,
 };
-use super::location_runtime::{is_same_document_fragment_navigation, location_href_slot};
+use super::location_runtime::location_href_slot;
 use super::media_queries::dispatch_simple_event_target_event;
 use super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
@@ -26,7 +26,7 @@ use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
     replace_navigation_unload_event_active, runtime_window_dispatch_scope,
     runtime_window_is_global, runtime_window_owner, should_dispatch_hash_change,
-    window_location_for_holder, window_navigation_for_holder, window_task_target_for_runtime_owner,
+    window_location_for_holder, window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::context_bootstrap::navigation_entry::wrappers as entry_wrappers;
@@ -1021,54 +1021,17 @@ fn dispatch_cross_document_navigation_navigate_event_for_window_with_type_form_d
             filename,
         );
     }
-    let Some(navigation) = window_navigation_for_holder(scope, owner) else {
-        return true;
-    };
-    let context = navigation
-        .get_creation_context(scope)
-        .unwrap_or_else(|| scope.get_current_context());
-    let scope = &mut v8::ContextScope::new(scope, context);
-    let current_href = window_location_for_holder(scope, owner)
-        .and_then(|location| location_href_slot(scope, location))
-        .unwrap_or_default();
-    let next_url = url::Url::parse(href).ok();
-    let current_url = url::Url::parse(&current_href).ok();
-    let same_document = if navigation_type == "reload" {
-        false
-    } else {
-        next_url
-            .as_ref()
-            .is_some_and(|next| is_same_document_fragment_navigation(current_url.as_ref(), next))
-    };
-    let hash_change = same_document && should_dispatch_hash_change(&current_href, href);
-    let destination = create_navigation_destination(scope, href, same_document, None);
-    let Some(signal) = create_navigation_abort_signal(scope) else {
-        return true;
-    };
-    let Some(event) = construct_native_navigate_event(
+    super::navigation_interception::dispatch_cross_document_navigation_event(
         scope,
+        owner,
+        href,
         navigation_type,
-        destination,
-        signal,
-        true,
-        can_intercept,
-        user_initiated,
-        hash_change,
-        download_request,
-        None,
-        form_data,
         source_element,
-    ) else {
-        return true;
-    };
-    set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
-    set_navigate_event_private_bool(
-        scope,
-        event,
-        NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT,
-        true,
-    );
-    dispatch_simple_event_target_event(scope, navigation, "navigate", event)
+        user_initiated,
+        download_request,
+        form_data,
+        can_intercept,
+    )
 }
 
 pub(crate) fn dispatch_srcdoc_navigation_navigate_event_for_window<'s>(
