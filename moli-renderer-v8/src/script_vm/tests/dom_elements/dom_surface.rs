@@ -11463,9 +11463,11 @@ seen.join('|')
         )
         .expect("targeted anchor click should dispatch child navigate");
 
+    // The child inherits the parent's origin, but its about:blank URL cannot
+    // be rewritten to an HTTPS URL, so this navigation cannot be intercepted.
     assert_eq!(
         result,
-        "push,true,true,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true"
+        "push,true,false,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true"
     );
 }
 

@@ -3940,6 +3940,9 @@ async fn navigation_retirement_reentry_preserves_successor_window() {
 async fn navigation_intercept_handlers_preserve_cancellation_and_committed_entry() {
     for api in [
         "location-fragment",
+        "location-cross-document",
+        "location-replace",
+        "location-reload",
         "navigate-fragment",
         "navigate-cross-document",
         "reload",
