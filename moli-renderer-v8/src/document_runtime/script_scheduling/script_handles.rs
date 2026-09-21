@@ -138,19 +138,6 @@ impl DocumentRuntime {
             .plan_script_event_task(kind, handle)
     }
 
-    pub(crate) fn enqueue_script_event_lifecycle_work(
-        &mut self,
-        kind: ScriptEventKind,
-        handle: &str,
-    ) -> bool {
-        let scripts = self.script_lifecycle.scripts_mut();
-        let Some(work) = scripts.plan_script_event_lifecycle_work(kind, handle) else {
-            return false;
-        };
-        scripts.enqueue_post_parse_lifecycle_work(work);
-        true
-    }
-
     pub(crate) fn plan_script_failure_lifecycle_work(
         &mut self,
         script: &PreparedScript,

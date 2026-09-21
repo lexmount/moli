@@ -998,6 +998,7 @@ impl HostScriptScheduler {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn plan_script_event_lifecycle_work(
         &self,
         kind: ScriptEventKind,
