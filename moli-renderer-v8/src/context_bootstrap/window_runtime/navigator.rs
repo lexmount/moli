@@ -1252,6 +1252,25 @@ pub(in crate::context_bootstrap) fn global_caches_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if args.data().is_true()
+        && !crate::context_bootstrap::window_receiver::require_same_origin_window_receiver(
+            scope,
+            args.this(),
+            false,
+        )
+    {
+        return;
+    }
+    // A borrowed Window getter must materialize the receiver's CacheStorage
+    // using its realm and storage partition, after the caller's security check.
+    let relevant_context = if args.data().is_true() {
+        args.this()
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context())
+    } else {
+        scope.get_current_context()
+    };
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
     if let Some(value) = get_private_value(scope, args.this(), GLOBAL_CACHE_STORAGE_SLOT) {
         rv.set(value);
         return;

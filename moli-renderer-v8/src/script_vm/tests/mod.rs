@@ -15825,3 +15825,4 @@ mod window_execution_context;
 
 
 mod history_replace_forward;
+mod window_restricted_accessors;

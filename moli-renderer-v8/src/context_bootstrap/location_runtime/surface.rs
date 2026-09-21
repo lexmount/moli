@@ -371,6 +371,9 @@ pub(in crate::context_bootstrap) fn window_navigation_setter<'s>(
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let receiver = args.this();
+    if !super::super::window_receiver::require_same_origin_window_receiver(scope, receiver, false) {
+        return;
+    }
     let value = args.get(0);
     let _ = receiver.define_own_property(
         scope,

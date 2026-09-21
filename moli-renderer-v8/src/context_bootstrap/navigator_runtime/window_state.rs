@@ -60,7 +60,7 @@ pub(in crate::context_bootstrap) fn install_navigator_runtime_state<'s>(
         storage_apis_available_value.into(),
     );
     if storage_apis_available {
-        GlobalCachesAccessorDeclaration::default()
+        GlobalCachesAccessorDeclaration::new(true)
             .initialize(scope, global)
             .map_err(|error| anyhow!("failed to initialize window caches accessor: {error}"))?;
     }
