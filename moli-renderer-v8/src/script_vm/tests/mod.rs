@@ -2253,6 +2253,7 @@ mod hyperlink_null_url_protocol;
 mod import_meta;
 mod indexed_db;
 mod inspector_unwrap;
+mod joint_history;
 mod lazy_storage;
 mod lazy_window_surfaces;
 mod location_put_forwards;

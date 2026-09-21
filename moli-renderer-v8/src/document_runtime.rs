@@ -657,10 +657,12 @@ pub(crate) struct DocumentPolicyContainer {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DocumentSandboxPolicy {
+    pub(crate) restricts_navigation: bool,
+    pub(crate) allows_top_navigation: bool,
+    pub(crate) allows_top_navigation_by_user_activation: bool,
     pub(crate) forces_opaque_origin: bool,
     pub(crate) allows_scripts: bool,
     pub(crate) allows_modals: bool,
-    pub(crate) allows_top_navigation: bool,
     pub(crate) allows_popups_to_escape: bool,
     pub(crate) sandboxes_document_domain: bool,
 }
@@ -668,10 +670,12 @@ pub(crate) struct DocumentSandboxPolicy {
 impl Default for DocumentSandboxPolicy {
     fn default() -> Self {
         Self {
+            restricts_navigation: false,
+            allows_top_navigation: true,
+            allows_top_navigation_by_user_activation: true,
             forces_opaque_origin: false,
             allows_scripts: true,
             allows_modals: true,
-            allows_top_navigation: true,
             allows_popups_to_escape: false,
             sandboxes_document_domain: false,
         }
@@ -681,6 +685,9 @@ impl Default for DocumentSandboxPolicy {
 impl DocumentSandboxPolicy {
     pub(crate) fn from_response_content_security_policies(policies: &[String]) -> Self {
         Self {
+            restricts_navigation: crate::content_security_policy::content_security_policy_sandboxes_document_domain(policies),
+            allows_top_navigation: crate::content_security_policy::content_security_policy_sandbox_allows_top_navigation(policies, false),
+            allows_top_navigation_by_user_activation: crate::content_security_policy::content_security_policy_sandbox_allows_top_navigation(policies, true),
             forces_opaque_origin:
                 crate::content_security_policy::content_security_policy_forces_opaque_origin(
                     policies,
@@ -691,10 +698,6 @@ impl DocumentSandboxPolicy {
                 ),
             allows_modals:
                 crate::content_security_policy::content_security_policy_sandbox_allows_modals(
-                    policies,
-                ),
-            allows_top_navigation:
-                crate::content_security_policy::content_security_policy_sandbox_allows_top_navigation(
                     policies,
                 ),
             allows_popups_to_escape:
@@ -709,11 +712,14 @@ impl DocumentSandboxPolicy {
     }
 
     pub(crate) fn with_response_content_security_policy(mut self, response: Self) -> Self {
+        self.restricts_navigation |= response.restricts_navigation;
+        self.allows_top_navigation &= response.allows_top_navigation;
+        self.allows_top_navigation_by_user_activation &=
+            response.allows_top_navigation_by_user_activation;
         if response.sandboxes_document_domain {
             self.forces_opaque_origin |= response.forces_opaque_origin;
             self.allows_scripts &= response.allows_scripts;
             self.allows_modals &= response.allows_modals;
-            self.allows_top_navigation &= response.allows_top_navigation;
             self.allows_popups_to_escape = if self.sandboxes_document_domain {
                 self.allows_popups_to_escape && response.allows_popups_to_escape
             } else {
