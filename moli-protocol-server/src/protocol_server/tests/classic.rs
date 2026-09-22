@@ -16,6 +16,20 @@ async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents()
             PAYLOAD,
         ),
         (
+            "plain.xml",
+            "text/plain; charset=utf-8",
+            "text/plain",
+            true,
+            "\n<&amp;\r\nbeta\rgamma\0</pre><script>window.executed=42</script>",
+        ),
+        (
+            "json.xml",
+            "application/problem+json",
+            "application/problem+json",
+            true,
+            PAYLOAD,
+        ),
+        (
             "plain-bom",
             "text/plain; charset=utf-8",
             "text/plain",
@@ -82,7 +96,12 @@ async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents()
             ).await;
             let expected = if literal {
                 json!([
-                    payload.strip_prefix('\u{feff}').unwrap_or(payload),
+                    payload
+                        .strip_prefix('\u{feff}')
+                        .unwrap_or(payload)
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n")
+                        .replace('\0', "\u{fffd}"),
                     null,
                     0,
                     content_type
@@ -91,6 +110,17 @@ async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents()
                 json!(["literal&Gülçek", 42, 1, content_type])
             };
             assert_eq!(observed["value"], expected, "{prefix}{name}");
+            if literal {
+                let structure = classic_request_json_with_body(
+                    app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+                    json!({"script": "const d=(document.querySelector('iframe')?.contentWindow ?? window).document; return [d.doctype===null,d.compatMode,d.body.children.length,d.body.firstElementChild.localName,d.querySelectorAll('pre').length];", "args": []}),
+                ).await;
+                assert_eq!(
+                    structure["value"],
+                    json!([true, "CSS1Compat", 1, "pre", 1]),
+                    "{prefix}{name}"
+                );
+            }
         }
     }
     classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
