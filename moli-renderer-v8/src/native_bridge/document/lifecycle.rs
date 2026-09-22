@@ -131,13 +131,13 @@ fn node_document_write_or_writeln_callback<'s>(
         );
         return;
     }
-    if let Some(popup_id) =
-        unsafe { &*runtime_ptr }.lightweight_popup_id_for_document_handle(handle)
+    if unsafe { &*runtime_ptr }
+        .lightweight_popup_id_for_document_handle(handle)
+        .is_some()
     {
         unsafe { &mut *runtime_ptr }.write_lightweight_popup_document_stream(
             scope,
             runtime_ptr,
-            popup_id,
             handle,
             args.this(),
             &html,

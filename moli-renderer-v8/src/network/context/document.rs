@@ -291,6 +291,21 @@ impl DocumentResourceLoader {
         self.authority.lifecycle.lock().context.clone()
     }
 
+    /// Updates the URL inputs for later loads without changing this Document's
+    /// origin, authority, or requests that already captured their settings.
+    pub(crate) fn update_document_urls(&self, document_url: url::Url, base_url: url::Url) {
+        let mut lifecycle = self.authority.lifecycle.lock();
+        if lifecycle.state != DocumentResourceLoaderState::Active {
+            return;
+        }
+        lifecycle.context = DocumentFetchContext::new(
+            lifecycle.context.owner(),
+            document_url,
+            base_url,
+            lifecycle.context.origin().to_owned(),
+        );
+    }
+
     #[cfg(test)]
     pub(crate) fn owner(&self) -> crate::native_bridge::WindowDocumentOwner {
         self.authority.lifecycle.lock().context.owner()
