@@ -54,6 +54,7 @@ pub(in crate::native_bridge) fn detached_iframe_content_document<'s>(
         snapshot.content_type.as_deref(),
         Some(&snapshot.character_set),
         HtmlParser::with_scripting_enabled(false),
+        &[],
     )?;
     if let Some(base_url) = v8_string(scope, base_url.as_str()) {
         set_private_value(

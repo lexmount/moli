@@ -42,6 +42,7 @@ mod performance;
 mod performance_memory;
 mod platform_identity;
 mod pointer_lock;
+mod popup_document_stream;
 mod popup_hyperlinks;
 mod promise_rejection;
 mod security_policy;
