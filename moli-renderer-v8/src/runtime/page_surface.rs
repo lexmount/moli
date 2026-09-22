@@ -328,6 +328,7 @@ struct RendererTopLevelNavigationRequest {
     request_headers: Vec<(String, String)>,
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
     history_mutation: moli_page_types::NavigationHistoryMutation,
+    navigation_history: Option<super::RendererNavigationHistoryRequest>,
 }
 
 impl RendererDocumentSourcedTopLevelLocationNavigation {
@@ -370,6 +371,7 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
                 request_headers,
                 browser_navigation_kind,
                 history_mutation: moli_page_types::NavigationHistoryMutation::Push,
+                navigation_history: None,
             }),
             runtime_command_cause,
             navigation_initiator: None,
@@ -421,6 +423,18 @@ impl RendererDocumentSourcedTopLevelLocationNavigation {
 
     pub fn history_mutation(&self) -> moli_page_types::NavigationHistoryMutation {
         self.request.history_mutation
+    }
+
+    pub fn with_navigation_history(
+        mut self,
+        history: Option<super::RendererNavigationHistoryRequest>,
+    ) -> Self {
+        self.request.navigation_history = history;
+        self
+    }
+
+    pub fn navigation_history(&self) -> Option<&super::RendererNavigationHistoryRequest> {
+        self.request.navigation_history.as_ref()
     }
 
     pub fn url(&self) -> &str {
@@ -6211,6 +6225,7 @@ impl RendererPageTable {
             view_generation,
             page_state: Arc::new(RendererPageState {
                 snapshot_revision: Default::default(),
+                navigation_history: Default::default(),
                 requested_url,
                 navigation_initiator_url: None,
                 navigation_redirected: false,

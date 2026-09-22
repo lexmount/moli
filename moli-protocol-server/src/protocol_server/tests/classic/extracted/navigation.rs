@@ -1495,213 +1495,7 @@ async fn webdriver_classic_url_routes_execute_through_devtools_runtime() {
     )
     .await;
 }
-#[tokio::test]
-async fn webdriver_classic_history_traversal_preserves_live_same_document_and_falls_back_after_restore()
- {
-    async fn page() -> impl IntoResponse {
-        (
-            [(header::CONTENT_TYPE.as_str(), "text/html")],
-            "<!doctype html><main id='kept'>same-document</main>",
-        )
-    }
 
-    async fn other() -> impl IntoResponse {
-        (
-            [(header::CONTENT_TYPE.as_str(), "text/html")],
-            "<!doctype html><main>other-document</main>",
-        )
-    }
-
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind Classic same-document history fixture listener");
-    let fixture_addr = listener
-        .local_addr()
-        .expect("Classic same-document history fixture addr");
-    let fixture_server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            Router::new()
-                .route("/page", get(page))
-                .route("/other", get(other)),
-        )
-        .await
-        .expect("serve Classic history fixture");
-    });
-    let app = build_router(test_state());
-
-    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
-    let session_id = session["value"]["sessionId"]
-        .as_str()
-        .expect("classic session id");
-    let page_url = format!("http://{fixture_addr}/page");
-
-    let navigated = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/url"),
-        json!({ "url": page_url }),
-    )
-    .await;
-    assert_eq!(navigated, json!({ "value": null }));
-
-    let element = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/element"),
-        json!({
-            "using": "css selector",
-            "value": "#kept"
-        }),
-    )
-    .await;
-    let element_id = element["value"]["element-6066-11e4-a52e-4f735466cecf"]
-        .as_str()
-        .expect("element reference id");
-
-    let pushed = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/execute/sync"),
-        json!({
-            "script": "
-                window.__sameDocumentRealmMarker = { kept: true };
-                history.pushState(null, '', '#first');
-                history.pushState(null, '', '#second');
-                return location.hash;
-            ",
-            "args": []
-        }),
-    )
-    .await;
-    assert_eq!(pushed, json!({ "value": "#second" }));
-
-    let back = classic_request_json(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/back"),
-    )
-    .await;
-    assert_eq!(back, json!({ "value": null }));
-
-    let realm_preserved = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/execute/sync"),
-        json!({
-            "script": "return window.__sameDocumentRealmMarker?.kept === true && location.hash === '#first';",
-            "args": []
-        }),
-    )
-    .await;
-    assert_eq!(realm_preserved, json!({ "value": true }));
-
-    let text = classic_request_json(
-        app.clone(),
-        Method::GET,
-        &format!("/session/{session_id}/element/{element_id}/text"),
-    )
-    .await;
-    assert_eq!(text, json!({ "value": "same-document" }));
-
-    let prepared_restore_chain = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/execute/sync"),
-        json!({
-            "script": "
-                history.replaceState(null, '', '?step=one');
-                history.pushState(null, '', '?step=two');
-                return location.search;
-            ",
-            "args": []
-        }),
-    )
-    .await;
-    assert_eq!(prepared_restore_chain, json!({ "value": "?step=two" }));
-
-    let other_url = format!("http://{fixture_addr}/other");
-    let navigated_other = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/url"),
-        json!({ "url": other_url }),
-    )
-    .await;
-    assert_eq!(navigated_other, json!({ "value": null }));
-
-    let restored = classic_request_json(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/back"),
-    )
-    .await;
-    assert_eq!(restored, json!({ "value": null }));
-
-    let restored_element = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/element"),
-        json!({
-            "using": "css selector",
-            "value": "#kept"
-        }),
-    )
-    .await;
-    let restored_element_id = restored_element["value"]["element-6066-11e4-a52e-4f735466cecf"]
-        .as_str()
-        .expect("restored element reference id");
-    let marked_restored_realm = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/execute/sync"),
-        json!({
-            "script": "window.__restoredRealmMarker = true; return location.search;",
-            "args": []
-        }),
-    )
-    .await;
-    assert_eq!(marked_restored_realm, json!({ "value": "?step=two" }));
-
-    let fallback_back = classic_request_json(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/back"),
-    )
-    .await;
-    assert_eq!(fallback_back, json!({ "value": null }));
-
-    let fallback_state = classic_request_json_with_body(
-        app.clone(),
-        Method::POST,
-        &format!("/session/{session_id}/execute/sync"),
-        json!({
-            "script": "return { search: location.search, marker: window.__restoredRealmMarker === true };",
-            "args": []
-        }),
-    )
-    .await;
-    assert_eq!(
-        fallback_state,
-        json!({
-            "value": {
-                "search": "?step=one",
-                "marker": false,
-            }
-        })
-    );
-
-    let (stale_status, stale) = classic_request_status_and_json(
-        app.clone(),
-        Method::GET,
-        &format!("/session/{session_id}/element/{restored_element_id}/text"),
-    )
-    .await;
-    assert_eq!(stale_status, StatusCode::NOT_FOUND);
-    assert_eq!(stale["value"]["error"], json!("stale element reference"));
-
-    fixture_server.abort();
-}
 #[tokio::test]
 async fn webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offset_frame() {
     for transform in ["none", "scale(0.75)", "rotate(12deg)"] {
@@ -1969,4 +1763,219 @@ async fn webdriver_classic_click_mousedown_navigation_does_not_activate_successo
         })).await;
     assert_eq!(observed, json!({"value":[1,"target",true]}));
     classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
+async fn webdriver_classic_history_traversal_preserves_same_document_before_and_after_restore() {
+    async fn page() -> impl IntoResponse {
+        (
+            [(header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><main id='kept'>same-document</main>",
+        )
+    }
+
+    async fn other() -> impl IntoResponse {
+        (
+            [(header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><main>other-document</main>",
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind Classic same-document history fixture listener");
+    let fixture_addr = listener
+        .local_addr()
+        .expect("Classic same-document history fixture addr");
+    let fixture_server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new()
+                .route("/page", get(page))
+                .route("/other", get(other)),
+        )
+        .await
+        .expect("serve Classic history fixture");
+    });
+    let app = build_router(test_state());
+
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"]
+        .as_str()
+        .expect("classic session id");
+    let page_url = format!("http://{fixture_addr}/page");
+
+    let navigated = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/url"),
+        json!({ "url": page_url }),
+    )
+    .await;
+    assert_eq!(navigated, json!({ "value": null }));
+
+    let element = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/element"),
+        json!({
+            "using": "css selector",
+            "value": "#kept"
+        }),
+    )
+    .await;
+    let element_id = element["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .expect("element reference id");
+
+    let pushed = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "
+                window.__sameDocumentRealmMarker = { kept: true };
+                history.pushState(null, '', '#first');
+                history.pushState(null, '', '#second');
+                return location.hash;
+            ",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(pushed, json!({ "value": "#second" }));
+
+    let back = classic_request_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/back"),
+    )
+    .await;
+    assert_eq!(back, json!({ "value": null }));
+
+    let realm_preserved = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return window.__sameDocumentRealmMarker?.kept === true && location.hash === '#first';",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(realm_preserved, json!({ "value": true }));
+
+    let text = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{element_id}/text"),
+    )
+    .await;
+    assert_eq!(text, json!({ "value": "same-document" }));
+
+    let prepared_restore_chain = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "
+                history.replaceState(null, '', '?step=one');
+                history.pushState(null, '', '?step=two');
+                return location.search;
+            ",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(prepared_restore_chain, json!({ "value": "?step=two" }));
+
+    let other_url = format!("http://{fixture_addr}/other");
+    let navigated_other = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/url"),
+        json!({ "url": other_url }),
+    )
+    .await;
+    assert_eq!(navigated_other, json!({ "value": null }));
+
+    let restored = classic_request_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/back"),
+    )
+    .await;
+    assert_eq!(restored, json!({ "value": null }));
+
+    let (stale_status, stale) = classic_request_status_and_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{element_id}/text"),
+    )
+    .await;
+    assert_eq!(stale_status, StatusCode::NOT_FOUND);
+    assert_eq!(stale["value"]["error"], json!("stale element reference"));
+
+    let restored_element = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/element"),
+        json!({
+            "using": "css selector",
+            "value": "#kept"
+        }),
+    )
+    .await;
+    let restored_element_id = restored_element["value"]["element-6066-11e4-a52e-4f735466cecf"]
+        .as_str()
+        .expect("restored element reference id");
+    let marked_restored_realm = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "window.__restoredRealmMarker = true; return location.search;",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(marked_restored_realm, json!({ "value": "?step=two" }));
+
+    let same_document_back = classic_request_json(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/back"),
+    )
+    .await;
+    assert_eq!(same_document_back, json!({ "value": null }));
+
+    let restored_state = classic_request_json_with_body(
+        app.clone(),
+        Method::POST,
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "return { search: location.search, marker: window.__restoredRealmMarker === true };",
+            "args": []
+        }),
+    )
+    .await;
+    assert_eq!(
+        restored_state,
+        json!({
+            "value": {
+                "search": "?step=one",
+                "marker": true,
+            }
+        })
+    );
+
+    let preserved_text = classic_request_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{restored_element_id}/text"),
+    )
+    .await;
+    assert_eq!(preserved_text, json!({ "value": "same-document" }));
+
+    fixture_server.abort();
 }
