@@ -20,6 +20,19 @@ pub trait WebApiFunctionTemplateDeclaration {
     /// prototype objects. Inherited declarations are listed separately.
     const PROTOTYPE_ATTRIBUTE_NAMES: &'static [&'static str] = &[];
 
+    /// Returns the generated native getter adapter for a statically named
+    /// accessor. Exotic installers can retain their native V8 cache while
+    /// using the declaration's receiver and access policies. Callback data,
+    /// when declared, must still be supplied by the installer.
+    fn accessor_getter_callback(_name: &str) -> Option<v8::FunctionCallback> {
+        None
+    }
+
+    /// The setter counterpart for native installers using declared accessors.
+    fn accessor_setter_callback(_name: &str) -> Option<v8::FunctionCallback> {
+        None
+    }
+
     fn build<'s>(scope: &mut v8::PinScope<'s, '_, ()>) -> v8::Local<'s, v8::FunctionTemplate>;
 
     fn initialize_template<'s>(
