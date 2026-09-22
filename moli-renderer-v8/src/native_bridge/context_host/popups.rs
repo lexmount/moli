@@ -1766,7 +1766,7 @@ impl JsContextHost {
 
     pub(crate) fn lightweight_popup_bar_props_visible(&self, popup_id: u64) -> bool {
         self.lightweight_popup_record(popup_id)
-            .is_some_and(|record| record.is_open() && !record.auxiliary_window.is_popup())
+            .is_some_and(|record| record.is_live() && !record.auxiliary_window.is_popup())
     }
 
     pub(crate) fn cancel_pending_lightweight_popup_navigation(&mut self, popup_id: u64) {
