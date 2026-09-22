@@ -8,6 +8,7 @@ jobs:
   iframe-diagnostic:
     name: Exact Linux iframe diagnostic
     runs-on: ubuntu-latest
+    container: rust:1.96.1-bookworm
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
@@ -35,7 +36,7 @@ jobs:
           MOLI_BIN: ${{ github.workspace }}/diagnostic-binary/moli-release-head/moli
           DEBUG: pw:api
           MOLI_SMOKE_TRACE_BG: '1'
-        run: uv run --project moli-cdp-smoke --locked moli-cdp-smoke --group iframe-input --repeat 3 --jobs 1 --timeout 120 --output-dir diagnostic-results
+        run: uv run --project moli-cdp-smoke --locked moli-cdp-smoke --group iframe-input --repeat 8 --jobs 4 --timeout 120 --output-dir diagnostic-results
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
