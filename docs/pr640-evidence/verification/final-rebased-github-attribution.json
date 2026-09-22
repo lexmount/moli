@@ -1,0 +1,78 @@
+{
+  "schema": "pr640-rebased-github-attribution/1",
+  "commits": [
+    {
+      "group": "engineering",
+      "sha": "746e376f0179988d0aa6250cb055aee2baaebb4f",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "layout",
+      "sha": "62c07ae866e8ce5dbc0c78c23ee2dc493d7fa393",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "input",
+      "sha": "9818501903e164ff0fb871885baf0a7dba4fdf9e",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "network",
+      "sha": "15faebd1683b94fb4aa646f3ffe695a2bb45a44b",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "stop",
+      "sha": "e9c3b70ceb73a9e1b36b44bbb9281ecbf3c51c17",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "forms",
+      "sha": "4e85980f809e229e68be6e51f8acc097087001df",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "text",
+      "sha": "d27ef866dc508b99a487991045c40b5f3f563ecc",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "text",
+      "sha": "b521ffea07c9a9115bfdd580ee33f4a1898b2105",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    },
+    {
+      "group": "text",
+      "sha": "c6d78aeb42892eeec1aa1856bd932380ff2e4bf3",
+      "author_login": "lanyue-llk",
+      "committer_login": "lanyue-llk",
+      "author_email": "270302213+lanyue-llk@users.noreply.github.com",
+      "committer_email": "270302213+lanyue-llk@users.noreply.github.com"
+    }
+  ],
+  "all_nine_linked_to_lanyue_llk": true
+}

@@ -1,6 +1,6 @@
 # PR #640 拆分后的当前提交与验收边界
 
-七个 PR 的当前提交均基于 main `a54ba82a7ac6462429d2f60cd0dbd0d67c589e84` 或其直接父 PR。每个分区只重放自身提交；七个分区的 `range-diff` 全部等价，稳定 patch-id、修改文件集合及提交顺序均保持，作者和提交者均为关联 GitHub 账号 `lanyue-llk` 的邮箱。文本分区保留原有三项提交，其余各一项。当前分支与原已测提交的逐项哈希见[机器可核对清单](final-rebased-prs.json)。
+七个 PR 的当前提交均基于 main `a54ba82a7ac6462429d2f60cd0dbd0d67c589e84` 或其直接父 PR。每个分区只重放自身提交；七个分区的 `range-diff` 全部等价，稳定 patch-id、修改文件集合及提交顺序均保持，作者和提交者均为关联 GitHub 账号 `lanyue-llk` 的邮箱；[GitHub API 对九个新提交的逐项核验](final-rebased-github-attribution.json)确认了账号映射。文本分区保留原有三项提交，其余各一项。当前分支与原已测提交的逐项哈希见[机器可核对清单](final-rebased-prs.json)。
 
 | PR | 职责 | 当前 HEAD | 直接父 PR | 已测 HEAD 归档 |
 |---|---|---|---|---|
