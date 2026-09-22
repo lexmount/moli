@@ -121,6 +121,8 @@ pub(super) fn history_entry_seed_for_traversal<'s>(
     );
     let mut candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
 
+    // The candidate already compares Document identities. Distinct Documents
+    // can have identical URLs, including URLs that differ only in fragment.
     super::session_history::capture_for_navigation(scope, owner, &mut candidate.seed);
     Some((candidate.target_url, candidate.seed))
 }
