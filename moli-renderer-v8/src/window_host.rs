@@ -326,7 +326,9 @@ fn default_passive_value(
         return false;
     }
     match target {
-        EventTargetHandle::Window | EventTargetHandle::ChildWindow(_) => true,
+        EventTargetHandle::Window
+        | EventTargetHandle::ChildWindow(_)
+        | EventTargetHandle::PopupWindow(_) => true,
         EventTargetHandle::Node(handle) => {
             let dom_host = host.dom_host();
             if dom_host

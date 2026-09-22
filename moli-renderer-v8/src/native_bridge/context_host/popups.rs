@@ -23,7 +23,7 @@ use crate::{
     definitions::define_function_accessor_property,
     document_runtime::create_content_security_policy_violation_event,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
-    host::HostTimerOwner,
+    host::{DispatchStatus, HostTimerOwner, PopupWindowEventTarget, event_dispatch_status},
     native_bridge::{
         ComputedStyleDescriptor, ComputedStyleTargetKey, OwnerDispatchScope, WindowTaskTarget,
         child_window_handle_from_marker_data,
@@ -3023,6 +3023,105 @@ impl JsContextHost {
             .mark_subtree_disconnected_preserving_owner_document(document_handle);
         self.style_engine
             .retire_document_style_world(document_handle);
+    }
+
+    pub(crate) fn current_popup_window_event_target(
+        &self,
+        popup_id: u64,
+    ) -> Option<PopupWindowEventTarget> {
+        let document = self.lightweight_popup_document_record(popup_id)?;
+        Some(PopupWindowEventTarget {
+            document_owner: document.owner,
+            local_window_id: document.local_window_id,
+        })
+    }
+
+    pub(crate) fn popup_window_event_target_is_current(
+        &self,
+        target: PopupWindowEventTarget,
+    ) -> bool {
+        self.current_popup_window_event_target(target.document_owner.popup_id()) == Some(target)
+    }
+
+    pub(crate) fn popup_window_event_target_wrapper<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: PopupWindowEventTarget,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        self.popup_window_event_target_is_current(target)
+            .then(|| self.lightweight_popup_window(scope, target.document_owner.popup_id()))
+            .flatten()
+    }
+
+    pub(crate) fn call_popup_window_event_path_listeners<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: PopupWindowEventTarget,
+        event_type: &str,
+        event: v8::Local<'s, v8::Object>,
+        capture_only: bool,
+        at_target: bool,
+    ) -> DispatchStatus {
+        let Some(window) = self.popup_window_event_target_wrapper(scope, target) else {
+            return DispatchStatus::StopPropagation;
+        };
+        if at_target && !capture_only {
+            return DispatchStatus::Continue;
+        }
+        let Some(context) = window.get_creation_context(scope) else {
+            return DispatchStatus::StopPropagation;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let popup_id = target.document_owner.popup_id();
+        if !self.register_lightweight_popup_execution_context(scope, popup_id) {
+            return DispatchStatus::StopPropagation;
+        }
+        let previous = enter_lightweight_popup_event_dispatch(scope, popup_id);
+        let previous_message_source = self.enter_window_message_source_scope(
+            super::PendingWindowMessageEndpoint::LightweightPopup(popup_id),
+        );
+        let error_arguments = (event_type == "error")
+            .then(|| crate::context_bootstrap::error_event_handler_arguments(scope, event))
+            .flatten();
+        let ordinary_arguments = [event.into()];
+        let handler_arguments = error_arguments
+            .as_ref()
+            .map_or(ordinary_arguments.as_slice(), |values| values.as_slice());
+        let handler_type = if error_arguments.is_some() {
+            crate::context_bootstrap::EventHandlerType::OnErrorEventHandler
+        } else {
+            crate::context_bootstrap::EventHandlerType::EventHandler
+        };
+        // The DOM dispatcher owns target, phase, path and cleanup. Invoke only
+        // this Window's listener phase without starting a second dispatch.
+        for capture in [true, false] {
+            if !at_target && capture != capture_only {
+                continue;
+            }
+            crate::context_bootstrap::invoke_simple_event_target_listeners(
+                scope,
+                window,
+                LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
+                event_type,
+                event,
+                capture,
+                handler_arguments,
+                handler_type,
+                None,
+            );
+            if event_dispatch_status(scope, event) != DispatchStatus::Continue
+                || !self.popup_window_event_target_is_current(target)
+            {
+                break;
+            }
+        }
+        self.restore_window_message_source_scope(previous_message_source);
+        restore_lightweight_popup_event_dispatch(scope, previous);
+        if self.popup_window_event_target_is_current(target) {
+            event_dispatch_status(scope, event)
+        } else {
+            DispatchStatus::StopPropagation
+        }
     }
 
     pub(crate) fn dispatch_lightweight_popup_window_event<'s>(

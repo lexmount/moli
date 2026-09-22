@@ -1091,6 +1091,7 @@ pub(crate) fn dispatched_click_activation_target(
             }
             EventTargetHandle::Window
             | EventTargetHandle::ChildWindow(_)
+            | EventTargetHandle::PopupWindow(_)
             | EventTargetHandle::Node(_) => None,
         })
 }

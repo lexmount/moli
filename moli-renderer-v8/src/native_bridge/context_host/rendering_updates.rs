@@ -104,7 +104,7 @@ impl JsContextHost {
             EventTargetHandle::Node(handle) => {
                 self.window_document_task_target_for_node(scope, handle)
             }
-            EventTargetHandle::ChildWindow(_) => None,
+            EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => None,
         };
         let Some(target) = target else {
             return false;
