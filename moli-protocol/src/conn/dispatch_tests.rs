@@ -686,7 +686,8 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
     ctx.conn
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::for_route(
             route.clone(),
-        ));
+        ))
+        .await;
 
     let sent_start = ctx.sent.len();
     ctx.route_direct_command_renderer_predecessor_for_test(predecessor)

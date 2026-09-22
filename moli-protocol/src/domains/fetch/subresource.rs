@@ -773,11 +773,13 @@ mod tests {
         )
     }
 
-    #[test]
-    fn prepared_subresource_fetch_pause_pairs_emit_network_then_fetch_per_item() {
+    #[tokio::test]
+    async fn prepared_subresource_fetch_pause_pairs_emit_network_then_fetch_per_item() {
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -849,11 +851,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn fetch_pause_does_not_synthesize_cookie_extra_info() {
+    #[tokio::test]
+    async fn fetch_pause_does_not_synthesize_cookie_extra_info() {
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -891,11 +895,13 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn prepared_subresource_fetch_pause_does_not_emit_after_page_replacement() {
+    #[tokio::test]
+    async fn prepared_subresource_fetch_pause_does_not_emit_after_page_replacement() {
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -908,7 +914,9 @@ mod tests {
             let target_id = context
                 .active_target_id_owned()
                 .expect("active fixture target");
-            context.replace_document_id_for_test_for_target(&target_id)
+            context
+                .replace_document_id_for_test_for_target(&target_id)
+                .await
         };
         let owner = CommandOwnerScope::capture(&conn, None);
 
@@ -942,8 +950,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn prepared_subresource_fetch_pause_can_emit_for_background_owner() {
+    #[tokio::test]
+    async fn prepared_subresource_fetch_pause_can_emit_for_background_owner() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
         bc.register_page_target_url_fixture(
@@ -955,7 +963,8 @@ mod tests {
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-background")),
             1,
-        );
+        )
+        .await;
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-background"))
             .expect("background test target should expose a Page residence identity");

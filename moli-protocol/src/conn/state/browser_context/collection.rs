@@ -81,7 +81,7 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
-    pub(crate) fn set_active_document_fixture_for_test(
+    pub(crate) async fn set_active_document_fixture_for_test(
         &mut self,
         raw: u64,
     ) -> crate::conn::state::DocumentId {
@@ -89,12 +89,12 @@ impl BrowserContext {
             .active_target_id_owned()
             .expect("active fixture target");
         self.set_document_id_for_test_for_target(&target_id, raw)
+            .await
     }
 
-    /// Capture only the exact Browser document capability used by inspection
-    /// independence tests. The physical Document remains on its Browser owner.
+    /// Capture an exact native capability for tests without exposing the Page.
     #[cfg(test)]
-    pub(in crate::conn) fn inspection_document_handle_for_test(
+    pub(crate) fn inspection_document_handle_for_test(
         &self,
         target_id: &str,
     ) -> Option<(

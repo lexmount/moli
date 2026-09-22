@@ -2414,7 +2414,7 @@ mod producer_tests {
         }
     }
 
-    fn bind_renderer_document_for_test(
+    async fn bind_renderer_document_for_test(
         conn: &mut CdpConnection,
         session_id: &str,
         frame_id: &str,
@@ -2422,7 +2422,8 @@ mod producer_tests {
     ) {
         let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
         if conn.current_document_id_for_owner(&owner).is_none() {
-            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64());
+            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64())
+                .await;
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -3244,8 +3245,8 @@ mod producer_tests {
         assert!(!completion.wait().accepted);
     }
 
-    #[test]
-    fn renderer_document_epoch_change_retires_page_dialog_scope_once() {
+    #[tokio::test]
+    async fn renderer_document_epoch_change_retires_page_dialog_scope_once() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-epoch");
         bc.set_active_target_id("TID-dialog-epoch");
@@ -3257,7 +3258,8 @@ mod producer_tests {
             "SID-dialog-epoch",
             "TID-dialog-epoch",
             first_document,
-        );
+        )
+        .await;
         let observer = conn
             .runtime_session_owner_slot(Some("SID-dialog-epoch"))
             .expect("target Page runtime slot")
@@ -3268,7 +3270,8 @@ mod producer_tests {
             "SID-dialog-epoch",
             "TID-dialog-epoch",
             first_document,
-        );
+        )
+        .await;
         assert!(
             conn.runtime_session_owner_slot(Some("SID-dialog-epoch"))
                 .expect("target Page runtime slot")
@@ -3281,7 +3284,8 @@ mod producer_tests {
             "SID-dialog-epoch",
             "TID-dialog-epoch",
             renderer_document_identity_for_test(1, 2),
-        );
+        )
+        .await;
         assert!(
             !conn
                 .runtime_session_owner_slot(Some("SID-dialog-epoch"))
@@ -3320,7 +3324,8 @@ mod producer_tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-dialog-stale-page"),
-        ));
+        ))
+        .await;
 
         let mut out = Vec::new();
         super::emit_javascript_dialog_activity_background_events_async(
@@ -3472,13 +3477,18 @@ mod producer_tests {
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
-        let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(
-            &mut conn,
-            "SID-activity-order",
-            "TID-activity-order",
-            source_document,
-        );
+        conn.install_navigation_fixture_for_session_owner_for_test(
+            "about:blank",
+            Some("SID-activity-order"),
+        )
+        .await
+        .unwrap();
+        let source_document = conn
+            .committed_renderer_document_binding_for_owner(&CommandOwnerScope::for_session(
+                "SID-activity-order",
+            ))
+            .unwrap()
+            .renderer_document_identity();
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order").await;
         let popup_opening = super::popup::capture_openings_for_test(
             &mut conn,
@@ -3808,7 +3818,7 @@ mod producer_tests {
             .runtime_frontend_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let mut background_events = Vec::new();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -3832,11 +3842,11 @@ mod producer_tests {
         let out = protocol_messages_from_background_events(background_events);
 
         assert!(
-            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
-                &conn,
-                Some("SID-1")
-            )),
-            "prepared child-frame completion emission must not require a loaded page"
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .unwrap()
+                .current_renderer_inspection_binding()
+                .is_none(),
+            "prepared child-frame completion emission must not require renderer inspection"
         );
         assert!(out.iter().any(|message| {
             message["method"] == json!("Page.frameAttached")
@@ -3889,7 +3899,7 @@ mod producer_tests {
             .page_domain_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let mut background_events = Vec::new();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -3971,7 +3981,8 @@ mod producer_tests {
             "SID-primary",
             "TID-child-page-fanout",
             source_document,
-        );
+        )
+        .await;
         let activity =
             default_prepared_child_frame_activity_for_test(&conn, "SID-primary", source_document);
         let mut background_events = Vec::new();
@@ -4025,7 +4036,7 @@ mod producer_tests {
             .page_domain_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let mut background_events = Vec::new();
         let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
@@ -4159,7 +4170,7 @@ mod producer_tests {
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-ATTACHED")));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let mut background_events = Vec::new();
         let mut document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
@@ -4308,7 +4319,7 @@ mod producer_tests {
         conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let mut background_events = Vec::new();
         project_child_network_for_test(
             &mut conn,
@@ -4399,7 +4410,7 @@ mod producer_tests {
         conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let mut background_events = Vec::new();
         project_child_network_for_test(
             &mut conn,
@@ -4445,7 +4456,7 @@ mod producer_tests {
             .page_domain_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document).await;
         let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
             vec![super::PagePreparedChildFrameTreeEvent::Attached {
@@ -4509,11 +4520,11 @@ mod producer_tests {
             "attachment-only child-frame token should not synthesize navigation events"
         );
         assert!(
-            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
-                &conn,
-                Some("SID-1")
-            )),
-            "prepared attachment-only emission must not require live page readback"
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .unwrap()
+                .current_renderer_inspection_binding()
+                .is_none(),
+            "prepared attachment-only emission must not require renderer inspection"
         );
     }
 
@@ -4531,7 +4542,8 @@ mod producer_tests {
             "SID-child-page-owner",
             "TID-child-page-owner",
             source_document,
-        );
+        )
+        .await;
         let activity = default_prepared_child_frame_activity_for_test(
             &conn,
             "SID-child-page-owner",
@@ -4540,7 +4552,8 @@ mod producer_tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-child-page-owner"),
-        ));
+        ))
+        .await;
 
         let mut events = Vec::new();
         super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
@@ -4570,7 +4583,8 @@ mod producer_tests {
             "SID-child-root-document",
             "TID-child-root-document",
             source_document,
-        );
+        )
+        .await;
         let activity = default_prepared_child_frame_activity_for_test(
             &conn,
             "SID-child-root-document",
@@ -4581,7 +4595,8 @@ mod producer_tests {
             "SID-child-root-document",
             "TID-child-root-document",
             renderer_document_identity_for_test(2, 2),
-        );
+        )
+        .await;
 
         let mut events = Vec::new();
         super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
@@ -4615,7 +4630,8 @@ mod producer_tests {
             "SID-child-delivery-route",
             "TID-child-delivery-route",
             source_document,
-        );
+        )
+        .await;
         let activity = default_prepared_child_frame_activity_for_test(
             &conn,
             "SID-child-delivery-route",
@@ -4640,7 +4656,8 @@ mod producer_tests {
             "SID-child-delivery-route",
             "TID-child-delivery-route",
             renderer_document_identity_for_test(2, 2),
-        );
+        )
+        .await;
 
         assert!(
             events.iter().all(|event| !event.route_is_current(&conn)),
@@ -4662,7 +4679,8 @@ mod producer_tests {
             "SID-child-session",
             "TID-child-session",
             source_document,
-        );
+        )
+        .await;
         let activity = default_prepared_child_frame_activity_for_test(
             &conn,
             "SID-child-session",
@@ -5210,7 +5228,8 @@ mod producer_tests {
             "SID-stale-page-same-document",
             "TID-stale-page-same-document",
             source_document,
-        );
+        )
+        .await;
         let owner =
             page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document").await;
         conn.browser_context
@@ -5220,7 +5239,8 @@ mod producer_tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-stale-page-same-document"),
-        ));
+        ))
+        .await;
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
@@ -5259,7 +5279,8 @@ mod producer_tests {
         bc.attach_active_session("SID-location");
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-location", "TID-location", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-location", "TID-location", source_document)
+            .await;
 
         let target_url = "data:text/html,%3Cmain%3Eprepared-location%3C/main%3E".to_owned();
         let mut prepared =
@@ -5343,14 +5364,16 @@ mod producer_tests {
             "SID-document-open-location",
             "TID-document-open-location",
             source_document,
-        );
+        )
+        .await;
         let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-location").await;
         bind_renderer_document_for_test(
             &mut conn,
             "SID-document-open-location",
             "TID-document-open-location",
             replacement_document,
-        );
+        )
+        .await;
         let target_url = "data:text/html,%3Cmain%3Epreserved%3C/main%3E".to_owned();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -5407,7 +5430,8 @@ mod producer_tests {
             "SID-stale-page-location",
             "TID-stale-page-location",
             source_document,
-        );
+        )
+        .await;
         let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location").await;
         conn.browser_context
             .as_mut()
@@ -5416,7 +5440,8 @@ mod producer_tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-stale-page-location"),
-        ));
+        ))
+        .await;
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(

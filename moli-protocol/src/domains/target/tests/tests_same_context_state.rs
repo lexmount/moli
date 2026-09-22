@@ -867,7 +867,7 @@ async fn same_context_targets_restore_their_own_document_id_and_request_counters
         .attach_active_session("SID-active");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.set_active_document_fixture_for_test(11);
+        bc.set_active_document_fixture_for_test(11).await;
         bc.set_next_network_request_sequence_for_test(41);
         bc.set_subresource_network_emitted_record_count_for_test(12);
         bc.active_page_target_mut()
@@ -909,7 +909,7 @@ async fn same_context_targets_restore_their_own_document_id_and_request_counters
 
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.set_active_document_fixture_for_test(23);
+        bc.set_active_document_fixture_for_test(23).await;
         bc.set_next_network_request_sequence_for_test(71);
         bc.set_subresource_network_emitted_record_count_for_test(8);
         bc.active_page_target_mut()

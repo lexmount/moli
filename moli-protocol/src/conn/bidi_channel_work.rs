@@ -159,7 +159,7 @@ impl BidiChannelOwnerAction {
 mod tests {
     use super::*;
 
-    fn connection_with_page_session() -> CdpConnection {
+    async fn connection_with_page_session() -> CdpConnection {
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_browser_context_fixture_for_test("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-owner");
@@ -168,13 +168,14 @@ mod tests {
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-owner")),
             1,
-        );
+        )
+        .await;
         conn
     }
 
-    #[test]
-    fn page_owner_rejects_replacement_attachment() {
-        let mut conn = connection_with_page_session();
+    #[tokio::test]
+    async fn page_owner_rejects_replacement_attachment() {
+        let mut conn = connection_with_page_session().await;
         let owner = BidiChannelPageOwner::capture_for_owner(
             &conn,
             CommandOwnerScope::for_session("SID-owner"),
@@ -185,7 +186,8 @@ mod tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-owner"),
-        ));
+        ))
+        .await;
 
         assert!(
             !owner.is_current(&conn),
@@ -193,9 +195,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn page_owner_rejects_detached_session() {
-        let mut conn = connection_with_page_session();
+    #[tokio::test]
+    async fn page_owner_rejects_detached_session() {
+        let mut conn = connection_with_page_session().await;
         let owner = BidiChannelPageOwner::capture_for_owner(
             &conn,
             CommandOwnerScope::for_session("SID-owner"),
@@ -218,9 +220,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn implicit_page_owner_retains_its_frozen_route() {
-        let conn = connection_with_page_session();
+    #[tokio::test]
+    async fn implicit_page_owner_retains_its_frozen_route() {
+        let conn = connection_with_page_session().await;
         let owner_route = crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-owner".to_owned(),
             target_id: "TID-owner".to_owned(),

@@ -91,7 +91,8 @@ async fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialo
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &ctx.conn,
             Some("SID-dialog-clear"),
-        ));
+        ))
+        .await;
 
     ctx.conn
         .with_target_devtools_session_state_for_session_mut(Some("SID-dialog-clear"), |state| {

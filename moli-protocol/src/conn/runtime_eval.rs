@@ -6400,12 +6400,14 @@ mod tests {
         );
     }
 
-    fn connection_with_bidi_page_session() -> CdpConnection {
+    async fn connection_with_bidi_page_session() -> CdpConnection {
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_browser_context_fixture_for_test("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-active");
         browser_context.attach_active_session("SID-active".to_owned());
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
@@ -6457,9 +6459,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn runtime_remote_object_validation_tolerates_an_empty_browser_context() {
-        let mut conn = connection_with_bidi_page_session();
+    #[tokio::test]
+    async fn runtime_remote_object_validation_tolerates_an_empty_browser_context() {
+        let mut conn = connection_with_bidi_page_session().await;
         conn.insert_browser_context(
             conn.new_browser_context_fixture_for_test("BID-empty".to_owned()),
         );
@@ -8478,9 +8480,9 @@ mod tests {
         });
     }
 
-    #[test]
-    fn bidi_channel_listener_owner_work_publishes_concrete_scheduler_work() {
-        let mut conn = connection_with_bidi_page_session();
+    #[tokio::test]
+    async fn bidi_channel_listener_owner_work_publishes_concrete_scheduler_work() {
+        let mut conn = connection_with_bidi_page_session().await;
         let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "wake");
         conn.publish_bidi_channel_listener_start(listener);
 
@@ -8500,9 +8502,9 @@ mod tests {
         assert_eq!(work.publish_sequence().get(), 1);
     }
 
-    #[test]
-    fn bidi_channel_actions_keep_causal_publication_order() {
-        let mut conn = connection_with_bidi_page_session();
+    #[tokio::test]
+    async fn bidi_channel_actions_keep_causal_publication_order() {
+        let mut conn = connection_with_bidi_page_session().await;
         let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "ordered");
         let owner = listener.owner().clone();
         conn.publish_bidi_channel_listener_start(listener);
@@ -9052,14 +9054,16 @@ mod tests {
         );
     }
 
-    #[test]
-    fn bidi_listener_cancellation_discards_correlation_registered_first() {
+    #[tokio::test]
+    async fn bidi_listener_cancellation_discards_correlation_registered_first() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-listener-cancel".to_owned());
         browser_context.set_active_target_id("TID-listener-cancel".to_owned());
         browser_context.attach_active_session("SID-listener-cancel".to_owned());
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.try_register_renderer_call_for_session_owner(
@@ -9278,7 +9282,7 @@ mod tests {
 
     #[tokio::test]
     async fn failing_pending_awaits_retire_concrete_listener_work_without_client_error() {
-        let mut conn = connection_with_bidi_page_session();
+        let mut conn = connection_with_bidi_page_session().await;
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
@@ -9294,7 +9298,8 @@ mod tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-active"),
-        ));
+        ))
+        .await;
 
         let mut direct_events = Vec::new();
         let mut claimed_events = Vec::new();
@@ -9354,7 +9359,7 @@ mod tests {
 
     #[tokio::test]
     async fn failed_bidi_listener_reply_publishes_concrete_object_group_release() {
-        let mut conn = connection_with_bidi_page_session();
+        let mut conn = connection_with_bidi_page_session().await;
         let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "error");
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
@@ -9400,7 +9405,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_bidi_object_group_release_does_not_mutate_replacement_page_state() {
-        let mut conn = connection_with_bidi_page_session();
+        let mut conn = connection_with_bidi_page_session().await;
         let listener =
             bidi_channel_listener_residence_for_test(&conn, "SID-active", "stale-release");
         conn.register_pending_bidi_channel_listener(8, Some("SID-active"), listener);
@@ -9425,7 +9430,8 @@ mod tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-active"),
-        ));
+        ))
+        .await;
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],
@@ -9444,16 +9450,17 @@ mod tests {
         );
     }
 
-    #[test]
-    fn stale_bidi_listener_reply_does_not_emit_or_restart_on_replacement_page() {
-        let mut conn = connection_with_bidi_page_session();
+    #[tokio::test]
+    async fn stale_bidi_listener_reply_does_not_emit_or_restart_on_replacement_page() {
+        let mut conn = connection_with_bidi_page_session().await;
         let listener = bidi_channel_listener_residence_for_test(&conn, "SID-active", "stale-reply");
         conn.register_pending_bidi_channel_listener(9, Some("SID-active"), listener);
 
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-active"),
-        ));
+        ))
+        .await;
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],

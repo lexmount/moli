@@ -12,16 +12,6 @@ use crate::{
 use super::BrowserContext;
 
 impl BrowserContext {
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
-    pub fn clear_web_contents_javascript_dialogs_for_test(
-        &mut self,
-        handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        self.web_contents_mut(handle)?.javascript_dialogs.clear();
-        Ok(())
-    }
-
     pub fn web_contents_has_pending_javascript_dialog(
         &self,
         handle: WebContentsHandle,

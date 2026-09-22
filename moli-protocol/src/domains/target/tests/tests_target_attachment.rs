@@ -3783,10 +3783,12 @@ async fn non_browser_auto_attach_owners_do_not_replay_existing_shared_worker_tar
         .expect("page session binding");
     ctx.conn
         .register_session_route_for_test("SID-page", page_route);
-    ctx.conn.set_document_fixture_for_owner_test(
-        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-page")),
-        1,
-    );
+    ctx.conn
+        .set_document_fixture_for_owner_test(
+            &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-page")),
+            1,
+        )
+        .await;
     let owner_page = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-page"))

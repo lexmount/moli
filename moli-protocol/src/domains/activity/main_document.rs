@@ -814,7 +814,7 @@ mod tests {
         }
     }
 
-    fn connection_with_dcl_only_renderer_lifecycle() -> (
+    async fn connection_with_dcl_only_renderer_lifecycle() -> (
         CdpConnection,
         CommittedRendererDocumentBinding,
         RendererDocumentLifecycleEvent,
@@ -825,7 +825,9 @@ mod tests {
         browser_context.set_active_target_id("TID-deferred-load-observer");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/start".to_owned());
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_id = moli_core::PageId::new_for_testing(71);
@@ -1370,7 +1372,7 @@ mod tests {
 
     #[tokio::test]
     async fn deferred_load_observer_waits_for_load_not_domcontentloaded() {
-        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle().await;
         let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
             &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
@@ -1396,7 +1398,7 @@ mod tests {
 
     #[tokio::test]
     async fn deferred_load_terminal_before_adapter_wait_is_not_lost() {
-        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle().await;
         let admission = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(admission);
         let work = take_deferred_load_work_for_test(&mut conn);
@@ -1415,9 +1417,9 @@ mod tests {
         assert_eq!(completed.observation_id(), observation_id);
     }
 
-    #[test]
-    fn same_owner_load_admissions_publish_distinct_ordered_work() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
+    #[tokio::test]
+    async fn same_owner_load_admissions_publish_distinct_ordered_work() {
+        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle().await;
         let first = deferred_load_admission_for_test(binding.clone());
         let second = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(first);
@@ -1449,7 +1451,7 @@ mod tests {
 
     #[tokio::test]
     async fn deferred_load_work_remains_resident_without_republication_until_terminal() {
-        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle().await;
         let admission = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(admission);
         let work = take_deferred_load_work_for_test(&mut conn);
@@ -1486,7 +1488,7 @@ mod tests {
 
     #[tokio::test]
     async fn deferred_load_observer_reports_exact_document_interruption() {
-        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, started) = connection_with_dcl_only_renderer_lifecycle().await;
         let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
             &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
@@ -1506,7 +1508,7 @@ mod tests {
 
     #[tokio::test]
     async fn newer_document_navigation_supersedes_deferred_load_observer() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle().await;
         let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
             &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
@@ -1526,7 +1528,7 @@ mod tests {
 
     #[tokio::test]
     async fn losing_page_slot_terminates_deferred_load_observer() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle().await;
         let observer = conn.register_exact_renderer_document_lifecycle_observer_for_owner(
             &CommandOwnerScope::for_session("SID-nav"),
             Some(&binding),
@@ -1542,7 +1544,7 @@ mod tests {
 
     #[tokio::test]
     async fn superseded_deferred_load_completion_is_consumed_through_its_observer() {
-        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle();
+        let (mut conn, binding, _) = connection_with_dcl_only_renderer_lifecycle().await;
         let old_completion = deferred_load_admission_for_test(binding);
         conn.enqueue_deferred_main_document_load_completion(old_completion);
         let work = take_deferred_load_work_for_test(&mut conn);

@@ -625,7 +625,7 @@ mod tests {
         let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
@@ -689,11 +689,11 @@ mod tests {
             .await;
 
         assert!(
-            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
-                &conn,
-                Some("SID-1")
-            )),
-            "prepared pending subresource continue emission must not require a loaded page"
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .unwrap()
+                .current_renderer_inspection_binding()
+                .is_none(),
+            "prepared pending subresource continue emission must not require renderer inspection"
         );
         let out = context
             .command
@@ -716,7 +716,7 @@ mod tests {
         let mut bc = conn.new_browser_context_fixture_for_test("BID-collision");
         bc.set_active_target_id("TID-collision");
         bc.attach_active_session("SID-collision");
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
 
         let old_owner = conn
@@ -755,7 +755,8 @@ mod tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-collision"),
-        ));
+        ))
+        .await;
         let replacement_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("replacement Page residence should exist");
@@ -797,7 +798,7 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("FETCH-SID")));
         let page_owner = conn
@@ -816,11 +817,11 @@ mod tests {
             .await;
 
         assert!(
-            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
-                &conn,
-                Some("SID-1")
-            )),
-            "prepared subresource fetch interception emission must not require a loaded page"
+            conn.runtime_session_owner_slot(Some("SID-1"))
+                .unwrap()
+                .current_renderer_inspection_binding()
+                .is_none(),
+            "prepared subresource fetch interception emission must not require renderer inspection"
         );
         let out = context
             .command
@@ -854,7 +855,7 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))

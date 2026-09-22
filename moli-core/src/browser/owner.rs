@@ -2259,17 +2259,6 @@ impl BrowserContextHandle {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn clear_web_contents_javascript_dialogs_for_test(
-        &self,
-        handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        self.try_update(move |context| {
-            context.clear_web_contents_javascript_dialogs_for_test(handle)
-        })
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[doc(hidden)]
     pub fn mark_initial_empty_document_materialized_for_test(
         &self,
         handle: WebContentsHandle,

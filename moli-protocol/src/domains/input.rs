@@ -2093,7 +2093,7 @@ mod producer_tests {
         }
     }
 
-    fn bind_renderer_document_for_test(
+    async fn bind_renderer_document_for_test(
         conn: &mut CdpConnection,
         session_id: &str,
         frame_id: &str,
@@ -2101,7 +2101,8 @@ mod producer_tests {
     ) {
         let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
         if conn.current_document_id_for_owner(&owner).is_none() {
-            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64());
+            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64())
+                .await;
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -2299,7 +2300,8 @@ mod producer_tests {
             .page_file_chooser_opened_event_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-typed", "ROOT-typed", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-typed", "ROOT-typed", source_document)
+            .await;
         let owner = page_residence_identity_for_test(&conn, "SID-typed");
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
 
@@ -2343,8 +2345,8 @@ mod producer_tests {
         );
     }
 
-    #[test]
-    fn file_chooser_capture_resolves_root_frame_once() {
+    #[tokio::test]
+    async fn file_chooser_capture_resolves_root_frame_once() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-root-capture");
         bc.set_active_target_id("TID-root-capture");
@@ -2356,7 +2358,8 @@ mod producer_tests {
             "SID-root-capture",
             "TID-root-capture",
             source_document,
-        );
+        )
+        .await;
         let owner = page_residence_identity_for_test(&conn, "SID-root-capture");
 
         let prepared = super::file_chooser::PreparedFileChooserActivation::capture(
@@ -2388,7 +2391,8 @@ mod producer_tests {
             "SID-document-collision",
             "TID-document-collision",
             source_document,
-        );
+        )
+        .await;
         let owner = page_residence_identity_for_test(&conn, "SID-document-collision");
         let prepared = super::file_chooser::PreparedFileChooserActivation::capture(
             &conn,
@@ -2404,7 +2408,8 @@ mod producer_tests {
             "SID-document-collision",
             "TID-document-collision",
             replacement_document,
-        );
+        )
+        .await;
         let mut out = Vec::new();
 
         super::file_chooser::emit_prepared_activation_async(
@@ -2459,7 +2464,8 @@ mod producer_tests {
             "SID-page-replacement",
             "TID-page-replacement",
             source_document,
-        );
+        )
+        .await;
         let owner = page_residence_identity_for_test(&conn, "SID-page-replacement");
         let stale = super::file_chooser::PreparedFileChooserActivation::capture(
             &conn,
@@ -2471,14 +2477,16 @@ mod producer_tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-page-replacement"),
-        ));
+        ))
+        .await;
         let replacement_document = renderer_document_identity_for_test(2, 2);
         bind_renderer_document_for_test(
             &mut conn,
             "SID-page-replacement",
             "TID-page-replacement",
             replacement_document,
-        );
+        )
+        .await;
         let replacement_owner = page_residence_identity_for_test(&conn, "SID-page-replacement");
         let current = super::file_chooser::PreparedFileChooserActivation::capture(
             &conn,
@@ -2579,7 +2587,7 @@ mod producer_tests {
             .page_file_chooser_opened_event_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-1", "ROOT-1", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-1", "ROOT-1", source_document).await;
         let owner = page_residence_identity_for_test(&conn, "SID-1");
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut prepared =
@@ -2627,7 +2635,8 @@ mod producer_tests {
             .page_file_chooser_opened_event_enabled = true;
         conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
-        bind_renderer_document_for_test(&mut conn, "SID-context", "ROOT-context", source_document);
+        bind_renderer_document_for_test(&mut conn, "SID-context", "ROOT-context", source_document)
+            .await;
         let owner = page_residence_identity_for_test(&conn, "SID-context");
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut prepared =

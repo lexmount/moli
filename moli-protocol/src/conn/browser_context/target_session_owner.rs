@@ -2163,20 +2163,24 @@ mod tests {
         );
     }
 
-    #[test]
-    fn renderer_runtime_inspector_session_id_tracks_owner_session_kind() {
+    #[tokio::test]
+    async fn renderer_runtime_inspector_session_id_tracks_owner_session_kind() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-owner-key".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active-primary".to_owned());
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background-primary".to_owned()),
             "about:blank#background".to_owned(),
         );
-        browser_context.set_document_id_for_test_for_target("TID-background", 2);
+        browser_context
+            .set_document_id_for_test_for_target("TID-background", 2)
+            .await;
         assert!(
             browser_context
                 .assign_attached_session_to_target("TID-active", "SID-active-attached".to_owned(),)
@@ -3004,8 +3008,8 @@ mod tests {
         assert!(!background.has_pending_document_navigation_for_target("TID-background"));
     }
 
-    #[test]
-    fn target_page_residence_identity_rejects_context_target_and_attachment_collisions() {
+    #[tokio::test]
+    async fn target_page_residence_identity_rejects_context_target_and_attachment_collisions() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-page-residence".to_owned());
@@ -3015,7 +3019,8 @@ mod tests {
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-page-residence")),
             41,
-        );
+        )
+        .await;
 
         let current = conn
             .target_page_residence_identity_for_session(Some("SID-page-residence"))
@@ -3082,8 +3087,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn implicit_active_route_freezes_the_concrete_target_in_page_residence() {
+    #[tokio::test]
+    async fn implicit_active_route_freezes_the_concrete_target_in_page_residence() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-implicit-page-residence".to_owned());
@@ -3092,7 +3097,8 @@ mod tests {
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, None),
             1,
-        );
+        )
+        .await;
 
         let original = conn
             .target_page_residence_identity_for_session(None)
@@ -3234,8 +3240,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn runtime_event_attachments_include_every_enabled_session_on_the_exact_page() {
+    #[tokio::test]
+    async fn runtime_event_attachments_include_every_enabled_session_on_the_exact_page() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-runtime-events".to_owned());
@@ -3251,7 +3257,9 @@ mod tests {
             "TID-runtime-events",
             "SID-runtime-disabled".to_owned(),
         ));
-        browser_context.set_active_document_fixture_for_test(41);
+        browser_context
+            .set_active_document_fixture_for_test(41)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-runtime-b"), |state| {
@@ -3290,14 +3298,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn attached_event_source_preserves_unbound_primary_audience_and_flags() {
+    #[tokio::test]
+    async fn attached_event_source_preserves_unbound_primary_audience_and_flags() {
         let mut conn = crate::test_support::connection();
         let mut context = conn.new_page_target_fixture_for_test("BID-audience", "TID-audience");
         assert!(
             context.assign_attached_session_to_target("TID-audience", "SID-emitter".to_owned())
         );
-        context.set_active_document_fixture_for_test(41);
+        context.set_active_document_fixture_for_test(41).await;
         conn.install_browser_context_fixture_for_test(context);
         let emitter = CommandOwnerScope::for_session("SID-emitter");
         assert_eq!(
@@ -3381,8 +3389,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn connection_runtime_slot_reference_reads_and_mutates_active_background_and_attached_slots() {
+    #[tokio::test]
+    async fn connection_runtime_slot_reference_reads_and_mutates_active_background_and_attached_slots()
+     {
         let mut conn = crate::test_support::connection();
         let mut active = conn.new_page_target_fixture_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
@@ -3426,15 +3435,18 @@ mod tests {
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-active")),
             11,
-        );
+        )
+        .await;
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-background")),
             22,
-        );
+        )
+        .await;
         conn.set_document_fixture_for_owner_test(
             &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-attached-inactive")),
             33,
-        );
+        )
+        .await;
 
         assert_eq!(
             conn.current_document_id_for_owner(&crate::conn::CommandOwnerScope::capture(

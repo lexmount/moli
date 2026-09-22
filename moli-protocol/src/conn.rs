@@ -641,7 +641,7 @@ pub struct CompletedDeferredMainDocumentLoadCompletion {
 pub struct DeferredMainDocumentLoadObservationId(u64);
 
 impl DeferredMainDocumentLoadObservationId {
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn from_test_value(value: u64) -> Self {
         assert_ne!(value, 0, "load observation identity starts at one");
         Self(value)
@@ -755,7 +755,7 @@ impl DeferredMainDocumentLoadCompletionOutputInterest {
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn from_test_residence(
         renderer_page: RendererPageResidenceIdentity,
         renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
@@ -1783,7 +1783,7 @@ impl CdpConnection {
     }
 
     #[cfg(test)]
-    pub(crate) fn set_document_fixture_for_owner_test(
+    pub(crate) async fn set_document_fixture_for_owner_test(
         &mut self,
         owner: &CommandOwnerScope,
         raw: u64,
@@ -1794,10 +1794,11 @@ impl CdpConnection {
         self.browser_context_by_id_mut(&context_id)
             .unwrap()
             .set_document_id_for_test_for_target(&target_id, raw)
+            .await
     }
 
     #[cfg(test)]
-    pub(crate) fn replace_document_fixture_for_owner_test(
+    pub(crate) async fn replace_document_fixture_for_owner_test(
         &mut self,
         owner: &CommandOwnerScope,
     ) -> state::DocumentId {
@@ -1807,6 +1808,7 @@ impl CdpConnection {
         self.browser_context_by_id_mut(&context_id)
             .unwrap()
             .replace_document_id_for_test_for_target(&target_id)
+            .await
     }
 
     #[cfg(test)]

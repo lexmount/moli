@@ -2086,13 +2086,15 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
     );
 }
 
-#[test]
-fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() {
+#[tokio::test]
+async fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() {
     let mut conn = crate::test_support::connection();
     let mut browser_context = conn.new_browser_context_fixture_for_test("BID-lifecycle-wait");
     browser_context.set_active_target_id("TID-lifecycle-wait".to_owned());
     browser_context.attach_active_session("SID-lifecycle-wait");
-    browser_context.set_active_document_fixture_for_test(901);
+    browser_context
+        .set_active_document_fixture_for_test(901)
+        .await;
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let page_id = moli_core::PageId::new_for_testing(901);
@@ -2221,7 +2223,9 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     let mut replacement_context = conn.new_browser_context_fixture_for_test("BID-other");
     replacement_context.set_active_target_id("TID-other".to_owned());
     replacement_context.attach_active_session("SID-lifecycle-wait");
-    replacement_context.set_active_document_fixture_for_test(902);
+    replacement_context
+        .set_active_document_fixture_for_test(902)
+        .await;
     conn.install_browser_context_fixture_for_test(replacement_context);
     let (_, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
@@ -2257,18 +2261,22 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     );
 }
 
-#[test]
-fn devtools_target_context_resolves_background_page_without_ambient_route() {
+#[tokio::test]
+async fn devtools_target_context_resolves_background_page_without_ambient_route() {
     let mut conn = crate::test_support::connection();
     let mut browser_context = conn.new_browser_context_fixture_for_test("BID-explicit-owner");
     browser_context.set_active_target_id("TID-active");
-    browser_context.set_active_document_fixture_for_test(1001);
+    browser_context
+        .set_active_document_fixture_for_test(1001)
+        .await;
     assert!(browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         None,
         "about:blank".to_owned(),
     ));
-    browser_context.set_document_id_for_test_for_target("TID-background", 1002);
+    browser_context
+        .set_document_id_for_test_for_target("TID-background", 1002)
+        .await;
     browser_context.begin_target_document_navigation("TID-background", "LID-background".to_owned());
     conn.install_browser_context_fixture_for_test(browser_context);
 

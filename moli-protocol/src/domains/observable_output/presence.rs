@@ -587,7 +587,7 @@ mod tests {
         observable_source_activity_outputs, runtime_lifecycle_error_prepared_outputs,
     };
 
-    fn runtime_lifecycle_error_audience(enabled_session_ids: &[&str]) -> Vec<Option<String>> {
+    async fn runtime_lifecycle_error_audience(enabled_session_ids: &[&str]) -> Vec<Option<String>> {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_browser_context_fixture_for_test("BID-runtime-lifecycle".to_owned());
         bc.set_active_target_id("TID-runtime-lifecycle".to_owned());
@@ -601,7 +601,7 @@ mod tests {
             "TID-runtime-lifecycle",
             "SID-runtime-disabled".to_owned(),
         ));
-        bc.set_active_document_fixture_for_test(17);
+        bc.set_active_document_fixture_for_test(17).await;
         conn.install_browser_context_fixture_for_test(bc);
         for session_id in enabled_session_ids {
             conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
@@ -622,11 +622,11 @@ mod tests {
         .collect()
     }
 
-    #[test]
-    fn observable_source_outputs_own_runtime_observable_presence() {
+    #[tokio::test]
+    async fn observable_source_outputs_own_runtime_observable_presence() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -651,15 +651,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn runtime_lifecycle_error_freezes_every_enabled_attachment_only() {
+    #[tokio::test]
+    async fn runtime_lifecycle_error_freezes_every_enabled_attachment_only() {
         assert_eq!(
-            runtime_lifecycle_error_audience(&["SID-runtime-b"]),
+            runtime_lifecycle_error_audience(&["SID-runtime-b"]).await,
             vec![Some("SID-runtime-b".to_owned())],
             "a disabled source attachment must not hide its enabled peer"
         );
         assert_eq!(
-            runtime_lifecycle_error_audience(&["SID-runtime-a", "SID-runtime-b"]),
+            runtime_lifecycle_error_audience(&["SID-runtime-a", "SID-runtime-b"]).await,
             vec![
                 Some("SID-runtime-a".to_owned()),
                 Some("SID-runtime-b".to_owned()),
@@ -668,12 +668,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observable_source_sync_is_independent_from_runtime_emission() {
+    #[tokio::test]
+    async fn observable_source_sync_is_independent_from_runtime_emission() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.set_target_url("data:text/html,console-only-source".to_owned());
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -721,11 +721,11 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observable_source_outputs_require_concrete_runtime_prepared_items() {
+    #[tokio::test]
+    async fn observable_source_outputs_require_concrete_runtime_prepared_items() {
         let mut conn = crate::test_support::connection();
         let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
-        bc.set_active_document_fixture_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state

@@ -427,8 +427,7 @@ mod tests {
      {
         use super::*;
         use moli_core::{
-            RendererOutputCursor, RendererOutputRecord, RendererOutputStreamIdentity,
-            RendererProtocolObservation,
+            RendererOutputCursor, RendererOutputRecord, RendererProtocolObservation,
             page::{
                 RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
                 RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
@@ -447,13 +446,37 @@ mod tests {
             let mut conn = crate::test_support::connection();
             let mut context = conn.new_browser_context_fixture_for_test(CONTEXT);
             context.set_active_target_id(TARGET);
-            context.set_active_document_fixture_for_test(1);
-            let page_id = moli_core::PageId::new_for_testing(42);
-            let stream = RendererOutputStreamIdentity::new_page_for_protocol_test(page_id);
+            context.set_active_document_fixture_for_test(1).await;
+            let (sender, mut outputs) = moli_core::renderer_output_transport_channel();
+            context
+                .loaded_document_renderer_inspection_endpoint_for_test()
+                .unwrap()
+                .bind_output_transport(sender)
+                .unwrap();
+            let (native, document) = context.inspection_document_handle_for_test(TARGET).unwrap();
+            native
+                .evaluate_document_expression_for_test(
+                    document,
+                    "console.log('lifecycle fixture stream')",
+                    false,
+                )
+                .await
+                .unwrap();
+            let stream = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let moli_core::RendererOutputTransportMessage::Publication(publication) =
+                        outputs.recv().await.unwrap()
+                    {
+                        break publication.cursor().stream();
+                    }
+                }
+            })
+            .await
+            .expect("real renderer must publish the fixture console output");
             let renderer_page =
                 crate::conn::RendererPageResidenceIdentity::from_residence(stream.residence())
                     .unwrap();
-            context.reserve_renderer_document_for_target(TARGET, renderer_page);
+            let page_id = renderer_page.page_id();
             let started = RendererDocumentLifecycleEvent {
                 frame: RendererFrameToken { page_id },
                 document: RendererDocumentToken::new_for_testing(page_id, 1),
@@ -624,8 +647,9 @@ mod tests {
         }
     }
 
-    #[test]
-    fn unbound_owner_actions_choose_a_stable_attachment_without_overriding_exact_root_cause() {
+    #[tokio::test]
+    async fn unbound_owner_actions_choose_a_stable_attachment_without_overriding_exact_root_cause()
+    {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-owner-action".to_owned());
@@ -636,7 +660,9 @@ mod tests {
                 "SID-owner-action".to_owned(),
             )
         );
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
         let owner = CommandOwnerScope::capture(&conn, None);
 

@@ -258,7 +258,7 @@ mod tests {
                 .as_mut()
                 .expect("browser context should exist");
             bc.set_target_url("http://example.test/runtime-source".to_owned());
-            bc.set_active_document_fixture_for_test(3);
+            bc.set_active_document_fixture_for_test(3).await;
             bc.sync_observable_output_source_from_renderer_snapshot_for_target(
                 &bc.active_target_id_owned().unwrap(),
                 "http://example.test/runtime-source".to_owned(),

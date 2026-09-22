@@ -1,6 +1,4 @@
 use super::BrowserContext;
-#[cfg(test)]
-use moli_core::browser::DocumentLifetime;
 use moli_core::browser::DocumentLifetimeObserver;
 #[cfg(test)]
 use moli_core::page::RendererLifecycleEventStamp;
@@ -217,8 +215,6 @@ impl PendingRendererPageBinding {
 #[derive(Debug, Default)]
 pub(crate) struct TargetPageSlot {
     loaded_page_absence_reason: TargetPageAbsenceReason,
-    #[cfg(test)]
-    document_fixture: Option<DocumentFixture>,
     // Frontend correlation only. Selection comes from the navigation state;
     // retain at most the pending and committed navigation's loader mappings.
     cdp_navigation_loaders: Vec<(NavigationId, NavigationProtocolProjection)>,
@@ -263,17 +259,6 @@ impl From<String> for NavigationProtocolProjection {
     }
 }
 
-// Legacy routing tests can describe a remote Document without constructing a
-// renderer Page. This is never a production DocumentHost and is deleted with
-// TargetPageSlot when the AgentHost routing tests cut over (Commit 30).
-#[cfg(test)]
-#[derive(Debug)]
-struct DocumentFixture {
-    id: DocumentId,
-    lifecycle: DocumentLifecycle,
-    lifetime: DocumentLifetime,
-}
-
 impl TargetPageSlot {
     pub(crate) fn empty_for_initial_document_page_build() -> Self {
         Self {
@@ -299,10 +284,6 @@ impl TargetPageSlot {
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
         self.root_post_load_observation = None;
         self.cdp_navigation_loaders.clear();
-        #[cfg(test)]
-        if let Some(fixture) = self.document_fixture.take() {
-            fixture.lifetime.supersede();
-        }
     }
 
     fn loader_id_for_navigation(&self, navigation: NavigationId) -> Option<&str> {
@@ -639,15 +620,6 @@ impl BrowserContext {
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .root_post_load_observation = None;
-        #[cfg(test)]
-        if let Some(fixture) = self
-            .page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .document_fixture
-            .take()
-        {
-            fixture.lifetime.supersede();
-        }
     }
 
     pub(crate) fn target_document_id(&self, target_id: &str) -> Option<DocumentId> {
@@ -658,21 +630,11 @@ impl BrowserContext {
             return Some(binding.document_id);
         }
         let handle = self.web_contents_handle_for_target(target_id)?;
-        let id = self
-            .browser_context
+        self.browser_context
             .document_handle(handle)
             .ok()
             .flatten()
-            .map(|document| document.id());
-        #[cfg(test)]
-        let id = id.or_else(|| {
-            self.page_slot_for_target(target_id)
-                .expect("registered Target projection")
-                .document_fixture
-                .as_ref()
-                .map(|fixture| fixture.id)
-        });
-        id
+            .map(|document| document.id())
     }
 
     #[cfg(test)]
@@ -680,8 +642,7 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<moli_core::page::RendererDocumentLifecycleSnapshot> {
-        let snapshot = self
-            .web_contents_handle_for_target(target_id)
+        self.web_contents_handle_for_target(target_id)
             .and_then(|web_contents| {
                 self.browser_context
                     .document_handle(web_contents)
@@ -693,16 +654,7 @@ impl BrowserContext {
                             .ok()
                             .flatten()
                     })
-            });
-        #[cfg(test)]
-        let snapshot = snapshot.or_else(|| {
-            self.page_slot_for_target(target_id)
-                .expect("registered Target projection")
-                .document_fixture
-                .as_ref()
-                .and_then(|fixture| fixture.lifecycle.snapshot())
-        });
-        snapshot
+            })
     }
 
     #[cfg(test)]
@@ -716,40 +668,23 @@ impl BrowserContext {
         let web_contents = self
             .web_contents_handle_for_target(target_id)
             .expect("registered Target must reference live WebContents");
-        let physical_document = self
+        let document = self
             .browser_context
             .document_handle(web_contents)
-            .expect("registered Target must reference live WebContents");
-        if let Some(document) = physical_document {
-            // Binding a frontend fixture cannot roll a live native journal
-            // back to the earlier Page-creation handoff.
-            if previous.is_some_and(|current| {
-                current.frame == snapshot.frame
-                    && current.document == snapshot.document
-                    && current.sequence() >= snapshot.sequence()
-            }) {
-                return;
-            }
-            self.browser_context
-                .install_document_lifecycle_for_test(document, lifecycle)
-                .expect("current fixture Document");
-        } else {
-            self.page_slot_for_target_mut(target_id)
-                .unwrap()
-                .document_fixture
-                .as_mut()
-                .expect("current fixture Document")
-                .lifecycle = lifecycle;
+            .expect("registered Target must reference live WebContents")
+            .expect("native fixture Document");
+        // Binding a frontend fixture cannot roll a live native journal
+        // back to the earlier Page-creation handoff.
+        if previous.is_some_and(|current| {
+            current.frame == snapshot.frame
+                && current.document == snapshot.document
+                && current.sequence() >= snapshot.sequence()
+        }) {
+            return;
         }
-        if previous.map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch))
-            != Some((snapshot.frame, snapshot.document, snapshot.epoch))
-            || snapshot.terminated.is_some()
-        {
-            let handle = self.web_contents_handle_for_target(target_id).unwrap();
-            self.browser_context
-                .clear_web_contents_javascript_dialogs_for_test(handle)
-                .unwrap();
-        }
+        self.browser_context
+            .install_document_lifecycle_for_test(document, lifecycle)
+            .expect("current fixture Document");
     }
 
     #[cfg(test)]
@@ -758,47 +693,6 @@ impl BrowserContext {
         target_id: &str,
         event: RendererDocumentLifecycleEvent,
     ) -> bool {
-        let handle = self
-            .web_contents_handle_for_target(target_id)
-            .expect("registered Target must reference live WebContents");
-        if !self.browser_context.has_loaded_document(handle)
-            && let Some(fixture) = self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .document_fixture
-                .as_mut()
-        {
-            let restarts = fixture
-                .lifecycle
-                .snapshot()
-                .is_some_and(|snapshot| snapshot.epoch != event.epoch);
-            let accepted = fixture.lifecycle.observe(event);
-            if accepted
-                && (restarts
-                    || matches!(
-                        event.kind,
-                        RendererDocumentLifecycleEventKind::Terminated { .. }
-                    ))
-            {
-                self.browser_context
-                    .clear_web_contents_javascript_dialogs_for_test(handle)
-                    .unwrap();
-            }
-            if accepted
-                && matches!(
-                    event.kind,
-                    RendererDocumentLifecycleEventKind::Started {
-                        reason: RendererLifecycleStartReason::ExplicitDocumentOpen
-                            | RendererLifecycleStartReason::JavascriptDocumentReplacement
-                    }
-                )
-            {
-                self.browser_context
-                    .mark_initial_empty_document_exited_for_test(handle)
-                    .unwrap();
-            }
-            return accepted;
-        }
         let document = self
             .document_handle_for_target(target_id)
             .expect("current fixture Document");
@@ -883,37 +777,30 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<DocumentLifetimeObserver> {
         let web_contents = self.web_contents_handle_for_target(target_id)?;
-        let physical_document = self
+        let document = self
             .browser_context
             .document_handle(web_contents)
             .ok()
-            .flatten();
-        if let Some(document) = physical_document {
-            return self
-                .browser_context
-                .observe_document_lifetime(document)
-                .ok();
-        }
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .document_fixture
-            .as_mut()
-            .map(|fixture| fixture.lifetime.observe())
+            .flatten()?;
+        self.browser_context
+            .observe_document_lifetime(document)
+            .ok()
     }
 
     #[cfg(test)]
-    pub(crate) fn set_document_id_for_test_for_target(
+    pub(crate) async fn set_document_id_for_test_for_target(
         &mut self,
         target_id: &str,
         raw: u64,
     ) -> DocumentId {
         let document_id = DocumentId::from_raw_for_test(raw);
-        self.install_document_id_for_test_for_target(target_id, document_id);
+        self.install_document_id_for_test_for_target(target_id, document_id)
+            .await;
         document_id
     }
 
     #[cfg(test)]
-    pub(crate) fn replace_document_id_for_test_for_target(
+    pub(crate) async fn replace_document_id_for_test_for_target(
         &mut self,
         target_id: &str,
     ) -> DocumentId {
@@ -921,12 +808,13 @@ impl BrowserContext {
         while self.target_document_id(target_id) == Some(document_id) {
             document_id = DocumentId::allocate();
         }
-        self.install_document_id_for_test_for_target(target_id, document_id);
+        self.install_document_id_for_test_for_target(target_id, document_id)
+            .await;
         document_id
     }
 
     #[cfg(test)]
-    pub(crate) fn install_document_id_for_test_for_target(
+    pub(crate) async fn install_document_id_for_test_for_target(
         &mut self,
         target_id: &str,
         document_id: DocumentId,
@@ -947,34 +835,14 @@ impl BrowserContext {
             .finish_renderer_document_lifecycle_observers(
                 RendererDocumentLifecycleObservation::Superseded,
             );
-        if let Some(document) = self
+        let document = self
             .browser_context
-            .document_handle(web_contents)
-            .expect("registered Target must reference live WebContents")
-        {
-            self.browser_context
-                .replace_document_identity_for_test(document, document_id)
-                .expect("current fixture Document");
-        } else {
-            self.browser_context
-                .clear_web_contents_javascript_dialogs_for_test(web_contents)
-                .unwrap();
-            if let Some(fixture) = self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .document_fixture
-                .take()
-            {
-                fixture.lifetime.supersede();
-            }
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .document_fixture = Some(DocumentFixture {
-                id: document_id,
-                lifecycle: DocumentLifecycle::default(),
-                lifetime: DocumentLifetime::default(),
-            });
-        }
+            .materialize_initial_document_for_test(web_contents)
+            .await
+            .expect("native fixture Document must materialize");
+        self.browser_context
+            .replace_document_identity_for_test(document, document_id)
+            .expect("current fixture Document");
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
@@ -1201,8 +1069,7 @@ impl BrowserContext {
         }
         // Construction and failed inspection rebinds may have no projected
         // binding yet. Resolve those exceptional paths at the native owner.
-        let matches = self
-            .web_contents_handle_for_target(target_id)
+        self.web_contents_handle_for_target(target_id)
             .is_some_and(|contents| {
                 self.browser_context
                     .document_renderer_residence(moli_core::browser::DocumentHandle::new(
@@ -1211,19 +1078,7 @@ impl BrowserContext {
                     ))
                     .ok()
                     == Some(renderer_page)
-            });
-        #[cfg(test)]
-        let matches = matches
-            || self.page_slot_for_target(target_id).is_some_and(|slot| {
-                slot.document_fixture
-                    .as_ref()
-                    .is_some_and(|fixture| fixture.id == document_id)
-                    && slot
-                        .pending_renderer_page
-                        .as_ref()
-                        .is_some_and(|binding| binding.renderer_page() == renderer_page)
-            });
-        matches
+            })
     }
 
     pub(in crate::conn) fn prepared_navigation_projection_matches(
@@ -1763,23 +1618,6 @@ impl BrowserContext {
             .browser_context
             .observe_document_lifetime(moli_core::browser::DocumentHandle::new(contents, document))
             .ok();
-        #[cfg(test)]
-        let lifetime = lifetime.or_else(|| {
-            if self
-                .browser_context
-                .document_handle(contents)
-                .ok()
-                .flatten()
-                .is_some()
-            {
-                return None;
-            }
-            self.page_slot_for_target_mut(target_id)?
-                .document_fixture
-                .as_mut()
-                .filter(|fixture| fixture.id == document)
-                .map(|fixture| fixture.lifetime.observe())
-        });
         let Some(lifetime) = lifetime.filter(DocumentLifetimeObserver::is_current) else {
             return Vec::new();
         };
@@ -2076,26 +1914,6 @@ impl BrowserContext {
                 .apply_document_lifecycle_for_test(document, event)
                 .ok()?
                 .then(|| crate::conn::DocumentLifecycleEvent::new(document.id(), event));
-        }
-        #[cfg(test)]
-        {
-            let target_id = self
-                .page_targets
-                .iter()
-                .find(|target| {
-                    !self.target_has_loaded_page(target.target_id())
-                        && self.routes_renderer_page_for_target(target.target_id(), renderer_page)
-                        && target.runtime_slot.page_slot().document_fixture.is_some()
-                })
-                .map(|target| target.target_id().to_owned());
-            if let Some(target_id) = target_id
-                && self.observe_document_lifecycle_for_target(&target_id, event)
-            {
-                return Some(crate::conn::DocumentLifecycleEvent::new(
-                    self.target_document_id(&target_id).unwrap(),
-                    event,
-                ));
-            }
         }
         None
     }
@@ -2544,10 +2362,12 @@ mod page_residence_tests {
         );
     }
 
-    #[test]
-    fn attachment_token_terminates_on_attachment_replacement() {
+    #[tokio::test]
+    async fn attachment_token_terminates_on_attachment_replacement() {
         let mut browser_context = context_with_page_slot_for_test(TargetPageSlot::default());
-        browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 91);
+        browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 91)
+            .await;
         let token = browser_context
             .document_lifetime_observer_for_target(PAGE_SLOT_TEST_TARGET)
             .expect("the installed attachment should expose its lifetime token");
@@ -2559,7 +2379,9 @@ mod page_residence_tests {
             "a live attachment token must remain pending"
         );
 
-        browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 92);
+        browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 92)
+            .await;
 
         assert!(matches!(
             wait.as_mut().poll(&mut context),
@@ -2803,11 +2625,12 @@ mod pending_renderer_page_tests {
         );
     }
 
-    #[test]
-    fn navigation_reservation_preallocates_one_exact_page_attachment() {
+    #[tokio::test]
+    async fn navigation_reservation_preallocates_one_exact_page_attachment() {
         let mut browser_context = context_with_page_slot_for_test(TargetPageSlot::default());
-        let current_attachment =
-            browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 19);
+        let current_attachment = browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 19)
+            .await;
         let navigation = browser_context
             .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-next".to_owned());
         let reserved_attachment = browser_context
@@ -2921,15 +2744,16 @@ mod renderer_document_lifecycle_tests {
         }
     }
 
-    fn context_with_attachment() -> BrowserContext {
+    async fn context_with_attachment() -> BrowserContext {
         let mut browser_context = context_with_page_slot_for_test(TargetPageSlot::default());
         browser_context
-            .install_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, DocumentId::allocate());
+            .install_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, DocumentId::allocate())
+            .await;
         browser_context
     }
 
-    #[test]
-    fn lifecycle_binding_requires_and_tracks_the_current_page_attachment() {
+    #[tokio::test]
+    async fn lifecycle_binding_requires_and_tracks_the_current_page_attachment() {
         let page_id = moli_core::PageId::new_for_testing(8);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -2977,7 +2801,9 @@ mod renderer_document_lifecycle_tests {
                 .is_none()
         );
 
-        browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 8);
+        browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 8)
+            .await;
         assert_eq!(
             browser_context.bind_renderer_document_lifecycle_for_target(
                 PAGE_SLOT_TEST_TARGET,
@@ -2994,10 +2820,10 @@ mod renderer_document_lifecycle_tests {
                 .is_some()
         );
 
-        browser_context
-            .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-            .unwrap()
-            .document_fixture = None;
+        browser_context.retire_loaded_document_with_reason_for_target(
+            PAGE_SLOT_TEST_TARGET,
+            TargetPageAbsenceReason::TargetClosed,
+        );
         assert!(
             browser_context
                 .renderer_document_lifecycle_binding_for_target(PAGE_SLOT_TEST_TARGET)
@@ -3006,8 +2832,8 @@ mod renderer_document_lifecycle_tests {
         );
     }
 
-    #[test]
-    fn binding_accepts_current_identity_and_rejects_stale_document() {
+    #[tokio::test]
+    async fn binding_accepts_current_identity_and_rejects_stale_document() {
         let page_id = moli_core::PageId::new_for_testing(9);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -3027,8 +2853,10 @@ mod renderer_document_lifecycle_tests {
                 RendererDocumentLifecycleMilestone::DomContentLoaded,
             ),
         );
-        let mut browser_context = context_with_attachment();
-        browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 4);
+        let mut browser_context = context_with_attachment().await;
+        browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 4)
+            .await;
         let navigation = browser_context
             .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-9".to_owned());
         assert!(
@@ -3136,8 +2964,8 @@ mod renderer_document_lifecycle_tests {
         );
     }
 
-    #[test]
-    fn load_visibility_barrier_exposes_dcl_and_defers_only_load_delivery() {
+    #[tokio::test]
+    async fn load_visibility_barrier_exposes_dcl_and_defers_only_load_delivery() {
         let page_id = moli_core::PageId::new_for_testing(10);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -3172,8 +3000,10 @@ mod renderer_document_lifecycle_tests {
                 reason: RendererDocumentTerminationReason::Stopped,
             },
         );
-        let mut browser_context = context_with_attachment();
-        browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 5);
+        let mut browser_context = context_with_attachment().await;
+        browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 5)
+            .await;
         let navigation = browser_context
             .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-10".to_owned());
         assert!(
@@ -3305,8 +3135,8 @@ mod renderer_document_lifecycle_tests {
         );
     }
 
-    #[test]
-    fn cancelling_load_visibility_barrier_discards_tail_without_revealing_it() {
+    #[tokio::test]
+    async fn cancelling_load_visibility_barrier_discards_tail_without_revealing_it() {
         let page_id = moli_core::PageId::new_for_testing(16);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -3324,7 +3154,7 @@ mod renderer_document_lifecycle_tests {
             2,
             RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
         );
-        let mut browser_context = context_with_attachment();
+        let mut browser_context = context_with_attachment().await;
         browser_context.bind_renderer_document_lifecycle_for_target(
             PAGE_SLOT_TEST_TARGET,
             RendererPageCreationArtifacts {
@@ -3404,8 +3234,8 @@ mod renderer_document_lifecycle_tests {
         );
     }
 
-    #[test]
-    fn load_visibility_barrier_keeps_later_epoch_behind_deferred_load_tail() {
+    #[tokio::test]
+    async fn load_visibility_barrier_keeps_later_epoch_behind_deferred_load_tail() {
         let page_id = moli_core::PageId::new_for_testing(11);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let first_epoch = RendererLifecycleEpoch(1);
@@ -3457,8 +3287,10 @@ mod renderer_document_lifecycle_tests {
                 RendererDocumentLifecycleMilestone::DomContentLoaded,
             ),
         );
-        let mut browser_context = context_with_attachment();
-        browser_context.set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 6);
+        let mut browser_context = context_with_attachment().await;
+        browser_context
+            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 6)
+            .await;
         let navigation = browser_context
             .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-11".to_owned());
         assert!(
@@ -3556,8 +3388,8 @@ mod renderer_document_lifecycle_tests {
         assert_eq!(visible.terminated, None);
     }
 
-    #[test]
-    fn same_document_restart_advances_epoch_without_rebinding_loader() {
+    #[tokio::test]
+    async fn same_document_restart_advances_epoch_without_rebinding_loader() {
         let page_id = moli_core::PageId::new_for_testing(10);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let first_epoch = RendererLifecycleEpoch(1);
@@ -3569,7 +3401,7 @@ mod renderer_document_lifecycle_tests {
                 reason: RendererLifecycleStartReason::InitialDocument,
             },
         );
-        let mut browser_context = context_with_attachment();
+        let mut browser_context = context_with_attachment().await;
         browser_context.bind_renderer_document_lifecycle_for_target(
             PAGE_SLOT_TEST_TARGET,
             RendererPageCreationArtifacts {
@@ -3644,8 +3476,8 @@ mod renderer_document_lifecycle_tests {
         );
     }
 
-    #[test]
-    fn creation_handoff_preserves_completed_epochs_before_the_active_epoch() {
+    #[tokio::test]
+    async fn creation_handoff_preserves_completed_epochs_before_the_active_epoch() {
         let page_id = moli_core::PageId::new_for_testing(11);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let first_epoch = RendererLifecycleEpoch(1);
@@ -3699,7 +3531,7 @@ mod renderer_document_lifecycle_tests {
             second_dcl,
         ];
 
-        let mut browser_context = context_with_attachment();
+        let mut browser_context = context_with_attachment().await;
         let accepted = browser_context.bind_renderer_document_lifecycle_for_target(
             PAGE_SLOT_TEST_TARGET,
             RendererPageCreationArtifacts {
@@ -3735,8 +3567,8 @@ mod renderer_document_lifecycle_tests {
         assert_eq!(snapshot.dom_content_loaded.unwrap().sequence, 5);
     }
 
-    #[test]
-    fn successor_document_binding_discards_deferred_tail_but_preserves_reached_waiter() {
+    #[tokio::test]
+    async fn successor_document_binding_discards_deferred_tail_but_preserves_reached_waiter() {
         let page_id = moli_core::PageId::new_for_testing(14);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -3756,7 +3588,7 @@ mod renderer_document_lifecycle_tests {
                 RendererDocumentLifecycleMilestone::DomContentLoaded,
             ),
         );
-        let mut browser_context = context_with_attachment();
+        let mut browser_context = context_with_attachment().await;
         browser_context.bind_renderer_document_lifecycle_for_target(
             PAGE_SLOT_TEST_TARGET,
             RendererPageCreationArtifacts {
@@ -3914,8 +3746,8 @@ mod renderer_document_lifecycle_tests {
         );
     }
 
-    #[test]
-    fn post_load_observers_are_armed_once_and_bound_to_the_loaded_document() {
+    #[tokio::test]
+    async fn post_load_observers_are_armed_once_and_bound_to_the_loaded_document() {
         let page_id = moli_core::PageId::new_for_testing(12);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -3933,7 +3765,7 @@ mod renderer_document_lifecycle_tests {
             2,
             RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
         );
-        let mut browser_context = context_with_attachment();
+        let mut browser_context = context_with_attachment().await;
         browser_context.bind_renderer_document_lifecycle_for_target(
             PAGE_SLOT_TEST_TARGET,
             RendererPageCreationArtifacts {

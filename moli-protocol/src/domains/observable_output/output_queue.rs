@@ -1117,10 +1117,12 @@ mod tests {
         assert_eq!(prepared.log[0].range.lifecycle_end(), 1200);
     }
 
-    #[test]
-    fn observable_source_queue_captures_runtime_observable_output() {
+    #[tokio::test]
+    async fn observable_source_queue_captures_runtime_observable_output() {
         let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.set_active_document_fixture_for_test(42);
+        source_context
+            .set_active_document_fixture_for_test(42)
+            .await;
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1172,11 +1174,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observable_source_queue_materializes_runtime_items_from_owner_cursor() {
+    #[tokio::test]
+    async fn observable_source_queue_materializes_runtime_items_from_owner_cursor() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.set_active_document_fixture_for_test(43);
+        source_context
+            .set_active_document_fixture_for_test(43)
+            .await;
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1254,11 +1258,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observable_source_queue_advances_contextless_lifecycle_source_items() {
+    #[tokio::test]
+    async fn observable_source_queue_advances_contextless_lifecycle_source_items() {
         let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.set_active_document_fixture_for_test(44);
+        source_context
+            .set_active_document_fixture_for_test(44)
+            .await;
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 None,
@@ -1295,11 +1301,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observable_source_queue_materializes_renderer_producer_source_items() {
+    #[tokio::test]
+    async fn observable_source_queue_materializes_renderer_producer_source_items() {
         let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.set_active_document_fixture_for_test(46);
+        source_context
+            .set_active_document_fixture_for_test(46)
+            .await;
         let source = RendererRuntimeObservableSourceSummary::from_source_items(
             Some(7),
             vec![RendererRuntimeObservableSourceItem::LifecycleError {
@@ -1340,11 +1348,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn observable_source_queue_materializes_latest_appended_runtime_source_item() {
+    #[tokio::test]
+    async fn observable_source_queue_materializes_latest_appended_runtime_source_item() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.set_active_document_fixture_for_test(47);
+        source_context
+            .set_active_document_fixture_for_test(47)
+            .await;
         let first_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1452,7 +1462,9 @@ mod tests {
             ),
         );
         let source_context = ctx.conn.browser_context.as_mut().unwrap();
-        source_context.set_active_document_fixture_for_test(45);
+        source_context
+            .set_active_document_fixture_for_test(45)
+            .await;
         let _ = TargetObservableOutputQueue::from_target_source_snapshot(
             source_context,
             "TID-queue",

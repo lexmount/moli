@@ -52,6 +52,49 @@ struct PendingInspection {
 }
 
 impl BrowserContextHandle {
+    /// Materialize a real initial Document for projection unit tests, releasing
+    /// inspection phases without installing a frontend inspection binding.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub async fn materialize_initial_document_for_test(
+        &self,
+        contents: WebContentsHandle,
+    ) -> Result<crate::browser::DocumentHandle, String> {
+        if let Some(document) = self.document_handle(contents)? {
+            return Ok(document);
+        }
+        self.try_update(move |context| {
+            if !context.web_contents(contents)?.has_navigation_engine() {
+                context.bind_page_navigation_engines(Default::default());
+            }
+            Ok(())
+        })?;
+        let (_, mut events) = self.browser.subscribe()?;
+        let inherited =
+            self.inherited_document_policy(Default::default(), &Default::default(), None, None);
+        let waiter = self
+            .start_initial_document(contents, inherited)?
+            .ok_or("initial fixture Document unexpectedly materialized")?;
+        let key = waiter.key();
+        let completion = waiter.wait();
+        tokio::pin!(completion);
+        loop {
+            tokio::select! {
+                result = &mut completion => {
+                    result?;
+                    return self.document_handle(contents)?
+                        .ok_or_else(|| "initial fixture Document was retired".into());
+                }
+                event = events.recv() => {
+                    let event = event.map_err(|error| error.to_string())?;
+                    if matches!(event.event, crate::browser::BrowserEvent::InitialDocumentAwaitingInspection { key: pending, .. } if pending == key) {
+                        drop(self.claim_initial_document_inspection(contents, key)?);
+                    }
+                }
+            }
+        }
+    }
+
     pub fn start_initial_document(
         &self,
         contents: WebContentsHandle,

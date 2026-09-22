@@ -435,7 +435,8 @@ async fn pending_fetch_command_state_is_bound_to_page_attachment() {
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &ctx.conn,
             Some("SID-1"),
-        ));
+        ))
+        .await;
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_request_for_owner(
@@ -530,7 +531,8 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &ctx.conn,
             Some("SID-1"),
-        ));
+        ))
+        .await;
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -595,7 +597,8 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &ctx.conn,
             Some("SID-1"),
-        ));
+        ))
+        .await;
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -632,7 +635,8 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     ctx.conn
         .browser_context_by_id_mut(&context_id)
         .unwrap()
-        .install_document_id_for_test_for_target(&target_id, retired_owner.document_id());
+        .install_document_id_for_test_for_target(&target_id, retired_owner.document_id())
+        .await;
     let ClaimedSubresourceContinueRequest::InFlight(in_flight) = ctx
         .conn
         .claim_subresource_continue_request_for_owner(
@@ -685,7 +689,8 @@ async fn pending_fetch_auth_state_is_bound_to_page_attachment() {
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &ctx.conn,
             Some("SID-1"),
-        ));
+        ))
+        .await;
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_auth_request_for_owner(
@@ -744,7 +749,8 @@ async fn pending_fetch_response_state_is_bound_to_page_attachment() {
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &ctx.conn,
             Some("SID-1"),
-        ));
+        ))
+        .await;
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_response_request_for_owner(

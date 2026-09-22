@@ -384,7 +384,7 @@ impl ProtocolSchedulerWork {
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn root_frame_stopped_loading_for_test_support(
         publish_sequence: u64,
         session_ids: Vec<Option<String>>,
@@ -401,7 +401,7 @@ impl ProtocolSchedulerWork {
         )
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn root_frame_stopped_loading_for_target_test_support(
         publish_sequence: u64,
         session_ids: Vec<Option<String>>,

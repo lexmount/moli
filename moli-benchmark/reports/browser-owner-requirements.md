@@ -42,19 +42,26 @@ is still valid publication state. Core Page command envelopes still carry
 renderer attachment tags for completion attribution; those tags do not give
 Page ownership of DevTools sessions.
 
-The inspection cutover passes the required root gates (19,533 tests, 13
-configured skips) and its current release/client checks, recorded in the
-acceptance report. The older full benchmarks apply to `d743043ab7`.
+The inspection cutover passes the required root gates and its pinned
+release/client checks. The subsequent fixture cutover deletes Protocol's
+fallback Document identity/lifecycle/lifetime; tests construct real native
+Documents through [the initial-document owner](../../moli-core/src/browser/owner/initial_document.rs).
+Standalone Protocol passes 3,780 tests, and root fmt, strict Clippy and full
+nextest pass (19,533 tests, 13 configured skips). The acceptance report records
+both source freezes separately. The older full benchmarks apply to `d743043ab7`.
 
 The plan is not yet certified complete. The following remain open:
 
-- Resolve the remaining `DocumentFixture` test fallback in
-  [page_slot.rs](../../moli-protocol/src/conn/state/browser_context/page_slot.rs),
-  whose comment still promises deletion at Commit 30. It is excluded from
-  production, but the explicit fixture cleanup requirement remains.
-- Resolve the standalone Protocol test build's four test-support gating errors
-  preserved in `inspection-admission.gb7ksf_g/before.log`. Workspace feature
-  unification passing does not establish that this test surface is clean.
+- Delete the old deferred main-document load scheduler and load-visibility
+  barrier. `ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction` and its
+  enqueue/constructor paths in [scheduler_work.rs](../../moli-protocol/src/domains/activity/scheduler_work.rs)
+  and [conn.rs](../../moli-protocol/src/conn.rs) are test-only, but
+  [the adapter](../../moli-protocol-server/src/cdp_scheduler/adapter_scheduler.rs)
+  still retains production wait channels and predecessor bookkeeping. The
+  load-visibility barrier in `page_slot.rs` likewise has only a test producer.
+  Preserve the native Document/fence ordering coverage while removing these
+  consumers and obsolete fixtures; making their constructors test-only did
+  not finish the deletion required by Commit 30.
 - Complete the final producer/deletion inventory and frozen comparison after
   the remaining source changes. The entries above identify checked boundaries;
   they do not turn an incomplete inventory into a complete one.

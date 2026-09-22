@@ -4314,7 +4314,7 @@ mod tests {
         outputs
     }
 
-    fn dedicated_worker_fixture() -> (
+    async fn dedicated_worker_fixture() -> (
         CdpConnection,
         TargetPageResidenceIdentity,
         RendererPageResidenceIdentity,
@@ -4322,7 +4322,7 @@ mod tests {
         let mut conn = crate::test_support::connection();
         let mut context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-page");
-        let document_id = context.set_active_document_fixture_for_test(1);
+        let document_id = context.set_active_document_fixture_for_test(1).await;
         let owner_page = TargetPageResidenceIdentity::new(
             "BID-1".to_owned(),
             Some("TID-page".to_owned()),
@@ -4502,7 +4502,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_creation_precedes_page_main_script_request_and_uses_target_id() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
 
         let outputs = register_loading_dedicated_worker(
@@ -4561,7 +4561,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         let page_route = conn
             .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
             .expect("page session binding");
@@ -4630,7 +4630,7 @@ mod tests {
     #[tokio::test]
     async fn dedicated_worker_paused_http_main_script_splits_page_extra_info_from_worker_completion()
      {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
         enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
         let created = register_loading_dedicated_worker(
@@ -4737,7 +4737,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_non_paused_auto_attach_does_not_replay_completed_main_script() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
         let created = register_loading_dedicated_worker(
             &mut conn,
@@ -4771,7 +4771,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_debugger_resume_discards_unobserved_main_script_completion() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
         let created = register_loading_dedicated_worker(
             &mut conn,
@@ -4808,9 +4808,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dedicated_worker_direct_attach_after_load_does_not_replay_main_script_completion() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+    #[tokio::test]
+    async fn dedicated_worker_direct_attach_after_load_does_not_replay_main_script_completion() {
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         let _ = register_loading_dedicated_worker(
             &mut conn,
             "BID-1",
@@ -4891,7 +4891,7 @@ mod tests {
                 true,
             ),
         ] {
-            let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+            let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
             enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, true);
             let created = register_loading_dedicated_worker(
                 &mut conn,
@@ -4938,7 +4938,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_failed_load_created_and_destroyed_in_one_capture_is_not_filtered() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
         enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
         let script_url = "https://example.test/missing-worker.js";
@@ -5002,7 +5002,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retirement() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         let route = conn
             .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
             .expect("page session binding");
@@ -5129,7 +5129,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_destruction_marks_detached_before_session_and_target_retirement() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
         enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
         let created = register_loading_dedicated_worker(
@@ -5189,7 +5189,7 @@ mod tests {
 
     #[tokio::test]
     async fn dedicated_worker_lifecycle_retires_state_without_target_discovery() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         let outputs = register_loading_dedicated_worker(
             &mut conn,
             "BID-1",
@@ -5255,7 +5255,7 @@ mod tests {
 
     #[tokio::test]
     async fn page_replacement_retires_only_its_owned_dedicated_workers() {
-        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
+        let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture().await;
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
         enable_dedicated_worker_auto_attach_for_owner_page(&mut conn, false);
         let created = register_loading_dedicated_worker(
@@ -5302,7 +5302,9 @@ mod tests {
             let target_id = context
                 .active_target_id_owned()
                 .expect("active fixture target");
-            context.replace_document_id_for_test_for_target(&target_id)
+            context
+                .replace_document_id_for_test_for_target(&target_id)
+                .await
         };
         let messages = protocol_messages(
             &retire_dedicated_worker_targets_for_replaced_page_async(&mut conn, &owner_page).await,
@@ -6810,9 +6812,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shared_worker_registration_only_auto_attaches_browser_level_owners() {
-        let (mut conn, owner_page, _) = dedicated_worker_fixture();
+    #[tokio::test]
+    async fn shared_worker_registration_only_auto_attaches_browser_level_owners() {
+        let (mut conn, owner_page, _) = dedicated_worker_fixture().await;
         let page_route = conn
             .prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned())
             .expect("page session binding");

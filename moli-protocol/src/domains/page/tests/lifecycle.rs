@@ -4012,7 +4012,8 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
     ctx.conn
         .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::for_session(
             "SID-screencast-frame",
-        ));
+        ))
+        .await;
     assert!(matches!(
         ctx.conn
             .complete_page_screencast_frame_capture(stale_capture.wait().await),

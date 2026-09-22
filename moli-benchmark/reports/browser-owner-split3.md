@@ -3,6 +3,32 @@
 The frozen comparison below covers `d743043ab7`. Historical results and failures
 remain unchanged; they do not validate later source changes.
 
+## Native Document test ownership, 2026-09-23
+
+Protocol no longer owns a fallback `DocumentFixture` with its own identity,
+lifecycle and lifetime. Routing and projection tests materialize a native
+initial Document through BrowserOwner, then use exact test capabilities to
+control its lifecycle. The fallback branches and their unused dialog-clearing
+adapters are deleted. Test-support constructors now share the module's
+`test`/`test-support` availability, so standalone Protocol tests compile without
+workspace feature unification.
+
+The independent Protocol run passes 3,780/3,780 tests, run
+`8f32cd96-113f-45a7-9949-2bc852621e99`. Root fmt, strict workspace Clippy and
+the final full nextest pass: 19,533/19,533, 13 configured skips, run
+`502c1db0-ccde-4834-a43f-a7367969da61` (96.333s test execution). All 91 expected
+panic records match the prior run. The 30 changed Rust files match the frozen
+validation hashes. Intermediate failures, the terminated fixture wait, source
+patches and final results remain in `target/smoke/native-document-fixtures.lvazc72e/`.
+
+Four prepared-output tests now require an absent inspection binding while the
+Document exists in Core; all event, payload and ordering assertions remain.
+The lifecycle ingress fixture uses a real renderer stream, and the popup
+ordering fixture navigates a real Document before executing its script. This
+validation concerns the fixture cutover; the performance results below retain
+their original source pins. The remaining deferred-load scheduler and barrier
+are explicitly tracked in [the requirement review](browser-owner-requirements.md).
+
 ## Completion audit reopened, 2026-09-23
 
 A blocked-owner regression disproved the earlier inspection-independence claim:

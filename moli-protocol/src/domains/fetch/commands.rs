@@ -1673,8 +1673,8 @@ mod protocol_neutral_tests {
         assert!(out[0]["error"].is_object());
     }
 
-    #[test]
-    fn cdp_continue_request_repauses_next_matching_fetch_session() {
+    #[tokio::test]
+    async fn cdp_continue_request_repauses_next_matching_fetch_session() {
         let mut conn = crate::test_support::connection();
         let mut browser_context = conn.new_browser_context_fixture_for_test("BID-chain".to_owned());
         browser_context.set_active_target_id("TID-chain".to_owned());
@@ -1683,7 +1683,9 @@ mod protocol_neutral_tests {
             browser_context
                 .assign_attached_session_to_target("TID-chain", "SID-attached".to_owned())
         );
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_owner = conn
@@ -1818,8 +1820,8 @@ mod protocol_neutral_tests {
         );
     }
 
-    #[test]
-    fn cdp_continue_response_repauses_next_matching_fetch_session() {
+    #[tokio::test]
+    async fn cdp_continue_response_repauses_next_matching_fetch_session() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-response-chain".to_owned());
@@ -1829,7 +1831,9 @@ mod protocol_neutral_tests {
             browser_context
                 .assign_attached_session_to_target("TID-response-chain", "SID-attached".to_owned())
         );
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_owner = conn
@@ -1959,14 +1963,16 @@ mod protocol_neutral_tests {
         assert_eq!(chained.response_status, 200);
     }
 
-    #[test]
-    fn cdp_continue_request_repauses_network_or_bidi_stage_on_target_owner_route() {
+    #[tokio::test]
+    async fn cdp_continue_request_repauses_network_or_bidi_stage_on_target_owner_route() {
         let mut conn = crate::test_support::connection();
         let mut browser_context =
             conn.new_browser_context_fixture_for_test("BID-chain-bidi".to_owned());
         browser_context.set_active_target_id("TID-chain-bidi".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
-        browser_context.set_active_document_fixture_for_test(1);
+        browser_context
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_owner = conn

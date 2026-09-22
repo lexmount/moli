@@ -1,4 +1,4 @@
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 use crate::conn::TargetPageResidenceIdentity;
 use crate::conn::{BackgroundProtocolEvent, CdpConnection, TargetPageProtocolAttachmentIdentity};
 
@@ -70,7 +70,7 @@ impl ProtocolOutputWork {
         }
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn root_frame_stopped_loading_for_test_support(
         session_ids: Vec<Option<String>>,
         frame_id: String,
@@ -85,7 +85,7 @@ impl ProtocolOutputWork {
         )
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn root_frame_stopped_loading_for_target_test_support(
         session_ids: Vec<Option<String>>,
         browser_context_id: String,

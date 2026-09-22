@@ -975,7 +975,8 @@ mod tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some(SESSION_ID),
-        ));
+        ))
+        .await;
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
@@ -1024,7 +1025,8 @@ mod tests {
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some(SESSION_ID),
-        ));
+        ))
+        .await;
         assert_eq!(
             order.release(&mut conn, permit, &mut command_context).await,
             RendererCommandResponseTerminal::Superseded
