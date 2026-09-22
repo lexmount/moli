@@ -18,9 +18,12 @@
     "group": "input",
     "url": "https://github.com/lexmount/moli/pull/727",
     "branch": "codex/input-activation-lifecycle",
-    "commit": "1fb7c73f7af5e2fb1db25d6e2af353693c29806f",
-    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
-    "patch_sha256": "e19777242804cb6e01da79fe190862026a0a8efee69444e16c253587571a81c2"
+    "commit": "a25a2c7b6d0c00e4812a1b3f95f9ad786530d034",
+    "base": "63242ebdfbe7926cc85b774a91db05572d9f9c94",
+    "patch_sha256": "e19777242804cb6e01da79fe190862026a0a8efee69444e16c253587571a81c2",
+    "previous_commit": "1fb7c73f7af5e2fb1db25d6e2af353693c29806f",
+    "dependency": "layout",
+    "patch_id": "d8f9cf8821b10de8b6bb341047a3348a40160f7b"
   },
   {
     "group": "network",
