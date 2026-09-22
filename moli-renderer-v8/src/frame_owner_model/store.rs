@@ -159,6 +159,7 @@ impl FrameOwnerStore {
                 url,
                 base_url,
                 creation_kind: DocumentCreationKind::Navigation,
+                has_committed_navigation: true,
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
@@ -317,6 +318,7 @@ impl FrameOwnerStore {
             .document_open_load_continuation();
         let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
         let is_initial_empty = retired_document.creation_kind.is_initial_empty();
+        let has_committed_navigation = retired_document.has_committed_navigation;
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -336,6 +338,7 @@ impl FrameOwnerStore {
                 url,
                 base_url: base_url.clone(),
                 creation_kind: DocumentCreationKind::DocumentOpen { is_initial_empty },
+                has_committed_navigation,
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
@@ -501,6 +504,7 @@ impl FrameOwnerStore {
                 url,
                 base_url,
                 creation_kind,
+                has_committed_navigation: !creation_kind.is_initial_empty(),
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress: DocumentLifecycleRecord::loading(
                     DocumentLoadDeliveryKind::Child,
@@ -765,6 +769,7 @@ impl FrameOwnerStore {
             url,
             base_url: base_url.clone(),
             creation_kind,
+            has_committed_navigation: !creation_kind.is_initial_empty(),
             lifecycle: DocumentLifecycleState::Current,
             lifecycle_progress,
             active_requests: BTreeMap::new(),
@@ -893,6 +898,7 @@ impl FrameOwnerStore {
             .document_open_load_continuation();
         let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
         let is_initial_empty = retired_document.creation_kind.is_initial_empty();
+        let has_committed_navigation = retired_document.has_committed_navigation;
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -912,6 +918,7 @@ impl FrameOwnerStore {
                 url,
                 base_url: base_url.clone(),
                 creation_kind: DocumentCreationKind::DocumentOpen { is_initial_empty },
+                has_committed_navigation,
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
@@ -953,6 +960,28 @@ impl FrameOwnerStore {
         self.pending_child_document_owner_retirements
             .push_back(transition);
         transition
+    }
+
+    /// document.open clears initial about:blank after its URL/history update.
+    /// Those callbacks can replace the Document again, so finish only the
+    /// replacement that started this operation.
+    pub(crate) fn finish_child_document_open_replacement(
+        &mut self,
+        child_handle: DomHandle,
+        owner: FrameDocumentTaskOwner,
+    ) {
+        if self.current_child_document_task_owner(child_handle) != Some(owner) {
+            return;
+        }
+        let document = self
+            .documents
+            .get_mut(&owner.document_id)
+            .expect("current child document-open owner must retain its document");
+        let DocumentCreationKind::DocumentOpen { is_initial_empty } = &mut document.creation_kind
+        else {
+            return;
+        };
+        *is_initial_empty = false;
     }
 
     pub(crate) fn detach_current_child_document(
@@ -1749,6 +1778,12 @@ impl FrameOwnerStore {
         self.documents
             .get(&snapshot.document_id)
             .map(|document| document.creation_kind)
+    }
+
+    pub(crate) fn child_has_committed_navigation(&self, child_handle: DomHandle) -> bool {
+        self.current_child_owner_snapshot(child_handle)
+            .and_then(|snapshot| self.documents.get(&snapshot.document_id))
+            .is_some_and(|document| document.has_committed_navigation)
     }
 
     pub(crate) fn current_child_document_task_owner_reserved_realm(

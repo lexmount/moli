@@ -292,11 +292,31 @@ impl ScriptVm {
                 );
                 return;
             }
-            let should_materialize_default_realm = {
+            let (should_materialize_default_realm, reconnect_exposed_proxy) = {
                 let host = self._context_host.borrow();
-                host.child_window_proxy_shell_is_exposed(child_handle)
-                    || !host.child_current_document_is_initial_empty(child_handle)
+                let exposed = host.child_window_proxy_shell_is_exposed(child_handle);
+                (
+                    exposed || !host.child_current_document_is_initial_empty(child_handle),
+                    retired_local_window_id.is_some()
+                        && exposed
+                        && host.child_browsing_context_is_same_origin_with_top(child_handle),
+                )
             };
+            if reconnect_exposed_proxy {
+                // A retained same-origin WindowProxy must remain usable between
+                // this commit and the queued realm turn. Prebootstrap its new
+                // inner global without running document-start scripts or
+                // publishing an Inspector execution context before that turn.
+                if let Err(error) = self.with_default_context_scope(|scope, host_ptr| {
+                    unsafe { &mut *host_ptr }
+                        .ensure_prebootstrapped_child_default_context(scope, child_handle)?;
+                    Ok(())
+                }) {
+                    self.record_runtime_warning(format_args!(
+                        "failed to reconnect committed child WindowProxy: {error}"
+                    ));
+                }
+            }
             if should_materialize_default_realm {
                 self._context_host
                     .borrow_mut()

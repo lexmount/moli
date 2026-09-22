@@ -1,6 +1,53 @@
 use super::*;
 
 #[tokio::test]
+async fn document_open_preserves_navigation_initialization() {
+    for kind in ["iframe", "popup"] {
+        let loader = static_http_loader([]);
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://navigation-document-open.test/parent",
+            &loader,
+        );
+        let script = include_str!("../../../../tests/fixtures/navigation-document-open.js");
+        vm.eval(&format!(
+            "{script}\nglobalThis.streamResult = 'pending';\n\
+             navigationDocumentOpenProbe({kind:?}).then(\n\
+               value => streamResult = value, error => streamResult = String(error));"
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(streamResult !== 'pending')",
+            "true",
+            kind,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(streamResult)").unwrap()).unwrap();
+        let snapshots: Vec<_> = ["initial", "opened", "reopened", "pushed", "fragment"]
+            .map(|label| {
+                serde_json::json!({
+                    "label": label, "entries": 0, "current": null,
+                    "update": "InvalidStateError", "events": [], "sameNavigation": true,
+                })
+            })
+            .into();
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "snapshots": snapshots,
+                "navigated": { "current": "about:blank", "state": 4 },
+                "loadedOpen": {
+                    "sameNavigation": true, "sameEntryKey": true, "state": 5,
+                },
+            }),
+            "{kind}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn navigation_entries_and_events_follow_document_initialness() {
     for mode in [
         "initial",

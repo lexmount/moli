@@ -594,76 +594,82 @@ impl JsContextHost {
             .dom_host()
             .child_handles(document_handle)
             .collect::<Vec<_>>();
-        crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
-            let host = unsafe { &mut *host_ptr };
-            let transition = host
-                .frame_owner_store
-                .commit_child_document_open_replacement(replacement_plan);
-            let current_owner = transition
-                .current_owner()
-                .expect("committed child document-open replacement must install an owner");
-            host.replace_document_resource_loader_for_document_open(
-                crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
-                crate::network::context::DocumentFetchContext::new(
-                    crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
+        let opened_owner =
+            crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                let host = unsafe { &mut *host_ptr };
+                let transition = host
+                    .frame_owner_store
+                    .commit_child_document_open_replacement(replacement_plan);
+                let current_owner = transition
+                    .current_owner()
+                    .expect("committed child document-open replacement must install an owner");
+                host.replace_document_resource_loader_for_document_open(
+                    crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
+                    crate::network::context::DocumentFetchContext::new(
+                        crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
+                        document_url.clone(),
+                        document_base_url,
+                        document_origin,
+                    ),
+                    crate::network::context::DocumentResourceAuthoritySource::Inherited(
+                        resource_authority,
+                    ),
+                );
+
+                host.clear_child_window_document_event_state(scope, child_handle);
+                host.clear_event_callbacks_for_document_replacement(document_handle, false);
+                for child in children {
+                    let _ = remove_child_to_current_reaction_queue(
+                        scope,
+                        host_ptr,
+                        document_handle,
+                        child,
+                    );
+                }
+                if replacement_url.is_some() {
+                    host.set_dom_document_url_for_handle(document_handle, document_url.clone());
+                }
+
+                host.cancel_child_meta_refresh_navigation(child_handle);
+                host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
+                host.retire_image_state_for_document(document_handle);
+                host.cancel_pending_media_loads_for_document(document_handle);
+                host.cancel_pending_text_track_loads_for_document(document_handle);
+                host.cancel_child_document_script_work_for_owner(child_handle, retired_owner);
+                host.child_document_parsers
+                    .clear(retired_owner.document_owner());
+                host.drop_child_browsing_context_subtree_with_window_realm(scope, document_handle);
+                if let Some(entry) = host.child_browsing_contexts.get_mut(&child_handle) {
+                    entry.clear_document_runtime_state();
+                }
+                host.request_child_frame_realm_materialization(child_handle);
+                host.install_empty_child_classic_script_runner_for_current_document(
+                    child_handle,
+                    current_owner.local_window_id,
+                    current_owner.document_id,
+                );
+                host.dom_host_mut()
+                    .mark_subtree_connected_preserving_owner_document(document_handle);
+                let security_token_refreshed =
+                    host.refresh_child_default_world_security_token(scope, child_handle);
+                host.install_child_document_write_parser(
+                    child_handle,
+                    current_owner.document_owner(),
+                    document_handle,
                     document_url.clone(),
-                    document_base_url,
-                    document_origin,
-                ),
-                crate::network::context::DocumentResourceAuthoritySource::Inherited(
-                    resource_authority,
-                ),
-            );
-
-            host.clear_child_window_document_event_state(scope, child_handle);
-            host.clear_event_callbacks_for_document_replacement(document_handle, false);
-            for child in children {
-                let _ =
-                    remove_child_to_current_reaction_queue(scope, host_ptr, document_handle, child);
-            }
-            if replacement_url.is_some() {
-                host.set_dom_document_url_for_handle(document_handle, document_url.clone());
-            }
-
-            host.cancel_child_meta_refresh_navigation(child_handle);
-            host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
-            host.retire_image_state_for_document(document_handle);
-            host.cancel_pending_media_loads_for_document(document_handle);
-            host.cancel_pending_text_track_loads_for_document(document_handle);
-            host.cancel_child_document_script_work_for_owner(child_handle, retired_owner);
-            host.child_document_parsers
-                .clear(retired_owner.document_owner());
-            host.drop_child_browsing_context_subtree_with_window_realm(scope, document_handle);
-            if let Some(entry) = host.child_browsing_contexts.get_mut(&child_handle) {
-                entry.clear_document_runtime_state();
-            }
-            host.request_child_frame_realm_materialization(child_handle);
-            host.install_empty_child_classic_script_runner_for_current_document(
-                child_handle,
-                current_owner.local_window_id,
-                current_owner.document_id,
-            );
-            host.dom_host_mut()
-                .mark_subtree_connected_preserving_owner_document(document_handle);
-            let security_token_refreshed =
-                host.refresh_child_default_world_security_token(scope, child_handle);
-            host.install_child_document_write_parser(
-                child_handle,
-                current_owner.document_owner(),
-                document_handle,
-                document_url.clone(),
-            );
-            host.note_child_frame_load_started_for_parent(child_handle);
-            host.queue_child_frame_document_opened_event(child_handle);
-            tracing::debug!(
-                ?child_handle,
-                ?retired_owner,
-                ?current_owner,
-                ?document_handle,
-                security_token_refreshed,
-                "opened child document stream through same-LocalWindow owner transaction"
-            );
-        });
+                );
+                host.note_child_frame_load_started_for_parent(child_handle);
+                host.queue_child_frame_document_opened_event(child_handle);
+                tracing::debug!(
+                    ?child_handle,
+                    ?retired_owner,
+                    ?current_owner,
+                    ?document_handle,
+                    security_token_refreshed,
+                    "opened child document stream through same-LocalWindow owner transaction"
+                );
+                current_owner
+            });
         if replacement_url.is_some() {
             let window = script_context.global(scope);
             crate::context_bootstrap::update_history_for_document_open(
@@ -672,6 +678,8 @@ impl JsContextHost {
                 &document_url,
             );
         }
+        self.frame_owner_store
+            .finish_child_document_open_replacement(child_handle, opened_owner);
         Some(script_context)
     }
 

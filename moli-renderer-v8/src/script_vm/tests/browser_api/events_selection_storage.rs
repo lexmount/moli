@@ -5800,6 +5800,111 @@ String(timerId > 0)
 }
 
 #[tokio::test]
+async fn child_document_open_revokes_initial_empty_window_reuse() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for (action, keeps_initial_window) in [
+        ("", true),
+        ("reuseDocument.close()", true),
+        ("reuseDocument.open()", false),
+        ("reuseDocument.open(); reuseDocument.close()", false),
+        ("reuseDocument.write('<!doctype html><p>stream')", false),
+        ("reuseDocument.writeln('<!doctype html><p>stream')", false),
+        (
+            "reuseDocument.open(); reuseDocument.close(); reuseDocument.open()",
+            false,
+        ),
+    ] {
+        let mut vm =
+            new_storage_test_vm_with_loader("https://document-open-window-reuse.test/", &loader);
+        vm.eval(
+            r#"
+globalThis.reuseFrame = document.createElement('iframe');
+reuseFrame.srcdoc = '<!doctype html><p>pending';
+(document.body || document.documentElement || document).appendChild(reuseFrame);
+globalThis.reuseWindow = reuseFrame.contentWindow;
+globalThis.reuseDocument = reuseWindow.document;
+globalThis.reuseObject = reuseWindow.Object;
+reuseWindow.retainedMarker = 'initial';
+"#,
+        )
+        .unwrap();
+        let child_handle = vm
+            ._context_host
+            .borrow()
+            .child_browsing_context_handles_in_document_order()[0];
+        let initial_owner = vm
+            ._context_host
+            .borrow()
+            .current_child_document_task_owner(child_handle)
+            .unwrap();
+        assert!(
+            vm._context_host
+                .borrow()
+                .child_current_document_is_initial_empty(child_handle)
+        );
+
+        vm.eval(action).unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([reuseWindow === reuseFrame.contentWindow, reuseDocument === reuseFrame.contentDocument, reuseWindow.Object === reuseObject, reuseWindow.retainedMarker])").unwrap(),
+            r#"[true,true,true,"initial"]"#,
+            "{action}: opening a stream must retain the current Window and Document"
+        );
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .child_current_document_is_initial_empty(child_handle),
+            keeps_initial_window,
+            "{action}: only a successful open clears initial about:blank"
+        );
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .current_child_document_task_owner(child_handle)
+                .unwrap()
+                .local_window_id,
+            initial_owner.local_window_id,
+            "{action}: document.open must preserve the LocalWindow"
+        );
+        vm.eval(
+            r#"
+globalThis.reuseListenerRuns = 0;
+reuseWindow.addEventListener('reuse-check', () => reuseListenerRuns++);
+reuseFrame.srcdoc = '<!doctype html><p>replacement';
+"#,
+        )
+        .unwrap();
+        vm.drain_pending_child_frame_work_for_test();
+        let result = vm.eval(
+            r#"
+reuseWindow.dispatchEvent(new reuseWindow.Event('reuse-check'));
+JSON.stringify([reuseWindow === reuseFrame.contentWindow,
+  reuseDocument !== reuseFrame.contentDocument, reuseWindow.Object === reuseObject,
+  typeof reuseWindow.retainedMarker, reuseListenerRuns, reuseFrame.contentDocument.body.textContent]);
+"#,
+        ).unwrap();
+        assert_eq!(
+            result,
+            if keeps_initial_window {
+                r#"[true,true,true,"string",1,"replacement"]"#
+            } else {
+                r#"[true,true,false,"undefined",0,"replacement"]"#
+            },
+            "{action}: the next navigation must apply the updated Window reuse eligibility"
+        );
+        assert_eq!(
+            vm._context_host
+                .borrow()
+                .current_child_document_task_owner(child_handle)
+                .unwrap()
+                .local_window_id
+                == initial_owner.local_window_id,
+            keeps_initial_window,
+            "{action}: native LocalWindow ownership must agree with realm identity"
+        );
+    }
+}
+
+#[tokio::test]
 async fn initial_empty_document_domain_prevents_local_window_reuse() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://sub.initial-empty-domain.test/", &loader);

@@ -967,6 +967,11 @@ impl JsContextHost {
             .is_some_and(crate::frame_owner_model::DocumentCreationKind::is_initial_empty)
     }
 
+    pub(crate) fn child_has_committed_navigation(&self, handle: DomHandle) -> bool {
+        self.frame_owner_store
+            .child_has_committed_navigation(handle)
+    }
+
     pub(crate) fn retire_child_frame_realm_materialization_request(
         &mut self,
         handle: DomHandle,
