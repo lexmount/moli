@@ -148,6 +148,25 @@ impl JsContextHost {
         unsafe { &*self.runtime }.document_policy_container()
     }
 
+    pub(crate) fn document_policy_container_for_inheritance(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<DocumentPolicyContainer> {
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        let mut policy = snapshot.policy_container;
+        policy
+            .content_security_policy_self_url
+            .get_or_insert(snapshot.document_url);
+        if let Some(document) = snapshot.document_handle {
+            // Meta policies are delivered separately from response headers.
+            // Capture their current list so later creator mutations cannot
+            // change the new Document's policy container.
+            policy.inherited_meta_content_security_policies = unsafe { &*self.runtime }
+                .meta_content_security_policy_strings_for_document(document);
+        }
+        Some(policy)
+    }
+
     pub(crate) fn document_connect_policy_snapshot_for_owner(
         &self,
         owner: OwnerDispatchScope,

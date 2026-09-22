@@ -134,11 +134,14 @@ fn element_popup_creator<'s>(
     let document = runtime.dom_host().owner_document_handle(source_handle)?;
     let base_url = runtime.document_base_url_for_handle(document);
     let document_url = runtime.document_url_for_handle(document);
+    let policy_container = runtime.document_policy_container_for_inheritance(
+        runtime.owner_dispatch_scope_for_node(source_handle)?,
+    )?;
     if document == runtime.document_handle() {
         return Some(ElementPopupCreator {
             opener: scope.get_current_context().global(scope),
             base_url,
-            policy_container: runtime.document_policy_container().clone(),
+            policy_container,
             document_url,
         });
     }
@@ -146,9 +149,7 @@ fn element_popup_creator<'s>(
         return Some(ElementPopupCreator {
             opener: runtime.lightweight_popup_window(scope, popup_id)?,
             base_url,
-            policy_container: runtime
-                .lightweight_popup_policy_container(popup_id)?
-                .clone(),
+            policy_container,
             document_url,
         });
     }
@@ -156,7 +157,7 @@ fn element_popup_creator<'s>(
     Some(ElementPopupCreator {
         opener: runtime.existing_child_browsing_context_window_wrapper(scope, frame)?,
         base_url,
-        policy_container: runtime.child_browsing_context_policy_container_snapshot(frame)?,
+        policy_container,
         document_url,
     })
 }
