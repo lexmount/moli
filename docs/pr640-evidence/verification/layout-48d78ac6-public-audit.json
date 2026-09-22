@@ -1,0 +1,215 @@
+{
+  "schema": "pr640-targeted-acceptance/1",
+  "partition": "PR-1",
+  "binary_sha256": "eb276fa5b713a20be352f22da0737500f091b65dec01dbc9467849200a41bd4b",
+  "receipt_sha256": "24e2c751d246aa0c35c80ead931349d90928acde8757bc9b64644f59f0198ace",
+  "manifest_sha256": "2adc1ae304cebf158d3147b2b463cc24dd30848aa3470bf0a3cbd8715acf151a",
+  "gates": {
+    "subset_evidence_certified": true,
+    "complete_90_cohort": false,
+    "17_hashes_unchanged": true,
+    "all_artifact_hashes_valid": true,
+    "one_run_zero_retries": true,
+    "frozen_actions_and_scoring": true,
+    "all_assigned_cases_pass": false
+  },
+  "comparison_note": "Baseline ran in a full90 sequence; this result is a freshly reset subset. Outcome differences alone do not prove causality.",
+  "cases": [
+    {
+      "case_id": 29,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "e76b9dd18538173f444d1708b33bd9e9b487018218368d56249d4ce1123901d8"
+    },
+    {
+      "case_id": 66,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "d1a1d513c02786051c5865396e03efbadec7ca40453d483d8d16c61f1ea5bef3"
+    },
+    {
+      "case_id": 108,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "66d18ee11724bc0d1d09644ee351dc2645bafc07e10aa2a700dedd522ef2ad12"
+    },
+    {
+      "case_id": 156,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "1954c07a99daf12392d5022997c66acc0d66e7f4fb73064fedafded224882ea6"
+    },
+    {
+      "case_id": 163,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "eefa0161dc4dbb4e446cdcb77ba3e30e4e2cd1229ded3f9dfc8280701bf007d7"
+    },
+    {
+      "case_id": 196,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "a67bb42e3323b33fb679d1345b30a8113542db1300eac92e2569abf5fb2b1b92"
+    },
+    {
+      "case_id": 314,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "44ac9e950796972906a4f31f867d717a56b0a57a15f2a0b459cd86fb76a5b489"
+    },
+    {
+      "case_id": 349,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "40d38f4a716943271f33ead2a5001068ac2895a0555b0e5c80ff6590124bbfbd"
+    },
+    {
+      "case_id": 374,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "6d60c572814abffa67ff7ac89d9039b971c00e8146a6cd83cf5eb88f77462059"
+    },
+    {
+      "case_id": 389,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "eb8ecd762898ef2799d6a339e9ee1d83587020c2f35d844cf47780219c4c8483"
+    },
+    {
+      "case_id": 399,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "d8eb232d9ef90f9f13ef71c86bbe8ba2786803a7775d6aba12f3e5a8dd398de4"
+    },
+    {
+      "case_id": 404,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "42b75a8ea699067e4b655e94d4143862620ddb1e14661e194b696a31aeb85bfc"
+    },
+    {
+      "case_id": 415,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "75bcf487b2bb27075de8f08d24944ff326b4173dadffbd0d8492ff92bc396873"
+    },
+    {
+      "case_id": 418,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "fb469afbf2d056731bc195b8cb20940c0eb7b46f2c2151c4bf343179863ca411"
+    },
+    {
+      "case_id": 441,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "eec3b1334e2d7064c897f0cd3f111327d07ad880ed40ab061081a49266d1fadc"
+    },
+    {
+      "case_id": 448,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "150ce7ec1c8c1f2808af586f29b962246649c7789ed7f22f05995fe039e7f488"
+    },
+    {
+      "case_id": 506,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "200160eb50989b5db2f2873a4ae6ee95ac397f19dc3ed4b2859aec53f41a1e0f"
+    },
+    {
+      "case_id": 547,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "7ca6a7498b7a95e377afab246040db353b1a8d0be45829a0abedc9fcbd06b760"
+    },
+    {
+      "case_id": 576,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "a8e673aea802cf3c43ad74e5b77b04a059698085a99feaa07a13c5f97702212f"
+    },
+    {
+      "case_id": 585,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "74ee267f0c7dde7ec97974b431fc542b7257f5de6f8c0ed5a4194a0d792222ac"
+    },
+    {
+      "case_id": 590,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "42f5cc6a2d71b158a90aa999d3ad5db42a72f284183294ee64b7dd2c09070790"
+    },
+    {
+      "case_id": 595,
+      "status": "fail",
+      "score": 0.0,
+      "base_status": "fail",
+      "trace_sha256": "76995b365f07df782223a3180ebfa9da21b8106fef697e4133bfacabdc2cb607"
+    },
+    {
+      "case_id": 620,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "236373b2354f06603373a0458291e3646b4506aa3f4f3643d85c41d88fa8b5c7"
+    },
+    {
+      "case_id": 640,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "c043d6146c598681b480be25c0f29c18b7a5eea6295359d866053d17d58c9531"
+    },
+    {
+      "case_id": 645,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "56e27bf8e42e15a261722e3f0f11f94e12eaf2be8e6274770e22c8025d8638ef"
+    },
+    {
+      "case_id": 658,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "beedc21bf58c4f03787f5e58e5ea2fa7bf454ea4037055c3bf478aceb2238f74"
+    },
+    {
+      "case_id": 666,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "b0b0607cbaf732be37f2e76acd4ee035301ffcab47aa6a51fc3ea2b55f7e8420"
+    },
+    {
+      "case_id": 714,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "40f95bc40bb20b4b3e1a382088d946466b390c8c14e953eed5cecfe017593a35"
+    }
+  ]
+}

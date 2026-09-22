@@ -1,0 +1,46 @@
+{
+  "pr_url": "https://github.com/lexmount/moli/pull/727",
+  "scope": "CI red/green evidence bound to these source revisions; not a later identity-only rewritten SHA.",
+  "red": {
+    "head": "1fb7c73f7af5e2fb1db25d6e2af353693c29806f",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "job_url": "https://github.com/lexmount/moli/actions/runs/35685565360/job/106611515537",
+    "tests_run": 18452,
+    "passed": 18450,
+    "failed": 2,
+    "skipped": 13
+  },
+  "green": {
+    "head": "a25a2c7b6d0c00e4812a1b3f95f9ad786530d034",
+    "source_parent": "63242ebdfbe7926cc85b774a91db05572d9f9c94",
+    "job_url": "https://github.com/lexmount/moli/actions/runs/35686687920/job/106614980482",
+    "checkout_merge_abbrev": "cc1bdf83f",
+    "checkout_merge_base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "command": "cargo nextest run --workspace --profile ci",
+    "tests_run": 18482,
+    "passed": 18482,
+    "failed": 0,
+    "skipped": 13,
+    "binaries": 139,
+    "completed_at_utc": "2026-09-22T04:44:32Z",
+    "log_sha256": "f74791ef7a1a13582e8c9dfec82c2f1983a2b5317cd38747d304e905dc7ea4f2"
+  },
+  "tests": [
+    {
+      "name": "protocol_server::tests::classic::webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_wrapping",
+      "old_result": "FAIL (3 attempts)",
+      "new_result": "PASS",
+      "unchanged_test_source": true,
+      "enabled_unconditional_tokio_test": true
+    },
+    {
+      "name": "protocol_server::tests::classic::webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatch",
+      "old_result": "FAIL (3 attempts)",
+      "new_result": "PASS",
+      "unchanged_test_source": true,
+      "enabled_unconditional_tokio_test": true
+    }
+  ],
+  "verification": "Successful CI output suppresses individual pass lines (status-level=fail, final-status-level=fail, success-output=never). Execution/pass is established from the unchanged unconditional, non-ignored tests, unfiltered workspace command, CI profile with no default filter, and all 18482 executed tests passing. The 13 skipped tests count is unchanged. There is no per-test PASS log line or uploaded result artifact; this statement does not claim one.",
+  "causal_change": "Input now includes layout dirty-snapshot invalidation through its layout parent; test file and assertions are byte-identical to the failing head. The run merge ref names the exact a25 head; its merge base was engineering, while a25 itself already contains layout."
+}

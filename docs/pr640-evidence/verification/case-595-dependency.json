@@ -1,0 +1,26 @@
+{
+  "case_id": 595,
+  "observed_layout_commit": "48d78ac639a3d5e1738342a6876225f9988cefe3",
+  "original_layout_run": {
+    "executed": 28,
+    "passed": 27,
+    "failed": [
+      595
+    ],
+    "retry_count": 0
+  },
+  "case_evidence": {
+    "case_id": 595,
+    "status": "fail",
+    "score": 0.0,
+    "base_status": "fail",
+    "trace_sha256": "76995b365f07df782223a3180ebfa9da21b8106fef697e4133bfacabdc2cb607"
+  },
+  "actions_succeeded": true,
+  "subscription_response_status": 200,
+  "subscription_result": true,
+  "failure": "Frozen NetworkEventEvaluator rejected the recorded subscription request because Referer was absent.",
+  "final_acceptance_owner": "network",
+  "required_prerequisite": "layout",
+  "network_combination_replay_status": "not yet executed"
+}

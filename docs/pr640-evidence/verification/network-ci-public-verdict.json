@@ -1,0 +1,32 @@
+{
+  "scenario": "Locally served form POST -> 302 -> 307 -> 200",
+  "checks": [
+    "Server methods POST,GET,GET and initial-only body",
+    "CDP ordinary per-hop method,body,url,requestId,redirect status",
+    "ExtraInfo Referer,Content-Type,Content-Length exactly match server for all three hops"
+  ],
+  "results": [
+    {
+      "engine": "Chromium 153",
+      "passed": true
+    },
+    {
+      "engine": "Moli PR728",
+      "commit": "ad2d10832ef45ca1b9cd3f817d3222eaa5d26a17",
+      "passed": true
+    },
+    {
+      "engine": "Moli main comparator",
+      "commit": "de1093d9c1ab23a0bf9b1c7d0ee99141c2eee134",
+      "passed": false,
+      "failures": [
+        "First redirected request reports POST instead of GET",
+        "Second redirected request reports POST instead of GET"
+      ]
+    }
+  ],
+  "scope": "Existing frozen binaries; comparator differs from exact PR base; corrected Rust test awaits CI",
+  "test_fix": "Remove ordinary-event wire-header equality; preserve all hop and ExtraInfo assertions",
+  "prior_evidence_correction": "Initial ordinary-event Referer failure affects both Moli versions and is not valid distinguishing red/green evidence",
+  "privacy": "No auth data, raw headers, runtime URLs, local paths or user identifiers included"
+}
