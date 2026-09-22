@@ -466,6 +466,10 @@ impl JsContextHost {
                         navigation_entry_seed,
                         committed_navigation_entry_seed,
                         cached_snapshot,
+                        srcdoc_history: existing
+                            .as_ref()
+                            .map(|entry| entry.srcdoc_history.clone())
+                            .unwrap_or_default(),
                         document_policy_container,
                         document_internal_ancestor_origins,
                         ancestor_origins_referrer_policy_snapshot,

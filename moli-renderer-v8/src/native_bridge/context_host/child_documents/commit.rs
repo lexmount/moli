@@ -232,6 +232,11 @@ impl JsContextHost {
         let current_owner = owner_transition
             .current_owner()
             .expect("child document commit must install a current owner");
+        if let Some(origin) = self.child_window_access_origin(handle)
+            && let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
+        {
+            entry.remember_srcdoc_history_resource(snapshot, origin);
+        }
         let owner_local_window_id = current_owner.local_window_id;
         let owner_document_id = current_owner.document_id;
         self.dom_host_mut()
