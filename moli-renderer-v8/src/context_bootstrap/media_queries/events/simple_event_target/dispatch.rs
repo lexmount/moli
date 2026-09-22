@@ -68,11 +68,56 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     slot_name: &str,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
+    callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
+) -> SimpleEventDispatchResult {
+    dispatch_simple_event_target_event_with_original_target_collecting_errors(
+        scope,
+        target,
+        target,
+        slot_name,
+        event_type,
+        event,
+        callback_errors,
+    )
+}
+
+pub(crate) fn dispatch_simple_event_target_event_with_original_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    original_target: v8::Local<'s, v8::Object>,
+    slot_name: &str,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    dispatch_simple_event_target_event_with_original_target_collecting_errors(
+        scope,
+        target,
+        original_target,
+        slot_name,
+        event_type,
+        event,
+        None,
+    )
+    .uncanceled
+}
+
+fn dispatch_simple_event_target_event_with_original_target_collecting_errors<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    original_target: v8::Local<'s, v8::Object>,
+    slot_name: &str,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
     let mut dispatched = false;
     let can_invoke =
-        crate::context_bootstrap::event_target_dispatch::begin_dispatch(scope, target, event);
+        crate::context_bootstrap::event_target_dispatch::begin_dispatch_with_original_target(
+            scope,
+            target,
+            original_target,
+            event,
+        );
 
     let error_arguments = if event_type == "error"
         && (web_api_interfaces::WorkerGlobalScope::is_instance(scope, target)

@@ -546,7 +546,7 @@ pub(super) use base::{
     event_current_target_getter_function, event_default_prevented_getter_function,
     event_event_phase_getter_function, event_src_element_getter_function,
     event_target_getter_function, event_type_getter_function, set_event_dispatch_fields,
-    set_event_initialized,
+    set_event_dispatch_fields_with_original_target, set_event_initialized,
 };
 pub(in crate::context_bootstrap) use init::parse_event_init;
 pub(super) use kind::EventSubclassKind;
