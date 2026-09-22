@@ -1927,6 +1927,44 @@ mod tests {
     }
 
     #[test]
+    fn text_document_shell_has_no_doctype_and_preserves_normalized_literal_text() {
+        for mime in [
+            "text/plain",
+            "application/json",
+            "application/problem+json",
+            "text/javascript",
+        ] {
+            let stream = HtmlParser::SCRIPTING_ENABLED
+                .start_text_document(Url::parse("https://example.test/data").unwrap(), mime);
+            for chunk in [
+                "\n<&amp;",
+                "\r",
+                "\nbeta\rgamma\0",
+                "</pre><script>bad()</script>",
+            ] {
+                stream.feed(chunk);
+            }
+            let document = stream.finish_dom_host();
+            let root = document.document_handle();
+            let children = document.child_handles(root).collect::<Vec<_>>();
+            assert_eq!(children.len(), 1, "no synthetic doctype: {mime}");
+            assert!(document.is_html_element_named(children[0], "html"));
+            let expected_mode = HtmlParser::SCRIPTING_ENABLED.parse_dom_host(
+                Url::parse("https://example.test/control").unwrap(),
+                "<!doctype html><p>control".to_owned(),
+            );
+            assert_eq!(
+                document.document_quirks_mode_for_handle(root),
+                expected_mode.document_quirks_mode_for_handle(expected_mode.document_handle())
+            );
+            assert_eq!(
+                document.text_content(root).as_deref(),
+                Some("\n<&amp;\nbeta\ngamma\u{fffd}</pre><script>bad()</script>")
+            );
+        }
+    }
+
+    #[test]
     fn html_document_still_parses_markup_and_entities() {
         let document = parse_test_document("<b>Gülçek&amp;</b>");
         let bold = first_element_by_ns(&document, HTML_NS, "b");
