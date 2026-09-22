@@ -235,6 +235,9 @@ pub enum RendererOutputStreamCloseReason {
 pub enum RendererOutputStreamControl {
     Opened {
         stream: RendererOutputStreamIdentity,
+        /// The first publication covered by this observer. A replacement
+        /// observer starts here rather than replaying the previous prefix.
+        first_sequence: NonZeroU64,
     },
     Closed {
         stream: RendererOutputStreamIdentity,

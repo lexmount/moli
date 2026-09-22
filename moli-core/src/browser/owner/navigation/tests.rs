@@ -943,6 +943,43 @@ async fn native_document_lifecycle_advances_without_a_devtools_output_consumer()
 }
 
 #[tokio::test]
+async fn native_context_output_rebind_preserves_live_document() {
+    let service = BrowserService::start().unwrap();
+    let (context, contents) = context_with_contents(&service);
+    let (sender, output) = crate::renderer_output_transport_channel();
+    context
+        .set_renderer_output_transport_sender(sender)
+        .unwrap();
+    let document = navigate(&context, contents, "data:text/html,<title>survivor</title>").await;
+    let history = context.navigation_history_snapshot(contents).unwrap();
+    drop(output);
+
+    let (sender, _output) = crate::renderer_output_transport_channel();
+    let prefix = context
+        .set_renderer_output_transport_sender(sender.clone())
+        .unwrap()
+        .unwrap();
+    assert!(prefix.web_contents.contains(&contents));
+    let commit = context.document_commit_snapshot(document).unwrap();
+    commit
+        .inspection_endpoint
+        .bind_output_transport(sender.clone())
+        .unwrap();
+    assert_eq!(context.document_handle(contents).unwrap(), Some(document));
+    assert_eq!(
+        context.navigation_history_snapshot(contents).unwrap(),
+        history
+    );
+    assert!(
+        context
+            .set_renderer_output_transport_sender(sender)
+            .unwrap()
+            .is_none()
+    );
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_service_worker_transport_binds_after_the_last_window_closes() {
     use crate::browser::{ServiceWorkerCommand, ServiceWorkerExecution, WorkerSnapshot};
     use crate::page::{
@@ -1008,7 +1045,7 @@ async fn native_service_worker_transport_binds_after_the_last_window_closes() {
             .is_some()
     );
     let crate::RendererOutputTransportMessage::StreamControl(
-        crate::RendererOutputStreamControl::Opened { stream },
+        crate::RendererOutputStreamControl::Opened { stream, .. },
     ) = output.try_recv().unwrap()
     else {
         panic!("the surviving version must bind without a Window engine")
@@ -1027,7 +1064,7 @@ async fn native_service_worker_transport_binds_after_the_last_window_closes() {
             scope: worker.info.scope_url.parse().unwrap(),
         })
         .unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let previous_tail = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         let mut next_sequence = 1;
         loop {
             let crate::RendererOutputTransportMessage::Publication(publication) =
@@ -1049,13 +1086,68 @@ async fn native_service_worker_transport_binds_after_the_last_window_closes() {
                 {
                     assert_eq!(*version_id, worker.info.version_id);
                     assert_ne!(Some(run), worker.execution.active_run());
-                    return;
+                    return next_sequence - 1;
                 }
             }
         }
     })
     .await
     .expect("the restarted run must publish through the bound version FIFO");
+    drop(output);
+    let (sender, mut output) = crate::renderer_output_transport_channel();
+    let prefix = context
+        .set_renderer_output_transport_sender(sender)
+        .unwrap()
+        .unwrap();
+    assert!(prefix.web_contents.is_empty());
+    assert!(prefix.workers.iter().any(|snapshot| matches!(snapshot,
+        WorkerSnapshot::Service { worker: current, .. }
+        if current.info.version_id == worker.info.version_id
+        && matches!(current.execution, ServiceWorkerExecution::Running(_)))));
+    let crate::RendererOutputTransportMessage::StreamControl(
+        crate::RendererOutputStreamControl::Opened {
+            stream: resumed,
+            first_sequence,
+        },
+    ) = output.try_recv().unwrap()
+    else {
+        panic!("the surviving version must resume independently of Window engines")
+    };
+    assert_eq!(resumed, stream);
+    assert!(first_sequence.get() > previous_tail);
+    context
+        .execute_service_worker_command(ServiceWorkerCommand::StopVersion {
+            version_id: worker.info.version_id,
+        })
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut next_sequence = first_sequence.get();
+        loop {
+            let crate::RendererOutputTransportMessage::Publication(publication) =
+                output.recv().await.unwrap()
+            else {
+                panic!("the version remains live while its run stops")
+            };
+            assert_eq!(publication.cursor().stream(), stream);
+            assert_eq!(publication.cursor().sequence(), next_sequence);
+            next_sequence += 1;
+            for record in publication.into_records() {
+                if let crate::RendererOutputItem::Observation(
+                    crate::RendererProtocolObservation::WorkerLifecycle(observation),
+                ) = record.into_parts().1
+                    && let Some(committed) = observation.committed().await
+                    && let RendererWorkerLifecycle::Service(
+                        RendererServiceWorkerLifecycle::Stopped { version_id, .. },
+                    ) = committed.lifecycle()
+                {
+                    assert_eq!(*version_id, worker.info.version_id);
+                    return;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the replacement observer must receive the live stop event");
     service.shutdown();
     server.shutdown().await;
 }

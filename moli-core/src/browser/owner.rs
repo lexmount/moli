@@ -962,8 +962,8 @@ impl BrowserContextHandle {
         self.update_live(move |context| context.bind_page_navigation_engines(config));
     }
 
-    /// First binding returns the native Worker prefix covered by the new
-    /// observer. Repeated binding to the same transport does not replay it.
+    /// A new observer receives the current native Worker prefix, including when
+    /// replacing a closed observer. Repeated binding does not replay it.
     pub fn set_renderer_output_transport_sender(
         &self,
         sender: crate::RendererOutputTransportSender,

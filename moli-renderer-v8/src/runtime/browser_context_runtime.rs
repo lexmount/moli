@@ -39,11 +39,13 @@ impl RendererOutputTransportSenderSlot {
     pub(crate) fn set(&self, sender: super::RendererOutputTransportSender) {
         let mut slot = self.sender.lock();
         if let Some(existing) = slot.as_ref() {
+            if existing.same_channel(&sender) {
+                return;
+            }
             assert!(
-                existing.same_channel(&sender),
-                "one BrowserContext renderer output stream cannot change protocol transport"
+                existing.is_closed(),
+                "Context renderer output cannot replace a live observer"
             );
-            return;
         }
         *slot = Some(sender);
     }

@@ -2382,6 +2382,7 @@ mod tests {
         };
         let opened = |page_id| {
             RendererOutputTransportMessage::from(RendererOutputStreamControl::Opened {
+                first_sequence: std::num::NonZeroU64::MIN,
                 stream: RendererOutputStreamIdentity::new_page_for_protocol_test(
                     PageId::new_for_testing(page_id),
                 ),
@@ -2391,7 +2392,7 @@ mod tests {
         let second = opened(2);
         let second_stream = match &second {
             RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream },
+                RendererOutputStreamControl::Opened { stream, .. },
             ) => *stream,
             RendererOutputTransportMessage::StreamControl(
                 RendererOutputStreamControl::Closed { .. },
@@ -2417,7 +2418,7 @@ mod tests {
         assert!(matches!(
             queued,
             RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream }
+                RendererOutputStreamControl::Opened { stream, .. }
             ) if stream == second_stream
         ));
     }

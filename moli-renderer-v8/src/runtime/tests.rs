@@ -3417,7 +3417,7 @@ async fn canceled_prepared_document_closes_its_ordered_output_stream() {
     };
     let opened_stream = match output_rx.recv_message().await {
         RendererOutputTransportMessage::StreamControl(
-            super::RendererOutputStreamControl::Opened { stream },
+            super::RendererOutputStreamControl::Opened { stream, .. },
         ) => stream,
         other => panic!("prepared isolate reservation must open its stream first, got {other:?}"),
     };
@@ -3523,7 +3523,7 @@ async fn dropping_started_initial_preparation_closes_only_its_reserved_stream() 
     drop(reserved); // No acknowledgement has been awaited.
     let stream = match output_rx.recv_message().await {
         RendererOutputTransportMessage::StreamControl(
-            super::RendererOutputStreamControl::Opened { stream },
+            super::RendererOutputStreamControl::Opened { stream, .. },
         ) => stream,
         other => {
             panic!("preparation must open its stream before releasing the reservation: {other:?}")

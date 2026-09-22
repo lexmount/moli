@@ -3901,7 +3901,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
 
@@ -3993,7 +3993,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.recv().await,
             Some(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
 
@@ -4127,7 +4127,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.recv().await,
             Some(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
         assert_eq!(transport_rx.recv().await, None);
@@ -4177,13 +4177,13 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             old_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream }
+                RendererOutputStreamControl::Opened { stream, .. }
             )) if stream == old_stream
         ));
         assert!(matches!(
             new_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream }
+                RendererOutputStreamControl::Opened { stream, .. }
             )) if stream == new_stream
         ));
 
@@ -4261,7 +4261,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
         let attachment = RendererAgentAttachmentId::allocate();
@@ -4333,7 +4333,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
         let attachment = RendererAgentAttachmentId::allocate();

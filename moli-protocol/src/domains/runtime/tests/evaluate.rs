@@ -8204,6 +8204,7 @@ fn runtime_evaluate_await_promise_timer_reply_ignores_unrelated_output_stream_co
         let unrelated_output = ctx
             .route_renderer_publication_for_test(
                 RendererOutputStreamControl::Opened {
+                    first_sequence: std::num::NonZeroU64::MIN,
                     stream: RendererOutputStreamIdentity::new_page_for_protocol_test(
                         PageId::new_for_testing(9_102),
                     ),

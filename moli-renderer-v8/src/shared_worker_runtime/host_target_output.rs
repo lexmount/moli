@@ -363,7 +363,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv().expect("stream open"),
             crate::runtime::RendererOutputTransportMessage::StreamControl(
-                crate::runtime::RendererOutputStreamControl::Opened { stream: actual }
+                crate::runtime::RendererOutputStreamControl::Opened { stream: actual, .. }
             ) if actual == stream
         ));
         for expected_sequence in [1, 2] {

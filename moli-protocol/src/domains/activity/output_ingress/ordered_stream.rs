@@ -1,4 +1,7 @@
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::{
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    num::NonZeroU64,
+};
 
 use moli_core::{
     PageId, RendererOutputCursor, RendererOutputFenceLeaseId, RendererOutputPublication,
@@ -33,6 +36,7 @@ pub(crate) enum RendererOutputIngressAdmission {
 #[derive(Debug)]
 struct OpenRendererOutputStream {
     owner: Option<RendererPublicationOwner>,
+    first_sequence: u64,
     next_expected_sequence: u64,
     last_projected_sequence: u64,
     projecting_sequence: Option<u64>,
@@ -78,6 +82,7 @@ impl OrderedRendererOutputIngress {
     pub(crate) fn open(
         &mut self,
         stream: RendererOutputStreamIdentity,
+        first_sequence: NonZeroU64,
         discovered_owner: Option<RendererPublicationOwner>,
     ) {
         assert!(
@@ -97,8 +102,9 @@ impl OrderedRendererOutputIngress {
             stream,
             OpenRendererOutputStream {
                 owner: registered_owner.or(discovered_owner),
-                next_expected_sequence: 1,
-                last_projected_sequence: 0,
+                first_sequence: first_sequence.get(),
+                next_expected_sequence: first_sequence.get(),
+                last_projected_sequence: first_sequence.get() - 1,
                 projecting_sequence: None,
                 pending: BTreeMap::new(),
                 closing_at: None,
@@ -193,7 +199,7 @@ impl OrderedRendererOutputIngress {
                 );
             } else {
                 assert_eq!(
-                    state.next_expected_sequence, 1,
+                    state.next_expected_sequence, state.first_sequence,
                     "an unobserved stream cannot acquire a retrospective owner"
                 );
                 state.owner = Some(owner.clone());
@@ -538,7 +544,7 @@ mod tests {
         let stream =
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7));
         let mut ingress = OrderedRendererOutputIngress::default();
-        ingress.open(stream, Some(owner()));
+        ingress.open(stream, NonZeroU64::MIN, Some(owner()));
         assert!(matches!(
             ingress.admit(publication(stream, 1)),
             RendererOutputIngressAdmission::Ready(ready) if sequences(&ready) == vec![1]
@@ -571,7 +577,7 @@ mod tests {
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(17));
         let cursor = RendererOutputCursor::new_for_test(stream, 1);
         let mut ingress = OrderedRendererOutputIngress::default();
-        ingress.open(stream, Some(owner()));
+        ingress.open(stream, NonZeroU64::MIN, Some(owner()));
         let lease_id = RendererOutputFenceLeaseId::new_for_test(1);
         ingress.declare_cursor_lease(cursor, lease_id);
 
@@ -600,11 +606,54 @@ mod tests {
     }
 
     #[test]
+    fn resumed_stream_orders_new_output_without_waiting_for_the_previous_observer() {
+        let stream =
+            RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(8));
+        let mut ingress = OrderedRendererOutputIngress::default();
+        ingress.open(stream, NonZeroU64::new(7).unwrap(), None);
+        ingress.bind_owner(stream.residence(), owner());
+        assert_eq!(
+            ingress.admit(publication(stream, 6)),
+            RendererOutputIngressAdmission::Stale
+        );
+        assert_eq!(
+            ingress.admit(publication(stream, 8)),
+            RendererOutputIngressAdmission::Buffered
+        );
+        assert!(matches!(
+            ingress.admit(publication(stream, 7)),
+            RendererOutputIngressAdmission::Ready(ready) if sequences(&ready) == vec![7]
+        ));
+        let cursor = RendererOutputCursor::new_for_test(stream, 8);
+        let lease = RendererOutputFenceLeaseId::new_for_test(1);
+        ingress.declare_cursor_lease(cursor, lease);
+        ingress.close(stream, NonZeroU64::new(8));
+        assert!(!ingress.is_projection_complete(cursor));
+        assert_eq!(
+            sequences(&ingress.complete_projection(RendererOutputCursor::new_for_test(stream, 7))),
+            vec![8]
+        );
+        assert!(ingress.complete_projection(cursor).is_empty());
+        assert!(ingress.is_projection_complete(cursor));
+        assert_eq!(ingress.closed_stream_count(), 1);
+        ingress.release_cursor_lease(stream, lease);
+        assert_eq!(ingress.closed_stream_count(), 0);
+
+        ingress.open(stream, NonZeroU64::new(9).unwrap(), Some(owner()));
+        ingress.close(stream, NonZeroU64::new(8));
+        assert_eq!(
+            ingress.closed_stream_count(),
+            0,
+            "retirement without new output must not await the previous observer's prefix"
+        );
+    }
+
+    #[test]
     fn stream_buffers_sequence_gaps_and_releases_the_original_publications_in_order() {
         let stream =
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(8));
         let mut ingress = OrderedRendererOutputIngress::default();
-        ingress.open(stream, Some(owner()));
+        ingress.open(stream, NonZeroU64::MIN, Some(owner()));
         assert_eq!(
             ingress.admit(publication(stream, 2)),
             RendererOutputIngressAdmission::Buffered
@@ -630,8 +679,8 @@ mod tests {
         let second =
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(19));
         let mut ingress = OrderedRendererOutputIngress::default();
-        ingress.open(first, Some(owner()));
-        ingress.open(second, Some(owner()));
+        ingress.open(first, NonZeroU64::MIN, Some(owner()));
+        ingress.open(second, NonZeroU64::MIN, Some(owner()));
 
         assert_eq!(
             ingress.admit(publication(first, 2)),
@@ -656,7 +705,7 @@ mod tests {
         let stream =
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(11));
         let mut ingress = OrderedRendererOutputIngress::default();
-        ingress.open(stream, Some(owner()));
+        ingress.open(stream, NonZeroU64::MIN, Some(owner()));
         assert_eq!(
             ingress.admit(publication(stream, 2)),
             RendererOutputIngressAdmission::Buffered
@@ -686,7 +735,7 @@ mod tests {
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(12));
         let expected_owner = owner();
         let mut ingress = OrderedRendererOutputIngress::default();
-        ingress.open(stream, None);
+        ingress.open(stream, NonZeroU64::MIN, None);
         ingress.bind_owner(stream.residence(), expected_owner.clone());
 
         let RendererOutputIngressAdmission::Ready(ready) = ingress.admit(publication(stream, 1))
@@ -708,7 +757,7 @@ mod tests {
         let expected_owner = owner();
         let mut ingress = OrderedRendererOutputIngress::default();
         ingress.bind_owner(stream.residence(), expected_owner.clone());
-        ingress.open(stream, None);
+        ingress.open(stream, NonZeroU64::MIN, None);
         let RendererOutputResidenceIdentity::Page {
             owner_local_host_id,
             page_id,
@@ -770,6 +819,7 @@ mod tests {
             let cursor = RendererOutputCursor::new_for_test(stream, 1);
             ingress.open(
                 stream,
+                NonZeroU64::MIN,
                 Some(RendererPublicationOwner::BrowserContext {
                     browser_context_id: "BID-test".to_owned(),
                 }),

@@ -311,3 +311,24 @@ passed **18,503 tests / 13 configured skips**, run
 match the preceding accepted run. `page-lifetime-acceptance.json` records the
 eleven Rust source hashes and evidence. No transport budget, deadline or workload
 was relaxed, and all intermediate failures remain in the artifact directory.
+
+## Observer recovery after the main rebase, 2026-09-22
+
+The three restored recovery regressions all failed on rebased `1185bbe922`,
+including every attempt in a three-iteration reproduction. Contexts and live
+Page/Worker journals now accept a replacement after the previous transport has
+permanently closed. The same stream resumes at its current sequence; frozen
+publications and cursor leases from the old observer cannot enter the new FIFO.
+Retired streams stay retired, and native state supplies the replacement snapshot.
+
+Validation passed: fmt, strict workspace Clippy, 35 focused tests × 3, 481 related
+tests × 3, and final nextest **19,528 passed / 13 configured skips**, run
+`a365789d-f16f-4d89-8862-3abc93e923d6`. Coverage includes real WebSocket owner
+shutdown/reconnection with retained JS state, Dedicated/Shared Worker streams,
+ServiceWorker recovery without a Window, delayed publications/fences, and budget
+exhaustion before the old receiver drains. Failures and source hashes are retained
+in `target/smoke/observer-lifetime.V0QMM14h/`.
+
+This closes the recovery assertion above. The unchanged transport budget, Slack
+throughput and final main-relative performance comparison still need acceptance;
+these tests are not new performance measurements.

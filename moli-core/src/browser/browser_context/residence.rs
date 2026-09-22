@@ -38,11 +38,13 @@ impl BrowserContext {
         sender: crate::RendererOutputTransportSender,
     ) -> bool {
         if let Some(existing) = &self.renderer_output_transport_sender {
+            if existing.same_channel(&sender) {
+                return false;
+            }
             assert!(
-                existing.same_channel(&sender),
-                "Context output cannot change transport"
+                existing.is_closed(),
+                "Context output cannot replace a live observer"
             );
-            return false;
         }
         self.renderer_output_transport_sender = Some(sender.clone());
         self.renderer_runtime_owner

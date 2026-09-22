@@ -633,6 +633,7 @@ fn only_post_load_renderer_output_can_become_a_future_load_predecessor_candidate
     );
 
     let control: RendererOutputTransportMessage = RendererOutputStreamControl::Opened {
+        first_sequence: std::num::NonZeroU64::MIN,
         stream: RendererOutputStreamIdentity::new_page_for_protocol_test(page_id),
     }
     .into();
@@ -1067,6 +1068,7 @@ fn scheduler_holds_concrete_renderer_output_until_its_exact_load_predecessor_fin
 #[tokio::test]
 async fn renderer_stream_control_is_consumed_without_protocol_residence() {
     let control: RendererOutputTransportMessage = RendererOutputStreamControl::Opened {
+        first_sequence: std::num::NonZeroU64::MIN,
         stream: RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(
             7,
         )),

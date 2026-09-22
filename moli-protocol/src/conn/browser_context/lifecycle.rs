@@ -235,7 +235,7 @@ impl CdpConnection {
         events
     }
 
-    /// Consume the native prefix frozen at first transport binding, before
+    /// Consume the native prefix frozen when this observer binds, before
     /// admitting that Context's live Worker output or subsequent commands.
     pub async fn project_bound_worker_output(&mut self) -> Vec<BackgroundProtocolEvent> {
         let snapshots = self

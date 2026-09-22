@@ -117,7 +117,10 @@ impl CdpConnection {
         control: moli_core::RendererOutputStreamControl,
     ) {
         match control {
-            moli_core::RendererOutputStreamControl::Opened { stream } => {
+            moli_core::RendererOutputStreamControl::Opened {
+                stream,
+                first_sequence,
+            } => {
                 let residence = stream.residence();
                 let owners = if self
                     .scheduler_state
@@ -141,7 +144,7 @@ impl CdpConnection {
                 };
                 self.scheduler_state
                     .renderer_output_ingress
-                    .open(stream, owner);
+                    .open(stream, first_sequence, owner);
             }
             moli_core::RendererOutputStreamControl::Closed {
                 stream,

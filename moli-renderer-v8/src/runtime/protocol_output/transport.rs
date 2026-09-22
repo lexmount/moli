@@ -64,7 +64,7 @@ impl RendererOutputTransportMessage {
 
     pub fn residence(&self) -> RendererOutputResidenceIdentity {
         match self {
-            Self::StreamControl(RendererOutputStreamControl::Opened { stream })
+            Self::StreamControl(RendererOutputStreamControl::Opened { stream, .. })
             | Self::StreamControl(RendererOutputStreamControl::Closed { stream, .. }) => {
                 stream.residence()
             }
@@ -404,6 +404,12 @@ impl RendererOutputTransportSender {
         Arc::ptr_eq(&self.shared, &other.shared)
     }
 
+    /// Admission is permanently closed, even if the receiver is still draining
+    /// the prefix preceding a budget-exhaustion terminal.
+    pub fn is_closed(&self) -> bool {
+        self.tx.is_closed() || self.diagnostics().terminal
+    }
+
     pub fn diagnostics(&self) -> RendererOutputTransportDiagnostics {
         self.shared.budget.lock().diagnostics
     }
@@ -665,6 +671,7 @@ mod tests {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(test_limits());
         let opened =
             RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+                first_sequence: std::num::NonZeroU64::MIN,
                 stream: stream(),
             });
         let first = publication(1, vec![observation_record(1)]);
@@ -680,6 +687,7 @@ mod tests {
             "the observation ceiling must not borrow the essential reserve"
         );
         assert!(sender.diagnostics().terminal);
+        assert!(sender.is_closed());
         assert!(receiver.is_terminal());
         assert!(
             !receiver.is_closed(),
@@ -692,6 +700,42 @@ mod tests {
         assert!(receiver.is_terminal());
         assert!(receiver.is_closed());
         assert_eq!(receiver.diagnostics().pending_messages, 0);
+    }
+
+    #[tokio::test]
+    async fn exhausted_observer_can_be_replaced_before_its_admitted_prefix_drains() {
+        let (sender, mut old) = renderer_output_transport_channel_with_limits(test_limits());
+        let journal =
+            crate::runtime::RendererTurnOutputJournal::new_with_transport(stream(), sender.clone());
+        journal.publish_record(observation_record(1));
+        journal.publish_record(observation_record(2));
+        assert!(sender.is_closed());
+        assert!(!old.is_closed());
+        let (replacement, mut resumed) = renderer_output_transport_channel();
+        journal.bind_transport(replacement.clone());
+        assert!(
+            matches!(resumed.try_recv().unwrap(), RendererOutputTransportMessage::StreamControl(
+            RendererOutputStreamControl::Opened { first_sequence, .. }) if first_sequence.get() == 3)
+        );
+        journal.publish_record(observation_record(3));
+        assert!(
+            matches!(resumed.try_recv().unwrap(), RendererOutputTransportMessage::Publication(publication)
+            if publication.cursor().stream() == journal.stream() && publication.cursor().sequence() == 3
+            && publication.records() == [observation_record(3)])
+        );
+        assert!(!replacement.is_closed());
+        assert!(
+            matches!(old.recv().await.unwrap(), RendererOutputTransportMessage::StreamControl(
+            RendererOutputStreamControl::Opened { first_sequence, .. }) if first_sequence.get() == 1)
+        );
+        assert!(
+            matches!(old.recv().await.unwrap(), RendererOutputTransportMessage::Publication(publication)
+            if publication.cursor().stream() == journal.stream() && publication.cursor().sequence() == 1
+            && publication.records() == [observation_record(1)])
+        );
+        assert_eq!(old.recv().await, None);
+        assert_eq!(sender.diagnostics().pending_messages, 0);
+        assert!(resumed.try_recv().is_err());
     }
 
     #[tokio::test]

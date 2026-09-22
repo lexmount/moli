@@ -149,6 +149,107 @@ fn pending_resolution_releases_journal_before_later_producer_append() {
 }
 
 #[test]
+fn closed_observer_can_resume_live_journal_without_replaying_history() {
+    let (transport, mut receiver) = renderer_output_transport_channel();
+    let journal = RendererTurnOutputJournal::new_with_transport(
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7)),
+        transport,
+    );
+    receiver.try_recv().unwrap();
+    journal.append(lifecycle_record(1));
+    let previous = journal.publish_pending().unwrap();
+    let previous_fence = journal.declare_fence(previous);
+    drop(receiver);
+
+    let (replacement, mut receiver) = renderer_output_transport_channel();
+    journal.bind_transport(replacement.clone());
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+            stream, first_sequence,
+        }) if stream == previous.stream() && first_sequence.get() == previous.sequence() + 1
+    ));
+    drop(previous_fence);
+    assert!(
+        receiver.try_recv().is_err(),
+        "old output and leases stay with the old observer"
+    );
+    journal.append(lifecycle_record(2));
+    journal.publish_pending();
+    let RendererOutputTransportMessage::Publication(publication) = receiver.try_recv().unwrap()
+    else {
+        panic!("the surviving journal must deliver new output")
+    };
+    assert_eq!(publication.cursor().stream(), previous.stream());
+    assert_eq!(publication.cursor().sequence(), previous.sequence() + 1);
+    assert_eq!(
+        publication.records(),
+        &[lifecycle_record(2).resolve().unwrap()]
+    );
+    journal.bind_transport(replacement);
+    assert!(
+        receiver.try_recv().is_err(),
+        "repeat binding does not reopen a stream"
+    );
+    journal.retire(RendererOutputStreamCloseReason::ResidenceRetired);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Closed { .. })
+    ));
+}
+
+#[test]
+fn observer_replacement_excludes_frozen_output_and_late_cursor_leases() {
+    let (transport, receiver) = renderer_output_transport_channel();
+    let journal = RendererTurnOutputJournal::new_with_transport(
+        RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7)),
+        transport,
+    );
+    journal.append(lifecycle_record(1));
+    let pending = journal.take_pending_for_resolution().unwrap();
+    drop(receiver);
+    let (replacement, mut receiver) = renderer_output_transport_channel();
+    journal.bind_transport(replacement);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+            first_sequence, ..
+        }) if first_sequence.get() == 2
+    ));
+    // Resolution and fence export can finish after the new observer binds.
+    let settled = RendererSettledOutput::new(journal.clone(), pending.finish());
+    let old_fence = journal.declare_fence(settled.cursor());
+    settled.publish();
+    drop(old_fence);
+    assert!(receiver.try_recv().is_err());
+    journal.append(lifecycle_record(2));
+    let cursor = journal.publish_pending().unwrap();
+    assert_eq!(cursor.sequence(), 2);
+    let fence = journal.declare_fence(cursor);
+    assert!(
+        matches!(receiver.try_recv().unwrap(), RendererOutputTransportMessage::Publication(publication)
+        if publication.cursor() == cursor && publication.records() == [lifecycle_record(2).resolve().unwrap()])
+    );
+    assert!(
+        matches!(receiver.try_recv().unwrap(), RendererOutputTransportMessage::CursorLeaseDeclared { cursor: declared, .. }
+        if declared == cursor)
+    );
+    drop(fence);
+    assert!(matches!(
+        receiver.try_recv().unwrap(),
+        RendererOutputTransportMessage::CursorLeaseReleased { .. }
+    ));
+    journal.retire(RendererOutputStreamCloseReason::ResidenceRetired);
+    drop(receiver);
+    let (replacement, mut receiver) = renderer_output_transport_channel();
+    journal.bind_transport(replacement);
+    assert!(
+        receiver.try_recv().is_err(),
+        "retired streams cannot reopen"
+    );
+}
+
+#[test]
 fn late_transport_replays_frozen_page_output_without_settling_an_active_turn() {
     let journal = RendererTurnOutputJournal::new(
         RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(7)),
@@ -163,6 +264,7 @@ fn late_transport_replays_frozen_page_output_without_settling_an_active_turn() {
     assert_eq!(
         receiver.try_recv().unwrap(),
         RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+            first_sequence: std::num::NonZeroU64::MIN,
             stream: journal.stream(),
         })
     );
@@ -207,6 +309,7 @@ fn retirement_publishes_the_final_batch_before_its_frozen_close_boundary() {
     assert_eq!(
         receiver.try_recv().expect("stream open"),
         RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+            first_sequence: std::num::NonZeroU64::MIN,
             stream
         })
     );

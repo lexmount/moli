@@ -16,6 +16,7 @@ struct RendererTurnOutputJournalState {
     last_published_sequence: Option<NonZeroU64>,
     records: Vec<PendingRendererOutputRecord>,
     transport: Option<RendererOutputTransportSender>,
+    transport_first_sequence: NonZeroU64,
     closed: bool,
     deferred_publications: Vec<RendererOutputPublication>,
     deferred_close: Option<RendererOutputStreamControl>,
@@ -190,6 +191,7 @@ impl RendererTurnOutputJournal {
                 last_published_sequence: None,
                 records: Vec::new(),
                 transport: None,
+                transport_first_sequence: NonZeroU64::MIN,
                 closed: false,
                 deferred_publications: Vec::new(),
                 deferred_close: None,
@@ -239,7 +241,10 @@ impl RendererTurnOutputJournal {
         // Declaration occurs while holding the same stream lock used by
         // publication and Close, so the transport observes a deterministic
         // publication -> declaration -> close order.
-        RendererOutputFence::declare(cursor, state.transport.clone())
+        let transport = (cursor.sequence() >= state.transport_first_sequence.get())
+            .then(|| state.transport.clone())
+            .flatten();
+        RendererOutputFence::declare(cursor, transport)
     }
 
     pub(crate) fn append(&self, record: PendingRendererOutputRecord) {
@@ -315,6 +320,11 @@ impl RendererTurnOutputJournal {
         state: &mut RendererTurnOutputJournalState,
         publication: RendererOutputPublication,
     ) {
+        // Resolution can finish after an observer replacement. Its reserved
+        // cursor still belongs to the previous observer, not the new FIFO.
+        if publication.cursor().sequence() < state.transport_first_sequence.get() {
+            return;
+        }
         if let Some(transport) = state.transport.as_ref() {
             // A closed transport means the protocol owner has already
             // retired. The concrete prefix is still settled at `cursor`; it
@@ -424,37 +434,34 @@ impl RendererTurnOutputJournal {
         }
         let cursor = Self::reserve_cursor_locked(&mut state);
         let publication = RendererOutputPublication::new(cursor, vec![record]);
-        if let Some(transport) = state.transport.as_ref() {
-            // A closed channel means the protocol owner has already retired.
-            // The renderer stream remains settled and must not resurrect the
-            // record on a later transport.
-            let _ = publication.publish_to(transport);
-        } else {
-            state.deferred_publications.push(publication);
-        }
+        Self::publish_or_defer_locked(&mut state, publication);
     }
 
-    /// Binds the browser-context protocol transport to a stream that may have
-    /// produced facts before a CDP connection installed its receiver.
+    /// Binds an observer, replaying the initial frozen prefix only on first
+    /// binding. A closed observer may be replaced while the residence lives.
     pub(crate) fn bind_transport(&self, transport: RendererOutputTransportSender) {
         let mut state = self.state.lock();
         if let Some(existing) = state.transport.as_ref() {
+            if existing.same_channel(&transport) {
+                return;
+            }
             assert!(
-                existing.same_channel(&transport),
-                "renderer output stream cannot be rebound to a different transport"
+                existing.is_closed(),
+                "renderer output cannot replace a live observer"
             );
-            return;
+            if state.closed {
+                return;
+            }
+            state.transport_first_sequence = state.next_sequence;
         }
-        // Binding is a one-shot stream-lifecycle transition, including for a
-        // stream which already retired before protocol transport existed.
-        // Record it before the first send: a closed receiver is a terminal
-        // protocol boundary, not permission to replay Opened or a concrete
-        // prefix into a later, unrelated transport.
+        // Record binding before the first send: rejection consumes the frozen
+        // prefix, so a later observer can never replay it.
         state.transport = Some(transport.clone());
         let deferred = std::mem::take(&mut state.deferred_publications);
         let close = state.deferred_close.take();
         let opened = RendererOutputStreamControl::Opened {
             stream: state.stream,
+            first_sequence: state.transport_first_sequence,
         };
         if transport.send(opened.into()).is_err() {
             return;

@@ -92,6 +92,61 @@ mod tests {
     use moli_shared_worker::SharedWorkerInstanceId;
 
     #[test]
+    fn replacement_observer_binds_only_surviving_dedicated_and_shared_workers() {
+        for worker in [
+            RendererWorkerIdentity::Dedicated(1),
+            RendererWorkerIdentity::Shared(SharedWorkerInstanceId::from_u64(1)),
+        ] {
+            let streams = RendererWorkerOutputStreams::new(
+                crate::runtime::RendererWorkerLifecycleReporter::new(
+                    RendererBrowserContextRuntimeId::new_for_testing(31),
+                ),
+                RendererOutputTransportSenderSlot::default(),
+            );
+            let (sender, receiver) = crate::runtime::renderer_output_transport_channel();
+            streams.bind_transport(sender);
+            let live = streams.open(worker.clone());
+            let record = crate::runtime::RendererOutputRecord::new_for_test(
+                crate::runtime::RendererOutputItem::Observation(
+                    crate::runtime::RendererProtocolObservation::RuntimeLifecycleError {
+                        text: "live worker".into(),
+                        execution_context_id: None,
+                    },
+                ),
+            );
+            live.publish_record(record.clone());
+            let retired = RendererWorkerIdentity::Dedicated(2);
+            streams.open(retired.clone());
+            drop(receiver);
+            streams.retire(&retired);
+            live.publish_record(record.clone());
+            let (sender, mut receiver) = crate::runtime::renderer_output_transport_channel();
+            streams.bind_transport(sender.clone());
+            assert!(
+                matches!(receiver.try_recv().unwrap(), RendererOutputTransportMessage::StreamControl(
+                RendererOutputStreamControl::Opened { stream, first_sequence })
+                if stream == live.stream() && first_sequence.get() == 3)
+            );
+            streams.bind_transport(sender);
+            assert!(
+                receiver.try_recv().is_err(),
+                "retired workers and old output cannot replay"
+            );
+            live.publish_record(record.clone());
+            assert!(
+                matches!(receiver.try_recv().unwrap(), RendererOutputTransportMessage::Publication(publication)
+                if publication.cursor().stream() == live.stream() && publication.cursor().sequence() == 3
+                && publication.records() == [record])
+            );
+            streams.retire(&worker);
+            assert!(
+                matches!(receiver.try_recv().unwrap(), RendererOutputTransportMessage::StreamControl(
+                RendererOutputStreamControl::Closed { stream, .. }) if stream == live.stream())
+            );
+        }
+    }
+
+    #[test]
     fn retired_unobserved_workers_release_their_streams_before_transport_binding() {
         let transport_slot = RendererOutputTransportSenderSlot::default();
         let streams = RendererWorkerOutputStreams::new(
@@ -124,7 +179,8 @@ mod tests {
         assert_eq!(
             receiver.try_recv().unwrap(),
             RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
-                stream: live.stream()
+                stream: live.stream(),
+                first_sequence: std::num::NonZeroU64::MIN,
             })
         );
         streams.bind_transport(sender);
