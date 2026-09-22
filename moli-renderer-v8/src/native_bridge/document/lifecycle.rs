@@ -88,7 +88,13 @@ fn node_document_write_or_writeln_callback<'s>(
         };
         let context = crate::native_bridge::node_relevant_context(scope, args.this())
             .unwrap_or_else(|| scope.get_current_context());
-        let global = context.global(scope);
+        let runtime = unsafe { &*runtime_ptr };
+        // Lightweight popup wrappers share a V8 realm with their opener, but
+        // their Window owns an independent policy container.
+        let global = runtime
+            .lightweight_popup_id_for_document_handle(handle)
+            .and_then(|popup_id| runtime.lightweight_popup_window(scope, popup_id))
+            .unwrap_or_else(|| context.global(scope));
         let requirements = unsafe { &*runtime_ptr }
             .trusted_types_for_script_requirements_for_global(scope, global);
         let Some(compliant) = crate::context_bootstrap::trusted_type_string_or_throw(
@@ -123,6 +129,20 @@ fn node_document_write_or_writeln_callback<'s>(
             11,
             "The object is in an invalid state.",
         );
+        return;
+    }
+    if let Some(popup_id) =
+        unsafe { &*runtime_ptr }.lightweight_popup_id_for_document_handle(handle)
+    {
+        unsafe { &mut *runtime_ptr }.write_lightweight_popup_document_stream(
+            scope,
+            runtime_ptr,
+            popup_id,
+            handle,
+            args.this(),
+            &html,
+        );
+        rv.set_undefined();
         return;
     }
     if let Some(child_handle) =
@@ -269,6 +289,19 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             return;
         }
         if unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+            rv.set(args.this().into());
+            return;
+        }
+        if unsafe { &*runtime_ptr }
+            .lightweight_popup_id_for_document_handle(handle)
+            .is_some()
+        {
+            unsafe { &mut *runtime_ptr }.open_lightweight_popup_document_stream(
+                scope,
+                runtime_ptr,
+                handle,
+                args.this(),
+            );
             rv.set(args.this().into());
             return;
         }
@@ -501,6 +534,15 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
                 11,
                 "The object is in an invalid state.",
             );
+            return;
+        }
+        if unsafe { &*runtime_ptr }
+            .lightweight_popup_id_for_document_handle(handle)
+            .is_some()
+        {
+            unsafe { &mut *runtime_ptr }
+                .close_lightweight_popup_document_stream(scope, args.this());
+            rv.set_undefined();
             return;
         }
         if let Some(child_handle) =

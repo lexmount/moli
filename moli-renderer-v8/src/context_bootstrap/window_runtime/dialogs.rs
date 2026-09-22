@@ -442,16 +442,8 @@ fn window_open_entered_policy_container(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> DocumentPolicyContainer {
-    if let Some(handle) = entered_child_window_handle(scope)
-        && let Some(policy_container) =
-            host.child_browsing_context_policy_container_snapshot(handle)
-    {
-        return policy_container;
-    }
-    if let Some(policy_container) = host.active_lightweight_popup_policy_container(scope) {
-        return policy_container.clone();
-    }
-    host.document_policy_container().clone()
+    host.document_policy_container_for_inheritance(host.entered_owner_dispatch_scope(scope))
+        .unwrap_or_else(|| host.document_policy_container().clone())
 }
 
 fn window_open_entered_window<'s>(

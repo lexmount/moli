@@ -384,6 +384,7 @@ pub(crate) fn parse_browsing_context_document_projection_from_source<'s>(
     content_type: Option<&str>,
     character_set: Option<&str>,
     html_parser: HtmlParser,
+    inherited_meta_policies: &[String],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let source = preserve_decoded_bom_only_browsing_context_body(source, content_type);
     let (parsed, kind) =
@@ -395,6 +396,7 @@ pub(crate) fn parse_browsing_context_document_projection_from_source<'s>(
         content_type,
         character_set,
         true,
+        Some(inherited_meta_policies),
     )
 }
 
@@ -474,6 +476,7 @@ fn build_detached_document_with_content_type<'s>(
         content_type,
         None,
         false,
+        None,
     )
 }
 
@@ -503,6 +506,7 @@ fn build_detached_document_from_dom_host_with_content_type<'s>(
         content_type,
         character_set,
         false,
+        None,
     )
 }
 
