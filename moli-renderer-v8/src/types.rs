@@ -135,6 +135,19 @@ pub(super) enum PendingSubresourceContinuation {
     },
 }
 
+pub(super) struct PendingWindowRequestAbort {
+    pub(super) binding: crate::native_bridge::WindowExecutionContextBinding,
+    pub(super) continuation: WindowRequestAbortContinuation,
+}
+
+pub(super) enum WindowRequestAbortContinuation {
+    Fetch {
+        resolver: Option<v8::Global<v8::PromiseResolver>>,
+        body_source: Option<NetworkBodySourceId>,
+    },
+    Xhr(v8::Global<v8::Object>),
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) enum ImageRequestCorsMode {
     NoCors,
@@ -827,6 +840,9 @@ pub(super) struct AsyncSubresourceStreamingFinished {
 /// another kind of resident.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AsyncSubresourceFetchEventTarget {
+    DocumentAbort {
+        internal_id: u64,
+    },
     /// The violation carries its source Document's reporting authority and
     /// remains reportable after the originating fetch has settled or aborted.
     ContentSecurityPolicyViolation,
@@ -854,6 +870,9 @@ pub(crate) enum AsyncSubresourceFetchEventTarget {
 
 #[derive(Debug)]
 pub(super) enum AsyncSubresourceFetchEvent {
+    DocumentAbort {
+        internal_id: u64,
+    },
     ContentSecurityPolicyViolation {
         report_context: Box<crate::network_host::WindowCspReportRequestContext>,
         violation: Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
@@ -872,6 +891,11 @@ pub(super) enum AsyncSubresourceFetchEvent {
 impl AsyncSubresourceFetchEvent {
     pub(crate) fn target(&self) -> AsyncSubresourceFetchEventTarget {
         match self {
+            Self::DocumentAbort { internal_id } => {
+                AsyncSubresourceFetchEventTarget::DocumentAbort {
+                    internal_id: *internal_id,
+                }
+            }
             Self::ContentSecurityPolicyViolation { .. } => {
                 AsyncSubresourceFetchEventTarget::ContentSecurityPolicyViolation
             }

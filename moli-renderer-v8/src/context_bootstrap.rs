@@ -173,6 +173,7 @@ pub(crate) use location_navigation::{
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,
+    stop_navigation_for_window_and_descendants,
 };
 pub(crate) use navigation_events::{
     construct_original_hash_change_event, dispatch_beforeunload_for_runtime_owner,
