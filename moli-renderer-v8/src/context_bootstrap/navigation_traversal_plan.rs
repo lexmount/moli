@@ -7,7 +7,7 @@ use super::navigation_projection::{
 };
 use super::navigation_traversal_execution::TraversalTarget;
 use super::navigation_window::{
-    navigation_document_has_opaque_origin, navigation_document_is_active, runtime_window_owner,
+    navigation_document_is_active, navigation_has_disabled_entries, runtime_window_owner,
     window_history_for_holder,
 };
 
@@ -76,9 +76,9 @@ pub(super) fn navigation_delta_traversal_plan<'s>(
             "Cannot traverse a non-fully-active document",
         ));
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_has_disabled_entries(scope, navigation) {
         return Some(NavigationTraversalPlan::RejectInvalidState(
-            "Cannot traverse an opaque origin document",
+            "Cannot traverse a document with disabled navigation entries",
         ));
     }
     let history = window_history_for_holder(scope, owner)?;
@@ -134,9 +134,9 @@ pub(super) fn navigation_index_traversal_plan<'s>(
             "Cannot traverse a non-fully-active document",
         ));
     }
-    if navigation_document_has_opaque_origin(scope, owner) {
+    if navigation_has_disabled_entries(scope, navigation) {
         return Some(NavigationTraversalPlan::RejectInvalidState(
-            "Cannot traverse an opaque origin document",
+            "Cannot traverse a document with disabled navigation entries",
         ));
     }
     let history = window_history_for_holder(scope, owner)?;

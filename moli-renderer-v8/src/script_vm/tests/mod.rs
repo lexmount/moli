@@ -6837,7 +6837,7 @@ fn pending_initial_child_navigation_keeps_initial_empty_window_surface() {
 "#,
         )
         .expect("pending child Window state should evaluate"),
-        "about:blank|about:blank|about:blank|complete",
+        "about:blank|null|about:blank|complete",
         "a planned target must not be projected as committed while the initial empty Document is still live"
     );
 

@@ -10,7 +10,7 @@ use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_from_seed,
 };
-use super::navigation_window::{window_history_for_holder, window_navigation_for_holder};
+use super::navigation_window::{navigation_has_current_document, window_history_for_holder, window_navigation_for_holder};
 use crate::native_bridge::NavigationHistoryEntrySeed;
 
 pub(crate) fn install_navigation_bootstrap_entry(
@@ -55,6 +55,28 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
 ) {
     if super::history_runtime::state::window_has_shared_history(scope, owner) {
         return;
+    }
+    if let Some(navigation) = window_navigation_for_holder(scope, owner)
+        && !navigation_has_current_document(scope, navigation)
+    {
+        let Some(current) = entry_seed
+            .entries
+            .iter()
+            .find(|entry| entry.history_index == entry_seed.current_index)
+        else {
+            return;
+        };
+        // A javascript: navigation can replace the Document without changing
+        // its URL. Do not install the new seed into the old Navigation object.
+        if super::navigation_bootstrap::reset_window_location_history_navigation_runtime_state(
+            scope,
+            owner,
+            &current.url,
+        )
+        .is_err()
+        {
+            return;
+        }
     }
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;

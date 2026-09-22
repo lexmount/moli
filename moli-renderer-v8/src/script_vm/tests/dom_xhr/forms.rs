@@ -4635,10 +4635,10 @@ seen
 fn iframe_anchor_download_click_dispatches_child_navigate_event() {
     let mut vm = new_storage_test_vm("https://iframe-download-navigation.test/page.html");
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 const frame = document.createElement('iframe');
+frame.srcdoc = '<p>committed child</p>';
 if (!document.documentElement) {
   document.appendChild(document.createElement('html'));
 }
@@ -4646,6 +4646,14 @@ if (!document.body) {
   document.documentElement.appendChild(document.createElement('body'));
 }
 document.body.appendChild(frame);
+"#,
+    )
+    .expect("committed download child should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
 let topNavigate = false;
 let childNavigate = false;
 navigation.onnavigate = () => { topNavigate = true; };
