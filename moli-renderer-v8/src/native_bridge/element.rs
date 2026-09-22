@@ -668,12 +668,14 @@ pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
     node_insert_adjacent_node_callback, node_insert_adjacent_text_callback,
 };
-pub(in crate::native_bridge) use url_attributes::parse_url_with_document_query_encoding;
 use url_attributes::{
     disconnected_iframe_can_materialize_detached_content, iframe_has_inactive_child_context,
     iframe_is_in_own_child_document, iframe_is_inside_its_own_child_context_document,
-    iframe_uses_detached_content_cache, parsed_url_like_attribute, resolve_url_like_attribute,
-    set_resolved_url_attribute, should_block_dangling_markup_subresource,
+    parsed_url_like_attribute, resolve_url_like_attribute, set_resolved_url_attribute,
+    should_block_dangling_markup_subresource,
+};
+pub(in crate::native_bridge) use url_attributes::{
+    iframe_uses_detached_content_cache, parse_url_with_document_query_encoding,
 };
 pub(super) use url_attributes::{
     live_frame_owner_content_window_for_handle, update_iframe_snapshot_navigation,

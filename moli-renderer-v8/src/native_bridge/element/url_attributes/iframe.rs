@@ -82,7 +82,7 @@ pub(in crate::native_bridge::element) fn disconnected_iframe_can_materialize_det
     !runtime.dom_host().is_connected(handle) && iframe_uses_detached_content_cache(runtime, handle)
 }
 
-pub(in crate::native_bridge::element) fn iframe_uses_detached_content_cache(
+pub(in crate::native_bridge) fn iframe_uses_detached_content_cache(
     runtime: &JsContextHost,
     handle: DomHandle,
 ) -> bool {

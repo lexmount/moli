@@ -339,12 +339,14 @@ pub(super) fn prune_views<'s>(
     let host = unsafe { &mut *host_ptr };
     let binding = binding(scope, host, owner);
     let model = host.session_histories.get_mut(binding.popup).clone();
-    let mut owners = vec![runtime_top_window_owner(scope, owner)];
-    if binding.popup.is_none() {
-        for handle in host.child_browsing_context_handles_in_document_order() {
-            if let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) {
-                owners.push(window);
-            }
+    let top = runtime_top_window_owner(scope, owner);
+    let mut owners = vec![top];
+    let children = super::window_accessors::window_document_handle(scope, top, host)
+        .map(|document| host.child_browsing_context_handles_in_document_order_for_document(document))
+        .unwrap_or_default();
+    for handle in children {
+        if let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) {
+            owners.push(window);
         }
     }
     let mut removed = Vec::new();
