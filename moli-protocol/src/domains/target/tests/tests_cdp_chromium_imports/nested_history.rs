@@ -154,8 +154,18 @@ async fn srcdoc(page: &mut HistoryPage, frame: &str, markup: &str) -> Result<()>
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nested_history_restores_interleaved_frames_after_parent_document_replacement() -> Result<()>
-{
+async fn nested_history_restores_interleaved_frames_after_parent_document_replacement() {
+    // Traversal drives a replacement load through the protocol output projector,
+    // so use the same stack allowance as the other deep CDP tests.
+    target_8mb_stack("nested-history-interleaved", || async {
+        check_interleaved_frames_after_parent_document_replacement()
+            .await
+            .expect("interleaved frame history should survive parent document replacement");
+    })
+    .await;
+}
+
+async fn check_interleaved_frames_after_parent_document_replacement() -> Result<()> {
     let server = SmokeFixtureServer::start().await;
     let initial_url = markup_url(&server, "<!doctype html><body><p>initial</p>");
     for popup in [false, true] {
@@ -349,7 +359,16 @@ async fn nested_history_retains_children_of_a_script_created_parent_navigable() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nested_history_restores_grandchildren_with_their_parent_document_identity() -> Result<()> {
+async fn nested_history_restores_grandchildren_with_their_parent_document_identity() {
+    target_8mb_stack("nested-history-grandchildren", || async {
+        check_grandchildren_with_their_parent_document_identity()
+            .await
+            .expect("grandchild history should keep its parent document identity");
+    })
+    .await;
+}
+
+async fn check_grandchildren_with_their_parent_document_identity() -> Result<()> {
     let server = SmokeFixtureServer::start().await;
     let leaf = markup_url(&server, "<!doctype html><body><p>initial</p>");
     let parent = markup_url(
