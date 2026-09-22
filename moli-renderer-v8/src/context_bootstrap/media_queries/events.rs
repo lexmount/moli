@@ -17,6 +17,7 @@ pub(crate) use simple_event_target::{
     dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
     install_simple_event_target_handlers, is_simple_event_target,
     invoke_simple_event_target_listeners,
+    dispatch_simple_event_target_event_with_original_target,
     simple_event_target_add_event_listener_callback, simple_event_target_dispatch_event_callback,
     simple_event_target_handler_getter_callback, simple_event_target_handler_setter_callback,
     simple_event_target_inspector_listener_snapshots,

@@ -46,6 +46,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
         event,
         None,
         None,
+        None,
     );
     rv.set_bool(dispatch_result.uncanceled);
 }
@@ -60,6 +61,25 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
         .uncanceled
 }
 
+pub(crate) fn dispatch_simple_event_target_event_with_original_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    original_target: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
+    dispatch_object_event(
+        scope,
+        target,
+        event_type,
+        event,
+        Some(original_target),
+        None,
+        None,
+    )
+    .uncanceled
+}
+
 pub(crate) struct SimpleEventDispatchResult {
     pub(crate) uncanceled: bool,
     pub(crate) dispatched: bool,
@@ -72,7 +92,15 @@ pub(crate) fn dispatch_simple_event_target_event_collecting_errors<'s>(
     event: v8::Local<'s, v8::Object>,
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventDispatchResult {
-    dispatch_object_event(scope, target, event_type, event, callback_errors, None)
+    dispatch_object_event(
+        scope,
+        target,
+        event_type,
+        event,
+        None,
+        callback_errors,
+        None,
+    )
 }
 
 /// Run the caller's microtask checkpoint while the native event is still
@@ -85,7 +113,15 @@ pub(crate) fn dispatch_simple_event_target_event_with_checkpoint<'s>(
     event: v8::Local<'s, v8::Object>,
     checkpoint: fn(&mut v8::PinScope<'s, '_>),
 ) -> SimpleEventDispatchResult {
-    dispatch_object_event(scope, target, event_type, event, None, Some(checkpoint))
+    dispatch_object_event(
+        scope,
+        target,
+        event_type,
+        event,
+        None,
+        None,
+        Some(checkpoint),
+    )
 }
 
 fn dispatch_object_event<'s>(
@@ -93,6 +129,7 @@ fn dispatch_object_event<'s>(
     target: v8::Local<'s, v8::Object>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
+    original_target: Option<v8::Local<'s, v8::Object>>,
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
     checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
 ) -> SimpleEventDispatchResult {
@@ -106,9 +143,10 @@ fn dispatch_object_event<'s>(
     else {
         // A native producer may dispatch before listener state is initialized.
         // It still owes the event its target, checkpoint and dispatch cleanup.
-        crate::context_bootstrap::event_target_dispatch::begin_dispatch(
+        crate::context_bootstrap::event_target_dispatch::begin_dispatch_with_original_target(
             scope,
             target.dispatch_target,
+            original_target.unwrap_or(target.dispatch_target),
             event,
         );
         return SimpleEventDispatchResult {
@@ -122,24 +160,33 @@ fn dispatch_object_event<'s>(
         registry,
         event_type,
         event,
+        original_target,
         callback_errors,
         checkpoint,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dispatch_resolved_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: ResolvedEventTarget<'s>,
     registry: SimpleEventListenerRegistry<'s>,
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
+    original_target: Option<v8::Local<'s, v8::Object>>,
     mut callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
     checkpoint: Option<fn(&mut v8::PinScope<'s, '_>)>,
 ) -> SimpleEventDispatchResult {
     let target = target.dispatch_target;
+    let original_target = original_target.unwrap_or(target);
     let mut dispatched = false;
     let can_invoke =
-        crate::context_bootstrap::event_target_dispatch::begin_dispatch(scope, target, event);
+        crate::context_bootstrap::event_target_dispatch::begin_dispatch_with_original_target(
+            scope,
+            target,
+            original_target,
+            event,
+        );
 
     let error_arguments = if event_type == "error"
         && (crate::web_api_interfaces::WorkerGlobalScope::is_instance(scope, target)
