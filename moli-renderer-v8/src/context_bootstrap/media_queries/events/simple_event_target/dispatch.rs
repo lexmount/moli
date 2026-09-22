@@ -332,7 +332,14 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
     current_event: v8::Local<'s, v8::Object>,
     callback_errors: Option<&mut Vec<crate::exception_reporting::V8ExceptionReport>>,
 ) -> SimpleEventCallbackResult {
-    let invocation = listener.invocation(callback_this, arguments, Some(current_event));
+    let Some(invocation) = listener.invocation(callback_this, arguments, Some(current_event))
+    else {
+        return SimpleEventCallbackResult {
+            invoked: false,
+            did_throw: false,
+            value: None,
+        };
+    };
     // Lightweight popup Window shells alias the opener's concrete V8 realm.
     // Retain the callback's exact registration-time Window only for popup
     // `load`: this is where a top-realm WPT callback must keep scheduling work

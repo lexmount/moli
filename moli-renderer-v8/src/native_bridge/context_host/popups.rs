@@ -13,14 +13,12 @@ use crate::{
         finish_cross_document_navigation_for_window,
         history_entry_seed_for_cross_document_location,
         install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
-        install_simple_event_target_ordered_handlers, install_storage_aliases_for_window,
+        install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
-        scoped_indexed_db_factory, simple_object_event_set_ordered_handler,
-        sync_document_location_runtime_state_from_window,
+        scoped_indexed_db_factory, sync_document_location_runtime_state_from_window,
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
-    definitions::define_function_accessor_property,
     document_runtime::create_content_security_policy_violation_event,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     host::{DispatchStatus, HostTimerOwner, PopupWindowEventTarget, event_dispatch_status},
@@ -63,6 +61,12 @@ use moli_url::origin_ascii_serialization;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 use std::collections::{HashMap, HashSet};
 use url::Url;
+
+mod event_handlers;
+use event_handlers::{
+    PopupWindowContentEventHandlers, clear_lightweight_popup_window_document_event_state,
+    install_lightweight_popup_event_handler_accessors,
+};
 
 const LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT: &str = "__lmLightweightPopupEventListeners";
 const LIGHTWEIGHT_POPUP_ID_SLOT: &str = "__lmLightweightPopupId";
@@ -279,12 +283,18 @@ impl PendingLightweightPopupHistory {
     }
 }
 
+#[derive(Clone, Copy)]
+enum LightweightPopupParserStep {
+    Script(DomHandle),
+    WindowEventHandlers(DomHandle),
+}
+
 struct LightweightPopupClassicScriptContinuation {
     task: LightweightPopupNavigationTaskToken,
     document_handle: DomHandle,
     document_url: Url,
-    scripts: Vec<DomHandle>,
-    next_script_index: usize,
+    parser_steps: Vec<LightweightPopupParserStep>,
+    next_step_index: usize,
     response_content_security_policies: Vec<String>,
     response_content_security_report_only_policies: Vec<String>,
     response_content_security_reporting_endpoints:
@@ -460,6 +470,7 @@ struct LightweightPopupDocumentRecord {
     wrapper: Option<v8::Global<v8::Object>>,
     handle: Option<DomHandle>,
     script_globals: HashMap<String, v8::Global<v8::Value>>,
+    content_event_handlers: PopupWindowContentEventHandlers,
     incomplete_child_frame_loads: HashSet<DomHandle>,
     dom_content_loaded: PopupDomContentLoadedState,
     pending_load_event: Option<LightweightPopupNavigationTaskToken>,
@@ -1058,6 +1069,7 @@ impl JsContextHost {
                         wrapper: None,
                         handle: None,
                         script_globals: HashMap::new(),
+                        content_event_handlers: PopupWindowContentEventHandlers::default(),
                         incomplete_child_frame_loads: HashSet::new(),
                         dom_content_loaded: PopupDomContentLoadedState::NotRequired,
                         pending_load_event: None,
@@ -1277,43 +1289,6 @@ impl JsContextHost {
         self.lightweight_popup_browsing_contexts
             .get(&popup_id)
             .map(|record| v8::Local::new(scope, &record.window_proxy))
-    }
-
-    pub(crate) fn lightweight_popup_event_handler_property_value<'s>(
-        &self,
-        scope: &mut v8::PinScope<'s, '_>,
-        popup_id: u64,
-        property_name: &str,
-    ) -> Option<v8::Local<'s, v8::Value>> {
-        let window = self.lightweight_popup_window(scope, popup_id)?;
-        Some(lightweight_popup_event_handler_value(
-            scope,
-            window,
-            property_name,
-        ))
-    }
-
-    pub(crate) fn set_lightweight_popup_event_handler_property<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        popup_id: u64,
-        property_name: &str,
-        handler: Option<v8::Local<'s, v8::Object>>,
-    ) {
-        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
-            return;
-        };
-        let Some(property_name) = WINDOW_EVENT_HANDLER_PROPERTIES
-            .iter()
-            .copied()
-            .find(|candidate| *candidate == property_name)
-        else {
-            return;
-        };
-        let value = handler
-            .map(v8::Local::<v8::Value>::from)
-            .unwrap_or_else(|| v8::null(scope).into());
-        set_lightweight_popup_event_handler_value(scope, window, property_name, value);
     }
 
     pub(in crate::native_bridge::context_host) fn lightweight_popup_opener_endpoint(
@@ -2176,6 +2151,7 @@ impl JsContextHost {
                     wrapper: None,
                     handle: None,
                     script_globals: HashMap::new(),
+                    content_event_handlers: PopupWindowContentEventHandlers::default(),
                     incomplete_child_frame_loads: HashSet::new(),
                     dom_content_loaded: PopupDomContentLoadedState::NotRequired,
                     pending_load_event: None,
@@ -3505,22 +3481,37 @@ impl JsContextHost {
                 PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             );
         };
-        if !scripting_enabled {
-            return LightweightPopupClassicScriptAdvance::Completed(
-                PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
-            );
-        }
         let Some(document) = self.lightweight_popup_document_record(task.popup_id()) else {
             return LightweightPopupClassicScriptAdvance::Completed(
                 PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             );
         };
+        // Register body/frameset handlers when execution reaches the element,
+        // after head scripts and before scripts within its subtree. Keeping
+        // these steps in the continuation also preserves listener order across
+        // a parser-blocking external script load.
+        let mut parser_steps = Vec::new();
+        let mut stack = vec![document_handle];
+        while let Some(handle) = stack.pop() {
+            let Some(node) = self.dom_host().node(handle) else {
+                continue;
+            };
+            if node.is_script_element() && scripting_enabled {
+                parser_steps.push(LightweightPopupParserStep::Script(handle));
+            } else if node.is_html_element_named("body") || node.is_html_element_named("frameset") {
+                parser_steps.push(LightweightPopupParserStep::WindowEventHandlers(handle));
+            }
+            stack.extend(self.dom_host().child_handles_reversed(handle));
+            if let Some(shadow_root) = self.dom_host().shadow_root_handle(handle) {
+                stack.push(shadow_root);
+            }
+        }
         let continuation = LightweightPopupClassicScriptContinuation {
             task,
             document_handle,
             document_url: document.url.clone(),
-            scripts: self.dom_host().script_handles_in_subtree(document_handle),
-            next_script_index: 0,
+            parser_steps,
+            next_step_index: 0,
             response_content_security_policies: response_content_security_policies.to_vec(),
             response_content_security_report_only_policies:
                 response_content_security_report_only_policies.to_vec(),
@@ -3542,11 +3533,20 @@ impl JsContextHost {
     ) -> LightweightPopupClassicScriptAdvance {
         let task = continuation.task;
         let popup_id = task.popup_id();
-        while let Some(&script) = continuation.scripts.get(continuation.next_script_index) {
-            continuation.next_script_index += 1;
+        while let Some(&step) = continuation.parser_steps.get(continuation.next_step_index) {
+            continuation.next_step_index += 1;
             if !self.lightweight_popup_committed_navigation_task_is_current(task) {
                 return LightweightPopupClassicScriptAdvance::Completed(body_activity);
             }
+            let script = match step {
+                LightweightPopupParserStep::Script(script) => script,
+                LightweightPopupParserStep::WindowEventHandlers(handle) => {
+                    crate::native_bridge::element::initialize_parser_inserted_body_window_event_handlers(
+                        scope, self as *mut JsContextHost, handle,
+                    );
+                    continue;
+                }
+            };
             let script_type = self
                 .child_document_native_script_attribute(script, "type")
                 .unwrap_or_default();
@@ -5510,126 +5510,6 @@ fn sync_lightweight_popup_window_location<'s>(
             unsafe { &*host_ptr }.lightweight_popup_document_wrapper(scope, popup_id)
     {
         sync_lightweight_popup_document_window_slots(scope, document, window, base_url, referrer);
-    }
-}
-
-fn install_lightweight_popup_event_handler_accessors<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    install_simple_event_target_ordered_handlers(scope, window);
-    for property_name in WINDOW_EVENT_HANDLER_PROPERTIES {
-        let data = v8str(scope, property_name).into();
-        define_function_accessor_property(
-            scope,
-            window,
-            property_name,
-            lightweight_popup_event_handler_getter,
-            Some(data),
-            lightweight_popup_event_handler_setter,
-            Some(data),
-            v8::PropertyAttribute::NONE,
-        )
-        .expect("lightweight popup Window event handler accessor should initialize");
-    }
-}
-
-fn lightweight_popup_event_handler_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<&'static str> {
-    let requested = data.to_string(scope)?.to_rust_string_lossy(scope);
-    WINDOW_EVENT_HANDLER_PROPERTIES
-        .iter()
-        .copied()
-        .find(|candidate| *candidate == requested)
-}
-
-fn lightweight_popup_event_handler_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if lightweight_popup_id_from_window(scope, args.this()).is_none() {
-        rv.set_null();
-        return;
-    }
-    let Some(property_name) = lightweight_popup_event_handler_name(scope, args.data()) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(lightweight_popup_event_handler_value(
-        scope,
-        args.this(),
-        property_name,
-    ));
-}
-
-fn lightweight_popup_event_handler_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    property_name: &str,
-) -> v8::Local<'s, v8::Value> {
-    get_private_value(scope, window, property_name)
-        .filter(|value| value.is_object())
-        .unwrap_or_else(|| v8::null(scope).into())
-}
-
-fn lightweight_popup_event_handler_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if lightweight_popup_id_from_window(scope, args.this()).is_none() {
-        rv.set_undefined();
-        return;
-    }
-    let Some(property_name) = lightweight_popup_event_handler_name(scope, args.data()) else {
-        rv.set_undefined();
-        return;
-    };
-    set_lightweight_popup_event_handler_value(scope, args.this(), property_name, args.get(0));
-    rv.set_undefined();
-}
-
-fn set_lightweight_popup_event_handler_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-    property_name: &'static str,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let stored = if value.is_object() {
-        value
-    } else {
-        v8::null(scope).into()
-    };
-    set_private_value(scope, window, property_name, stored);
-    simple_object_event_set_ordered_handler(
-        scope,
-        window,
-        LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
-        property_name.strip_prefix("on").unwrap_or(property_name),
-        property_name,
-        stored.is_object(),
-    );
-}
-
-fn clear_lightweight_popup_window_document_event_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    let undefined = v8::undefined(scope);
-    set_private_value(
-        scope,
-        window,
-        LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
-        undefined.into(),
-    );
-    let null = v8::null(scope).into();
-    for name in WINDOW_EVENT_HANDLER_PROPERTIES {
-        // Reset the shared handler state even if script has replaced the
-        // public accessor. Document retirement must not invoke author setters.
-        set_private_value(scope, window, name, null);
     }
 }
 

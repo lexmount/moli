@@ -4,7 +4,7 @@ mod shared;
 
 pub(crate) use body_window::{
     body_or_frameset_reflects_window_event_type, compile_body_window_event_attribute,
-    initialize_parser_inserted_body_window_event_handlers,
+    compile_window_event_attribute_handler, initialize_parser_inserted_body_window_event_handlers,
     install_body_or_frameset_window_event_handler_accessors,
     resolve_window_event_handler_content_attribute,
 };
