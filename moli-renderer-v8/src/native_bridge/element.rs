@@ -34,6 +34,32 @@ mod event_handlers;
 mod events;
 mod focus;
 mod forms;
+
+#[cfg(test)]
+std::thread_local! {
+    static FORM_LOOKUP_WORK: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_form_lookup_work_for_test() -> (u64, u64) {
+    FORM_LOOKUP_WORK.with(|work| work.replace((0, 0)))
+}
+
+#[cfg(test)]
+fn record_form_lookup_traversal_for_test() {
+    FORM_LOOKUP_WORK.with(|work| {
+        let (traversals, enumerations) = work.get();
+        work.set((traversals + 1, enumerations));
+    });
+}
+
+#[cfg(test)]
+fn record_form_lookup_enumeration_for_test() {
+    FORM_LOOKUP_WORK.with(|work| {
+        let (traversals, enumerations) = work.get();
+        work.set((traversals, enumerations + 1));
+    });
+}
 mod geometry;
 mod global_attributes;
 mod html_elements;
@@ -644,7 +670,8 @@ use stylesheets::{
     style_blocking_setter_function, style_disabled_getter_function, style_disabled_setter_function,
 };
 pub(super) use template_install::{
-    install_specialized_instance_properties, install_specialized_template,
+    install_form_property_handlers, install_specialized_instance_properties,
+    install_specialized_template,
 };
 pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
