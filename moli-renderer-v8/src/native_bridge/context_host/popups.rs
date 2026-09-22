@@ -1279,6 +1279,43 @@ impl JsContextHost {
             .map(|record| v8::Local::new(scope, &record.window_proxy))
     }
 
+    pub(crate) fn lightweight_popup_event_handler_property_value<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        property_name: &str,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        let window = self.lightweight_popup_window(scope, popup_id)?;
+        Some(lightweight_popup_event_handler_value(
+            scope,
+            window,
+            property_name,
+        ))
+    }
+
+    pub(crate) fn set_lightweight_popup_event_handler_property<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        property_name: &str,
+        handler: Option<v8::Local<'s, v8::Object>>,
+    ) {
+        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
+            return;
+        };
+        let Some(property_name) = WINDOW_EVENT_HANDLER_PROPERTIES
+            .iter()
+            .copied()
+            .find(|candidate| *candidate == property_name)
+        else {
+            return;
+        };
+        let value = handler
+            .map(v8::Local::<v8::Value>::from)
+            .unwrap_or_else(|| v8::null(scope).into());
+        set_lightweight_popup_event_handler_value(scope, window, property_name, value);
+    }
+
     pub(in crate::native_bridge::context_host) fn lightweight_popup_opener_endpoint(
         &self,
         popup_id: u64,
@@ -5521,11 +5558,21 @@ fn lightweight_popup_event_handler_getter<'s>(
         rv.set_null();
         return;
     };
-    rv.set(
-        get_private_value(scope, args.this(), property_name)
-            .filter(|value| value.is_object())
-            .unwrap_or_else(|| v8::null(scope).into()),
-    );
+    rv.set(lightweight_popup_event_handler_value(
+        scope,
+        args.this(),
+        property_name,
+    ));
+}
+
+fn lightweight_popup_event_handler_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    property_name: &str,
+) -> v8::Local<'s, v8::Value> {
+    get_private_value(scope, window, property_name)
+        .filter(|value| value.is_object())
+        .unwrap_or_else(|| v8::null(scope).into())
 }
 
 fn lightweight_popup_event_handler_setter<'s>(
@@ -5541,22 +5588,30 @@ fn lightweight_popup_event_handler_setter<'s>(
         rv.set_undefined();
         return;
     };
-    let value = args.get(0);
+    set_lightweight_popup_event_handler_value(scope, args.this(), property_name, args.get(0));
+    rv.set_undefined();
+}
+
+fn set_lightweight_popup_event_handler_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    property_name: &'static str,
+    value: v8::Local<'s, v8::Value>,
+) {
     let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
     };
-    set_private_value(scope, args.this(), property_name, stored);
+    set_private_value(scope, window, property_name, stored);
     simple_object_event_set_ordered_handler(
         scope,
-        args.this(),
+        window,
         LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
         property_name.strip_prefix("on").unwrap_or(property_name),
         property_name,
         stored.is_object(),
     );
-    rv.set_undefined();
 }
 
 fn clear_lightweight_popup_window_document_event_state<'s>(
@@ -5572,7 +5627,9 @@ fn clear_lightweight_popup_window_document_event_state<'s>(
     );
     let null = v8::null(scope).into();
     for name in WINDOW_EVENT_HANDLER_PROPERTIES {
-        let _ = window.set(scope, v8str(scope, name).into(), null);
+        // Reset the shared handler state even if script has replaced the
+        // public accessor. Document retirement must not invoke author setters.
+        set_private_value(scope, window, name, null);
     }
 }
 

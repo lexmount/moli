@@ -74,7 +74,9 @@ fn body_window_event_handler_getter_function<'s>(
         }
         Some(OwnerDispatchScope::Child(child_handle)) => unsafe { &mut *runtime_ptr }
             .child_window_event_handler_property_value(scope, child_handle, &handler_name),
-        Some(OwnerDispatchScope::LightweightPopup(_)) | None => None,
+        Some(OwnerDispatchScope::LightweightPopup(popup_id)) => unsafe { &*runtime_ptr }
+            .lightweight_popup_event_handler_property_value(scope, popup_id, &handler_name),
+        None => None,
     };
     match value {
         Some(value) => rv.set(value),
@@ -122,7 +124,9 @@ fn body_window_event_handler_setter_function<'s>(
                 relevant_context,
             );
         }
-        Some(OwnerDispatchScope::LightweightPopup(_)) | None => {}
+        Some(OwnerDispatchScope::LightweightPopup(popup_id)) => unsafe { &mut *runtime_ptr }
+            .set_lightweight_popup_event_handler_property(scope, popup_id, &handler_name, handler),
+        None => {}
     }
     rv.set_undefined();
 }
