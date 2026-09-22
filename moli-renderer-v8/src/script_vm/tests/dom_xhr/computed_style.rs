@@ -3,6 +3,51 @@ use super::*;
 mod child_list;
 
 #[test]
+fn content_alt_counters_compute_from_stylesheets_variables_and_cssom_updates() {
+    let mut vm = new_parsed_test_vm(
+        "https://content-alt-counter-computed.test/",
+        r#"<!doctype html><html><head><style>
+          #target {
+            --alt: "Chapter " counter(chapter);
+            content: "sheet" / "Chapter " counter(chapter);
+          }
+          #target::before { content: "before" / var(--alt); }
+        </style></head><body><div id="target"></div></body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const values = [
+    getComputedStyle(target).content,
+    getComputedStyle(target, '::before').content
+  ];
+  target.style.setProperty(
+    'content', '"inline" / counters(chapter, ".", DECIMAL)', 'important'
+  );
+  values.push(getComputedStyle(target).content);
+  document.styleSheets[0].cssRules[0].style.content =
+    '"updated" / counter(chapter, upper-roman)';
+  values.push(getComputedStyle(target).content);
+  target.style.removeProperty('content');
+  values.push(getComputedStyle(target).content);
+  target.style.setProperty('--alt', '"Section " counters(chapter, ".")');
+  values.push(getComputedStyle(target, '::before').content);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("content alternative counters should flow through Stylo computed values");
+
+    assert_eq!(
+        result,
+        r#""sheet" / "Chapter " counter(chapter)|"before" / "Chapter " counter(chapter)|"inline" / counters(chapter, ".")|"inline" / counters(chapter, ".")|"updated" / counter(chapter, upper-roman)|"before" / "Section " counters(chapter, ".")"#
+    );
+}
+
+#[test]
 fn element_current_css_zoom_observes_fresh_effective_style_for_rendered_boxes() {
     let mut vm = new_parsed_test_vm(
         "https://element-current-css-zoom.test/",

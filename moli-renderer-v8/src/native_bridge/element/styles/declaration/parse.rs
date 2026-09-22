@@ -2346,9 +2346,6 @@ fn parse_pdb_supplemental_entries(
     value: &str,
     priority: bool,
 ) -> Option<ParsedStylePropertyEntries> {
-    if let Some(entries) = parse_content_alt_counter_supplemental_entries(name, value, priority) {
-        return Some(entries);
-    }
     if let Some(entries) = parse_preferred_pdb_supplemental_entries(name, value, priority) {
         return Some(entries);
     }
@@ -2371,140 +2368,6 @@ fn parse_pdb_supplemental_entries(
         });
     }
     parse_transition_numeric_property_entries(name, value, priority)
-}
-
-fn parse_content_alt_counter_supplemental_entries(
-    name: &str,
-    value: &str,
-    priority: bool,
-) -> Option<ParsedStylePropertyEntries> {
-    if name != "content" {
-        return None;
-    }
-    let (content, alt) = split_content_alt_text(value)?;
-    if !content_alt_text_contains_only_strings_attrs_and_counters(alt)? {
-        return None;
-    }
-
-    // Stylo already owns the grammar on both sides of the slash. Its current
-    // content parser only has one narrower restriction: counter() and
-    // counters() are rejected after the alt marker. Validate the main list
-    // with an ordinary string alt, then validate the alt list as an ordinary
-    // content list. This keeps images and quote keywords out of alt text while
-    // retaining Stylo's counter argument and counter-style validation.
-    stylo_pdb_single_property_value(name, &format!("{content} / \"\""), priority)?;
-    let content = stylo_pdb_single_property_value(name, content, priority)?;
-    let alt = stylo_pdb_single_property_value(name, alt, priority)?;
-    Some(ParsedStylePropertyEntries {
-        entries: vec![StyleEntry {
-            name: name.to_owned(),
-            value: format!("{content} / {alt}"),
-            priority,
-        }],
-        affected_names: vec![name.to_owned()],
-    })
-}
-
-fn stylo_pdb_single_property_value(name: &str, value: &str, priority: bool) -> Option<String> {
-    let parsed = stylo_pdb_entries_for_property(name, value, priority)?;
-    let [entry] = parsed.entries.as_slice() else {
-        return None;
-    };
-    (entry.name == name && entry.priority == priority).then(|| entry.value.clone())
-}
-
-fn split_content_alt_text(value: &str) -> Option<(&str, &str)> {
-    let mut parser_input = cssparser::ParserInput::new(value);
-    let mut input = cssparser::Parser::new(&mut parser_input);
-    let value_start = input.position();
-    let mut slash = None;
-
-    loop {
-        let token_start = input.position();
-        let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
-            break;
-        };
-        let token_end = input.position();
-        match token {
-            cssparser::Token::Delim('/') => {
-                if slash.replace((token_start, token_end)).is_some() {
-                    return None;
-                }
-            }
-            token if content_component_starts_nested_block(&token) => {
-                let nested: Result<(), cssparser::ParseError<'_, ()>> =
-                    input.parse_nested_block(|input| {
-                        consume_nested_content_components(input)
-                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
-                    });
-                nested.ok()?;
-            }
-            _ => {}
-        }
-    }
-    if !input.is_exhausted() {
-        return None;
-    }
-
-    let value_end = input.position();
-    let (slash_start, slash_end) = slash?;
-    let content = input.slice(value_start..slash_start).trim();
-    let alt = input.slice(slash_end..value_end).trim();
-    (!content.is_empty() && !alt.is_empty()).then_some((content, alt))
-}
-
-fn content_alt_text_contains_only_strings_attrs_and_counters(value: &str) -> Option<bool> {
-    let mut parser_input = cssparser::ParserInput::new(value);
-    let mut input = cssparser::Parser::new(&mut parser_input);
-    let mut has_counter = false;
-
-    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
-        match token {
-            cssparser::Token::WhiteSpace(_)
-            | cssparser::Token::Comment(_)
-            | cssparser::Token::QuotedString(_) => {}
-            cssparser::Token::Function(name)
-                if name.eq_ignore_ascii_case("attr")
-                    || name.eq_ignore_ascii_case("counter")
-                    || name.eq_ignore_ascii_case("counters") =>
-            {
-                has_counter |=
-                    name.eq_ignore_ascii_case("counter") || name.eq_ignore_ascii_case("counters");
-                let nested: Result<(), cssparser::ParseError<'_, ()>> =
-                    input.parse_nested_block(|input| {
-                        consume_nested_content_components(input)
-                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
-                    });
-                nested.ok()?;
-            }
-            _ => return None,
-        }
-    }
-    input.is_exhausted().then_some(has_counter)
-}
-
-fn content_component_starts_nested_block(token: &cssparser::Token<'_>) -> bool {
-    matches!(
-        token,
-        cssparser::Token::Function(_)
-            | cssparser::Token::ParenthesisBlock
-            | cssparser::Token::SquareBracketBlock
-            | cssparser::Token::CurlyBracketBlock
-    )
-}
-
-fn consume_nested_content_components(input: &mut cssparser::Parser<'_, '_>) -> Option<()> {
-    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
-        if content_component_starts_nested_block(&token) {
-            let nested: Result<(), cssparser::ParseError<'_, ()>> =
-                input.parse_nested_block(|input| {
-                    consume_nested_content_components(input)
-                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
-                });
-            nested.ok()?;
-        }
-    }
-    input.is_exhausted().then_some(())
 }
 
 fn parse_text_decoration_line_supplemental_entries(
@@ -7503,7 +7366,7 @@ mod tests {
     }
 
     #[test]
-    fn content_alt_counters_use_validated_supplemental_entries() {
+    fn content_alt_counters_use_stylo_declaration_blocks() {
         for (input, expected) in [
             ("\"\" / counter(cnt)", "\"\" / counter(cnt)"),
             (
@@ -7532,8 +7395,8 @@ mod tests {
             assert_eq!(parsed.affected_names, vec!["content".to_owned()]);
             assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
             assert!(
-                style_entry_is_pdb_supplemental_side_entry(&parsed.entries[0]),
-                "content: {input} should use side storage until Stylo parses alt counters"
+                !style_entry_is_pdb_supplemental_side_entry(&parsed.entries[0]),
+                "content: {input} should use the native Stylo declaration block"
             );
         }
 
