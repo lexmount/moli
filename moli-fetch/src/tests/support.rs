@@ -1003,14 +1003,85 @@ impl ScriptedHttpServer {
     }
 }
 
+#[test]
+fn scripted_server_waits_for_request_on_nonblocking_accepted_socket() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    client
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    // macOS may inherit this mode from the listening socket.
+    stream.set_nonblocking(true).unwrap();
+    let hits = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let responses = Arc::new(Mutex::new(VecDeque::from([ScriptedResponse::ok("ready")])));
+    let (done_tx, done_rx) = std_mpsc::channel();
+    let handler = {
+        let hits = Arc::clone(&hits);
+        let requests = Arc::clone(&requests);
+        thread::spawn(move || {
+            handle_scripted_connection(stream, hits, requests, responses);
+            done_tx.send(()).unwrap();
+        })
+    };
+    assert!(
+        matches!(
+            done_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std_mpsc::RecvTimeoutError::Timeout)
+        ),
+        "a connection without HTTP bytes must not receive a scripted response"
+    );
+    client
+        .write_all(b"GET /delayed HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    client.read_to_string(&mut response).unwrap();
+    handler.join().unwrap();
+    assert!(response.ends_with("ready"));
+    assert_eq!(hits.load(Ordering::SeqCst), 1);
+    assert!(requests.lock()[0].starts_with("GET /delayed HTTP/1.1\r\n"));
+}
+
+#[test]
+fn scripted_server_does_not_consume_response_for_closed_unused_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (stream, _) = listener.accept().unwrap();
+    drop(client);
+    let hits = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let responses = Arc::new(Mutex::new(VecDeque::from([ScriptedResponse::ok("ready")])));
+    handle_scripted_connection(
+        stream,
+        Arc::clone(&hits),
+        Arc::clone(&requests),
+        Arc::clone(&responses),
+    );
+    assert_eq!(hits.load(Ordering::SeqCst), 0);
+    assert!(requests.lock().is_empty());
+    assert_eq!(responses.lock().len(), 1);
+}
+
 fn handle_scripted_connection(
     mut stream: std::net::TcpStream,
     hits: Arc<AtomicUsize>,
     requests: Arc<Mutex<Vec<String>>>,
     responses: Arc<Mutex<VecDeque<ScriptedResponse>>>,
 ) {
+    stream
+        .set_nonblocking(false)
+        .expect("scripted HTTP connection should use blocking reads");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("scripted HTTP connection should have a bounded read");
     let mut request = [0; 1024];
-    let bytes_read = stream.read(&mut request).unwrap_or(0);
+    let bytes_read = stream
+        .read(&mut request)
+        .expect("read scripted HTTP request");
+    if bytes_read == 0 {
+        return;
+    }
     let request_text = String::from_utf8_lossy(&request[..bytes_read]).into_owned();
     requests.lock().push(request_text);
     let _ = hits.fetch_add(1, Ordering::SeqCst) + 1;
