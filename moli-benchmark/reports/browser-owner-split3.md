@@ -1,7 +1,110 @@
 # Browser owner acceptance measurements
 
-The frozen comparison below covers `d743043ab7`. Historical results and failures
-remain unchanged; they do not validate later source changes.
+The current frozen comparison covers `f3e4c92459`. Earlier results and failures
+retain their source pins below; they do not validate later source changes.
+
+## Frozen comparison for f3e4c92459, 2026-09-23
+
+The implementation pin is `f3e4c92459e5fa40dd20d9a1e56b92457e2b9f66`,
+compared with fixed main `8e7be5c3fb144189335de3a61731f3e4717b6bcb`.
+The ordinary release SHA256 is
+`466a05e58e7ca2aa379a4d2a20cd22b0ab396c0dc3e885e3c55e63826ffd7c08`;
+main is `30f15ef58a873e0f80de36f027e002946841537747e6e1c969251bad6724cf5d`.
+Both use the pinned release profile, Rust 1.96.1 and V8 archive
+`53677ea11387e3175b18c7c3338be3175abda5d8e9fb3afd3f84c80912e6b016`.
+All tracked Rust/build entries match the ordinary build manifest. Diagnostic
+instrumentation exists only in the task-owned scratch checkout.
+
+Root fmt, strict workspace/all-targets/all-features Clippy and full nextest
+pass: **19,496 tests, 13 configured skips, zero retries**. Run
+`47423a12-e8a8-4bb4-8f0f-6710f9862dfa` retains the prior 90 expected panic
+pairs; the removed invalid assertion test accounts for the one-record decrease.
+The same ordinary release passes 48 CDP groups / 536 scenarios, 165 WebDriver
+cases, shared-page lifecycle from all three frontends, and both exact
+32 × 4 MiB Network bursts with Log disabled/enabled. The initial popup timeout,
+parent/candidate 3/3 isolated controls and final full CDP pass remain documented
+below; its cause was not established by those bounded controls.
+
+Three balanced ordinary pairs run serially before the external corpora and
+measurement build. Each retains the original four pages, eight warmups,
+100 measured navigations, 256 history reads at 64 concurrency, 12,288 Worker
+outputs, late observer and 256 live records. All six probes pass; all 108
+navigation events per probe precede their corresponding renderer output.
+The six host reports show no swap deltas.
+
+| Ordinary median | Main, rounds 1 / 2 / 3 | Candidate, rounds 1 / 2 / 3 |
+| --- | --- | --- |
+| Navigation command (ms) | 1.580 / 1.583 / 1.808 | 2.366 / 2.154 / 2.347 |
+| Frame event (ms) | 9.760 / 9.092 / 9.354 | 8.787 / 9.144 / 8.417 |
+| Concurrent history command (ms) | 1.354 / 1.270 / 1.273 | 2.579 / 2.414 / 2.589 |
+
+Navigation commands cost **0.54–0.79 ms more than main** in these matched rounds;
+history commands also cost more. This is not performance parity, and small
+frame-event differences do not establish a speedup. The separate diagnostic
+attributes a median 196.677 us of 242.665 us navigation dispatch to native
+owner calls on the same caller thread. Four initial navigations make 12 calls;
+the other 104 make 14. History makes one native snapshot call per command
+(256/256), median 16.819 us. These include queue/execution/wakeup and diagnostic
+overhead; they identify costs rather than replacing ordinary latency results.
+
+Before the first retention snapshot, 10,064 owner-queue samples have median
+wait 6.504 us, p95 9.419 us, and maximum observed waiting depth 1. The local
+queue has 1,644 samples, median 0.572 us and maximum observed depth 2. These
+are sampled depths, not guaranteed high-water bounds. All 108 native commits
+match exactly one projection: commit median 17.690 us; first-projection lag
+median 877.158 us, p95 2,030.288 us. There are no unmatched/duplicate sequences
+or output-admission rejections. Main has no independent-owner queue sample;
+that absence is not reported as a zero-cost measurement.
+
+Worker history plateaus at **312 records / 10,484,448 estimated bytes** in
+every candidate round. Late replay returns those 312 records, followed by all
+256 live records. After forced GC, process PSS is 119–124 MiB versus main's
+1,057–1,113 MiB; enabled/live observation is 115–126 MiB versus 1,219–1,235 MiB.
+After Worker owner close, candidate PSS is about 70 MiB and both retained
+history counters are zero. The bound is for retained histories; it is not a
+claim that every process allocation has a fixed total cap.
+
+In the separate instrumented 12,288-output interval, main makes 1,463,341
+Rust allocation/reallocation requests for 2,436,835,748 requested bytes;
+candidate makes 1,369,859 for 1,935,286,766 bytes. These are cumulative allocation
+traffic, including observer/instrument work, not live bytes; C++/V8 allocations
+are excluded. Both measured probes pass on an otherwise idle task workload.
+The candidate diagnostic SHA256 is
+`692aee9b5033b26616c3f0ef5d994bafad28ceef0ac63e05cef2fe4ed5efb0f6`;
+its 14-file patch and exact source hashes are retained beside the traces.
+
+The complete Lexbench run finishes **1,928 rows**: 1,555 pass, 371 fail,
+one unsupported and one infrastructure failure. Every task's status matches
+main, including the download timeout classification. Benchmark manifest,
+resolved tasks, resource profile, seed and scoring parameters compare equal.
+The complete webfetch run finishes **1,036 rows**: 332 successes versus main's
+338, with 20 status differences across 12 URLs. There is no Rust panic, and
+Hupu passes all four targets. Neither external corpus is described as wholly
+passing. Their concurrent durations are not used for throughput comparisons.
+
+One predeclared control pair covers those 12 URLs and all four targets,
+retaining the 30s timeout and 20-way concurrency. Both variants pass 23/48,
+but their passing sets differ: candidate passes eBay CDP where main receives
+a verification page; candidate GitHub full times out where main succeeds.
+The GitHub failure waits for response headers, before Document/parser work.
+The same pinned main binary and identical command already show that exact
+30s response-header timeout in the retained previous control; see
+`github-timeout-baseline.json`. The timeout is therefore not unique to the
+candidate; these bounded samples do not establish equal failure rates. The
+other originally lost successes either recover in this
+control or also fail on main; Douyin basic and all four WeChat modes succeed
+on both. Challenge/denial pages, response-header timeouts and the shared
+Douyin CDP closure remain failures. Neither control has a Rust panic.
+
+The current producer/consumer/deletion inventory is in
+[the requirement review](browser-owner-requirements.md). Source audits, original
+failures, manifest comparisons, wire captures, full corpora, control runs and
+measurement code are in `target/smoke/parser-input-restore.x7e3l47w/`.
+`pins.json`, `release-source.json`, `measurement-source.json`, `runs.json`,
+`command-attribution.json` and the two corpus comparison files identify the
+source, binary, parameters and result joins. The previous failed freeze remains
+in `target/smoke/split3-frozen-final.3apndj0s/`; it is not substituted for this
+source. The records below retain their original source pins and failure scope.
 
 ## Parser restore publication race, 2026-09-23
 
@@ -34,7 +137,7 @@ deadline. Three isolated repetitions pass on both parent and candidate; the
 subsequent complete CDP run passes without source changes. This bounded check
 does not establish the timeout's cause. All original failures, source hashes,
 control runs and release evidence are in `target/smoke/parser-input-restore.x7e3l47w/`.
-The complete comparison for this source is still pending; earlier source
+The complete comparison for this source is recorded above; earlier source
 measurements below are not substituted for it.
 
 ## Deferred-load deletion, 2026-09-23

@@ -1,9 +1,9 @@
 # Browser owner requirement review
 
 This replaces reliance on the unavailable scratch ownership audit. It records
-the current implementation boundaries, the tests that exercise them, and open
-work. The numbered references are to the split3 rewrite plan, not additional
-delivery phases. Test results and binary/source pins are in
+the current implementation boundaries, the tests that exercise them, and
+validation limits. The numbered references are to the split3 rewrite plan,
+not additional delivery phases. Test results and binary/source pins are in
 [the acceptance report](browser-owner-split3.md).
 
 | Requirement | Current implementation and behavioral evidence |
@@ -21,7 +21,7 @@ delivery phases. Test results and binary/source pins are in
 | §§12–13: teardown and neutral interception | Core removes a whole WebContents through `close_web_contents` and Context shutdown consumes the physical aggregate. [Dialog/lifetime tests](../../moli-protocol/src/conn/state/browser_context/page_slot/document_host_tests.rs) prove teardown without session cleanup. [Native network tests](../../moli-core/src/browser/owner/navigation/tests.rs) cover Worker/context retirement and paused requests without DevTools. Fetch correlations carry native permits, not commit ownership. |
 | §14: lazy default publication | [Default target lifecycle](../../moli-protocol/src/conn/target/default_target.rs) is protocol publication state. [Control-plane tests](../../moli-protocol/src/domains/target/tests/tests_control_plane.rs) cover unmaterialized publication and initial about:blank materialization. Core has no default Target identity. |
 | §16: native request producers and retained output | [Native stage tests](../../moli-core/src/browser/owner/navigation/tests/network_stages.rs) and adjacent document/child response tests cover real heads, body prefixes, failures and cancellation; [the public burst probe](../scripts/probe-browser-network-output.py) checks exact bodies, request identity, ordering and terminal uniqueness with Log enabled/disabled. Worker retention/close measurements remain revision-specific in the acceptance report. |
-| §17: cohesive changes and validation | Rust changes require root fmt, strict workspace/all-targets/all-features Clippy, then full nextest. The inspection cutover retains its original failures, intermediate failures, hashes and final runs in `target/smoke/inspection-admission.gb7ksf_g/`. No result from an earlier source is substituted for a later source. |
+| §17: cohesive changes and validation | Rust changes require root fmt, strict workspace/all-targets/all-features Clippy, then full nextest. The final source and all original failures, hashes and runs are pinned in `target/smoke/parser-input-restore.x7e3l47w/`. No result from an earlier source is substituted for a later source. |
 
 The historical commit index maps to these boundaries: 1 is lifecycle
 characterization; 2–8 are the Core tree/identities; 9–11 are lazy publication,
@@ -42,25 +42,42 @@ is still valid publication state. Core Page command envelopes still carry
 renderer attachment tags for completion attribution; those tags do not give
 Page ownership of DevTools sessions.
 
-The inspection cutover passes the required root gates and its pinned
-release/client checks. The subsequent fixture cutover deletes Protocol's
-fallback Document identity/lifecycle/lifetime; tests construct real native
-Documents through [the initial-document owner](../../moli-core/src/browser/owner/initial_document.rs).
-Standalone Protocol passes 3,780 tests, and root fmt, strict Clippy and full
-nextest pass (19,533 tests, 13 configured skips). The acceptance report records
-both source freezes separately. The older full benchmarks apply to `d743043ab7`.
+## Final producer and deletion inventory
 
-The subsequent deferred-load deletion removes that scheduler, its exports,
-completion channels, watch observers and both manual visibility barriers. Real
-client-turn ordering remains in the existing shared scheduler. Native-load
-versus Protocol-replay visibility now has a real-source regression; exact
-Runtime output-prefix and successor-waiter behavior remain covered. Root fmt,
-strict Clippy and full nextest pass (19,497 tests, 13 configured skips), with
-the test migration and unchanged 91 expected panic records retained in the
-acceptance report's artifact directory.
+The reviewed physical path is producer → Context load/response ownership →
+native Browser facts → protocol projection. Protocol decides visibility and
+client interception, while the original native request retains its body,
+terminal and cancellation authority. This inventory closes the migration
+families; it is not a claim that every compatibility feature in the repository
+has been removed.
 
-The plan is not yet certified complete. The following remain open:
+| Producer family | Current owner and consumer; replaced path removed |
+| --- | --- |
+| Main/child Document, parser/runtime scripts, stylesheets and preloads | [Context resource loader](../../moli-renderer-v8/src/network/context/resource.rs) and native navigation retain the response and exact Document. [Document stage tests](../../moli-core/src/browser/owner/navigation/tests/document_network_stages.rs) and child/navigation siblings exercise physical head, partial body, redirects and cancellation. Completion-only direct loaders and duplicate preload stores are gone. |
+| Window fetch and synchronous/asynchronous XHR | [Physical response body](../../moli-renderer-v8/src/network/response_body.rs) owns streaming, response/auth decisions and the spool used by Fetch/IO. Window/Worker consumers deliver VM work; they do not create another response owner. The response holder/collector and buffered-after-continue forks are gone. |
+| Worker fetch, XHR, imports and module descendants | [Worker script entry](../../moli-renderer-v8/src/worker/script_loading.rs) and [ResourceTransfer](../../moli-renderer-v8/src/network/resource_transfer.rs) publish through the original Worker source and load lease. Module descendants, including local data URLs, use the admitted module queue. Separate completion publishers, the local module bypass and blocking script helper are gone. |
+| Dedicated/Shared/Service Worker main scripts and updates | The same script transfer spans loading and execution; [Shared loading](../../moli-renderer-v8/src/shared_worker_runtime/host_loading.rs) and [Service scripts](../../moli-renderer-v8/src/service_worker_runtime/script_loading.rs) use the Context runner and exact execution identity. Created precedes script output, readiness follows execution, and retirement consumes the original cancellation authority. Separate loading/update OS threads and duplicate local-response branches are gone. |
+| CSP reports, beacon and link ping | [CSP admission](../../moli-renderer-v8/src/network_host/csp_reports.rs), [keepalive](../../moli-renderer-v8/src/network_host/keepalive.rs) and Context load leases retain the original Document even after VM retirement. Native publication has one terminal; generic completion duplicates, the `native_network` switch and unused VM stream adapters are gone. |
+| Preflight, rejected requests and ServiceWorker responses | [Preflight](../../moli-renderer-v8/src/network_host/preflight_events.rs) derives an exact request from the admitted parent; controlled responses use the same physical body/decision owner. Native stage/retirement tests cover real OPTIONS, request bytes, partial failure and cancellation. Manufactured post-EOF preflight records and a separate ServiceWorker stream bridge are gone. |
+| Manifest, resource inspection and lightweight popup loads | These use the same Context resource operation. Exact Document completion checks reject replacement/foreign owners; network publication survives an irrelevant VM result. Buffered navigation/subresource APIs and unproduced completion bridges are gone. |
+| Worker output and late observation | [Worker streams](../../moli-renderer-v8/src/runtime/worker_output_streams.rs) retire with the actual execution; unobserved renderer journals retain no history. Protocol projections use [OutputHistory](../../moli-page-types/src/output_history.rs), monotonic cursors and aggregate diagnostics. Each history is capped at 1,000 entries / 10 MiB, with one oversized newest entry allowed under the separate transport limit. These are history bounds, not a fixed total process-memory ceiling. Duplicate client-owner identities and append-only replay storage are gone. |
+| Document restore and protocol publication | Native lifecycle and scheduler descriptors drive readiness. Fallback `DocumentFixture`, deferred-load IDs/channels, manual load/body visibility and watch-observer chains are deleted. The raw-input readiness probe is also deleted: input and continuation publication are distinct producer steps. Real lifecycle wait keys, failed-navigation projection, `DocumentProjectionFence` and client-turn ordering remain. |
 
-- Complete the final producer/deletion inventory and frozen comparison after
-  the remaining source changes. The entries above identify checked boundaries;
-  they do not turn an incomplete inventory into a complete one.
+The final source audit finds no retired cross-layer ownership/deferred-load
+symbols or protocol identity types in Core Browser. Its eight `PageOwner`
+name matches are live variants inside two renderer-local dispatch/publication
+boundaries, not the removed physical-owner type. The surviving string
+`native_network` labels a trace event, not the old publication-choice flag.
+Protocol's `BrowserContext`
+is a projection containing a native handle, AgentHosts and session/output
+cursors; the Core Context owns storage, WebContents, selection and runtime.
+Default-target publication, native interception permits and projection fences
+have real producers/consumers and remain part of the final model. The shared
+IR/CdpScheduler is retained across all three frontends.
+
+This closes the split3 ownership and migration-only deletion inventory. The
+final source is `f3e4c92459`; required root checks, release and public protocol
+checks pass. The [frozen comparison](browser-owner-split3.md) records complete
+external corpora, their baseline failures, the unreproduced popup timeout and
+the measured navigation/history latency cost. Completion of this migration is
+not a claim of universal benchmark success or performance parity with main.
