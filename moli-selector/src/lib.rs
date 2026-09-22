@@ -1461,6 +1461,36 @@ mod tests {
     }
 
     #[test]
+    fn dom_api_selectors_dir_auto_tracks_clean_and_dirty_textarea_values() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let engine = QueryEngine;
+        let textarea = host.create_element("textarea");
+        assert!(host.set_attribute(textarea, "dir", "auto"));
+        let text = host.create_text_node("\u{05ea}");
+        assert!(host.append_child(textarea, text));
+        assert!(host.append_child(body, textarea));
+        assert!(!engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_text_content(textarea, "A"));
+        assert!(engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(!engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_input_value(textarea, "\u{05ea}"));
+        assert!(host.set_text_content(textarea, "A"));
+        assert!(!engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_input_value(textarea, "A"));
+        assert!(host.set_text_content(textarea, "\u{05ea}"));
+        assert!(engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(!engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+    }
+
+    #[test]
     fn dom_api_selectors_dir_on_input_uses_html_directionality_rules() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
