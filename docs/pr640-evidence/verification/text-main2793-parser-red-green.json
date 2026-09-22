@@ -1,0 +1,15 @@
+{
+  "before_commit": "9863a77f2ed5697e8275aaa54a893fe8364e8e09",
+  "fixed_commit": "092b58063f3c3d3e3c4ba3ad58383d23923384d5",
+  "test": "text_document_shell_has_no_doctype_and_preserves_normalized_literal_text",
+  "red": {
+    "production_file_restored": "moli-parser/src/session.rs",
+    "tests_unchanged": true,
+    "failure": "expected single html child; observed two children due synthetic doctype"
+  },
+  "green": {
+    "parser_library_passed": 117,
+    "failed": 0
+  },
+  "integration_tests": "Existing child no-doctype test retained; projection and WebDriver main/iframe MIME tests included; final CI verifies these paths."
+}
