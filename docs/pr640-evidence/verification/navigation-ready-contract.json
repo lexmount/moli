@@ -1,0 +1,11 @@
+{
+  "schema": "pr640-navigation-ready-replay-v1",
+  "original_browser_eval_commit": "2e4f1e0114a012256f5040c98c647d47901f85ab",
+  "old_replay_sha256": "484e1f10381ed21ea8c8bee6b4a90ed961846191f4a5b08aebde1b220c650ac3",
+  "new_replay_sha256": "98cd1bb279fec0926ce16cc8c94a06ace3269ae5191f04ad48e50c3b99820b0e",
+  "production_difference": "Only replay_logic changes. Main-frame cross-document navigations triggered by DOM clicks must reach commit and DOMContentLoaded; no task/URL/selector-specific conditions.",
+  "unchanged": "Actions, scoring, dataset, CowAgent and all other runner reference files retain their original bytes. Original failed cohorts are immutable.",
+  "unit_test_report_sha256": "eaa47639dfbcc74ccebf6b63ca301a3fdcf38a3e233ebd07797548ffdd6e08c3",
+  "real_browser_report_sha256": "821ea1d5e7878806fcfa26cf4441bfe1ceb0ae565f3f4ac22e16c5ac906789a1",
+  "comparison": "Results under this revised replay contract must be labeled separately from original frozen cohorts."
+}

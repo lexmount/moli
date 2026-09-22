@@ -1,0 +1,337 @@
+--- a/harness/trajectory_replay/webarena_replay.py
++++ b/harness/trajectory_replay/webarena_replay.py
+@@ -103,6 +103,76 @@
+     )
+ 
+ 
++class _SnapshotClickNavigation:
++    """Wait for a main-document request observed during a DOM click and its grace.
++
++    A response and frame commit must precede DCL: an already-ready old document
++    cannot satisfy this barrier. Same-document navigation has no document request.
++    This does not promise readiness of asynchronous application initialization.
++    """
++
++    def __init__(self, page: Any, timeout: int) -> None:
++        self.page = page
++        self.deadline = time.monotonic() + timeout / 1000
++        self.request: Any = None
++        self.response_received = False
++        self.committed = False
++        self.ready = False
++        self.failure: str | None = None
++        self.listeners = {
++            "request": self._request,
++            "response": self._response,
++            "framenavigated": self._committed,
++            "domcontentloaded": self._ready,
++            "requestfailed": self._failed,
++        }
++        for event, listener in self.listeners.items():
++            page.on(event, listener)
++
++    def _request(self, request: Any) -> None:
++        if request.is_navigation_request() and request.frame == self.page.main_frame:
++            self.request = request
++            self.response_received = self.committed = self.ready = False
++            self.failure = None
++
++    def _response(self, response: Any) -> None:
++        redirects = response.status in {301, 302, 303, 307, 308} and (
++            "location" in response.headers
++        )
++        if response.request == self.request and not redirects:
++            self.response_received = True
++
++    def _committed(self, frame: Any) -> None:
++        if frame == self.page.main_frame and self.response_received:
++            self.committed = True
++
++    def _ready(self, *_: Any) -> None:
++        if self.committed:
++            self.ready = True
++
++    def _failed(self, request: Any) -> None:
++        if request == self.request:
++            self.failure = request.failure or "document navigation failed"
++
++    def wait(self) -> None:
++        while self.request is not None:
++            if self.failure:
++                raise RuntimeError(self.failure)
++            if self.ready:
++                return
++            remaining = (self.deadline - time.monotonic()) * 1000
++            if remaining <= 0:
++                raise TimeoutError(
++                    "Click navigation did not reach its new document's DOMContentLoaded"
++                )
++            # Pump Playwright events, bounded by the same action deadline.
++            self.page.wait_for_timeout(min(50, remaining))
++
++    def close(self) -> None:
++        for event, listener in self.listeners.items():
++            self.page.remove_listener(event, listener)
++
++
+ def _execute_replay_call(
+     tool: Any, arguments: dict[str, Any], *, diagnostics: dict[str, Any] | None = None,
+ ) -> tuple[str, str]:
+@@ -133,24 +203,29 @@
+             page = service._page
+             locator = page.locator(selector).first
+             if action == "click":
+-                if diagnostics is None:
+-                    locator.evaluate("element => element.click()")
+-                else:
+-                    # Observe and dispatch in one JS turn: a separate probe can
+-                    # race widget initialization. Do not add actionability waits
+-                    # or reinterpret a successful DOM call as a successful task.
+-                    state = locator.evaluate("""element => {
+-                        const state = {
+-                            connected: element.isConnected,
+-                            disabled: Boolean(element.disabled),
+-                            effectivelyDisabled: element.matches(':disabled'),
+-                            ariaDisabled: element.getAttribute('aria-disabled')
+-                        };
+-                        element.click();
+-                        return state;
+-                    }""")
+-                    diagnostics["click_dispatch_state"] = state
+-                page.wait_for_timeout(500)
++                navigation = _SnapshotClickNavigation(page, public_arguments.get("timeout", 5000))
++                try:
++                    if diagnostics is None:
++                        locator.evaluate("element => element.click()")
++                    else:
++                        # Observe and dispatch in one JS turn: a separate probe can
++                        # race widget initialization. Do not add actionability waits
++                        # or reinterpret a successful DOM call as a successful task.
++                        state = locator.evaluate("""element => {
++                            const state = {
++                                connected: element.isConnected,
++                                disabled: Boolean(element.disabled),
++                                effectivelyDisabled: element.matches(':disabled'),
++                                ariaDisabled: element.getAttribute('aria-disabled')
++                            };
++                            element.click();
++                            return state;
++                        }""")
++                        diagnostics["click_dispatch_state"] = state
++                    page.wait_for_timeout(500)
++                    navigation.wait()
++                finally:
++                    navigation.close()
+             elif action == "fill":
+                 platform = locator.evaluate(
+                     "element => { element.focus(); return navigator.platform; }"
+--- a/tests/trajectory_replay/test_webarena_replay.py
++++ b/tests/trajectory_replay/test_webarena_replay.py
+@@ -377,6 +377,12 @@
+                     "effectivelyDisabled": disabled, "ariaDisabled": None}
+ 
+     class Page:
++        def on(self, _event, _listener):
++            pass
++
++        def remove_listener(self, _event, _listener):
++            pass
++
+         def locator(self, selector):
+             events.append(("locator", selector))
+             return Locator()
+--- /dev/null
++++ b/tests/trajectory_replay/test_snapshot_navigation_ready.py
+@@ -0,0 +1,192 @@
++"""Navigation readiness scenarios, independent of site actions and scoring."""
++
++from types import SimpleNamespace
++
++import pytest
++
++from harness.trajectory_replay.webarena_replay import _execute_replay_call
++
++
++class Page:
++    def __init__(self, events):
++        self.main_frame = SimpleNamespace(url="https://fixture.test/same")
++        self.child = object()
++        self.listeners = {}
++        self.events = sorted(events, key=lambda event: event[0])
++        self.clock = 0
++        self.clicks = 0
++        self.first = self
++
++    def on(self, name, callback):
++        self.listeners.setdefault(name, []).append(callback)
++
++    def remove_listener(self, name, callback):
++        self.listeners[name].remove(callback)
++
++    def locator(self, selector):
++        return self
++
++    def evaluate(self, script):
++        self.clicks += 1
++        return {
++            "connected": True,
++            "disabled": False,
++            "effectivelyDisabled": False,
++            "ariaDisabled": None,
++        }
++
++    def wait_for_timeout(self, ms):
++        end = self.clock + ms
++        while self.events and self.events[0][0] <= end:
++            self.clock, event, payload = self.events.pop(0)
++            for callback in list(self.listeners.get(event, [])):
++                callback(payload)
++        self.clock = end
++
++
++class Request:
++    def __init__(self, frame, failure=None):
++        self.frame = frame
++        self.failure = failure
++
++    def is_navigation_request(self):
++        return True
++
++
++def run(monkeypatch, page):
++    monkeypatch.setattr(
++        "harness.trajectory_replay.webarena_replay.time.monotonic", lambda: page.clock / 1000
++    )
++    service = SimpleNamespace(_page=page, _submit=lambda callback: callback())
++    tool = SimpleNamespace(_get_service=lambda: service)
++    result = _execute_replay_call(
++        tool,
++        {
++            "action": "click",
++            "selector": "button",
++            "replay_mode": "snapshot_ref_semantics",
++            "timeout": 2000,
++        },
++    )
++    assert page.clicks == 1
++    assert not any(page.listeners.values()), "listeners must always be removed"
++    return result
++
++
++@pytest.mark.parametrize("redirect", [False, True])
++def test_waits_for_same_url_document_commit_and_deferred_scripts(monkeypatch, redirect):
++    page = Page([])
++    first = Request(page.main_frame)
++    final = Request(page.main_frame) if redirect else first
++    page.events = [(10, "request", first), (100, "domcontentloaded", page)]  # old document
++    if redirect:
++        page.events += [
++            (
++                600,
++                "response",
++                SimpleNamespace(request=first, status=302, headers={"location": "/same"}),
++            ),
++            (610, "request", final),
++        ]
++    page.events += [
++        (900, "response", SimpleNamespace(request=final, status=200)),
++        (910, "framenavigated", page.main_frame),
++        (1300, "domcontentloaded", page),
++    ]
++    assert run(monkeypatch, page)[0] == "success"
++    assert page.clock >= 1300  # unchanged URL must not bypass commit/DCL
++
++
++@pytest.mark.parametrize("event", [None, "framenavigated"])
++def test_no_navigation_and_hash_navigation_keep_original_grace(monkeypatch, event):
++    page = Page([])
++    if event:
++        page.events = [(10, event, page.main_frame)]
++    assert run(monkeypatch, page)[0] == "success"
++    assert page.clock == 500
++
++
++def test_failed_navigation_is_not_success(monkeypatch):
++    page = Page([])
++    req = Request(page.main_frame, "net::ERR_CONNECTION_RESET")
++    page.events = [(10, "request", req), (700, "requestfailed", req)]
++    status, message = run(monkeypatch, page)
++    assert status == "error"
++    assert "ERR_CONNECTION_RESET" in message
++
++
++@pytest.mark.parametrize("commit", [False, True])
++def test_missing_new_document_dcl_times_out(monkeypatch, commit):
++    page = Page([])
++    req = Request(page.main_frame)
++    page.events = [(10, "request", req), (100, "domcontentloaded", page)]
++    if commit:
++        page.events += [
++            (300, "response", SimpleNamespace(request=req, status=200)),
++            (350, "framenavigated", page.main_frame),
++        ]
++    status, message = run(monkeypatch, page)
++    assert status == "error"
++    assert "DOMContentLoaded" in message
++
++
++def test_child_navigation_does_not_change_main_frame_contract(monkeypatch):
++    page = Page([])
++    req = Request(page.child)
++    page.events = [(10, "request", req)]
++    assert run(monkeypatch, page)[0] == "success"
++    assert page.clock == 500
++
++
++def test_fast_navigation_still_keeps_original_grace(monkeypatch):
++    page = Page([])
++    req = Request(page.main_frame)
++    page.events = [
++        (10, "request", req),
++        (100, "response", SimpleNamespace(request=req, status=200)),
++        (110, "framenavigated", page.main_frame),
++        (150, "domcontentloaded", page),
++    ]
++    assert run(monkeypatch, page)[0] == "success"
++    assert page.clock == 500
++
++
++def test_old_dcl_after_response_does_not_replace_commit(monkeypatch):
++    page = Page([])
++    req = Request(page.main_frame)
++    page.events = [
++        (10, "request", req),
++        (100, "response", SimpleNamespace(request=req, status=200)),
++        (150, "domcontentloaded", page),
++        (700, "framenavigated", page.main_frame),
++        (900, "domcontentloaded", page),
++    ]
++    assert run(monkeypatch, page)[0] == "success"
++    assert page.clock >= 900
++
++
++def test_dispatch_error_is_preserved_and_listeners_removed(monkeypatch):
++    page = Page([])
++
++    def failed_evaluate(_script):
++        page.clicks += 1
++        raise RuntimeError("dispatch exception")
++
++    page.evaluate = failed_evaluate
++    status, message = run(monkeypatch, page)
++    assert status == "error"
++    assert "dispatch exception" in message
++
++
++@pytest.mark.parametrize("status", [300, 304, 302])
++def test_terminal_nonredirect_3xx_can_commit_and_reach_dcl(monkeypatch, status):
++    page = Page([])
++    req = Request(page.main_frame)
++    page.events = [
++        (10, "request", req),
++        (700, "response", SimpleNamespace(request=req, status=status, headers={})),
++        (710, "framenavigated", page.main_frame),
++        (900, "domcontentloaded", page),
++    ]
++    assert run(monkeypatch, page)[0] == "success"
++    assert page.clock >= 900

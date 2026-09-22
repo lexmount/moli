@@ -1,0 +1,341 @@
+{
+  "source_sha256": {
+    "new": "98cd1bb279fec0926ce16cc8c94a06ace3269ae5191f04ad48e50c3b99820b0e",
+    "old": "484e1f10381ed21ea8c8bee6b4a90ed961846191f4a5b08aebde1b220c650ac3"
+  },
+  "method": "Original function/class AST executed unchanged with a real Playwright Page; thin shim only exposes _page and calls submitted function",
+  "results": [
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "slow-defer",
+      "passed": false,
+      "status": "success",
+      "call_ms": 542.83,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "slow-headers",
+      "passed": false,
+      "status": "success",
+      "call_ms": 526.83,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "same-url-reload",
+      "passed": false,
+      "status": "success",
+      "call_ms": 533.85,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "redirect",
+      "passed": false,
+      "status": "success",
+      "call_ms": 534.89,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "no-navigation",
+      "passed": true,
+      "status": "success",
+      "call_ms": 528.52,
+      "routes": []
+    },
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "hash",
+      "passed": true,
+      "status": "success",
+      "call_ms": 533.3,
+      "routes": []
+    },
+    {
+      "engine": "chrome",
+      "adapter": "old",
+      "scenario": "failed-navigation",
+      "passed": false,
+      "status": "success",
+      "call_ms": 528.54,
+      "routes": []
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "slow-defer",
+      "passed": true,
+      "status": "success",
+      "call_ms": 918.13,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "slow-headers",
+      "passed": true,
+      "status": "success",
+      "call_ms": 1781.92,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "same-url-reload",
+      "passed": true,
+      "status": "success",
+      "call_ms": 1795.19,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "redirect",
+      "passed": true,
+      "status": "success",
+      "call_ms": 924.78,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "no-navigation",
+      "passed": true,
+      "status": "success",
+      "call_ms": 534.36,
+      "routes": []
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "hash",
+      "passed": true,
+      "status": "success",
+      "call_ms": 535.8,
+      "routes": []
+    },
+    {
+      "engine": "chrome",
+      "adapter": "new",
+      "scenario": "failed-navigation",
+      "passed": true,
+      "status": "error",
+      "call_ms": 533.07,
+      "routes": []
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "slow-defer",
+      "passed": false,
+      "status": "success",
+      "call_ms": 546.81,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "slow-headers",
+      "passed": false,
+      "status": "success",
+      "call_ms": 534.29,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "same-url-reload",
+      "passed": false,
+      "status": "success",
+      "call_ms": 534.89,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "redirect",
+      "passed": false,
+      "status": "success",
+      "call_ms": 535.3,
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "no-navigation",
+      "passed": true,
+      "status": "success",
+      "call_ms": 533.96,
+      "routes": []
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "hash",
+      "passed": true,
+      "status": "success",
+      "call_ms": 536.25,
+      "routes": []
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "old",
+      "scenario": "failed-navigation",
+      "passed": false,
+      "status": "success",
+      "call_ms": 536.17,
+      "routes": []
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "slow-defer",
+      "passed": true,
+      "status": "success",
+      "call_ms": 914.48,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "slow-headers",
+      "passed": true,
+      "status": "success",
+      "call_ms": 1797.36,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "same-url-reload",
+      "passed": true,
+      "status": "success",
+      "call_ms": 1785.67,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "redirect",
+      "passed": true,
+      "status": "success",
+      "call_ms": 921.63,
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ]
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "no-navigation",
+      "passed": true,
+      "status": "success",
+      "call_ms": 535.16,
+      "routes": []
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "hash",
+      "passed": true,
+      "status": "success",
+      "call_ms": 537.43,
+      "routes": []
+    },
+    {
+      "engine": "finalb0",
+      "adapter": "new",
+      "scenario": "failed-navigation",
+      "passed": true,
+      "status": "error",
+      "call_ms": 536.12,
+      "routes": []
+    }
+  ]
+}

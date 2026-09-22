@@ -1,0 +1,31 @@
+{
+  "source_commit": "2e4f1e0114a012256f5040c98c647d47901f85ab",
+  "copy_source_hashes": {
+    "harness/trajectory_replay/webarena_replay.py": "98cd1bb279fec0926ce16cc8c94a06ace3269ae5191f04ad48e50c3b99820b0e",
+    "tests/trajectory_replay/test_webarena_replay.py": "0666f421eeba0a21a9252070f3d1efd7ef08b834f83afb477924c9fbcd7f80b2",
+    "tests/trajectory_replay/test_snapshot_navigation_ready.py": "bf92b6af4b6bc1bdc86e80cba0633ca45add32c893ec6f4cfad30de642338579"
+  },
+  "red": {
+    "file": "navigation-ready-red.log",
+    "passed": 3,
+    "failed": 5,
+    "scope": "initial 8 independent navigation scenarios against unmodified replay"
+  },
+  "green": {
+    "file": "navigation-ready-green.log",
+    "passed": 46,
+    "failed": 0,
+    "scope": "14 navigation scenarios plus existing replay and date input tests"
+  },
+  "semantics": "Existing DOM click and 500ms grace retained. Main-document requests initiated during dispatch/grace must reach post-response commit and then DCL. Same URL allowed. No navigation or same-document hash does not add lifecycle wait. Navigation errors and timeout propagate. No arbitrary app-ready guarantee. Requests first initiated after grace are outside this click barrier.",
+  "lint": "New scenario test file passes Ruff; edited legacy files retain 3 pre-existing E501 lines; newly introduced lines pass.",
+  "real_browser_validation": "Separate localhost agent validation pending; no WebArena/application195 calls performed by this implementation task.",
+  "unchanged": "Frozen CowAgent, original browser-eval repository, action dataset, scoring, and previous receipts were not edited.",
+  "red_complete": {
+    "file": "navigation-ready-red-complete.log",
+    "passed": 5,
+    "failed": 9,
+    "scope": "same final 14 navigation tests against exact original replay function, loaded by AST without modifying either source tree"
+  },
+  "redirect_semantics": "Only 301/302/303/307/308 with Location count as redirects; terminal 300/304/302 without Location await commit and DCL normally."
+}
