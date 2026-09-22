@@ -23,7 +23,7 @@ pub(crate) enum PageDomManipulationTestFamily {
     PromiseRejection,
     MainDocumentLifecycle,
     ImageLoadEvent,
-    PopupLoadEvent,
+    PopupDocumentLifecycle,
     ConnectedStyleEvent,
     TextTrackDefaultMode,
     TextTrackLoad,
@@ -62,8 +62,8 @@ impl PageDomManipulationTestFamily {
                 Self::ImageLoadEvent,
                 RendererPageDomManipulationOwner::ImageLoadEvent(_)
             ) | (
-                Self::PopupLoadEvent,
-                RendererPageDomManipulationOwner::PopupLoadEvent(_)
+                Self::PopupDocumentLifecycle,
+                RendererPageDomManipulationOwner::PopupDocumentLifecycle(_)
             ) | (
                 Self::ConnectedStyleEvent,
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(_)

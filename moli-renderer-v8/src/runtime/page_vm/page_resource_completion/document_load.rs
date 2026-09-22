@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use crate::{
     page_resource_completion::{
-        PageResourceCompletionOutputEffect, PageResourceCompletionTurnAction,
-        RendererPageResourceCompletionOwner,
+        PageResourceCompletionOutputEffect, PageResourceCompletionPostCheckpointEffect,
+        PageResourceCompletionTurnAction, RendererPageResourceCompletionOwner,
     },
     runtime::RendererOwnerResourceActivitySource,
     types::{
@@ -162,8 +162,11 @@ impl PageVm {
                     PageResourceCompletionOutputEffect::CaptureRequired,
                 )
             }
-            crate::native_bridge::PopupDocumentLoadApplication::Applied { body_activity } => {
-                match body_activity {
+            crate::native_bridge::PopupDocumentLoadApplication::Applied {
+                body_activity,
+                parser_completion,
+            } => {
+                let action = match body_activity {
                     crate::native_bridge::PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch => {
                         PageResourceCompletionTurnAction::applied(
                             source,
@@ -178,7 +181,15 @@ impl PageVm {
                             PageResourceCompletionOutputEffect::CaptureRequired,
                         )
                     }
-                }
+                };
+                action.with_post_checkpoint_effect(parser_completion.map_or(
+                    PageResourceCompletionPostCheckpointEffect::None,
+                    |completion| {
+                        PageResourceCompletionPostCheckpointEffect::CompletePopupDocumentParser {
+                            completion,
+                        }
+                    },
+                ))
             }
         })
     }
@@ -218,7 +229,9 @@ impl PageVm {
             }
             crate::native_bridge::PopupClassicScriptLoadApplication::Applied {
                 body_activity,
-            } => match body_activity {
+                parser_completion,
+            } => {
+                let action = match body_activity {
                 crate::native_bridge::PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch => {
                     PageResourceCompletionTurnAction::applied(
                         source,
@@ -233,7 +246,16 @@ impl PageVm {
                         PageResourceCompletionOutputEffect::CaptureRequired,
                     )
                 }
-            },
+                };
+                action.with_post_checkpoint_effect(parser_completion.map_or(
+                    PageResourceCompletionPostCheckpointEffect::None,
+                    |completion| {
+                        PageResourceCompletionPostCheckpointEffect::CompletePopupDocumentParser {
+                            completion,
+                        }
+                    },
+                ))
+            }
         })
     }
 }
