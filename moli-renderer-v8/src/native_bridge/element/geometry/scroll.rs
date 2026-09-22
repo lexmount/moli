@@ -208,7 +208,7 @@ pub(crate) fn perform_wheel_scroll_default_action(
     let Some(mut geometry) = observable_scroll_into_view_geometry(
         runtime,
         target,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     )?
     else {
         return Ok(false);
@@ -217,11 +217,9 @@ pub(crate) fn perform_wheel_scroll_default_action(
     // ScrollIntoView geometry begins at the target's parent. Include the
     // target itself so an empty overflow scroller still responds when its own
     // background is the hit-test result.
-    if let Some(metrics) = observable_element_metrics(
-        runtime,
-        target,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )? && metrics.is_scroll_container
+    if let Some(metrics) =
+        observable_element_metrics(runtime, target, moli_layout::LayoutFlushReason::DomGeometry)?
+        && metrics.is_scroll_container
         && geometry
             .scroll_containers
             .iter()
