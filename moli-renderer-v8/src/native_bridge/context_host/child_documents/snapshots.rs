@@ -1,6 +1,8 @@
 use super::super::{ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, PageScriptHost};
 use crate::document_response_decoder::decode_document_response;
 use crate::document_runtime::{DocumentPolicyContainer, DomHandle};
+#[cfg(test)]
+use moli_web_mime::resource_mime_essence_for_url;
 use moli_web_mime::{
     is_html_document_mime, resource_mime_essence_for_url, response_document_content_type,
 };
@@ -102,13 +104,22 @@ impl PageScriptHost {
                     ),
                 )
             }
-            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => Some(
-                self.apply_page_csp_bypass_to_child_snapshot(ChildBrowsingContextSnapshot::srcdoc(
-                    base_url.clone(),
-                    markup.clone(),
-                    self.document_character_set().to_owned(),
-                )),
-            ),
+            ChildBrowsingContextBootstrap::Srcdoc { base_url, markup } => {
+                if let Some(snapshot) = self
+                    .child_browsing_contexts
+                    .get(&handle)
+                    .and_then(|entry| entry.pending_srcdoc_history_snapshot())
+                {
+                    return Some(self.apply_page_csp_bypass_to_child_snapshot(snapshot));
+                }
+                Some(self.apply_page_csp_bypass_to_child_snapshot(
+                    ChildBrowsingContextSnapshot::srcdoc(
+                        base_url.clone(),
+                        markup.clone(),
+                        self.document_character_set().to_owned(),
+                    ),
+                ))
+            }
             ChildBrowsingContextBootstrap::Url(url) => {
                 self.materialize_local_child_snapshot_for_navigation_url(handle, url)
             }
@@ -127,6 +138,7 @@ fn child_document_content_type_from_header_value(value: &str) -> Option<String> 
     moli_web_mime::mime_essence(value)
 }
 
+#[cfg(test)]
 pub(in crate::native_bridge::context_host) fn child_document_content_type_for_url(
     url: &Url,
 ) -> Option<String> {
