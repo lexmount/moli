@@ -2528,9 +2528,10 @@ async fn blob_worker_created_in_data_iframe_inherits_opaque_broadcast_channel_ow
     .await;
 }
 
-#[tokio::test]
-async fn child_message_handler_external_dedicated_worker_binds_child_client_event_owner() {
-    run_page_vm_async_test(async move {
+#[test]
+fn child_message_handler_external_dedicated_worker_binds_child_client_event_owner() {
+    // Match the render runtime's stack budget for the nested child/Worker turns.
+    run_page_vm_large_stack_async_test("child-message-worker-owner", || async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
             "/worker.js",
             "HTTP/1.1 200 OK",
@@ -2655,8 +2656,7 @@ document
         server
             .await
             .expect("child message-created Worker server should finish");
-    })
-    .await;
+    });
 }
 
 #[tokio::test]
