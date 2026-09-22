@@ -41,10 +41,9 @@ use super::navigation_traversal_plan::{
     navigation_index_traversal_plan,
 };
 use super::navigation_window::{
-    navigation_can_update_current_entry,
-    navigation_document_is_active, navigation_has_current_document, navigation_unload_event_active,
-    runtime_window_owner, window_history_for_holder, window_location_for_holder,
-    window_navigation_for_holder,
+    navigation_can_update_current_entry, navigation_document_is_active,
+    navigation_has_current_document, navigation_unload_event_active, runtime_window_owner,
+    window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
