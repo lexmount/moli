@@ -4,6 +4,7 @@ use crate::context_bootstrap::{
 };
 use crate::dom::{forms::InputType, native::Node};
 use crate::native_bridge::element::*;
+use crate::runtime::ClipboardSnapshot;
 use crate::util::utf16_units;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -125,7 +126,7 @@ fn perform_clipboard_action(
 ) -> bool {
     let clipboard = unsafe { &*runtime_ptr }.browser_context_runtime();
     let contents = if action == ClipboardAction::Paste {
-        clipboard.clipboard_data()
+        clipboard.clipboard_snapshot().representations
     } else {
         Vec::new()
     };
@@ -155,10 +156,13 @@ fn perform_clipboard_action(
                 return true;
             }
             if let Some(text) = selected_control_text(runtime, handle) {
-                clipboard.set_clipboard_data(vec![(
-                    "text/plain".to_owned(),
-                    native_clipboard_text_bytes(&text),
-                )]);
+                clipboard.set_clipboard_snapshot(ClipboardSnapshot {
+                    representations: vec![(
+                        "text/plain".to_owned(),
+                        native_clipboard_text_bytes(&text),
+                    )],
+                    ..ClipboardSnapshot::default()
+                });
                 if action == ClipboardAction::Cut {
                     replace_text_control_selection_with_input_type(
                         scope,
@@ -213,7 +217,10 @@ pub(super) fn dispatch_clipboard_action_event(
     disable_clipboard_data_transfer(scope, transfer);
     if !outcome.allows_default() {
         if !authored_contents.is_empty() {
-            clipboard.set_clipboard_data(authored_contents);
+            clipboard.set_clipboard_snapshot(ClipboardSnapshot {
+                representations: authored_contents,
+                ..ClipboardSnapshot::default()
+            });
         }
         return Some(false);
     }
