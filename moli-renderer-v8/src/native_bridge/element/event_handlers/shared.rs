@@ -29,7 +29,7 @@ pub(super) fn compile_event_attribute_handler<'s>(
     )
 }
 
-fn compile_event_attribute_handler_for_owner_with_context<'s>(
+pub(super) fn compile_event_attribute_handler_for_owner_with_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut JsContextHost,
     owner: OwnerDispatchScope,

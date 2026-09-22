@@ -428,6 +428,7 @@ pub(crate) use self::media_queries::{
     simple_event_target_remove_event_listener_callback, simple_object_event_listeners_snapshot,
     simple_object_event_set_handler, simple_object_has_event_listeners,
     simple_object_event_target_register_webidl_listener,
+    simple_object_event_activate_uncompiled_handler,
 };
 pub(crate) use self::message_ports::{
     MessagePortDeliveryRunResult, MessagePortRealmBinding, TransferredMessagePort,
