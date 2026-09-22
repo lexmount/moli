@@ -118,6 +118,44 @@ impl JsContextHost {
         self.top_level_navigation_history.clone()
     }
 
+    pub(in crate::native_bridge::context_host) fn child_frame_attribute_initiator_has_same_origin(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        let source = self
+            .owner_dispatch_scope_for_node(handle)
+            .and_then(|owner| self.window_access_origin_for_dispatch_scope(owner));
+        let target =
+            self.window_access_origin_for_dispatch_scope(OwnerDispatchScope::Child(handle));
+        source
+            .zip(target)
+            .is_some_and(|(source, target)| source.has_same_origin(&target))
+    }
+
+    pub(in crate::native_bridge) fn child_frame_attribute_navigation_replaces_current_entry(
+        &self,
+        handle: DomHandle,
+        destination: &Url,
+    ) -> bool {
+        let replaces_same_url = self.child_frame_attribute_initiator_has_same_origin(handle)
+            && self
+                .child_browsing_contexts
+                .get(&handle)
+                .is_some_and(|entry| {
+                    let seed = entry.committed_navigation_entry_seed();
+                    seed.entries.iter().any(|entry| {
+                        entry.history_index == seed.current_index
+                            && entry.url == destination.as_str()
+                    })
+                });
+        self.child_current_document_is_initial_empty(handle)
+            || self
+                .child_browsing_context_document_handle(handle)
+                .and_then(|document| self.document_is_completely_loaded(document))
+                == Some(false)
+            || replaces_same_url
+    }
+
     pub(crate) fn form_navigation_history_mutation(
         &self,
         source_document: Option<DomHandle>,
