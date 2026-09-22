@@ -129,6 +129,11 @@ impl WindowOpenFeatures {
         features
     }
 
+    /// Returns whether these features request a popup browsing context.
+    pub fn is_popup(&self) -> bool {
+        self.is_popup
+    }
+
     /// Returns whether the parsed features suppress the opener relationship.
     pub fn suppresses_opener(&self) -> bool {
         self.noopener
