@@ -1,5 +1,5 @@
 //! Real macOS trust evaluation. Run only on an ephemeral GitHub Actions runner:
-//! this test installs a temporary keychain and administrator trust setting.
+//! this test temporarily installs a CA in the system keychain and admin trust domain.
 
 use std::{
     fs,
@@ -22,6 +22,7 @@ use rustls::{
 
 const DEADLINE: Duration = Duration::from_secs(10);
 const COMMAND_DEADLINE: Duration = Duration::from_secs(15);
+const SYSTEM_KEYCHAIN: &str = "/Library/Keychains/System.keychain";
 
 #[test]
 #[ignore = "requires an ephemeral macOS GitHub Actions runner and modifies its trust settings"]
@@ -41,7 +42,7 @@ fn apple_sectrust() {
         generate_certificates(fixtures.path(), name);
         create_ca_directory(fixtures.path(), name);
     }
-    let _keychain = Keychain::install(fixtures.path());
+    let _trust = SystemTrust::install(fixtures.path());
 
     // Separate processes keep certificate environment variables isolated from
     // other tests and exercise the binding's fresh-handle initialization.
@@ -154,30 +155,36 @@ fn create_ca_directory(directory: &Path, name: &str) {
     .unwrap();
 }
 
-struct Keychain {
-    path: PathBuf,
+struct SystemTrust {
     root: PathBuf,
-    previous: Vec<String>,
+    fingerprint: String,
 }
 
-impl Keychain {
+impl SystemTrust {
     fn install(directory: &Path) -> Self {
-        let previous = security(&["list-keychains", "-d", "user"]);
-        let keychain = Self {
-            path: directory.join("test.keychain-db"),
-            root: directory.join("trusted.pem"),
-            previous: previous
-                .lines()
-                .map(|line| line.trim().trim_matches('"').to_owned())
-                .collect(),
-        };
-        let path = keychain.path.to_str().unwrap();
-        security(&["create-keychain", "-p", "moli-test", path]);
-        security(&["unlock-keychain", "-p", "moli-test", path]);
-        let mut search_list = vec!["list-keychains", "-d", "user", "-s"];
-        search_list.extend(keychain.previous.iter().map(String::as_str));
-        search_list.push(path);
-        security(&search_list);
+        let root = directory.join("trusted.pem");
+        let output = command_output(
+            Command::new("openssl")
+                .args(["x509", "-noout", "-fingerprint", "-sha256", "-in"])
+                .arg(&root),
+            COMMAND_DEADLINE,
+        )
+        .unwrap();
+        assert!(output.status.success());
+        let fingerprint = String::from_utf8(output.stdout)
+            .unwrap()
+            .split_once('=')
+            .unwrap()
+            .1
+            .trim()
+            .replace(':', "");
+        assert_eq!(fingerprint.len(), 64);
+        assert!(fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        // Admin trust settings enumerate certificates in System.keychain, not
+        // the user's keychain search list. Keep the certificate and its trust
+        // setting in the same domain; a temporary user keychain is not enough.
+        // Construct the cleanup guard before either installation step can fail.
+        let trust = Self { root, fingerprint };
         let output = command_output(
             Command::new("sudo")
                 .args([
@@ -190,9 +197,9 @@ impl Keychain {
                     "-p",
                     "ssl",
                     "-k",
-                    path,
+                    SYSTEM_KEYCHAIN,
                 ])
-                .arg(&keychain.root),
+                .arg(&trust.root),
             COMMAND_DEADLINE,
         )
         .unwrap();
@@ -201,39 +208,56 @@ impl Keychain {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        keychain
+        // trustd consumes keychain changes asynchronously. Verify the ambient
+        // trust source independently of curl, without supplying an explicit CA.
+        let start = Instant::now();
+        loop {
+            let output = verify_with_security(directory, "fixture.test", None);
+            if output.status.success() {
+                println!("macOS verified the fixture through the installed system CA");
+                break;
+            }
+            assert!(
+                start.elapsed() < DEADLINE,
+                "installed test CA is not visible to macOS trust evaluation:\n{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            thread::sleep(Duration::from_millis(100));
+        }
+        trust
     }
 }
 
-impl Drop for Keychain {
+impl Drop for SystemTrust {
     fn drop(&mut self) {
         cleanup(
             Command::new("sudo")
                 .args(["-n", "security", "remove-trusted-cert", "-d"])
                 .arg(&self.root),
         );
+        // Delete only this run's randomly generated CA, even if removing its
+        // trust setting failed. Never delete or replace the system keychain.
         cleanup(
-            Command::new("security")
-                .args(["list-keychains", "-d", "user", "-s"])
-                .args(&self.previous),
-        );
-        cleanup(
-            Command::new("security")
-                .arg("delete-keychain")
-                .arg(&self.path),
+            Command::new("sudo")
+                .args(["-n", "security", "delete-certificate", "-Z"])
+                .arg(&self.fingerprint)
+                .arg(SYSTEM_KEYCHAIN),
         );
     }
 }
 
-fn security(arguments: &[&str]) -> String {
-    let output =
-        command_output(Command::new("security").args(arguments), COMMAND_DEADLINE).unwrap();
-    assert!(
-        output.status.success(),
-        "security {arguments:?}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
+fn verify_with_security(directory: &Path, hostname: &str, anchor: Option<&str>) -> Output {
+    let mut command = Command::new("security");
+    command
+        .args(["verify-cert", "-L", "-p", "ssl", "-n", hostname, "-c"])
+        .arg(directory.join("trusted.der"));
+    if let Some(anchor) = anchor {
+        command
+            .arg("-r")
+            .arg(directory.join(format!("{anchor}.pem")));
+    }
+    command_output(&mut command, COMMAND_DEADLINE).unwrap()
 }
 
 fn cleanup(command: &mut Command) {
@@ -495,6 +519,31 @@ fn fixture_certificates_work_with_explicit_ca_files() {
         for policy in ["ca", "ca-untrusted"] {
             run_case(&format!("{route}/{policy}"), fixtures.path());
         }
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn fixture_certificates_work_with_apple_verifier() {
+    let fixtures = tempfile::tempdir().unwrap();
+    generate_certificates(fixtures.path(), "trusted");
+    generate_certificates(fixtures.path(), "untrusted");
+    // Explicit anchors affect this verification only; this test never writes
+    // a keychain or changes the machine's trust settings.
+    for (anchor, hostname, trusted) in [
+        (Some("trusted"), "fixture.test", true),
+        (Some("untrusted"), "fixture.test", false),
+        (Some("trusted"), "wrong.test", false),
+        (None, "fixture.test", false),
+    ] {
+        let output = verify_with_security(fixtures.path(), hostname, anchor);
+        assert_eq!(
+            output.status.success(),
+            trusted,
+            "anchor={anchor:?}, hostname={hostname}:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 

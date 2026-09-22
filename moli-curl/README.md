@@ -48,9 +48,14 @@ The `macOS TLS trust` workflow builds the AWS-LC/SecTrust combination on
 `macos-latest`. Its `apple_sectrust` integration test covers HTTPS, WSS,
 HTTPS proxy verification, rejected chains and hostnames, and CA file/directory
 overrides. It checks libcurl's verifier diagnostics during real local handshakes.
-The test is ignored in normal runs because it installs a temporary keychain and
-administrator trust setting; it is restricted to ephemeral macOS CI runners and
-cleans up the trust setting and keychain afterward.
+The test is ignored in normal runs because it temporarily installs a test CA in
+the system keychain and administrator trust domain; it is restricted to ephemeral
+macOS CI runners. Admin trust settings look up certificates in the system keychain,
+so a temporary user keychain cannot supply this trust anchor. The test first checks
+system trust with `security verify-cert`, then cleans up its trust setting and
+deletes only its generated CA by fingerprint. A normal macOS test also checks that
+Apple's verifier accepts the generated chain with an explicit anchor and rejects
+incorrect anchors and hostnames, without modifying any keychain or trust setting.
 
 ## Enable counters
 
