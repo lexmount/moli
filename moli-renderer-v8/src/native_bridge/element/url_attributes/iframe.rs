@@ -76,7 +76,7 @@ fn iframe_navigation_target(runtime: &PageScriptHost, handle: DomHandle) -> Stri
     }
 }
 
-pub(in crate::native_bridge::element) fn iframe_uses_detached_content_cache(
+pub(in crate::native_bridge) fn iframe_uses_detached_content_cache(
     runtime: &PageScriptHost,
     handle: DomHandle,
 ) -> bool {
