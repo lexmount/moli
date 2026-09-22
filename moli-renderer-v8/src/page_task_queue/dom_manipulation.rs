@@ -30,9 +30,9 @@ use super::{
     popup_close::{
         RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
     },
-    popup_load_event::{
-        RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
-        RendererPagePopupLoadEventTask,
+    popup_document_lifecycle::{
+        RendererPagePopupDocumentLifecycleOwner, RendererPagePopupDocumentLifecycleSender,
+        RendererPagePopupDocumentLifecycleTask,
     },
     promise_rejection::{
         RendererPagePromiseRejectionOwner, RendererPagePromiseRejectionSender,
@@ -81,7 +81,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleOwner),
     ChildDocumentLifecycle(super::RendererPageChildFrameTaskOwner),
     ChildHostLoad(super::RendererPageChildFrameTaskOwner),
-    PopupLoadEvent(RendererPagePopupLoadEventOwner),
+    PopupDocumentLifecycle(RendererPagePopupDocumentLifecycleOwner),
     PopupClose(RendererPagePopupCloseOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeOwner),
@@ -103,7 +103,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     MainDocumentLifecycle(super::RendererPageMainDocumentLifecycleTask),
     ChildDocumentLifecycle(super::RendererPageChildFrameTask),
     ChildHostLoad(super::RendererPageChildFrameTask),
-    PopupLoadEvent(RendererPagePopupLoadEventTask),
+    PopupDocumentLifecycle(RendererPagePopupDocumentLifecycleTask),
     PopupClose(RendererPagePopupCloseTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeTask),
@@ -145,8 +145,8 @@ impl RendererPageDomManipulationTask {
             Self::ChildHostLoad(task) => {
                 RendererPageDomManipulationOwner::ChildHostLoad(task.owner())
             }
-            Self::PopupLoadEvent(task) => {
-                RendererPageDomManipulationOwner::PopupLoadEvent(task.owner())
+            Self::PopupDocumentLifecycle(task) => {
+                RendererPageDomManipulationOwner::PopupDocumentLifecycle(task.owner())
             }
             Self::PopupClose(task) => RendererPageDomManipulationOwner::PopupClose(task.owner()),
             Self::ConnectedStyleEvent(task) => {
@@ -187,7 +187,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     MainDocumentLifecycle(super::PageMainDocumentLifecycleTurnAction),
     ChildDocumentLifecycle(super::PageChildDocumentLifecycleTurnAction),
     ChildHostLoad(super::PageChildHostLoadTurnAction),
-    PopupLoadEvent(super::PagePopupLoadEventTurnAction),
+    PopupDocumentLifecycle(super::PagePopupDocumentLifecycleTurnAction),
     PopupClose(super::PagePopupCloseTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
     TextTrackDefaultMode(super::PageTextTrackDefaultModeTurnAction),
@@ -292,8 +292,8 @@ impl RendererPageDomManipulationSender {
             .map_err(|_| super::child_frame_task::RendererPageChildFrameTaskRouteClosed)
     }
 
-    pub(crate) fn popup_load_event(&self) -> RendererPagePopupLoadEventSender {
-        RendererPagePopupLoadEventSender::new(self.route.clone(), self.root_document)
+    pub(crate) fn popup_document_lifecycle(&self) -> RendererPagePopupDocumentLifecycleSender {
+        RendererPagePopupDocumentLifecycleSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn popup_close(&self) -> RendererPagePopupCloseSender {

@@ -217,10 +217,10 @@ pub(crate) use navigation::{
 pub(crate) use popups::{
     LightweightPopupClassicScriptFetchTarget, LightweightPopupDocumentFetchTarget,
     LightweightPopupNavigationTaskToken, PopupClassicScriptLoadApplication,
-    PopupDocumentLoadApplication, PopupDocumentLoadBodyActivity, active_lightweight_popup_id,
-    defer_active_lightweight_popup_restore, enter_active_lightweight_popup_scope,
-    enter_top_level_lightweight_popup_scope, lightweight_popup_id_from_window,
-    restore_active_lightweight_popup_scope,
+    PopupDocumentLoadApplication, PopupDocumentLoadBodyActivity, PopupDocumentParserCompletion,
+    active_lightweight_popup_id, defer_active_lightweight_popup_restore,
+    enter_active_lightweight_popup_scope, enter_top_level_lightweight_popup_scope,
+    lightweight_popup_id_from_window, restore_active_lightweight_popup_scope,
     restore_deferred_active_lightweight_popup_scope_if_present,
 };
 pub(crate) use range_records::{RangeBoundarySide, RangeRecordHandle};
@@ -1073,6 +1073,7 @@ pub(crate) struct JsContextHost {
         HashMap<u64, popups::PendingLightweightPopupDocumentLoad>,
     pending_lightweight_popup_classic_script_loads:
         HashMap<u64, popups::PendingLightweightPopupClassicScriptLoad>,
+    completed_popup_javascript_url_parsers: Vec<PopupDocumentParserCompletion>,
     /// Standalone-only compatibility storage for locally materialized popup
     /// documents whose test/runtime adapter has no stable Page source.
     #[cfg(test)]

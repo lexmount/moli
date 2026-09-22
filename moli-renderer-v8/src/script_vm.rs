@@ -798,7 +798,8 @@ mod parser_owned_classic;
 pub(crate) use parser_owned_classic::*;
 mod parser_module_terminal;
 mod popup_close;
-mod popup_load_event;
+mod popup_document_lifecycle;
+pub(crate) use popup_document_lifecycle::PopupDocumentLifecycleStep;
 mod post_parse;
 mod post_parse_lifecycle;
 mod script_event_body;
@@ -6202,7 +6203,21 @@ impl ScriptVm {
         }
         // Timer turns are ordinary runtime activity. Runtime follow-up may
         // publish concrete Page work, but must not wait for network completion.
+        let popup_parsers = self.take_completed_popup_javascript_url_parsers();
         self.finish_selected_page_callback_task(loader).await?;
+        for completion in popup_parsers {
+            let mut step = self.begin_popup_document_interactive(completion)?;
+            loop {
+                match step {
+                    PopupDocumentLifecycleStep::Completed => break,
+                    PopupDocumentLifecycleStep::Checkpoint(checkpoint) => {
+                        self.finish_popup_document_lifecycle_checkpoint()?;
+                        step = self.resume_popup_document_lifecycle_after_checkpoint(checkpoint)?;
+                    }
+                }
+            }
+            self.finish_popup_document_lifecycle_turn(());
+        }
         Ok(true)
     }
 
