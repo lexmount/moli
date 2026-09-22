@@ -3,9 +3,8 @@ use super::navigation_serialize::serialize_history_entries;
 use super::navigation_window::window_history_for_holder;
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::JsContextHost;
-use moli_page_types::{
-    NavigationHistoryEntrySeed, NavigationHistoryMutation, cross_document_navigation_seed,
-};
+use crate::native_bridge::NavigationHistoryEntrySeed;
+use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 use url::Url;
 
 pub(crate) struct FormNavigationHistory {

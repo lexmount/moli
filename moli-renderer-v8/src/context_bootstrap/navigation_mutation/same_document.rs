@@ -26,8 +26,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
     // not inherit classic History API state from the previous entry.
     let history_state = v8::null(scope).into();
     let navigation_state = clone_navigation_entry_state(scope, current_entry);
-    let navigation_state_json =
-        navigation_state.and_then(|state| stringify_history_state(scope, state));
+    let navigation_state = navigation_state.and_then(|state| serialize_history_state(scope, state));
     let entries = history_entries(scope, history).unwrap_or_else(|| v8::Array::new(scope, 0));
     let mut pruned_entries = Vec::new();
     match kind {
@@ -40,7 +39,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 owner,
                 href,
                 None,
-                navigation_state_json.as_deref(),
+                navigation_state.as_deref(),
                 None,
                 next_navigation_index,
                 &new_navigation_entry_id(),
@@ -69,7 +68,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
                 owner,
                 href,
                 None,
-                navigation_state_json.as_deref(),
+                navigation_state.as_deref(),
                 None,
                 current_navigation_index,
                 &new_navigation_entry_id(),

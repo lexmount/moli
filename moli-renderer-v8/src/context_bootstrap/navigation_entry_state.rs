@@ -2,7 +2,7 @@ use super::location_history_storage::{
     HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
 };
 use super::navigation_entry::{
-    navigation_entry_private_slot_value, set_navigation_entry_private_slot_value,
+    navigation_entry_state_slot_value, set_navigation_entry_private_slot_value,
 };
 use super::*;
 
@@ -10,7 +10,7 @@ pub(super) fn navigation_entry_state_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    navigation_entry_private_slot_value(scope, entry, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT)
+    navigation_entry_state_slot_value(scope, entry, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT)
         .filter(|value| !value.is_undefined())
 }
 
@@ -18,7 +18,7 @@ pub(super) fn history_entry_state_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    navigation_entry_private_slot_value(scope, entry, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT)
+    navigation_entry_state_slot_value(scope, entry, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT)
 }
 
 pub(super) fn clone_navigation_entry_state<'s>(
@@ -75,7 +75,7 @@ pub(super) fn clone_navigation_state_arg_for_result<'s>(
 
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut scope = try_catch.init();
-    let cloned_state = structured_clone_value(&mut scope, raw_state);
+    let cloned_state = structured_clone_value_for_storage(&mut scope, raw_state);
     if let Some(error) = scope.exception() {
         scope.reset();
         return Err(error);

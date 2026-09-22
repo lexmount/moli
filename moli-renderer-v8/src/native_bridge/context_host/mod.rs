@@ -205,9 +205,17 @@ pub(crate) use messages::{
     PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
 };
 pub(crate) use moli_page_types::{
-    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
-    NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
+    NavigationHistoryDocumentId, NavigationHistoryEntryId, NavigationHistoryEntryKey,
 };
+pub(crate) type NavigationHistoryState =
+    std::sync::Arc<crate::structured_clone::V8StructuredClonePayload>;
+pub(crate) type NavigationHistoryEntrySeed =
+    moli_page_types::NavigationHistoryEntrySeed<NavigationHistoryState>;
+pub(crate) type NavigationHistorySerializedEntry =
+    moli_page_types::NavigationHistorySerializedEntry<NavigationHistoryState>;
+pub(crate) type NavigationActivationSeed =
+    moli_page_types::NavigationActivationSeed<NavigationHistoryState>;
+
 pub(crate) use navigation::{
     PendingLocationNavigation, PendingLocationNavigationKind, PendingTopLevelNavigation,
 };

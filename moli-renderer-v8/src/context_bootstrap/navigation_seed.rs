@@ -1,7 +1,7 @@
 use super::navigation_activation::bind_navigation_entry_runtime_owner;
 use super::navigation_entry::{
-    create_navigation_entry, history_index, set_navigation_entry_document_id,
-    stringify_history_state,
+    create_navigation_entry, history_index, serialize_history_state,
+    set_navigation_entry_document_id,
 };
 use super::navigation_serialize::{
     apply_current_document_referrer_policy_to_entry_snapshots, serialize_history_entries,
@@ -38,8 +38,8 @@ pub(super) fn build_history_entries_array_from_seed<'s>(
             scope,
             owner,
             &snapshot.url,
-            snapshot.history_state_json.as_deref(),
-            snapshot.navigation_state_json.as_deref(),
+            snapshot.history_state.as_deref(),
+            snapshot.navigation_state.as_deref(),
             snapshot.referrer_policy.as_deref(),
             snapshot.index,
             &snapshot.id,
@@ -63,15 +63,15 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         .iter()
         .find(|entry| entry.history_index == seed.current_index)
     else {
-        let fallback_state_json = stringify_history_state(scope, fallback_state);
+        let fallback_serialized_state = serialize_history_state(scope, fallback_state);
         let entry_id = NavigationHistoryEntryId::allocate();
         let entry_key = NavigationHistoryEntryKey::allocate();
         let entry = create_navigation_entry(
             scope,
             owner,
             "about:blank",
-            fallback_state_json.as_deref(),
-            fallback_state_json.as_deref(),
+            fallback_serialized_state.as_deref(),
+            fallback_serialized_state.as_deref(),
             None,
             0,
             entry_id.as_str(),
@@ -86,8 +86,8 @@ pub(super) fn build_current_navigation_entry_from_seed<'s>(
         scope,
         owner,
         &snapshot.url,
-        snapshot.history_state_json.as_deref(),
-        snapshot.navigation_state_json.as_deref(),
+        snapshot.history_state.as_deref(),
+        snapshot.navigation_state.as_deref(),
         snapshot.referrer_policy.as_deref(),
         snapshot.index,
         &snapshot.id,

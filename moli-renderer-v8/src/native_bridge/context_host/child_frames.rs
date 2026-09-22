@@ -810,8 +810,8 @@ impl ChildBrowsingContextEntry {
             .entries
             .push(NavigationHistorySerializedEntry {
                 url: url.as_str().to_owned(),
-                history_state_json: None,
-                navigation_state_json: None,
+                history_state: None,
+                navigation_state: None,
                 referrer_policy: None,
                 document_id: NavigationHistoryDocumentId::allocate(),
                 history_index: 1,
@@ -1332,7 +1332,7 @@ fn child_navigation_current_document_id(seed: &NavigationHistoryEntrySeed) -> Op
 
 fn child_navigation_current_entry(
     seed: &NavigationHistoryEntrySeed,
-) -> Option<&moli_page_types::NavigationHistorySerializedEntry> {
+) -> Option<&NavigationHistorySerializedEntry> {
     seed.entries
         .iter()
         .find(|entry| entry.history_index == seed.current_index)

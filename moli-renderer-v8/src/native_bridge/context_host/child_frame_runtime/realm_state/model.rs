@@ -1,9 +1,9 @@
+use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::{
     document_runtime::{DocumentPolicyContainer, DomHandle},
     frame_owner_model::FrameDocumentTaskOwner,
     native_bridge::{RuntimeObservableContextToken, WindowExecutionContextAccessPolicy},
 };
-use moli_page_types::NavigationHistoryEntrySeed;
 use url::Url;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

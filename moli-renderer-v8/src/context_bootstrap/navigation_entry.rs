@@ -114,7 +114,10 @@ pub(super) fn history_state_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Value> {
-    history_slot_value(scope, history, HISTORY_STATE_SLOT).unwrap_or_else(|| v8::null(scope).into())
+    // Unlike optional metadata, undefined is a stored History state value.
+    let value = crate::util::private_key(scope, HISTORY_STATE_SLOT)
+        .and_then(|key| history.get_private(scope, key));
+    value.unwrap_or_else(|| v8::null(scope).into())
 }
 
 pub(super) fn sync_navigation_current_entry_from_history_entry<'s>(
@@ -169,8 +172,8 @@ pub(super) fn create_navigation_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     url: &str,
-    history_state_json: Option<&str>,
-    navigation_state_json: Option<&str>,
+    history_state: Option<&crate::structured_clone::V8StructuredClonePayload>,
+    navigation_state: Option<&crate::structured_clone::V8StructuredClonePayload>,
     referrer_policy: Option<&str>,
     index: u32,
     id: &str,
@@ -182,9 +185,9 @@ pub(super) fn create_navigation_entry<'s>(
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
     let history_snapshot =
-        super::navigation_serialize::parse_history_entry_state(scope, history_state_json);
+        super::navigation_serialize::parse_history_entry_state(scope, history_state);
     let navigation_snapshot =
-        super::navigation_serialize::parse_navigation_entry_state(scope, navigation_state_json);
+        super::navigation_serialize::parse_navigation_entry_state(scope, navigation_state);
     let exposed_state = structured_clone_value(scope, navigation_snapshot)
         .or(Some(navigation_snapshot))
         .unwrap_or_else(|| v8::undefined(scope).into());
@@ -488,12 +491,15 @@ fn navigation_entry_slot_value<'s>(
     get_private_value(scope, entry, slot)
 }
 
-pub(super) fn navigation_entry_private_slot_value<'s>(
+pub(super) fn navigation_entry_state_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
     slot: &str,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    navigation_entry_slot_value(scope, entry, slot)
+    // Both state slots are initialized when the entry is created. Do not
+    // treat a stored undefined as an absent slot.
+    let key = crate::util::private_key(scope, slot)?;
+    entry.get_private(scope, key)
 }
 
 pub(super) fn set_navigation_entry_private_slot_value<'s>(
@@ -664,15 +670,12 @@ pub(super) fn set_history_length<'s>(
     );
 }
 
-pub(super) fn stringify_history_state<'s>(
+/// Serialize an already cloned History/Navigation state for a later Document.
+/// JSON would lose cycles, binary data, BigInts and platform objects, and can
+/// invoke inherited toJSON hooks while taking an internal history snapshot.
+pub(super) fn serialize_history_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: v8::Local<'s, v8::Value>,
-) -> Option<String> {
-    let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-    let mut scope = try_catch.init();
-    let serialized = v8::json::stringify(&scope, state)
-        .map(|value| value.to_rust_string_lossy(&scope))
-        .filter(|value| value != "null");
-    scope.reset();
-    serialized
+) -> Option<crate::native_bridge::NavigationHistoryState> {
+    structured_serialize_value_for_storage(scope, state).map(std::sync::Arc::new)
 }

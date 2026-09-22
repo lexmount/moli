@@ -1917,7 +1917,7 @@ pub(in crate::context_bootstrap) fn navigation_update_current_entry_callback<'s>
         );
         return;
     }
-    let Some(cloned_state) = structured_clone_value(scope, requested_state) else {
+    let Some(cloned_state) = structured_clone_value_for_storage(scope, requested_state) else {
         return;
     };
     set_navigation_entry_state(scope, current_entry, cloned_state);

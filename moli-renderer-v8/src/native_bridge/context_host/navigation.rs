@@ -1,5 +1,6 @@
 use super::{JsContextHost, OwnerDispatchScope};
 use crate::document_runtime::DomHandle;
+use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::page_task_queue::RendererTopLevelNavigationHandoff;
 use crate::runtime::{
     RendererBrowserContextRuntime, RendererDocumentLifecycleIdentity,
@@ -8,9 +9,7 @@ use crate::runtime::{
 };
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerClientNavigateError};
 use moli_fetch::BrowserNavigationRequestKind;
-use moli_page_types::{
-    NavigationHistoryEntrySeed, NavigationHistoryMutation, SameDocumentHistoryUpdate,
-};
+use moli_page_types::{NavigationHistoryMutation, SameDocumentHistoryUpdate};
 use url::Url;
 
 pub(crate) struct PendingReservedServiceWorkerClient {

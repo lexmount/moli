@@ -2,7 +2,7 @@ use super::navigation_activation::navigation_activation_value;
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_document_id,
     navigation_entry_id_value, navigation_entry_initial_index, navigation_entry_key_value,
-    navigation_entry_referrer_policy_value, navigation_entry_url_value,
+    navigation_entry_referrer_policy_value, navigation_entry_url_value, serialize_history_state,
 };
 use super::navigation_entry_state::{
     history_entry_state_snapshot, navigation_entry_state_snapshot,
@@ -107,22 +107,18 @@ pub(super) fn serialize_navigation_entry_object<'s>(
         return snapshot.clone();
     }
     let url = navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
-    let history_state_json = history_entry_state_snapshot(scope, entry)
-        .and_then(|value| v8::json::stringify(scope, value))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| value != "null");
-    let navigation_state_json = navigation_entry_state_snapshot(scope, entry)
-        .and_then(|value| v8::json::stringify(scope, value))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| value != "null");
+    let history_state = history_entry_state_snapshot(scope, entry)
+        .and_then(|value| serialize_history_state(scope, value));
+    let navigation_state = navigation_entry_state_snapshot(scope, entry)
+        .and_then(|value| serialize_history_state(scope, value));
     let entry_index = navigation_entry_initial_index(scope, entry).unwrap_or(0);
     let document_id = navigation_entry_document_id(scope, entry)
         .map(NavigationHistoryDocumentId::from_serialized)
         .unwrap_or_else(NavigationHistoryDocumentId::allocate);
     NavigationHistorySerializedEntry {
         url,
-        history_state_json,
-        navigation_state_json,
+        history_state,
+        navigation_state,
         referrer_policy: navigation_entry_referrer_policy_value(scope, entry),
         document_id,
         history_index: entry_index,
@@ -160,28 +156,20 @@ fn serialize_navigation_activation_seed<'s>(
 
 pub(super) fn parse_history_entry_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    state_json: Option<&str>,
+    state: Option<&crate::structured_clone::V8StructuredClonePayload>,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(state_json) = state_json {
-        v8_string(scope, state_json)
-            .and_then(|json| v8::json::parse(scope, json))
-            .unwrap_or_else(|| v8::null(scope).into())
-    } else {
-        v8::null(scope).into()
-    }
+    state
+        .and_then(|state| structured_deserialize_value(scope, state))
+        .unwrap_or_else(|| v8::null(scope).into())
 }
 
 pub(super) fn parse_navigation_entry_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    state_json: Option<&str>,
+    state: Option<&crate::structured_clone::V8StructuredClonePayload>,
 ) -> v8::Local<'s, v8::Value> {
-    if let Some(state_json) = state_json {
-        v8_string(scope, state_json)
-            .and_then(|json| v8::json::parse(scope, json))
-            .unwrap_or_else(|| v8::undefined(scope).into())
-    } else {
-        v8::undefined(scope).into()
-    }
+    state
+        .and_then(|state| structured_deserialize_value(scope, state))
+        .unwrap_or_else(|| v8::undefined(scope).into())
 }
 
 pub(super) fn serialize_history_entries<'s>(
@@ -201,14 +189,10 @@ pub(super) fn serialize_history_entries<'s>(
         };
         let url =
             navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
-        let history_state_json = history_entry_state_snapshot(scope, entry)
-            .and_then(|value| v8::json::stringify(scope, value))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| value != "null");
-        let navigation_state_json = navigation_entry_state_snapshot(scope, entry)
-            .and_then(|value| v8::json::stringify(scope, value))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| value != "null");
+        let history_state = history_entry_state_snapshot(scope, entry)
+            .and_then(|value| serialize_history_state(scope, value));
+        let navigation_state = navigation_entry_state_snapshot(scope, entry)
+            .and_then(|value| serialize_history_state(scope, value));
         // The public index is relative to the current contiguous same-origin
         // region, and is -1 outside it. It cannot identify a session-history slot.
         let entry_index = navigation_entry_initial_index(scope, entry).unwrap_or(index);
@@ -225,8 +209,8 @@ pub(super) fn serialize_history_entries<'s>(
             .unwrap_or_else(NavigationHistoryDocumentId::allocate);
         snapshots.push(NavigationHistorySerializedEntry {
             url,
-            history_state_json,
-            navigation_state_json,
+            history_state,
+            navigation_state,
             referrer_policy: navigation_entry_referrer_policy_value(scope, entry),
             document_id,
             history_index: index,

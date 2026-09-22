@@ -5,8 +5,9 @@ use super::navigation_callbacks::cancel_active_intercepted_same_document_navigat
 use super::navigation_entry::{
     copy_navigation_entry_document_id, create_navigation_entry, history_entries, history_index,
     navigation_current_entry, navigation_current_entry_index, navigation_entry_key_value,
-    new_navigation_entry_id, new_navigation_entry_key, set_history_entries, set_history_index,
-    set_history_state, stringify_history_state, sync_navigation_current_entry_from_history_entry,
+    new_navigation_entry_id, new_navigation_entry_key, serialize_history_state,
+    set_history_entries, set_history_index, set_history_state,
+    sync_navigation_current_entry_from_history_entry,
 };
 use super::navigation_entry_state::{clone_history_entry_state, set_history_entry_state};
 use super::navigation_events::{
@@ -62,12 +63,12 @@ pub(crate) fn update_history_for_document_open<'s>(
         .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
     let state =
         clone_history_entry_state(scope, previous).unwrap_or_else(|| v8::null(scope).into());
-    let state_json = stringify_history_state(scope, state);
+    let serialized_state = serialize_history_state(scope, state);
     let entry = create_navigation_entry(
         scope,
         window,
         url.as_str(),
-        state_json.as_deref(),
+        serialized_state.as_deref(),
         None,
         None,
         navigation_index,
@@ -168,7 +169,7 @@ fn mutate_history_object<'s>(
     let Some(state) = structured_clone_value_for_storage(scope, parsed.state) else {
         return;
     };
-    let state_json = stringify_history_state(scope, state);
+    let serialized_state = serialize_history_state(scope, state);
     let Some(location) = window_location_for_holder(scope, owner) else {
         return;
     };
@@ -252,7 +253,7 @@ fn mutate_history_object<'s>(
                 scope,
                 owner,
                 url.as_str(),
-                state_json.as_deref(),
+                serialized_state.as_deref(),
                 None,
                 None,
                 next_navigation_index,
@@ -277,7 +278,7 @@ fn mutate_history_object<'s>(
                 scope,
                 owner,
                 url.as_str(),
-                state_json.as_deref(),
+                serialized_state.as_deref(),
                 None,
                 None,
                 current_navigation_index,
@@ -293,10 +294,7 @@ fn mutate_history_object<'s>(
             entry
         }
     };
-    // `history.state` is a structured-clone value, not a JSON value. Keep the
-    // live entry's cloned snapshot authoritative even when the optional
-    // cross-runtime JSON projection cannot represent values such as Map,
-    // ArrayBuffer, or BigInt.
+    // Keep the stored snapshot separate from the mutable history.state value.
     set_history_entry_state(scope, entry, state);
     let current_state =
         clone_history_entry_state(scope, entry).unwrap_or_else(|| v8::null(scope).into());
