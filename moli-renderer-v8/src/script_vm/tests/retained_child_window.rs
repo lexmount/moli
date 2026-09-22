@@ -1,6 +1,81 @@
 use super::*;
 
 #[test]
+fn child_document_open_navigation_keeps_window_accessible_before_realm_turn() {
+    for materialized in [false, true] {
+        let mut vm = new_storage_test_vm("https://document-open-proxy.test/parent");
+        vm.eval(
+            r#"
+globalThis.frame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(frame);
+globalThis.heldWindow = frame.contentWindow;
+"#,
+        )
+        .unwrap();
+        if materialized {
+            materialize_single_child_default_realm_for_test(&mut vm, "initial child Window");
+        }
+        vm.eval(
+            r#"
+heldWindow.document.open();
+heldWindow.document.write('<p>old document');
+heldWindow.document.close();
+globalThis.heldDocument = heldWindow.document;
+globalThis.heldObject = heldWindow.Object;
+heldWindow.marker = 'retired';
+globalThis.heldRead = heldWindow.Function('return marker');
+globalThis.heldNavigator = heldWindow.navigator;
+globalThis.heldReadNavigator = heldWindow.Function('return navigator');
+"#,
+        )
+        .unwrap();
+        let previous = current_single_child_document_owner_for_test(&vm, "opened child");
+        vm.eval("frame.src = 'about:blank'").unwrap();
+        for _ in 0..8 {
+            if vm
+                .run_next_child_navigation_commit_body_for_test()
+                .unwrap()
+                .is_none()
+                || current_single_child_document_owner_for_test(&vm, "navigating child")
+                    .local_window_id
+                    != previous.local_window_id
+            {
+                break;
+            }
+        }
+        assert_ne!(
+            current_single_child_document_owner_for_test(&vm, "committed child").local_window_id,
+            previous.local_window_id,
+            "the replacement must commit without consuming a realm task"
+        );
+        assert_eq!(vm.child_frame_realm_store.len(), 0);
+        assert!(vm.has_pending_child_frame_realm_materialization());
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify([
+heldWindow.document !== heldDocument,
+heldWindow.document.URL,
+heldWindow.Object !== heldObject,
+typeof heldWindow.marker,
+heldRead(),
+heldWindow === frame.contentWindow,
+heldReadNavigator() === heldWindow.navigator,
+heldReadNavigator() !== heldNavigator
+])"#,
+            )
+            .unwrap(),
+            r#"[true,"about:blank",true,"undefined","retired",true,true,true]"#,
+            "materialized={materialized}: commit must reconnect the proxy before another JS task"
+        );
+        assert_eq!(
+            vm.child_frame_realm_store.len(),
+            0,
+            "synchronous access must leave Inspector registration to the queued realm turn"
+        );
+    }
+}
+
+#[test]
 fn current_child_isolated_world_can_post_messages_to_its_native_window() {
     let mut vm = new_storage_test_vm("https://isolated-child-message.test/");
     vm.eval(
