@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+image = { version = "0.25.10", default-features = false }
 anyrender = { git = "https://github.com/ldm0/anyrender", rev = "18fd67d7a5622a9821d86434857fd69856912a43" }
 anyrender_svg = { git = "https://github.com/ldm0/anyrender", rev = "18fd67d7a5622a9821d86434857fd69856912a43", default-features = false, features = ["text"] }
 anyrender_vello_cpu = { git = "https://github.com/ldm0/anyrender", rev = "18fd67d7a5622a9821d86434857fd69856912a43", default-features = false, features = ["bitmap-glyphs", "filters"] }

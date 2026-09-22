@@ -522,12 +522,18 @@ pub(crate) fn complete_pending_css_command(
 }
 
 fn computed_style_result(properties: Vec<(String, String)>) -> Value {
-    json!({
-                    "computedStyle": properties
-                        .into_iter()
-                        .map(|(name, value)| json!({ "name": name, "value": value }))
-                        .collect::<Vec<_>>()
-    })
+    use chromiumoxide_cdp::cdp::browser_protocol::css::{
+        ComputedStyleExtraFields, CssComputedStyleProperty, GetComputedStyleForNodeReturns,
+    };
+    let result = GetComputedStyleForNodeReturns::new(
+        properties
+            .into_iter()
+            .map(|(name, value)| CssComputedStyleProperty::new(name, value))
+            .collect(),
+        // Stylo does not implement Blink's base appearance rendering mode.
+        ComputedStyleExtraFields::new(false),
+    );
+    json!(result)
 }
 
 fn inline_style_result_from_attributes_resolution(
@@ -981,6 +987,10 @@ mod tests {
         .await;
         let computed = take_response_by_id(&mut ctx, 204);
         assert_eq!(computed["sessionId"], "SID-background");
+        let typed: chromiumoxide_cdp::cdp::browser_protocol::css::GetComputedStyleForNodeReturns =
+            serde_json::from_value(computed["result"].clone())
+                .expect("computed style must be consumable by typed CDP clients");
+        assert!(!typed.extra_fields.is_appearance_base);
         let computed_properties = computed["result"]["computedStyle"]
             .as_array()
             .expect("computedStyle array");

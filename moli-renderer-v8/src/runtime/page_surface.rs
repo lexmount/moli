@@ -5225,6 +5225,10 @@ pub enum RendererPageCommand {
     SetScriptExecutionDisabled(bool),
     SetScrollbarsHidden(bool),
     SetBypassContentSecurityPolicy(bool),
+    SetInspectorOverlay {
+        inspector_session_id: Option<String>,
+        command: super::RendererInspectorOverlayCommand,
+    },
     SetEmulatedMedia(crate::protocol_types::EmulatedMediaOverrides),
     SetViewportSurface(Option<crate::protocol_types::ViewportSurface>),
     SetNetworkOffline(bool),

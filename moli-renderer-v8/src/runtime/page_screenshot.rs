@@ -3,6 +3,7 @@ use moli_layout::{
     PaintViewport,
 };
 use moli_page_types::{LayoutPolicy, ViewportSurface};
+pub use moli_paint::VisionDeficiency as RendererVisionDeficiency;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -75,6 +76,8 @@ struct RendererVisualState {
     viewport_height: u32,
     device_pixel_ratio_bits: u32,
     base_background_color: [u8; 4],
+    vision_deficiency: RendererVisionDeficiency,
+    inspector_overlay_revision: u64,
 }
 
 impl RendererVisualStateToken {
@@ -102,7 +105,23 @@ impl RendererVisualStateToken {
             viewport_height: viewport.css_height,
             device_pixel_ratio_bits: viewport.device_pixel_ratio.to_bits(),
             base_background_color,
+            vision_deficiency: RendererVisionDeficiency::None,
+            inspector_overlay_revision: 0,
         }))
+    }
+
+    fn with_capture_effects(
+        mut self,
+        vision: RendererVisionDeficiency,
+        overlay_revision: u64,
+    ) -> Self {
+        Arc::get_mut(&mut self.0)
+            .expect("new visual token")
+            .vision_deficiency = vision;
+        Arc::get_mut(&mut self.0)
+            .expect("new visual token")
+            .inspector_overlay_revision = overlay_revision;
+        self
     }
 
     fn has_same_resource_generation(&self, other: &Self) -> bool {
@@ -152,6 +171,7 @@ pub struct RendererCaptureScreenshotRequest {
     pub region: RendererScreenshotRegion,
     /// Straight-alpha sRGB bytes in RGBA order, beneath author backgrounds.
     pub base_background_color: [u8; 4],
+    pub vision_deficiency: RendererVisionDeficiency,
     pub optimize_for_speed: bool,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
@@ -166,6 +186,7 @@ pub struct RendererCaptureScreencastFrameRequest {
     pub quality: u8,
     /// Straight-alpha sRGB bytes in RGBA order, beneath author backgrounds.
     pub base_background_color: [u8; 4],
+    pub vision_deficiency: RendererVisionDeficiency,
     pub optimize_for_speed: bool,
     pub max_width: Option<u32>,
     pub max_height: Option<u32>,
@@ -180,6 +201,7 @@ impl RendererCaptureScreenshotRequest {
             quality: 100,
             region: RendererScreenshotRegion::Viewport,
             base_background_color: [255; 4],
+            vision_deficiency: RendererVisionDeficiency::None,
             optimize_for_speed: false,
             max_width: None,
             max_height: None,
@@ -216,6 +238,8 @@ impl PageVm {
             request.format,
             request.quality,
             request.optimize_for_speed,
+            request.vision_deficiency,
+            request.purpose == RendererScreenshotPurpose::Screenshot,
             paint_capture,
             match request.purpose {
                 RendererScreenshotPurpose::Screenshot => moli_layout::LayoutFlushReason::Screenshot,
@@ -261,11 +285,14 @@ impl PageVm {
             surface.inner_height,
             surface.device_pixel_ratio as f32,
         );
-        let visual_state_before = self.vm().visual_state_token(
-            self.document_lifecycle.identity(),
-            viewport,
-            request.base_background_color,
-        );
+        let visual_state_before = self
+            .vm()
+            .visual_state_token(
+                self.document_lifecycle.identity(),
+                viewport,
+                request.base_background_color,
+            )
+            .with_capture_effects(request.vision_deficiency, self.inspector_overlay.revision);
         if request.known_visual_state.as_ref() == Some(&visual_state_before) {
             return Ok(RendererCaptureScreencastFrameReply::Unchanged);
         }
@@ -282,6 +309,8 @@ impl PageVm {
             request.format,
             request.quality,
             request.optimize_for_speed,
+            request.vision_deficiency,
+            true,
             paint_capture,
             moli_layout::LayoutFlushReason::Screencast,
         )? {
@@ -293,11 +322,14 @@ impl PageVm {
                 return Ok(RendererCaptureScreencastFrameReply::NoDocument);
             }
         };
-        let visual_state_after = self.vm().visual_state_token(
-            self.document_lifecycle.identity(),
-            viewport,
-            request.base_background_color,
-        );
+        let visual_state_after = self
+            .vm()
+            .visual_state_token(
+                self.document_lifecycle.identity(),
+                viewport,
+                request.base_background_color,
+            )
+            .with_capture_effects(request.vision_deficiency, self.inspector_overlay.revision);
         let visual_state =
             visual_state_for_captured_screencast_frame(visual_state_before, visual_state_after);
         Ok(RendererCaptureScreencastFrameReply::Captured(
@@ -314,6 +346,8 @@ impl PageVm {
         format: RendererScreenshotFormat,
         quality: u8,
         optimize_for_speed: bool,
+        vision_deficiency: RendererVisionDeficiency,
+        include_inspector_overlay: bool,
         paint_capture: PaintCaptureRequest,
         reason: moli_layout::LayoutFlushReason,
     ) -> anyhow::Result<RendererImageCaptureOutcome> {
@@ -362,6 +396,16 @@ impl PageVm {
 
         let raster_started = profile_enabled.then(Instant::now);
         let mut raster = moli_paint::raster_snapshot(&snapshot)?;
+        vision_deficiency.apply(&mut raster, snapshot.surface.device_scale)?;
+        if vision_deficiency == RendererVisionDeficiency::BlurredVision {
+            super::page_overlay::composite_background(
+                &mut raster,
+                paint_capture.base_background_color,
+            );
+        }
+        if include_inspector_overlay {
+            self.composite_inspector_overlay(&snapshot, &mut raster)?;
+        }
         let raster_us = raster_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or_default();
