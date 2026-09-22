@@ -15,11 +15,13 @@ async fn stream_operation_during_unload(
     let markup = format!(
         r#"<!doctype html><body><script>
           window.finished = (async () => {{
+            let nextFrameId = 0;
             async function frameIn(owner) {{
               const frame = owner.document.createElement('iframe');
               const loaded = new Promise(resolve => frame.onload = resolve);
               frame.src = '/compat/child-dynamic-markup-document?markup=' +
-                encodeURIComponent('<!doctype html><body><p id="retained">retained');
+                encodeURIComponent('<!doctype html><body><p id="retained">retained') +
+                '&frame=' + nextFrameId++;
               owner.document.body.append(frame);
               await loaded;
               return frame;
