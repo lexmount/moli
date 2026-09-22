@@ -4,7 +4,6 @@ mod text_json;
 use super::super::fetch_surface::{
     REQUEST_BODY_USED_SLOT, REQUEST_HEADERS_SLOT, RESPONSE_BODY_USED_SLOT, RESPONSE_HEADERS_SLOT,
 };
-use super::super::headers::normalized_headers_entries;
 use super::*;
 use moli_web_mime::{response_blob_mime_type, response_content_type};
 
@@ -160,7 +159,7 @@ fn body_headers<'s>(
             .map(|headers| headers_entries(scope, headers)),
     }
     .map(|headers| {
-        moli_fetch::headers_from_byte_strings(&normalized_headers_entries(&headers))
+        moli_fetch::headers_from_byte_strings(&headers)
             .expect("Headers contain ByteStrings")
     })
 }

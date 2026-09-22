@@ -1,6 +1,4 @@
-use super::headers::{
-    build_headers_object, headers_entries, headers_list, mark_headers_immutable, normalized_headers_entries,
-};
+use super::headers::{build_headers_object, headers_entries, headers_list, mark_headers_immutable};
 use super::response::{ParsedResponseInit, install_response_body_methods, parse_response_init};
 use super::*;
 pub(in crate::network_host) use crate::util::constructor_prototype;
@@ -457,9 +455,7 @@ fn response_content_type<'s>(
 ) -> Option<String> {
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)?;
     moli_web_mime::response_header_value(
-        &moli_fetch::headers_from_byte_strings(&normalized_headers_entries(&headers_entries(
-            scope, headers,
-        )))
+        &moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
         .expect("Headers contain ByteStrings"),
         "content-type",
     )

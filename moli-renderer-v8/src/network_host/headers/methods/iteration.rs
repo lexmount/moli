@@ -1,4 +1,4 @@
-use super::super::store::{headers_entries, normalized_headers_entries};
+use super::super::store::headers_entries;
 use super::*;
 use crate::web_api_interfaces;
 use crate::{
@@ -212,7 +212,9 @@ fn headers_iterator_next_callback<'s>(
         return;
     };
     let index = index_value.integer_value(scope).unwrap_or(0).max(0) as usize;
-    let entries = normalized_headers_entries(&headers_entries(scope, target));
+    // This is already the combined projection. Normalizing it again would
+    // trim the separator space contributed by a trailing empty field.
+    let entries = headers_entries(scope, target);
     if index >= entries.len() {
         let result = HeadersIteratorResultDeclaration::new(true, v8::undefined(scope).into())
             .bind(scope)
