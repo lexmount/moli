@@ -1099,6 +1099,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) layout_configuration: moli_page_types::LayoutConfiguration,
     pub(crate) wpt_extensions_enabled: bool,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
+    pub(crate) navigation_history_source: Option<crate::runtime::RendererNavigationHistory>,
     pub(crate) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
 }
@@ -4636,7 +4637,10 @@ impl PageVm {
             AuxiliaryEnvironmentApply::Navigation | AuxiliaryEnvironmentApply::InheritedNavigation
         ) {
             self.vm_mut()
-                .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
+                .install_navigation_bootstrap_from_history(
+                    env.navigation_bootstrap_entry.clone(),
+                    env.navigation_history_source.clone(),
+                );
             if env.navigation_bootstrap_entry.is_none()
                 && let Some(position) = env
                     .main_document_commit
