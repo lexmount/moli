@@ -1687,6 +1687,7 @@ impl JsContextHost {
         document_base_url: Url,
         markup: &str,
         is_xml_document: bool,
+        content_type: Option<&str>,
     ) -> ChildLiveDocumentParserStartResult {
         let owner = FrameDocumentOwner::new(owner_local_window_id, owner_document_id);
         self.child_document_parsers.clear(owner);
@@ -1694,6 +1695,13 @@ impl JsContextHost {
             DocumentParserSession::start_finite_live_xml_document(
                 document_base_url,
                 document_handle,
+            )
+        } else if content_type.is_some_and(moli_web_mime::is_text_document_mime) {
+            let mut parser_owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
+            DocumentParserSession::start_finite_live_text_document(
+                document_base_url,
+                document_handle,
+                &mut parser_owner,
             )
         } else {
             DocumentParserSession::start_finite_live_document(
