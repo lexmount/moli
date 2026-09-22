@@ -592,14 +592,28 @@ async fn first_nonempty_response_body_chunk(
             Some(chunk) if chunk.is_empty() => continue,
             Some(chunk) => return Ok(Some(chunk)),
             None => {
-                response
-                    .finish()
-                    .await
-                    .context("failed to read page body from stream")?;
+                response.finish().await?;
                 return Ok(None);
             }
         }
     }
+}
+
+fn failed_provisional_body_load(
+    error: anyhow::Error,
+    context: &str,
+) -> anyhow::Result<NavigationLoadOutcome> {
+    if error
+        .downcast_ref::<NetworkFetchFailureContext>()
+        .is_some_and(|failure| {
+            failure.network_error_text() == moli_fetch::NET_ERR_ABORTED_ERROR_TEXT
+        })
+    {
+        return Ok(NavigationLoadOutcome::network_failure(
+            moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+        ));
+    }
+    Err(error.context(context.to_owned()))
 }
 
 fn spawn_streaming_body_capture(
@@ -959,6 +973,14 @@ impl BackgroundNavigationLoadJob {
                             network_error_text = failure.network_error_text(),
                             "main document transport failed before response metadata"
                         );
+                        // An aborted provisional navigation never commits a replacement
+                        // document. Retain its network failure for the command/event
+                        // completion path, without creating a browser-owned error page.
+                        if failure.network_error_text() == moli_fetch::NET_ERR_ABORTED_ERROR_TEXT {
+                            return Ok(NavigationLoadOutcome::network_failure(
+                                failure.network_error_text().to_owned(),
+                            ));
+                        }
                         return prepare_network_error_page_navigation_with_engine_async(
                             &mut engine,
                             self.page_reservation,
@@ -1363,9 +1385,12 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         body_progress_source.body_network_progress_for_completed_events(network_events);
     let body_progress_source_for_body_finish = body_progress_source.clone();
     let mut initial_body_chunk = if response_status_may_use_http_error_page(response_status) {
-        match first_nonempty_response_body_chunk(&mut response).await? {
-            Some(chunk) => Some(chunk),
-            None => {
+        match first_nonempty_response_body_chunk(&mut response).await {
+            Err(error) => {
+                return failed_provisional_body_load(error, "failed to read page body from stream");
+            }
+            Ok(Some(chunk)) => Some(chunk),
+            Ok(None) => {
                 let body =
                     CapturedBody::from_string(http_error_page_html(&final_url, response_status));
                 return prepare_browser_owned_error_page_navigation_with_engine_async(
@@ -1400,10 +1425,9 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 .append(&chunk)
                 .context("failed to capture XML page body")?;
         }
-        response
-            .finish()
-            .await
-            .context("failed to read XML page body from stream")?;
+        if let Err(error) = response.finish().await {
+            return failed_provisional_body_load(error, "failed to read XML page body from stream");
+        }
         let captured_body = body_writer
             .finish()
             .context("failed to finish captured XML page body")?;
@@ -1479,7 +1503,8 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
 
     let (body_tx, body_rx) = mpsc::channel(EXTERNAL_RAW_BODY_CHANNEL_CAPACITY);
     let (completion_tx, completion_rx) = oneshot::channel();
-    let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx);
+    let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(body_rx, completion_rx)
+        .with_stop_loading_cancellation(response.cancellation_handle());
     let page_storage = load_inputs.page_storage_handles();
     let main_document_commit = load_inputs
         .main_document_commit_for_final_url(&final_url, None)
@@ -1702,7 +1727,8 @@ impl CdpConnection {
         let raw_body = moli_core::runtime::ExternalRawDocumentBodyStream::new(
             renderer_body_rx,
             renderer_completion_rx,
-        );
+        )
+        .with_stop_loading_cancellation(response.cancellation_handle());
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
         let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
@@ -4026,6 +4052,77 @@ mod tests {
         inline_html_navigation_source,
     };
     use serde_json::json;
+
+    #[test]
+    fn provisional_body_failure_preserves_typed_source_and_context() {
+        let source = anyhow::Error::new(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "body transport reset",
+        ))
+        .context("transport completion failed");
+        let error =
+            super::failed_provisional_body_load(source, "failed to read XML page body from stream")
+                .expect_err("transport failure must remain an error");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            std::io::ErrorKind::ConnectionReset
+        );
+        let message = format!("{error:#}");
+        assert!(message.contains("failed to read XML page body from stream"));
+        assert!(message.contains("transport completion failed"));
+        assert!(message.contains("body transport reset"));
+    }
+
+    #[test]
+    fn provisional_body_failure_does_not_infer_cancellation_from_error_text() {
+        let error = super::failed_provisional_body_load(
+            anyhow::anyhow!(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT),
+            "failed to read page body from stream",
+        )
+        .expect_err("only a typed transport cancellation may become a network outcome");
+        assert!(format!("{error:#}").contains(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT));
+    }
+
+    #[tokio::test]
+    async fn response_capture_survives_ordinary_renderer_body_retirement() {
+        let cancellation = moli_fetch::FetchCancelHandle::new();
+        let (source_tx, source_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (source_completion_tx, source_completion_rx) = tokio::sync::oneshot::channel();
+        let response = moli_fetch::StreamingRawResponse::new(
+            url::Url::parse("https://capture.test/document").unwrap(),
+            200,
+            Vec::new(),
+            None,
+            Vec::new(),
+            false,
+            Vec::new(),
+            source_rx,
+            cancellation.clone(),
+            source_completion_rx,
+        );
+        let (renderer_tx, renderer_rx) = tokio::sync::mpsc::channel(1);
+        let (renderer_completion_tx, renderer_completion_rx) = tokio::sync::oneshot::channel();
+        drop(renderer_rx);
+        drop(renderer_completion_rx);
+        let capture = super::spawn_streaming_body_capture(
+            response,
+            None,
+            renderer_tx,
+            renderer_completion_tx,
+        );
+        source_tx.send(b"prefix".to_vec()).unwrap();
+        source_tx
+            .send(b"captured after parser retirement".to_vec())
+            .unwrap();
+        drop(source_tx);
+        source_completion_tx.send(Ok(())).unwrap();
+        let body = capture.await.unwrap().unwrap();
+        assert_eq!(
+            body.materialize_bytes().unwrap().as_slice(),
+            b"prefixcaptured after parser retirement"
+        );
+        assert!(!cancellation.is_cancelled());
+    }
 
     #[tokio::test]
     async fn streaming_body_failure_preserves_source_for_renderer_and_navigation() {
