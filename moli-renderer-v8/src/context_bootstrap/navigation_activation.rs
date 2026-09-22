@@ -348,7 +348,7 @@ fn settle_navigation_transition_callback<'s>(
     }
 }
 
-fn navigation_transition_matches_resolver<'s>(
+pub(super) fn navigation_transition_matches_resolver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
     resolver: v8::Local<'s, v8::PromiseResolver>,

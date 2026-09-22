@@ -1,12 +1,15 @@
 use super::super::navigation_activation::{
     clear_navigation_transition, install_navigation_transition,
-    reject_navigation_transition_committed, resolve_navigation_transition_committed,
+    navigation_transition_matches_resolver, reject_navigation_transition_committed,
+    resolve_navigation_transition_committed,
 };
 use super::super::navigation_events::dispatch_popstate_event;
 use super::super::navigation_lifecycle::{
     begin_navigation_attempt, cancel_navigation_attempt, complete_navigation_attempt,
-    finish_navigation_error_events, navigation_attempt_id_from_slot, navigation_attempt_is_active,
+    finish_navigation_error_events, finish_navigation_success_events,
+    navigation_attempt_id_from_slot, navigation_attempt_is_active, settle_navigation_committed,
     settle_navigation_finished_rejected_after_reactions,
+    settle_navigation_finished_resolved_after_reactions,
     settle_navigation_transition_finished_local,
 };
 use super::super::navigation_window::{
@@ -249,7 +252,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         } else {
             false
         };
-        let mut navigate_outcome = navigation_for_event.map(|navigation| {
+        let navigate_outcome = navigation_for_event.map(|navigation| {
             dispatch_navigation_navigate_event_with_outcome(
                 scope,
                 navigation,
@@ -409,6 +412,9 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             rv.set(pending.object.into());
             return;
         }
+        let intercepted = navigate_outcome
+            .as_ref()
+            .is_some_and(|outcome| outcome.intercepted);
         let transition_from = navigate_outcome
             .as_ref()
             .is_some_and(|outcome| outcome.intercepted)
@@ -443,17 +449,6 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             effective_kind,
             effective_state,
         );
-        if let Some(outcome) = navigate_outcome.as_mut()
-            && let Some(precommit_event) = outcome.precommit_event
-        {
-            let (intercept_error, intercept_result) =
-                run_navigation_precommit_deferred_handlers(scope, precommit_event);
-            outcome.intercept_error = intercept_error;
-            outcome.intercept_result = intercept_result.or(outcome.intercept_result);
-        }
-        let intercepted = navigate_outcome
-            .as_ref()
-            .is_some_and(|outcome| outcome.intercepted);
         let result = if intercepted {
             let Some(pending) = navigation_current_entry_result_with_pending_finished(scope, owner)
             else {
@@ -469,8 +464,8 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                     navigation,
                     outcome,
                     Some(pending.committed_resolve),
-                    pending.finished_resolve,
-                    pending.finished_reject,
+                    Some(pending.finished_resolve),
+                    Some(pending.finished_reject),
                     transition_resolver,
                     pending.resolved_value,
                     &current_href,
@@ -519,7 +514,7 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                 LocationNavigationKind::Assign
             }
         };
-        let mut outcome = dispatch_navigation_navigate_event_with_outcome(
+        let outcome = dispatch_navigation_navigate_event_with_outcome(
             scope,
             navigation,
             next_url.as_str(),
@@ -635,12 +630,6 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                 effective_kind,
                 effective_state,
             );
-            if let Some(precommit_event) = outcome.precommit_event {
-                let (intercept_error, intercept_result) =
-                    run_navigation_precommit_deferred_handlers(scope, precommit_event);
-                outcome.intercept_error = intercept_error;
-                outcome.intercept_result = intercept_result.or(outcome.intercept_result);
-            }
             let Some(pending) = navigation_current_entry_result_with_pending_finished(scope, owner)
             else {
                 let result = navigation_immediate_result_with_value(scope, resolved_value);
@@ -652,8 +641,8 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
                 navigation,
                 outcome,
                 Some(pending.committed_resolve),
-                pending.finished_resolve,
-                pending.finished_reject,
+                Some(pending.finished_resolve),
+                Some(pending.finished_reject),
                 transition_resolver,
                 pending.resolved_value,
                 &current_href,
@@ -1254,8 +1243,6 @@ fn precommit_commit_fulfilled_callback<'s>(
         .committed_resolve
         .call(scope, receiver, &[resolved_value]);
     resolve_navigation_transition_committed(scope, data.navigation, resolved_value);
-    let (intercept_error, intercept_result) =
-        run_navigation_precommit_deferred_handlers(scope, data.event);
     let outcome = NavigationDispatchOutcome {
         proceed: true,
         intercepted: true,
@@ -1267,11 +1254,11 @@ fn precommit_commit_fulfilled_callback<'s>(
         redirected_url: None,
         redirected_history: None,
         redirected_state: None,
-        precommit_event: None,
+        precommit_event: Some(data.event),
         precommit_error: None,
         precommit_result: None,
-        intercept_error,
-        intercept_result,
+        intercept_error: None,
+        intercept_result: None,
         abort_error: None,
     };
     settle_intercepted_same_document_navigation(
@@ -1279,8 +1266,8 @@ fn precommit_commit_fulfilled_callback<'s>(
         data.navigation,
         outcome,
         None,
-        data.finished_resolve,
-        data.finished_reject,
+        Some(data.finished_resolve),
+        Some(data.finished_reject),
         data.transition_resolver,
         resolved_value,
         &data.current_href,
@@ -1361,10 +1348,10 @@ struct InterceptSettlementDataDeclaration<'scope> {
     signal: Option<v8::Local<'scope, v8::Object>>,
 
     #[webapi(slot = INTERCEPT_SETTLEMENT_RESOLVE_SLOT)]
-    resolve: v8::Local<'scope, v8::Function>,
+    resolve: Option<v8::Local<'scope, v8::Function>>,
 
     #[webapi(slot = INTERCEPT_SETTLEMENT_REJECT_SLOT)]
-    reject: v8::Local<'scope, v8::Function>,
+    reject: Option<v8::Local<'scope, v8::Function>>,
 
     #[webapi(slot = INTERCEPT_SETTLEMENT_TRANSITION_RESOLVER_SLOT)]
     transition_resolver: Option<v8::Local<'scope, v8::PromiseResolver>>,
@@ -1416,22 +1403,61 @@ fn clear_navigation_active_intercept_settlement<'s>(
 pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
-    outcome: NavigationDispatchOutcome<'s>,
+    mut outcome: NavigationDispatchOutcome<'s>,
     mut committed_resolve: Option<v8::Local<'s, v8::Function>>,
-    finished_resolve: v8::Local<'s, v8::Function>,
-    finished_reject: v8::Local<'s, v8::Function>,
+    finished_resolve: Option<v8::Local<'s, v8::Function>>,
+    finished_reject: Option<v8::Local<'s, v8::Function>>,
     transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
     resolved_value: v8::Local<'s, v8::Value>,
     filename: &str,
 ) {
-    if (outcome.intercept_error.is_some() || outcome.intercept_result.is_some())
-        && let Some(resolve) = committed_resolve.take()
-    {
+    let attempt_id = begin_navigation_attempt(scope, "intercept-settlement")
+        .map(|attempt_id| v8::BigInt::new_from_u64(scope, attempt_id.raw()));
+    let filename_value = v8_string(scope, filename).unwrap_or_else(|| v8::String::empty(scope));
+    let data = InterceptSettlementDataDeclaration {
+        active: true,
+        attempt_id,
+        promise: None,
+        navigation,
+        committed_resolve: None,
+        signal: outcome.signal,
+        resolve: finished_resolve,
+        reject: finished_reject,
+        transition_resolver,
+        value: resolved_value,
+        filename: filename_value,
+    }
+    .bind(scope)
+    .expect("intercept settlement data should bind");
+    // Handlers can stop, detach, or supersede this navigation synchronously.
+    // Register its settlement before invoking any of them, and keep the
+    // committed entry captured before a reentrant navigation can replace it.
+    set_navigation_active_intercept_settlement(scope, navigation, data);
+    if let Some(resolve) = committed_resolve.take() {
         let receiver = v8::undefined(scope).into();
         let _ = resolve.call(scope, receiver, &[resolved_value]);
+    }
+    if transition_resolver
+        .is_some_and(|resolver| navigation_transition_matches_resolver(scope, navigation, resolver))
+    {
         resolve_navigation_transition_committed(scope, navigation, resolved_value);
     }
+    if let Some(event) = outcome.precommit_event {
+        let (error, result) = run_navigation_precommit_deferred_handlers(scope, event);
+        outcome.intercept_error = error.or(outcome.intercept_error);
+        outcome.intercept_result = result.or(outcome.intercept_result);
+    }
+    if !intercept_settlement_is_active(scope, data.into()) {
+        if let Some(result) = outcome.intercept_result
+            && let Ok(promise) = v8::Local::<v8::Promise>::try_from(result)
+        {
+            suppress_unhandled_rejection(scope, promise);
+        }
+        return;
+    }
     if let Some(error) = outcome.intercept_error {
+        complete_intercept_settlement_attempt(scope, data);
+        set_intercept_settlement_active(scope, navigation, data, false);
         finish_intercepted_navigation_rejected(
             scope,
             navigation,
@@ -1446,6 +1472,8 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
         return;
     }
     let Some(result) = outcome.intercept_result else {
+        complete_intercept_settlement_attempt(scope, data);
+        set_intercept_settlement_active(scope, navigation, data, false);
         finish_intercepted_navigation_fulfilled(
             scope,
             navigation,
@@ -1459,6 +1487,8 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
         return;
     };
     let Some(result_object) = v8::Local::<v8::Object>::try_from(result).ok() else {
+        complete_intercept_settlement_attempt(scope, data);
+        set_intercept_settlement_active(scope, navigation, data, false);
         finish_intercepted_navigation_fulfilled(
             scope,
             navigation,
@@ -1475,6 +1505,8 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
         .get(scope, v8str(scope, "then").into())
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
     else {
+        complete_intercept_settlement_attempt(scope, data);
+        set_intercept_settlement_active(scope, navigation, data, false);
         finish_intercepted_navigation_fulfilled(
             scope,
             navigation,
@@ -1487,28 +1519,9 @@ pub(in crate::context_bootstrap) fn settle_intercepted_same_document_navigation<
         );
         return;
     };
-    let attempt_id = begin_navigation_attempt(scope, "intercept-settlement")
-        .map(|attempt_id| v8::BigInt::new_from_u64(scope, attempt_id.raw()));
-    let promise = v8::Local::<v8::Promise>::try_from(result)
-        .is_ok()
-        .then_some(result);
-    let filename = v8_string(scope, filename).unwrap_or_else(|| v8::String::empty(scope));
-    let data = InterceptSettlementDataDeclaration {
-        active: true,
-        attempt_id,
-        promise,
-        navigation,
-        committed_resolve,
-        signal: outcome.signal,
-        resolve: finished_resolve,
-        reject: finished_reject,
-        transition_resolver,
-        value: resolved_value,
-        filename,
+    if v8::Local::<v8::Promise>::try_from(result).is_ok() {
+        set_private_value(scope, data, INTERCEPT_SETTLEMENT_PROMISE_SLOT, result);
     }
-    .bind(scope)
-    .expect("intercept settlement data should bind");
-    set_navigation_active_intercept_settlement(scope, navigation, data);
     let Some(on_fulfilled) = v8::Function::builder(intercept_settlement_fulfilled_callback)
         .data(data.into())
         .build(scope)
@@ -1592,11 +1605,13 @@ pub(in crate::context_bootstrap) fn cancel_active_intercepted_same_document_navi
         let _ = committed_resolve.call(scope, receiver, &[resolved_value]);
         resolve_navigation_transition_committed(scope, navigation, resolved_value);
     }
-    let _ = reject.call(scope, receiver, &[error]);
-    if transition_resolver.is_some() {
-        clear_navigation_transition(scope, navigation);
+    if let Some(reject) = reject {
+        let _ = reject.call(scope, receiver, &[error]);
     }
     if let Some(transition_resolver) = transition_resolver {
+        if navigation_transition_matches_resolver(scope, navigation, transition_resolver) {
+            clear_navigation_transition(scope, navigation);
+        }
         let _ = transition_resolver.reject(scope, error);
     }
     true
@@ -1661,7 +1676,10 @@ fn set_intercept_settlement_active<'s>(
         INTERCEPT_SETTLEMENT_ACTIVE_SLOT,
         v8::Boolean::new(scope, active).into(),
     );
-    if !active {
+    if !active
+        && navigation_active_intercept_settlement(scope, navigation)
+            .is_some_and(|current| current.strict_equals(data.into()))
+    {
         clear_navigation_active_intercept_settlement(scope, navigation);
     }
 }
@@ -1673,8 +1691,8 @@ fn intercept_settlement_data<'s>(
     v8::Local<'s, v8::Object>,
     Option<v8::Local<'s, v8::Object>>,
     Option<v8::Local<'s, v8::Function>>,
-    v8::Local<'s, v8::Function>,
-    v8::Local<'s, v8::Function>,
+    Option<v8::Local<'s, v8::Function>>,
+    Option<v8::Local<'s, v8::Function>>,
     v8::Local<'s, v8::Value>,
     Option<v8::Local<'s, v8::Promise>>,
     Option<v8::Local<'s, v8::PromiseResolver>>,
@@ -1690,9 +1708,8 @@ fn intercept_settlement_data<'s>(
             .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
     let resolve = get_private_value(scope, data, INTERCEPT_SETTLEMENT_RESOLVE_SLOT)
         .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
-    let resolve = resolve?;
     let reject = get_private_value(scope, data, INTERCEPT_SETTLEMENT_REJECT_SLOT)
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok());
     let resolved_value = get_private_value(scope, data, INTERCEPT_SETTLEMENT_VALUE_SLOT)
         .unwrap_or_else(|| v8::undefined(scope).into());
     let promise = get_private_value(scope, data, INTERCEPT_SETTLEMENT_PROMISE_SLOT)
@@ -1728,10 +1745,10 @@ fn intercept_settlement_fulfilled_callback<'s>(
     }
     let Some((
         navigation,
-        signal,
+        _,
         committed_resolve,
         resolve,
-        reject,
+        _,
         resolved_value,
         _,
         transition_resolver,
@@ -1744,16 +1761,16 @@ fn intercept_settlement_fulfilled_callback<'s>(
         complete_intercept_settlement_attempt(scope, data);
         set_intercept_settlement_active(scope, navigation, data, false);
     }
-    finish_intercepted_navigation_fulfilled(
-        scope,
-        navigation,
-        signal,
-        committed_resolve,
-        resolve,
-        reject,
-        transition_resolver,
-        resolved_value,
-    );
+    // This callback already runs as the handler promise's fulfillment reaction.
+    // Another queued completion would put navigatesuccess after author microtasks.
+    finish_navigation_success_events(scope, navigation, "");
+    if let Some(resolve) = committed_resolve {
+        settle_navigation_committed(scope, navigation, resolve, resolved_value);
+    }
+    if let Some(resolve) = resolve {
+        settle_navigation_finished_resolved_after_reactions(scope, resolve, resolved_value);
+    }
+    settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
 }
 
 fn intercept_settlement_rejected_callback<'s>(
@@ -1804,8 +1821,8 @@ fn finish_intercepted_navigation_fulfilled<'s>(
     navigation: v8::Local<'s, v8::Object>,
     signal: Option<v8::Local<'s, v8::Object>>,
     committed_resolve: Option<v8::Local<'s, v8::Function>>,
-    finished_resolve: v8::Local<'s, v8::Function>,
-    finished_reject: v8::Local<'s, v8::Function>,
+    finished_resolve: Option<v8::Local<'s, v8::Function>>,
+    finished_reject: Option<v8::Local<'s, v8::Function>>,
     transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
     resolved_value: v8::Local<'s, v8::Value>,
 ) {
@@ -1814,8 +1831,8 @@ fn finish_intercepted_navigation_fulfilled<'s>(
         navigation,
         signal,
         committed_resolve,
-        Some(finished_resolve),
-        Some(finished_reject),
+        finished_resolve,
+        finished_reject,
         Some(resolved_value),
         transition_resolver,
         "",
@@ -1828,7 +1845,7 @@ fn finish_intercepted_navigation_rejected<'s>(
     signal: Option<v8::Local<'s, v8::Object>>,
     committed_resolve: Option<v8::Local<'s, v8::Function>>,
     resolved_value: v8::Local<'s, v8::Value>,
-    finished_reject: v8::Local<'s, v8::Function>,
+    finished_reject: Option<v8::Local<'s, v8::Function>>,
     transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
     error: v8::Local<'s, v8::Value>,
     filename: &str,
@@ -1844,7 +1861,9 @@ fn finish_intercepted_navigation_rejected<'s>(
         let _ = committed_resolve.call(scope, receiver, &[resolved_value]);
         resolve_navigation_transition_committed(scope, navigation, resolved_value);
     }
-    settle_navigation_finished_rejected_after_reactions(scope, finished_reject, error);
+    if let Some(reject) = finished_reject {
+        settle_navigation_finished_rejected_after_reactions(scope, reject, error);
+    }
     settle_navigation_transition_finished_local(
         scope,
         navigation,

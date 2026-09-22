@@ -46,7 +46,7 @@ pub(super) fn location_replace_callback<'s>(
     if require_location_href_slot(scope, args.this()).is_none() {
         return;
     }
-    navigate_location_object(
+    navigate_location_object_with_child_navigate_event(
         scope,
         args.this(),
         LocationNavigationKind::Replace,

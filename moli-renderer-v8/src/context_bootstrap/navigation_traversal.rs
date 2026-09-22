@@ -21,7 +21,6 @@ use super::navigation_entry_state::{
 use super::navigation_events::cancel_active_navigation_event;
 use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_navigate_event_with_outcome,
-    run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_projection::visible_navigation_entries_len;
@@ -283,7 +282,7 @@ pub(super) fn navigation_reload_callback<'s>(
         let current_href = super::location_runtime::location_href_slot(scope, location)
             .unwrap_or_else(|| "about:blank".to_owned());
         let destination_state = reload_destination_state(scope, owner, cloned_navigation_state);
-        let mut outcome = dispatch_navigation_navigate_event_with_outcome(
+        let outcome = dispatch_navigation_navigate_event_with_outcome(
             scope,
             navigation,
             &current_href,
@@ -363,12 +362,6 @@ pub(super) fn navigation_reload_callback<'s>(
             if let Some(state) = cloned_navigation_state {
                 set_reload_current_entry_state(scope, owner, state);
             }
-            if let Some(precommit_event) = outcome.precommit_event {
-                let (intercept_error, intercept_result) =
-                    run_navigation_precommit_deferred_handlers(scope, precommit_event);
-                outcome.intercept_error = intercept_error;
-                outcome.intercept_result = intercept_result.or(outcome.intercept_result);
-            }
             let Some(pending) = navigation_current_entry_result_with_pending_finished(scope, owner)
             else {
                 rv.set(navigation_immediate_current_entry_result(scope, owner).into());
@@ -379,8 +372,8 @@ pub(super) fn navigation_reload_callback<'s>(
                 navigation,
                 outcome,
                 Some(pending.committed_resolve),
-                pending.finished_resolve,
-                pending.finished_reject,
+                Some(pending.finished_resolve),
+                Some(pending.finished_reject),
                 transition_resolver,
                 pending.resolved_value,
                 &current_href,

@@ -26,7 +26,7 @@ use super::navigation_result::{
     navigation_immediate_result_with_value, navigation_pending_result,
     navigation_rejected_dom_exception_result, navigation_rejected_invalid_state_result,
     navigation_rejected_value_result, navigation_result_with_pending_commit,
-    queue_same_document_navigation_finished,
+    queue_same_document_navigation_finished, suppress_unhandled_rejection,
 };
 use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::navigation_window::{

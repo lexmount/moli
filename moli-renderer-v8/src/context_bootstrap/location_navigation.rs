@@ -2,7 +2,7 @@ use super::location_runtime::{
     is_same_document_fragment_navigation, location_href_slot, resolve_location_navigation_target,
     sync_location_object,
 };
-use super::navigation_activation::{clear_navigation_transition, install_navigation_transition};
+use super::navigation_activation::install_navigation_transition;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
 use super::navigation_entry::history_state_value;
 use super::navigation_entry::{
@@ -13,15 +13,10 @@ use super::navigation_events::{
     NavigationDispatchOutcome, cancel_active_navigation_event,
     dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data,
     dispatch_navigation_navigate_event_with_form_data_and_outcome,
-    dispatch_navigation_navigate_event_with_outcome, dispatch_navigation_success,
-    dispatch_popstate_event, queue_hash_change_for_runtime_owner,
-    run_navigation_precommit_deferred_handlers,
+    dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event,
+    queue_hash_change_for_runtime_owner,
 };
-use super::navigation_lifecycle::{
-    begin_navigation_attempt, cancel_navigation_attempt, complete_navigation_attempt,
-    finish_navigation_error_events, navigation_attempt_id_from_slot, navigation_attempt_is_active,
-    settle_navigation_transition_finished_local,
-};
+use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_mutation::{
     apply_local_window_location_navigation, apply_navigation_navigate_same_document,
     sync_local_document_front_from_window, update_navigation_current_entry_for_same_document,
@@ -42,12 +37,11 @@ use super::navigation_window::{
 };
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
-use crate::util::{context_host_ptr_from_window_object, get_private_value, set_private_value};
+use crate::util::context_host_ptr_from_window_object;
 use crate::webidl;
 use moli_page_types::{
     NavigationHistoryMutation, SameDocumentHistoryUpdate, cross_document_navigation_seed,
 };
-use moli_webapi_declare::WebApiObject;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LocationNavigationKind {
@@ -330,7 +324,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         let mut navigate_outcome = navigation.map(|navigation| {
             let _ = cancel_active_navigation_event(scope, navigation);
             cancel_active_intercepted_same_document_navigation(scope, navigation);
-            cancel_active_location_intercepted_same_document_navigation(scope, navigation);
             cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
             dispatch_navigation_navigate_event_with_outcome(
                 scope,
@@ -439,15 +432,9 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 .as_ref()
                 .is_some_and(|outcome| outcome.intercepted)
             {
-                let mut outcome = navigate_outcome
+                let outcome = navigate_outcome
                     .take()
                     .expect("checked intercepted outcome");
-                if let Some(precommit_event) = outcome.precommit_event {
-                    let (intercept_error, intercept_result) =
-                        run_navigation_precommit_deferred_handlers(scope, precommit_event);
-                    outcome.intercept_error = intercept_error;
-                    outcome.intercept_result = intercept_result.or(outcome.intercept_result);
-                }
                 settle_location_intercepted_same_document_navigation(
                     scope,
                     navigation,
@@ -478,7 +465,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     {
         let _ = cancel_active_navigation_event(scope, navigation);
         cancel_active_intercepted_same_document_navigation(scope, navigation);
-        cancel_active_location_intercepted_same_document_navigation(scope, navigation);
         cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
         let navigation_type = match kind {
             LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
@@ -494,7 +480,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             None
         };
-        let mut outcome = dispatch_navigation_navigate_event_with_outcome(
+        let outcome = dispatch_navigation_navigate_event_with_outcome(
             scope,
             navigation,
             resolved.as_str(),
@@ -562,12 +548,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                     }
                 };
                 host.record_same_document_navigation(&url, "fragment", history_update);
-            }
-            if let Some(precommit_event) = outcome.precommit_event {
-                let (intercept_error, intercept_result) =
-                    run_navigation_precommit_deferred_handlers(scope, precommit_event);
-                outcome.intercept_error = intercept_error;
-                outcome.intercept_result = intercept_result.or(outcome.intercept_result);
             }
             settle_location_intercepted_same_document_navigation(
                 scope,
@@ -729,7 +709,6 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
         .unwrap_or_default();
     let _ = cancel_active_navigation_event(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
-    cancel_active_location_intercepted_same_document_navigation(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
     let outcome = dispatch_navigation_navigate_event_with_outcome(
         scope,
@@ -776,7 +755,6 @@ pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
         .unwrap_or_default();
     let _ = cancel_active_navigation_event(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
-    cancel_active_location_intercepted_same_document_navigation(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
     let outcome = dispatch_navigation_navigate_event_with_form_data_and_outcome(
         scope,
@@ -811,79 +789,6 @@ fn top_level_document_is_before_load_complete(scope: &mut v8::PinScope<'_, '_>) 
     })
 }
 
-const LOCATION_INTERCEPT_SETTLEMENT_NAVIGATION_SLOT: &str = "__lmLocationInterceptNavigation";
-const LOCATION_INTERCEPT_SETTLEMENT_SIGNAL_SLOT: &str = "__lmLocationInterceptSignal";
-const LOCATION_INTERCEPT_SETTLEMENT_FILENAME_SLOT: &str = "__lmLocationInterceptFilename";
-const LOCATION_INTERCEPT_SETTLEMENT_PROMISE_SLOT: &str = "__lmLocationInterceptPromise";
-const LOCATION_INTERCEPT_SETTLEMENT_TRANSITION_RESOLVER_SLOT: &str =
-    "__lmLocationInterceptTransitionResolver";
-const LOCATION_INTERCEPT_SETTLEMENT_ACTIVE_SLOT: &str = "__lmLocationInterceptActive";
-const LOCATION_INTERCEPT_SETTLEMENT_ATTEMPT_ID_SLOT: &str = "__lmLocationInterceptAttemptId";
-const NAVIGATION_ACTIVE_LOCATION_INTERCEPT_SETTLEMENT_SLOT: &str =
-    "__lmNavigationActiveLocationInterceptSettlement";
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct LocationInterceptSettlementDataDeclaration<'scope> {
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_ACTIVE_SLOT)]
-    active: bool,
-
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_ATTEMPT_ID_SLOT)]
-    attempt_id: Option<v8::Local<'scope, v8::BigInt>>,
-
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_PROMISE_SLOT)]
-    promise: Option<v8::Local<'scope, v8::Value>>,
-
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_NAVIGATION_SLOT)]
-    navigation: v8::Local<'scope, v8::Object>,
-
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_SIGNAL_SLOT)]
-    signal: Option<v8::Local<'scope, v8::Object>>,
-
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_TRANSITION_RESOLVER_SLOT)]
-    transition_resolver: Option<v8::Local<'scope, v8::PromiseResolver>>,
-
-    #[webapi(slot = LOCATION_INTERCEPT_SETTLEMENT_FILENAME_SLOT)]
-    filename: v8::Local<'scope, v8::String>,
-}
-
-fn navigation_active_location_intercept_settlement<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_value(
-        scope,
-        navigation,
-        NAVIGATION_ACTIVE_LOCATION_INTERCEPT_SETTLEMENT_SLOT,
-    )
-    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn set_navigation_active_location_intercept_settlement<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    data: v8::Local<'s, v8::Object>,
-) {
-    set_private_value(
-        scope,
-        navigation,
-        NAVIGATION_ACTIVE_LOCATION_INTERCEPT_SETTLEMENT_SLOT,
-        data.into(),
-    );
-}
-
-fn clear_navigation_active_location_intercept_settlement<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-) {
-    set_private_value(
-        scope,
-        navigation,
-        NAVIGATION_ACTIVE_LOCATION_INTERCEPT_SETTLEMENT_SLOT,
-        v8::undefined(scope).into(),
-    );
-}
-
 fn finish_location_navigation_canceled<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
@@ -906,283 +811,21 @@ fn settle_location_intercepted_same_document_navigation<'s>(
     transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
     filename: &str,
 ) {
-    if let Some(error) = outcome.intercept_error {
-        finish_location_intercepted_navigation_rejected(
-            scope,
-            navigation,
-            outcome.signal,
-            transition_resolver,
-            error,
-            filename,
-        );
-        return;
-    }
-    let Some(result) = outcome.intercept_result else {
-        dispatch_navigation_success(scope, navigation);
-        settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
-        return;
-    };
-    let Some(result_object) = v8::Local::<v8::Object>::try_from(result).ok() else {
-        dispatch_navigation_success(scope, navigation);
-        settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
-        return;
-    };
-    let Some(then) = result_object
-        .get(scope, v8str(scope, "then").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    else {
-        dispatch_navigation_success(scope, navigation);
-        settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
-        return;
-    };
-    let attempt_id = begin_navigation_attempt(scope, "location-intercept-settlement")
-        .map(|attempt_id| v8::BigInt::new_from_u64(scope, attempt_id.raw()));
-    let promise = v8::Local::<v8::Promise>::try_from(result)
-        .is_ok()
-        .then_some(result);
-    let filename = v8_string(scope, filename).unwrap_or_else(|| v8::String::empty(scope));
-    let data = LocationInterceptSettlementDataDeclaration::new(
-        true,
-        attempt_id,
-        promise,
+    let owner = runtime_window_owner(scope, navigation);
+    let resolved_value = navigation_current_entry(scope, owner)
+        .map(v8::Local::<v8::Value>::from)
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    super::navigation_callbacks::settle_intercepted_same_document_navigation(
+        scope,
         navigation,
-        outcome.signal,
+        outcome,
+        None,
+        None,
+        None,
         transition_resolver,
+        resolved_value,
         filename,
-    )
-    .bind(scope)
-    .expect("location intercept settlement data should bind");
-    set_navigation_active_location_intercept_settlement(scope, navigation, data);
-    let Some(on_fulfilled) =
-        v8::Function::builder(location_intercept_settlement_fulfilled_callback)
-            .data(data.into())
-            .build(scope)
-    else {
-        complete_location_intercept_settlement_attempt(scope, data);
-        set_location_intercept_settlement_active(scope, navigation, data, false);
-        dispatch_navigation_success(scope, navigation);
-        settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
-        return;
-    };
-    let Some(on_rejected) = v8::Function::builder(location_intercept_settlement_rejected_callback)
-        .data(data.into())
-        .build(scope)
-    else {
-        complete_location_intercept_settlement_attempt(scope, data);
-        set_location_intercept_settlement_active(scope, navigation, data, false);
-        dispatch_navigation_success(scope, navigation);
-        settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
-        return;
-    };
-    if then
-        .call(scope, result, &[on_fulfilled.into(), on_rejected.into()])
-        .is_none()
-    {
-        cancel_location_intercept_settlement_attempt(scope, data);
-        set_location_intercept_settlement_active(scope, navigation, data, false);
-    }
-}
-
-fn location_intercept_settlement_data<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> Option<(
-    v8::Local<'s, v8::Object>,
-    Option<v8::Local<'s, v8::Object>>,
-    Option<v8::Local<'s, v8::Promise>>,
-    Option<v8::Local<'s, v8::PromiseResolver>>,
-    String,
-)> {
-    let data = v8::Local::<v8::Object>::try_from(data).ok()?;
-    let navigation = get_private_value(scope, data, LOCATION_INTERCEPT_SETTLEMENT_NAVIGATION_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let signal = get_private_value(scope, data, LOCATION_INTERCEPT_SETTLEMENT_SIGNAL_SLOT)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-    let promise = get_private_value(scope, data, LOCATION_INTERCEPT_SETTLEMENT_PROMISE_SLOT)
-        .and_then(|value| v8::Local::<v8::Promise>::try_from(value).ok());
-    let transition_resolver = get_private_value(
-        scope,
-        data,
-        LOCATION_INTERCEPT_SETTLEMENT_TRANSITION_RESOLVER_SLOT,
-    )
-    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    .map(|object| unsafe { v8::Local::<v8::PromiseResolver>::cast_unchecked(object) });
-    let filename = get_private_value(scope, data, LOCATION_INTERCEPT_SETTLEMENT_FILENAME_SLOT)
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
-    Some((navigation, signal, promise, transition_resolver, filename))
-}
-
-fn location_intercept_settlement_fulfilled_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !location_intercept_settlement_is_active(scope, args.data()) {
-        return;
-    }
-    let Some((navigation, _, _, transition_resolver, _)) =
-        location_intercept_settlement_data(scope, args.data())
-    else {
-        return;
-    };
-    if let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) {
-        complete_location_intercept_settlement_attempt(scope, data);
-        set_location_intercept_settlement_active(scope, navigation, data, false);
-    }
-    dispatch_navigation_success(scope, navigation);
-    settle_navigation_transition_finished_local(scope, navigation, transition_resolver, None);
-}
-
-fn location_intercept_settlement_rejected_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if !location_intercept_settlement_is_active(scope, args.data()) {
-        return;
-    }
-    let Some((navigation, signal, promise, transition_resolver, filename)) =
-        location_intercept_settlement_data(scope, args.data())
-    else {
-        return;
-    };
-    if let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) {
-        complete_location_intercept_settlement_attempt(scope, data);
-        set_location_intercept_settlement_active(scope, navigation, data, false);
-    }
-    let error = promise
-        .filter(|promise| promise.state() == v8::PromiseState::Rejected)
-        .map(|promise| promise.result(scope))
-        .unwrap_or_else(|| args.get(0));
-    finish_location_intercepted_navigation_rejected(
-        scope,
-        navigation,
-        signal,
-        transition_resolver,
-        error,
-        &filename,
     );
-}
-
-fn finish_location_intercepted_navigation_rejected<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    signal: Option<v8::Local<'s, v8::Object>>,
-    transition_resolver: Option<v8::Local<'s, v8::PromiseResolver>>,
-    error: v8::Local<'s, v8::Value>,
-    filename: &str,
-) {
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
-    }
-    finish_navigation_error_events(scope, navigation, error, filename);
-    settle_navigation_transition_finished_local(
-        scope,
-        navigation,
-        transition_resolver,
-        Some(error),
-    );
-}
-
-fn cancel_active_location_intercepted_same_document_navigation<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-) -> bool {
-    let Some(data) = navigation_active_location_intercept_settlement(scope, navigation) else {
-        return false;
-    };
-    if !location_intercept_settlement_is_active(scope, data.into()) {
-        return false;
-    }
-    cancel_location_intercept_settlement_attempt(scope, data);
-    set_location_intercept_settlement_active(scope, navigation, data, false);
-    let Some((navigation, signal, _, transition_resolver, filename)) =
-        location_intercept_settlement_data(scope, data.into())
-    else {
-        return false;
-    };
-    let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
-    }
-    finish_navigation_error_events(scope, navigation, error, &filename);
-    if transition_resolver.is_some() {
-        clear_navigation_transition(scope, navigation);
-    }
-    if let Some(transition_resolver) = transition_resolver {
-        let _ = transition_resolver.reject(scope, error);
-    }
-    true
-}
-
-fn location_intercept_settlement_is_active<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Value>,
-) -> bool {
-    v8::Local::<v8::Object>::try_from(data)
-        .ok()
-        .is_some_and(|data| {
-            location_intercept_settlement_active(scope, data)
-                && navigation_attempt_id_from_slot(
-                    scope,
-                    data,
-                    LOCATION_INTERCEPT_SETTLEMENT_ATTEMPT_ID_SLOT,
-                )
-                .is_some_and(|attempt_id| navigation_attempt_is_active(scope, attempt_id))
-        })
-}
-
-fn location_intercept_settlement_active<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, data, LOCATION_INTERCEPT_SETTLEMENT_ACTIVE_SLOT)
-        .is_some_and(|value| value.is_boolean() && value.boolean_value(scope))
-}
-
-fn complete_location_intercept_settlement_attempt<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Object>,
-) {
-    if let Some(attempt_id) =
-        navigation_attempt_id_from_slot(scope, data, LOCATION_INTERCEPT_SETTLEMENT_ATTEMPT_ID_SLOT)
-    {
-        complete_navigation_attempt(scope, attempt_id);
-    }
-}
-
-fn cancel_location_intercept_settlement_attempt<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    data: v8::Local<'s, v8::Object>,
-) {
-    if let Some(attempt_id) =
-        navigation_attempt_id_from_slot(scope, data, LOCATION_INTERCEPT_SETTLEMENT_ATTEMPT_ID_SLOT)
-    {
-        cancel_navigation_attempt(scope, attempt_id);
-    }
-}
-
-fn set_location_intercept_settlement_active<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    data: v8::Local<'s, v8::Object>,
-    active: bool,
-) {
-    set_private_value(
-        scope,
-        data,
-        LOCATION_INTERCEPT_SETTLEMENT_ACTIVE_SLOT,
-        v8::Boolean::new(scope, active).into(),
-    );
-    if !active {
-        clear_navigation_active_location_intercept_settlement(scope, navigation);
-    }
 }
 
 fn history_entry_seed_for_cross_document_location<'s>(

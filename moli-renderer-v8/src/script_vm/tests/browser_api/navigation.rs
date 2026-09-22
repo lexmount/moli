@@ -2996,6 +2996,146 @@ async fn pending_precommit_navigation_slot_is_not_script_writable() {
     );
 }
 #[tokio::test]
+async fn navigation_intercept_handlers_preserve_cancellation_and_committed_entry() {
+    for api in [
+        "location-fragment",
+        "navigate-fragment",
+        "navigate-cross-document",
+        "reload",
+        "precommit",
+    ] {
+        for cause in ["none", "stop", "detach", "throw"] {
+            let server = StaticHttpServer::spawn(1).await;
+            let parent_url = server.base_url().join("parent").unwrap();
+            let loader = static_http_loader([]);
+            let mut vm =
+                new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+            let script = include_str!("../../../../tests/fixtures/navigation-interception.js");
+            vm.eval(&format!(
+                "{script}\n\
+                 globalThis.interceptionResult = 'pending';\n\
+                 navigationInterceptionProbe({api:?}, {cause:?}).then(\n\
+                   value => interceptionResult = value,\n\
+                   error => interceptionResult = String(error));"
+            ))
+            .unwrap();
+            let context = format!("{api}/{cause}");
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(interceptionResult !== 'pending')",
+                "true",
+                &context,
+            )
+            .await;
+            let result: serde_json::Value =
+                serde_json::from_str(&vm.eval("JSON.stringify(interceptionResult)").unwrap())
+                    .unwrap();
+            let (log, settlement) = match cause {
+                "none" => (
+                    vec!["navigate", "first", "first-after", "second", "success"],
+                    "fulfilled",
+                ),
+                "throw" => (
+                    vec!["navigate", "first", "second", "abort", "error:Error"],
+                    "Error",
+                ),
+                _ => (
+                    vec![
+                        "navigate",
+                        "first",
+                        "abort",
+                        "error:AbortError",
+                        "first-after",
+                        "second",
+                    ],
+                    "AbortError",
+                ),
+            };
+            let promises = if api.starts_with("location-") {
+                serde_json::json!([])
+            } else {
+                serde_json::json!(["fulfilled", settlement])
+            };
+            assert_eq!(
+                result,
+                serde_json::json!({
+                    "log": log,
+                    "entryChanges": 1,
+                    "defaultPrevented": false,
+                    "aborted": cause != "none",
+                    "transition": ["fulfilled", settlement],
+                    "promises": promises,
+                    "committedEntry": true,
+                    "sameReason": true,
+                    "errorKind": true,
+                    "transitionCleared": true
+                }),
+                "{context}"
+            );
+            assert_eq!(server.finish_targets().await, ["/child"], "{context}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn navigation_intercept_reentrant_handlers_preserve_replacement_navigation() {
+    for throws_after_replacement in [false, true] {
+        let server = StaticHttpServer::spawn(1).await;
+        let parent_url = server.base_url().join("parent").unwrap();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        let script = include_str!("../../../../tests/fixtures/navigation-interception.js");
+        vm.eval(&format!(
+            "{script}\n\
+             globalThis.interceptionResult = 'pending';\n\
+             navigationReentrantInterceptionProbe({throws_after_replacement}).then(\n\
+               value => interceptionResult = value,\n\
+               error => interceptionResult = String(error));"
+        ))
+        .unwrap();
+        let context = format!("throws after replacement: {throws_after_replacement}");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(interceptionResult !== 'pending')",
+            "true",
+            &context,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(interceptionResult)").unwrap()).unwrap();
+        let mut log = vec!["first", "abort", "replacement-handler"];
+        if !throws_after_replacement {
+            log.push("first-after");
+        }
+        log.push("second");
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "before": {
+                    "activeTransition": true,
+                    "promises": ["fulfilled", "AbortError"],
+                    "transition": ["fulfilled", "AbortError"],
+                    "committedEntry": true,
+                    "sameReason": true,
+                    "errors": 1,
+                    "successes": 0
+                },
+                "log": log,
+                "replacementEntry": true,
+                "transitionCleared": true,
+                "errors": 1,
+                "successes": 1
+            }),
+            "{context}"
+        );
+        assert_eq!(server.finish_targets().await, ["/child"], "{context}");
+    }
+}
+
+#[tokio::test]
 async fn nested_same_document_navigation_marks_outer_event_canceled() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://example.com/base", &loader);

@@ -88,11 +88,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "context_bootstrap/location_navigation.rs",
-        1,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
         "context_bootstrap/navigation_callbacks/navigation.rs",
         11,
         DirectCallOwner::BrowserAlgorithm,
