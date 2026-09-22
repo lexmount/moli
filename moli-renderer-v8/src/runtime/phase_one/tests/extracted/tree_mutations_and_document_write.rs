@@ -1155,6 +1155,8 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
             reserved_service_worker_client_id: None,
+
+ navigation_history_source: None,
 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
                 parser_dom_host,

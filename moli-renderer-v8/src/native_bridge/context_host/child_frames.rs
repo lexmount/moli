@@ -32,6 +32,7 @@ mod classic_scripts;
 mod discovery;
 mod lookup;
 mod module_scripts;
+mod nested_history;
 mod registry;
 mod request_scope;
 mod srcdoc_history;
@@ -39,6 +40,8 @@ mod stylesheets;
 
 pub(in crate::native_bridge::context_host) use classic_scripts::ChildParserClassicScriptCandidate;
 pub(in crate::native_bridge::context_host) use classic_scripts::PendingChildExternalClassicDocumentScriptLoad;
+pub(super) use nested_history::ChildHistoryIdentity;
+pub(crate) use nested_history::NestedHistoryStore;
 pub(crate) use request_scope::WebStorageScope;
 pub(in crate::native_bridge::context_host) use request_scope::{
     document_sandbox_policy_from_attribute, sandbox_attribute_forces_opaque_origin,
@@ -50,6 +53,9 @@ pub(super) struct ChildBrowsingContextEntry {
     pub(super) pending_download_policy:
         Option<super::child_documents::ChildNavigationDownloadPolicy>,
     retiring: bool,
+    history_identity: Option<ChildHistoryIdentity>,
+    restored_history_positions: Option<nested_history::NavigableHistory>,
+    restoring_history: bool,
     current_document_loader_id: Option<String>,
     name: Option<String>,
     id: Option<String>,
