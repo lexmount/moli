@@ -202,25 +202,11 @@ async fn inspector_domain_state_survives_navigation_and_cleanup_without_document
 
     command(&mut ctx, "Overlay.enable", json!({})).await;
     command(&mut ctx, "Overlay.hideHighlight", json!({})).await;
-    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_owner(&owner)
-            .unwrap()
-            .overlay_enabled
-    );
-
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body style='margin:0;background:white'>first</body>",
         Some("SID-1"),
     )
     .await;
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_owner(&owner)
-            .unwrap()
-            .overlay_enabled
-    );
     command(
         &mut ctx,
         "Overlay.highlightRect",
@@ -237,12 +223,6 @@ async fn inspector_domain_state_survives_navigation_and_cleanup_without_document
         json!({"url":"data:text/html,<body style='margin:0;background:white'>second</body>"}),
     )
     .await;
-    assert!(
-        ctx.conn
-            .target_devtools_session_state_for_owner(&owner)
-            .unwrap()
-            .overlay_enabled
-    );
     assert_eq!(
         pixel(&screenshot(&mut ctx).await, 20, 20),
         [255, 255, 255, 255]
@@ -273,12 +253,6 @@ async fn inspector_domain_state_survives_navigation_and_cleanup_without_document
     assert_eq!(
         pixel(&screenshot(&mut ctx).await, 20, 20),
         [255, 255, 255, 255]
-    );
-    assert!(
-        !ctx.conn
-            .target_devtools_session_state_for_owner(&owner)
-            .unwrap()
-            .overlay_enabled
     );
 }
 

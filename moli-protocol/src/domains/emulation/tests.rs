@@ -3043,6 +3043,53 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn context_media_keeps_each_page_text_scale_across_reload() {
+    let mut ctx = TestContext::new();
+    let background = PageTargetHost::new(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        TargetIdentityState::about_blank(),
+        TargetPageSlot::empty_for_test_fixture(),
+    );
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-active");
+    bc.attach_active_session("SID-active");
+    bc.insert_page_target_host(background);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    let html = "data:text/html,<style>body{font-size:calc(16px * env(preferred-text-scale,1))}</style><body>text</body>";
+    for (session, scale, id) in [("SID-background", 2.0, 1), ("SID-active", 1.5, 2)] {
+        ctx.install_navigation_fixture_for_session_owner(html, Some(session))
+            .await;
+        ctx.process_async(json!({"id":id,"sessionId":session,"method":"Emulation.setEmulatedOSTextScale","params":{"scale":scale}})).await;
+        ctx.expect_result(id, json!({}), Some(session));
+    }
+    ctx.process_async(json!({"id":3,"method":"Emulation.setEmulatedMedia","params":{"features":[{"name":"prefers-color-scheme","value":"dark"}]}})).await;
+    ctx.expect_result(3, json!({}), None);
+    for (session, expected, id) in [("SID-background", "32px", 4), ("SID-active", "24px", 5)] {
+        ctx.process_async(json!({"id":id,"sessionId":session,"method":"Runtime.evaluate","params":{"expression":"[getComputedStyle(document.body).fontSize,matchMedia('(prefers-color-scheme:dark)').matches]","returnByValue":true}})).await;
+        let response = ctx.take_response_by_id(id);
+        assert_eq!(
+            response["result"]["result"]["value"],
+            json!([expected, true]),
+            "{session}: {response}"
+        );
+    }
+    ctx.process_async(
+        json!({"id":6,"sessionId":"SID-background","method":"Page.navigate","params":{"url":html}}),
+    )
+    .await;
+    let navigation = ctx.take_response_by_id(6);
+    assert!(navigation["error"].is_null(), "{navigation}");
+    ctx.process_async(json!({"id":7,"sessionId":"SID-background","method":"Runtime.evaluate","params":{"expression":"getComputedStyle(document.body).fontSize","returnByValue":true}})).await;
+    let response = ctx.take_response_by_id(7);
+    assert_eq!(
+        response["result"]["result"]["value"],
+        json!("32px"),
+        "{response}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn context_locale_override_applies_to_loaded_background_page_without_activation() {
     let mut ctx = TestContext::new();
     let background = PageTargetHost::new(

@@ -32,7 +32,6 @@ use moli_page_types::{
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
     pub(crate) dom_session_state: DevToolsDomSessionState,
-    pub(crate) overlay_enabled: bool,
     pub(crate) dom_debugger_event_listener_breakpoints:
         BTreeSet<RendererDomDebuggerEventListenerBreakpoint>,
     pub(crate) dom_debugger_xhr_breakpoints: BTreeSet<RendererDomDebuggerXhrBreakpoint>,

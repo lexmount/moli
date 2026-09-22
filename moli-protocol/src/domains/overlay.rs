@@ -160,17 +160,8 @@ pub(crate) fn try_start_overlay_command_dispatch(
             "No target for Overlay command",
         ));
     }
-    if let Some(enabled) = match command {
-        RendererInspectorOverlayCommand::Enable => Some(true),
-        RendererInspectorOverlayCommand::Disable => Some(false),
-        _ => None,
-    } {
-        conn.with_target_devtools_session_state_for_owner_mut(&owner, |state| {
-            state.overlay_enabled = enabled;
-        });
-        if enabled {
-            return OverlayCommandTaskStep::Complete(CommandOutputPlan::success());
-        }
+    if matches!(command, RendererInspectorOverlayCommand::Enable) {
+        return OverlayCommandTaskStep::Complete(CommandOutputPlan::success());
     }
     let cleanup = matches!(
         command,

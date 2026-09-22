@@ -828,15 +828,12 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
+    if let Err(error) =
+        page_session::update_style_environment_state(conn, cmd.session_id, |mut state| {
             state.set_emulated_media(overrides.clone());
-        }
-    }) {
-        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
-            -31998,
-            "BrowserContextNotLoaded",
-        ));
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, error));
     }
     start_style_environment_update(conn, cmd)
 }
@@ -865,7 +862,7 @@ fn start_os_text_scale_command(
         ));
     }
     if let Err(error) =
-        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        page_session::update_style_environment_state(conn, cmd.session_id, |mut state| {
             state.set_preferred_text_scale(params.scale);
         })
     {
@@ -878,10 +875,8 @@ fn start_style_environment_update(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> EmulationCommandTaskStep {
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let page_overrides = conn.navigation_load_inputs_for_owner(&owner).emulated_media;
     let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
-        match start_context_emulated_media_page_commands(conn, &page_overrides) {
+        match start_context_emulated_media_page_commands(conn) {
             Ok(pending) => pending,
             Err(error) => {
                 return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
@@ -889,6 +884,9 @@ fn start_style_environment_update(
         }
     } else {
         let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+        let page_overrides = conn
+            .navigation_load_inputs_for_owner(&owner_scope)
+            .emulated_media;
         let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
             return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
         };
@@ -2636,7 +2634,6 @@ fn emulation_command_is_context_wide(conn: &CdpConnection, session_id: Option<&s
 
 fn start_context_emulated_media_page_commands(
     conn: &mut CdpConnection,
-    overrides: &moli_core::page::EmulatedMediaOverrides,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
     let Some(browser_context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
@@ -2645,6 +2642,7 @@ fn start_context_emulated_media_page_commands(
     let mut pending = Vec::new();
     for target in browser_context.page_targets.iter_mut() {
         let target_id = target.target_id().to_owned();
+        let overrides = (&target.effective_emulation_state.emulated_media).into();
         let Some(page) = target.loaded_page_mut() else {
             continue;
         };
@@ -2655,7 +2653,7 @@ fn start_context_emulated_media_page_commands(
             },
             operation: PendingEmulationPageOperation::SetEmulatedMedia,
             pending: page
-                .start_set_emulated_media(overrides)
+                .start_set_emulated_media(&overrides)
                 .map_err(|error| error.to_string())?,
             runtime_response_rx: None,
         });
