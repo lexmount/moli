@@ -1,0 +1,361 @@
+{
+  "schema": "case676-readiness-local-contract-tests/1",
+  "scope": "Real HTTP and browser execution; synthetic KO/jQuery observation fixture, not full Magento. No task actions executed.",
+  "predicate_sha256": "5b8c663343b0936ec709642c9c55b45022679bc2320bc79ddad541ba295484f4",
+  "network_build": {
+    "source_commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+    "base_commit": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+    "publication_branch": "codex/pr640-network-final",
+    "replaces_pr_url": "https://github.com/lexmount/moli/pull/728",
+    "group": "network",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "moli"
+    ],
+    "sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "version": "moli 1.1.9",
+    "build_env": {
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "frozen_at_unix": 1790056098.1530812,
+    "full_rust_gates": "PR CI; not claimed as locally repeated"
+  },
+  "mutation_requests": [],
+  "results": [
+    {
+      "engine": "chromium",
+      "scenario": "delayed-template",
+      "passed": true,
+      "expected_ready": true,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 145.60000002384186
+      },
+      "result": {
+        "ready": true,
+        "target": "first Filters control",
+        "controls_present": true,
+        "target_option_present": true,
+        "expand_interactive": true,
+        "knockout_component_contexts": true,
+        "wait_ms": 135
+      },
+      "error": null,
+      "duration_ms": 152
+    },
+    {
+      "engine": "chromium",
+      "scenario": "delayed-binding",
+      "passed": true,
+      "expected_ready": true,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 230.69999992847443
+      },
+      "result": {
+        "ready": true,
+        "target": "first Filters control",
+        "controls_present": true,
+        "target_option_present": true,
+        "expand_interactive": true,
+        "knockout_component_contexts": true,
+        "wait_ms": 217
+      },
+      "error": null,
+      "duration_ms": 225
+    },
+    {
+      "engine": "chromium",
+      "scenario": "two-buttons",
+      "passed": true,
+      "expected_ready": true,
+      "observed": {
+        "mutations": 0,
+        "buttons": 2,
+        "boundAt": 16.200000047683716
+      },
+      "result": {
+        "ready": true,
+        "target": "first Filters control",
+        "controls_present": true,
+        "target_option_present": true,
+        "expand_interactive": true,
+        "knockout_component_contexts": true,
+        "wait_ms": 0
+      },
+      "error": null,
+      "duration_ms": 3
+    },
+    {
+      "engine": "chromium",
+      "scenario": "permanent-missing",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 0,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at filter DOM",
+      "duration_ms": 679
+    },
+    {
+      "engine": "chromium",
+      "scenario": "no-binding",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at Knockout contexts",
+      "duration_ms": 656
+    },
+    {
+      "engine": "chromium",
+      "scenario": "missing-binding-definition",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 19.299999952316284
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at component binding contract",
+      "duration_ms": 655
+    },
+    {
+      "engine": "chromium",
+      "scenario": "initialization-error",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: synthetic binding initialization failure",
+      "duration_ms": 9
+    },
+    {
+      "engine": "chromium",
+      "scenario": "wrong-document",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 20.199999928474426
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Readiness reached a different document",
+      "duration_ms": 10
+    },
+    {
+      "engine": "chromium",
+      "scenario": "missing-option",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 16
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at filter DOM",
+      "duration_ms": 678
+    },
+    {
+      "engine": "chromium",
+      "scenario": "hidden-first",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 2,
+        "boundAt": 18.600000023841858
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at first expand control",
+      "duration_ms": 688
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "delayed-template",
+      "passed": true,
+      "expected_ready": true,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 143
+      },
+      "result": {
+        "ready": true,
+        "target": "first Filters control",
+        "controls_present": true,
+        "target_option_present": true,
+        "expand_interactive": true,
+        "knockout_component_contexts": true,
+        "wait_ms": 153
+      },
+      "error": null,
+      "duration_ms": 160
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "delayed-binding",
+      "passed": true,
+      "expected_ready": true,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 226.2
+      },
+      "result": {
+        "ready": true,
+        "target": "first Filters control",
+        "controls_present": true,
+        "target_option_present": true,
+        "expand_interactive": true,
+        "knockout_component_contexts": true,
+        "wait_ms": 222
+      },
+      "error": null,
+      "duration_ms": 227
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "two-buttons",
+      "passed": true,
+      "expected_ready": true,
+      "observed": {
+        "mutations": 0,
+        "buttons": 2,
+        "boundAt": 15.9
+      },
+      "result": {
+        "ready": true,
+        "target": "first Filters control",
+        "controls_present": true,
+        "target_option_present": true,
+        "expand_interactive": true,
+        "knockout_component_contexts": true,
+        "wait_ms": 29
+      },
+      "error": null,
+      "duration_ms": 33
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "permanent-missing",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 0,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at filter DOM",
+      "duration_ms": 671
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "no-binding",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at Knockout contexts",
+      "duration_ms": 680
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "missing-binding-definition",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 15.6
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at component binding contract",
+      "duration_ms": 678
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "initialization-error",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: synthetic binding initialization failure",
+      "duration_ms": 6
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "wrong-document",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": null
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Readiness reached a different document",
+      "duration_ms": 3
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "missing-option",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 1,
+        "boundAt": 16
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at filter DOM",
+      "duration_ms": 677
+    },
+    {
+      "engine": "network-db091f69",
+      "scenario": "hidden-first",
+      "passed": true,
+      "expected_ready": false,
+      "observed": {
+        "mutations": 0,
+        "buttons": 2,
+        "boundAt": 15.4
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Filters readiness timed out at first expand control",
+      "duration_ms": 674
+    }
+  ],
+  "passed": 20,
+  "total": 20
+}

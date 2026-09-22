@@ -1,0 +1,104 @@
+{
+  "schema": "layout-readiness-local-controls/1",
+  "scope": "Real localhost HTTP/Chromium/Moli; orders/cart/configurations KO/widget APIs are synthetic. Document lifecycle uses native browser parsing and delayed defer script and DCL microtask initialization. No Magento integration claim.",
+  "predicates": {
+    "document": "cb215f3179b037b3819ca72f1c899b3f6ba0e6cfec202d49608371d119c941bd"
+  },
+  "network_build": {
+    "source_commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+    "base_commit": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+    "publication_branch": "codex/pr640-network-final",
+    "replaces_pr_url": "https://github.com/lexmount/moli/pull/728",
+    "group": "network",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "moli"
+    ],
+    "sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "version": "moli 1.1.9",
+    "build_env": {
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "frozen_at_unix": 1790056098.1530812,
+    "full_rust_gates": "PR CI; not claimed as locally repeated"
+  },
+  "script_sha256": "9355230cdee053dc9a391d21b911355605d028c50b9fd658f56d62ce1c16a898",
+  "mutation_requests": [],
+  "passed": 4,
+  "total": 4,
+  "results": [
+    {
+      "engine": "network-db091f69",
+      "kind": "document",
+      "scenario": "delayed-defer",
+      "expected_ready": true,
+      "passed": true,
+      "initial_ready_state": "interactive",
+      "observed": {
+        "mutations": 0,
+        "deferred": true,
+        "controllerStarted": true
+      },
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 297
+      },
+      "error": null
+    },
+    {
+      "engine": "network-db091f69",
+      "kind": "document",
+      "scenario": "already-complete",
+      "expected_ready": true,
+      "passed": true,
+      "initial_ready_state": "complete",
+      "observed": {
+        "mutations": 0,
+        "deferred": true,
+        "controllerStarted": true
+      },
+      "result": {
+        "ready": true,
+        "document_lifecycle": "complete",
+        "wait_ms": 0
+      },
+      "error": null
+    },
+    {
+      "engine": "network-db091f69",
+      "kind": "document",
+      "scenario": "wrong-document",
+      "expected_ready": false,
+      "passed": true,
+      "initial_ready_state": "interactive",
+      "observed": {
+        "mutations": 0,
+        "deferred": false,
+        "controllerStarted": false
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Wrong target document"
+    },
+    {
+      "engine": "network-db091f69",
+      "kind": "document",
+      "scenario": "timeout",
+      "expected_ready": false,
+      "passed": true,
+      "initial_ready_state": "interactive",
+      "observed": {
+        "mutations": 0,
+        "deferred": false,
+        "controllerStarted": false
+      },
+      "result": null,
+      "error": "Page.evaluate: Error: Target document readiness timed out"
+    }
+  ]
+}

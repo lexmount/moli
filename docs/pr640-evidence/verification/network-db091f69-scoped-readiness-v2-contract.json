@@ -1,0 +1,78 @@
+{
+  "schema": "pr640-scoped-readiness-contract/2",
+  "group": "network",
+  "status": "candidate_pending_qualification",
+  "site_execution_authorized_by_this_tool": false,
+  "source_commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+  "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+  "pins": {
+    "original": {
+      "path": "/tmp/moli-split640/network-db091f69-inputs.json",
+      "sha256": "f6bd4db583106f02b032a75f654b367f065e77ef88b5ec5e05916629f1f07efd"
+    },
+    "receipt": {
+      "path": "/tmp/moli-split640/network-db091f69-targeted/receipt.json",
+      "sha256": "69b8d3c903ee22931c07da7d544e9abc2c0792bc824480a0c2f8fc40285e6c18"
+    },
+    "build": {
+      "path": "/tmp/moli-split640/binaries/network-db091f69/build.json",
+      "sha256": "806db219ff91264b035d99e2dbbecf33db880d5b74bbf5bcdb56ea7d67747bae"
+    },
+    "scope": {
+      "path": "/tmp/moli-split640/35-case-scope-v2.json",
+      "sha256": "2ed77738693003596736f23c8dd5b59d3ed00221455d43a3b6e62e03473ed5f4"
+    }
+  },
+  "predicates": {
+    "595": {
+      "path": "/tmp/moli-split640/layout-readiness-document.js",
+      "sha256": "cb215f3179b037b3819ca72f1c899b3f6ba0e6cfec202d49608371d119c941bd"
+    },
+    "676": {
+      "path": "/tmp/moli-split640/case676-readiness-predicate.js",
+      "sha256": "5b8c663343b0936ec709642c9c55b45022679bc2320bc79ddad541ba295484f4"
+    }
+  },
+  "scope_ids": [
+    339,
+    595,
+    676
+  ],
+  "allowed_boundaries": {
+    "595": 13,
+    "676": 2
+  },
+  "new_manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+  "original_results": {
+    "339": "pass",
+    "595": "pass",
+    "676": "fail"
+  },
+  "reference_hashes": {
+    "manifest": "f6bd4db583106f02b032a75f654b367f065e77ef88b5ec5e05916629f1f07efd",
+    "browser_binary": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "site_map": "78c6c9498a07db4cd2b0b1ea3e573ad2ab92c4a9275b24c6dca054a641221ced",
+    "cohort_reset_hook": "0fe695d434614ced151c1cf469fd7e40889410e2af356584439fb0260f21667b",
+    "cowagent_browser_tool": "d700714f2ef6da0ad59d538f4c9a344db744bb49035d804d9d04ef2981927a58",
+    "cowagent_browser_service": "395e73ec640c2a25e5c398d1eb0c4edbde0a0f410d39e33d43f671c67715454c",
+    "task_selection": "06d8d999164c7c2de6cb21d15ec12f5260bfc2a58ca81b098a8c7779d4d2d91a",
+    "frozen_trajectories": "624a0ea83c6e4c3533714e961656d7e4159189a9e4941017b06a5299e4dc31d5",
+    "task_corrections": "e764f4b2828fa97d98cecc8752b31329871e612be1fff13878410d41e8414f9b",
+    "runner": "99e6f576c64c58004900ac1b9d7642c886abcf87ecab582c4a95f597dc65acec",
+    "candidate_runner": "71ac90a788cf671c24b39f84824a429869a410d27e911882a7d7fdb406b5f51e",
+    "replay_logic": "484e1f10381ed21ea8c8bee6b4a90ed961846191f4a5b08aebde1b220c650ac3",
+    "retrieval_acceptance": "253e6d3af74779d4311f8071384ac593ab60246e3154984f72b29f0344204e25",
+    "correction_logic": "95801bddb8ee0cfc7e5b399212f53009e09cc59f946489a40fdfe6fd1ae9cd6a",
+    "remote_runtime": "f9f6d371be790685c50714e09b2994793778d10a401edb34807df947c9cd1751",
+    "reference_receipt_225": "0e6f2a1a0e9d85a6f8c6f9a03832253d97be4934159be502b8786e8ae96a567a",
+    "reference_receipt_279": "c6064850ebb16044bd3ba945333686d378575822c4563e08564343e52fe54b85"
+  },
+  "allowed_reference_changes": [
+    "manifest"
+  ],
+  "allowed_manifest_changes": [
+    "method_id",
+    "tasks[task_id=595].readiness",
+    "tasks[task_id=676].readiness"
+  ]
+}

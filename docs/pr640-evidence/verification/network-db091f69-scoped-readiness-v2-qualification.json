@@ -1,0 +1,120 @@
+{
+  "schema": "pr640-scoped-readiness-qualification/2",
+  "status": "qualified_read_only_actual_and_local_controls",
+  "group": "network",
+  "contract_sha256": "242758c3f7deed570f44aa7c2493bcc8da2c45efc1193fdf6468fa8cd50e6ab9",
+  "manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+  "source_commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+  "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+  "scope_note": "Only network guards595/676 qualified. Shared actual probe file records layout506 failures; no layout qualification or task score is implied.",
+  "guards": {
+    "595": {
+      "predicate_sha256": "cb215f3179b037b3819ca72f1c899b3f6ba0e6cfec202d49608371d119c941bd",
+      "read_only": true,
+      "not_case_retry": true,
+      "actual": [
+        {
+          "engine": "chromium",
+          "ready": true,
+          "evidence": {
+            "path": "/tmp/moli-split640/scoped-readiness-actual-qualification.json",
+            "sha256": "8a65426d419c6ef9fa0b28a159b6e81eba7cc5fc8b744813bd0eaae811fb601d"
+          },
+          "case_id": 595
+        },
+        {
+          "engine": "moli",
+          "ready": true,
+          "evidence": {
+            "path": "/tmp/moli-split640/scoped-readiness-actual-qualification.json",
+            "sha256": "8a65426d419c6ef9fa0b28a159b6e81eba7cc5fc8b744813bd0eaae811fb601d"
+          },
+          "case_id": 595
+        }
+      ],
+      "local": {
+        "passed": 4,
+        "total": 4,
+        "positive_control": true,
+        "negative_control": true,
+        "evidence": {
+          "path": "/tmp/moli-split640/network-document-readiness-local-results.json",
+          "sha256": "4dcc476708ec1026d7d25c47d8cee676555700860face0dfff3af6da2aea6752"
+        },
+        "script": {
+          "path": "/tmp/moli-split640/network-document-readiness-local-test.py",
+          "sha256": "9355230cdee053dc9a391d21b911355605d028c50b9fd658f56d62ce1c16a898"
+        }
+      },
+      "source_evidence": [
+        {
+          "path": "/tmp/moli-split640/postmill-main.js",
+          "sha256": "c4381479a1077a229c236abc245ffe553f6ea382c7abb36651e993e732a45da9"
+        },
+        {
+          "path": "/tmp/moli-split640/postmill-vendor.js",
+          "sha256": "4514a566c450e4c1620c375ad42fec7489fa29c10499055222b45d7d16a19336"
+        },
+        {
+          "path": "/tmp/moli-split640/postmill-vendor-source.json",
+          "sha256": "2a8b8fb8e488cddd602fcf148c622e38668070d1ab20d93fc395566cc5c3bcf3"
+        }
+      ]
+    },
+    "676": {
+      "predicate_sha256": "5b8c663343b0936ec709642c9c55b45022679bc2320bc79ddad541ba295484f4",
+      "read_only": true,
+      "not_case_retry": true,
+      "reuses_immutable_qualification": {
+        "path": "/tmp/moli-split640/network-readiness-qualification.json",
+        "sha256": "041279c513794c72de4e7ed7bfc8445bde73f5a82cb216af55f0839d7bc1bcb4"
+      },
+      "actual": [
+        {
+          "engine": "chromium",
+          "ready": true,
+          "evidence": {
+            "path": "/tmp/moli-split640/orders-predicate-chromium.json",
+            "sha256": "f37b150cc5252daa845daac668756e7dc48d06e148be6829e015a727fa82b2c5"
+          }
+        },
+        {
+          "engine": "moli",
+          "ready": true,
+          "evidence": {
+            "path": "/tmp/moli-split640/orders-predicate-moli.json",
+            "sha256": "57fb344ca09037e579d9d6f723c09caa1a25c7c038397006e0d6567fdf910a6d"
+          }
+        }
+      ],
+      "local": {
+        "passed": 20,
+        "total": 20,
+        "positive_control": true,
+        "negative_control": true,
+        "evidence": {
+          "path": "/tmp/moli-split640/case676-readiness-local-results.json",
+          "sha256": "d5f4a22e18ce6941cae6ab8caca7146a5dc7a33165486dcc4a327a2f317328d8"
+        },
+        "script": {
+          "path": "/tmp/moli-split640/case676-readiness-local-test.py",
+          "sha256": "4a4852faa361a8efc3aa239c0335e6acbe104cef5dd590bb2eb271d522ac5e0b"
+        }
+      },
+      "source_evidence": [
+        {
+          "path": "/tmp/moli-split640/case676-filters.js",
+          "sha256": "92d3b39b3c30d9c132271207dea3ed80240a3cfed63f037eea1e899127a9ace2"
+        },
+        {
+          "path": "/tmp/moli-split640/case676-filters.html",
+          "sha256": "2764d4b2ac449bfa89e13174746a4715598f86902a1e26e852df3bdcfe65c0ab"
+        },
+        {
+          "path": "/tmp/moli-split640/case676-filters-source.json",
+          "sha256": "4eb3400f535ac6eae9e649de68ab9bbb355705108cd103b33bdfb32b154b4172"
+        }
+      ]
+    }
+  }
+}

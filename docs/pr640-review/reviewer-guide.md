@@ -2,7 +2,7 @@
 
 七个独立职责的 PR；按依赖阅读机制，再核对精确版本的验证证据。
 
-阅读顺序：734 → 735 → 736 → 737 → 738 → 739 → 740。该顺序不是线性依赖链：734→735→{736,737}；734→{738,739,740}。
+审查与合入顺序：734 → 735 → 736 → 737 → 738 → 739 → 740。该顺序不是线性依赖链：734→735→{736,737}；734→{738,739,740}。
 
 ![依赖地图](assets/review-map.png)
 
@@ -36,7 +36,7 @@ Review：DOM、样式、字体和视口是否完整使快照失效？干净读�
 HEAD：`b0f237b0955784c12a22bdda3996f52a8610f4cd`  
 直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 6 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
 ## [736 · 输入与默认激活](https://github.com/lexmount/moli/pull/736)
 
@@ -66,7 +66,7 @@ Review：ExtraInfo 是否与真实 wire 一致？302 后307是否保留正确方
 HEAD：`db091f6976d3742a669b64c85360d4dfd3e41ca6`  
 直接 base：`b0f237b0955784c12a22bdda3996f52a8610f4cd`（codex/pr640-layout-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 3 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 0 项未完成、0 项失败。
 
 ## [738 · 停止加载与生命周期](https://github.com/lexmount/moli/pull/738)
 
@@ -81,7 +81,7 @@ Review：停止是否幂等？旧回调能否影响新导航？解析器退役�
 HEAD：`b43a213dc6b68a314dadcdf36d3b5fb4dc8d8d3b`  
 直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 3 项未完成、0 项失败。
 
 ## [739 · 表单命名属性](https://github.com/lexmount/moli/pull/739)
 
@@ -96,7 +96,7 @@ Review：改名、归属变更与跨文档收养是否立即生效？getter、�
 HEAD：`7919ed092465dd2e8c288201bde5aa7d7f71ad2c`  
 直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 2 项未完成、0 项失败。
 
 ## [740 · 文本响应解析](https://github.com/lexmount/moli/pull/740)
 
@@ -111,7 +111,7 @@ Review：编码与分块是否改变正文？快照与 live DOM 是否一致？�
 HEAD：`ca2a8d39572644de1211e3aba30d239abf0ffb17`  
 直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 6 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
 ## 35 题与原 11 类问题
 
@@ -171,6 +171,18 @@ Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 
 
 内容覆盖不等于35题全部通过，原合同失败结果保留。
 
+## 合入与版本证据
+
+按 734 → 735 → 736 → 737 → 738 → 739 → 740 合入。父 PR 线性合入后，仅重放子 PR 自身直接 base → HEAD 增量到最新 main，再复核 diff、提交身份与 CI。保留原始 PR、分支和已测试提交证据；旧二进制结果不能直接换成新 HEAD 标签。
+
+## 架构与 Rust 审查依据
+
+[仓库架构](https://github.com/lexmount/moli/blob/2793b2407fc7805afcb531e94fc02da4ac7bf33d/README.md)：native DOM / Stylo 单一状态来源，布局按需快照；检查失效归属、快照一致性与默认 Mock 行为。
+
+[Rust 类型安全](https://rust-lang.github.io/api-guidelines/type-safety.html)：状态和所需数据由类型表达；[Rust 错误处理](https://doc.rust-lang.org/book/ch09-03-to-panic-or-not-to-panic.html)：区分可恢复错误与不变量破坏，不能以导航为由吞掉无关错误。
+
+[Rust Style Guide](https://doc.rust-lang.org/stable/style-guide/) 与 [仓库门禁](https://github.com/lexmount/moli/blob/2793b2407fc7805afcb531e94fc02da4ac7bf33d/AGENTS.md) 确定格式和检查要求；门禁不能替代生命周期、真实 wire 与 DOM/raw body 的独立验证。
+
 ## 机制图解
 
 ![核心机制](assets/mechanisms.png)
@@ -185,7 +197,7 @@ Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 
 
 组合版本 ed844e7c 的 localhost HTTP + CDP 场景 3/3 通过：文本 DOM 与原始网络正文、停止后新导航、解析器退役后继续捕获响应。该结果属于七分区组合，不能代替各 PR 或 35 题成绩。 组合场景证据
 
-676 Chrome / Moli 时序证据 加入 676 就绪前提的后续完整三题验收为 2/3：339、676 通过，595 在脚本初始化前触发原生订阅表单，仍失败；该结果不与原轮拼接为 3/3。 后续三题审计
+676 Chrome / Moli 时序证据 加入 676 就绪前提的后续完整三题验收为 2/3：339、676 通过，595 在脚本初始化前触发原生订阅表单，仍失败；该结果不与原轮拼接为 3/3。 后续三题审计 网络显式就绪合同 v2 已完成 3/3；595 与 676 有独立验证的就绪前提，其余动作与评分不变。 完整3题新合同审计
 
 文本 PR 的 Nextest 汇总包含 1 个重试后通过的测试；现有 CI 配置未保留该测试名称与首次失败输出，不能把它描述为全部首轮通过。
 

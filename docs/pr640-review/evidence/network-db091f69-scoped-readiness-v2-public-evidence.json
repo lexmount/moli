@@ -1,0 +1,202 @@
+{
+  "schema": "pr640-declared-contract-public-evidence/1",
+  "group": "network",
+  "audit": {
+    "schema": "pr640-scoped-readiness-acceptance/2",
+    "group": "network",
+    "passed": 3,
+    "total": 3,
+    "source_commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+    "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+    "contract_sha256": "242758c3f7deed570f44aa7c2493bcc8da2c45efc1193fdf6468fa8cd50e6ab9",
+    "qualification_sha256": "13a56faa7e1e7bc84095e9057b8e0822bd359dfafceb9d4932dbfad776db535d",
+    "receipt_sha256": "3d719d13f397fc1fe63cf19be0332d9832ef428b444c0ed7fd56bae221644b8c",
+    "original_results": {
+      "339": "pass",
+      "595": "pass",
+      "676": "fail"
+    },
+    "scope_ids": [
+      339,
+      595,
+      676
+    ],
+    "original_runner_and_actions_unchanged": true,
+    "new_readiness_contract": true,
+    "historical_results_preserved": true
+  },
+  "receipt_sha256": "3d719d13f397fc1fe63cf19be0332d9832ef428b444c0ed7fd56bae221644b8c",
+  "run_count": 1,
+  "retry_count": 0,
+  "fresh_browser_context_per_task": true,
+  "site_reset_between_tasks": false,
+  "site_reset_sha256": "ddcbe2869e706eae7aa65c418119bfb3c3dc980634f49484bdb891a125829457",
+  "reference_sha256_before": {
+    "manifest": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+    "browser_binary": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "site_map": "78c6c9498a07db4cd2b0b1ea3e573ad2ab92c4a9275b24c6dca054a641221ced",
+    "cohort_reset_hook": "0fe695d434614ced151c1cf469fd7e40889410e2af356584439fb0260f21667b",
+    "cowagent_browser_tool": "d700714f2ef6da0ad59d538f4c9a344db744bb49035d804d9d04ef2981927a58",
+    "cowagent_browser_service": "395e73ec640c2a25e5c398d1eb0c4edbde0a0f410d39e33d43f671c67715454c",
+    "task_selection": "06d8d999164c7c2de6cb21d15ec12f5260bfc2a58ca81b098a8c7779d4d2d91a",
+    "frozen_trajectories": "624a0ea83c6e4c3533714e961656d7e4159189a9e4941017b06a5299e4dc31d5",
+    "task_corrections": "e764f4b2828fa97d98cecc8752b31329871e612be1fff13878410d41e8414f9b",
+    "runner": "99e6f576c64c58004900ac1b9d7642c886abcf87ecab582c4a95f597dc65acec",
+    "candidate_runner": "71ac90a788cf671c24b39f84824a429869a410d27e911882a7d7fdb406b5f51e",
+    "replay_logic": "484e1f10381ed21ea8c8bee6b4a90ed961846191f4a5b08aebde1b220c650ac3",
+    "retrieval_acceptance": "253e6d3af74779d4311f8071384ac593ab60246e3154984f72b29f0344204e25",
+    "correction_logic": "95801bddb8ee0cfc7e5b399212f53009e09cc59f946489a40fdfe6fd1ae9cd6a",
+    "remote_runtime": "f9f6d371be790685c50714e09b2994793778d10a401edb34807df947c9cd1751",
+    "reference_receipt_225": "0e6f2a1a0e9d85a6f8c6f9a03832253d97be4934159be502b8786e8ae96a567a",
+    "reference_receipt_279": "c6064850ebb16044bd3ba945333686d378575822c4563e08564343e52fe54b85"
+  },
+  "reference_sha256_after": {
+    "manifest": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+    "browser_binary": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "site_map": "78c6c9498a07db4cd2b0b1ea3e573ad2ab92c4a9275b24c6dca054a641221ced",
+    "cohort_reset_hook": "0fe695d434614ced151c1cf469fd7e40889410e2af356584439fb0260f21667b",
+    "cowagent_browser_tool": "d700714f2ef6da0ad59d538f4c9a344db744bb49035d804d9d04ef2981927a58",
+    "cowagent_browser_service": "395e73ec640c2a25e5c398d1eb0c4edbde0a0f410d39e33d43f671c67715454c",
+    "task_selection": "06d8d999164c7c2de6cb21d15ec12f5260bfc2a58ca81b098a8c7779d4d2d91a",
+    "frozen_trajectories": "624a0ea83c6e4c3533714e961656d7e4159189a9e4941017b06a5299e4dc31d5",
+    "task_corrections": "e764f4b2828fa97d98cecc8752b31329871e612be1fff13878410d41e8414f9b",
+    "runner": "99e6f576c64c58004900ac1b9d7642c886abcf87ecab582c4a95f597dc65acec",
+    "candidate_runner": "71ac90a788cf671c24b39f84824a429869a410d27e911882a7d7fdb406b5f51e",
+    "replay_logic": "484e1f10381ed21ea8c8bee6b4a90ed961846191f4a5b08aebde1b220c650ac3",
+    "retrieval_acceptance": "253e6d3af74779d4311f8071384ac593ab60246e3154984f72b29f0344204e25",
+    "correction_logic": "95801bddb8ee0cfc7e5b399212f53009e09cc59f946489a40fdfe6fd1ae9cd6a",
+    "remote_runtime": "f9f6d371be790685c50714e09b2994793778d10a401edb34807df947c9cd1751",
+    "reference_receipt_225": "0e6f2a1a0e9d85a6f8c6f9a03832253d97be4934159be502b8786e8ae96a567a",
+    "reference_receipt_279": "c6064850ebb16044bd3ba945333686d378575822c4563e08564343e52fe54b85"
+  },
+  "cases": [
+    {
+      "task_id": 339,
+      "status": "pass",
+      "score": 1.0,
+      "action_count": 2,
+      "completed_actions": 2,
+      "executed_actions_sha256": "fb13fd12f74f820120e9deb1e4cd111100d5e09f48b6894c785e21a448efa863",
+      "duration_ms": 20521.373,
+      "evidence_sha256": {
+        "network_har": "7e0c6c9a796187f919fea494c62be30c0493a5026e714df6a642fe8614b680ad",
+        "actual_response": "6af6f817e0baf7324e0447d74cfcff9f4068cddfb6ae151e41bc43eb94d3a5a5",
+        "evaluation": "8ed783b695064c3215acf3d29c571b6f14a34534405acbc64670550ccd90270a",
+        "trace": "5be367344d955619d8d893c113eca1b7541b3281b71d6885ec6b5abb5185ac76",
+        "readiness": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+      }
+    },
+    {
+      "task_id": 595,
+      "status": "pass",
+      "score": 1.0,
+      "action_count": 16,
+      "completed_actions": 16,
+      "executed_actions_sha256": "175298d5f1b6be028046efa0f606face4ab8b82838f20259034633df01aceb91",
+      "duration_ms": 27010.26,
+      "evidence_sha256": {
+        "network_har": "70901a1449230329d88f4a65b07579d7f6802a887a20f27c3f5837eae9b9b7e7",
+        "actual_response": "5443c04623ea249da72e3416665b576d9440e12d4e7d65174f4eac167f7cf2c4",
+        "evaluation": "6b3e7ad9a3bd459708b3b1d43d60efe44e5d4d44aee22baed973676e4d648a64",
+        "trace": "ea09e9e334d01f034f099e311e030d0719b74eea1dfcabce733fb2a4e927b546",
+        "readiness": "f1a697edcd969a1c4c7928c1bd7c4d670eb2c79cab097f890df0357778dce67c"
+      }
+    },
+    {
+      "task_id": 676,
+      "status": "pass",
+      "score": 1.0,
+      "action_count": 5,
+      "completed_actions": 5,
+      "executed_actions_sha256": "a4de7eff370e282404f3e7df5a6e8b07529d3b76d266412241ca27dc989eb4d6",
+      "duration_ms": 13852.81,
+      "evidence_sha256": {
+        "network_har": "36f9a35bc8d452a4fd320c6291189e01f4a36c7bc7c38788e331264bb4fce1b0",
+        "actual_response": "6af6f817e0baf7324e0447d74cfcff9f4068cddfb6ae151e41bc43eb94d3a5a5",
+        "evaluation": "01abc4f3ada48eddf8a6fd39065cdd18bac7add44c6881e32f17bcf34657916a",
+        "trace": "22baf97f3e16b705ad6f109676680e94b2de226ed465a15e431943b0c7d88062",
+        "readiness": "e81b42f6c4f591d2a0516a1b93a2c54be94b896e5a5f8d2168e8faa266dbfd33"
+      }
+    }
+  ],
+  "contract": {
+    "schema": "pr640-scoped-readiness-contract/2",
+    "group": "network",
+    "status": "candidate_pending_qualification",
+    "site_execution_authorized_by_this_tool": false,
+    "source_commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+    "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+    "pins": {
+      "original": {
+        "path": "/tmp/moli-split640/network-db091f69-inputs.json",
+        "sha256": "f6bd4db583106f02b032a75f654b367f065e77ef88b5ec5e05916629f1f07efd"
+      },
+      "receipt": {
+        "path": "/tmp/moli-split640/network-db091f69-targeted/receipt.json",
+        "sha256": "69b8d3c903ee22931c07da7d544e9abc2c0792bc824480a0c2f8fc40285e6c18"
+      },
+      "build": {
+        "path": "/tmp/moli-split640/binaries/network-db091f69/build.json",
+        "sha256": "806db219ff91264b035d99e2dbbecf33db880d5b74bbf5bcdb56ea7d67747bae"
+      },
+      "scope": {
+        "path": "/tmp/moli-split640/35-case-scope-v2.json",
+        "sha256": "2ed77738693003596736f23c8dd5b59d3ed00221455d43a3b6e62e03473ed5f4"
+      }
+    },
+    "predicates": {
+      "595": {
+        "path": "/tmp/moli-split640/layout-readiness-document.js",
+        "sha256": "cb215f3179b037b3819ca72f1c899b3f6ba0e6cfec202d49608371d119c941bd"
+      },
+      "676": {
+        "path": "/tmp/moli-split640/case676-readiness-predicate.js",
+        "sha256": "5b8c663343b0936ec709642c9c55b45022679bc2320bc79ddad541ba295484f4"
+      }
+    },
+    "scope_ids": [
+      339,
+      595,
+      676
+    ],
+    "allowed_boundaries": {
+      "595": 13,
+      "676": 2
+    },
+    "new_manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+    "original_results": {
+      "339": "pass",
+      "595": "pass",
+      "676": "fail"
+    },
+    "reference_hashes": {
+      "manifest": "f6bd4db583106f02b032a75f654b367f065e77ef88b5ec5e05916629f1f07efd",
+      "browser_binary": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+      "site_map": "78c6c9498a07db4cd2b0b1ea3e573ad2ab92c4a9275b24c6dca054a641221ced",
+      "cohort_reset_hook": "0fe695d434614ced151c1cf469fd7e40889410e2af356584439fb0260f21667b",
+      "cowagent_browser_tool": "d700714f2ef6da0ad59d538f4c9a344db744bb49035d804d9d04ef2981927a58",
+      "cowagent_browser_service": "395e73ec640c2a25e5c398d1eb0c4edbde0a0f410d39e33d43f671c67715454c",
+      "task_selection": "06d8d999164c7c2de6cb21d15ec12f5260bfc2a58ca81b098a8c7779d4d2d91a",
+      "frozen_trajectories": "624a0ea83c6e4c3533714e961656d7e4159189a9e4941017b06a5299e4dc31d5",
+      "task_corrections": "e764f4b2828fa97d98cecc8752b31329871e612be1fff13878410d41e8414f9b",
+      "runner": "99e6f576c64c58004900ac1b9d7642c886abcf87ecab582c4a95f597dc65acec",
+      "candidate_runner": "71ac90a788cf671c24b39f84824a429869a410d27e911882a7d7fdb406b5f51e",
+      "replay_logic": "484e1f10381ed21ea8c8bee6b4a90ed961846191f4a5b08aebde1b220c650ac3",
+      "retrieval_acceptance": "253e6d3af74779d4311f8071384ac593ab60246e3154984f72b29f0344204e25",
+      "correction_logic": "95801bddb8ee0cfc7e5b399212f53009e09cc59f946489a40fdfe6fd1ae9cd6a",
+      "remote_runtime": "f9f6d371be790685c50714e09b2994793778d10a401edb34807df947c9cd1751",
+      "reference_receipt_225": "0e6f2a1a0e9d85a6f8c6f9a03832253d97be4934159be502b8786e8ae96a567a",
+      "reference_receipt_279": "c6064850ebb16044bd3ba945333686d378575822c4563e08564343e52fe54b85"
+    },
+    "allowed_reference_changes": [
+      "manifest"
+    ],
+    "allowed_manifest_changes": [
+      "method_id",
+      "tasks[task_id=595].readiness",
+      "tasks[task_id=676].readiness"
+    ]
+  },
+  "privacy": "Contains artifact/input digests and outcomes, excludes authentication state, full HTTP captures and service reset credentials."
+}

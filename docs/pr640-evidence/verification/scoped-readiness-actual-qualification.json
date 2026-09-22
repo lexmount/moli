@@ -1,0 +1,258 @@
+{
+  "schema": "scoped-readiness-actual-qualification/1",
+  "read_only": true,
+  "business_clicks": 0,
+  "task_runs": 0,
+  "site_reset": false,
+  "started_at_unix": 1790065008.458178,
+  "probes": [
+    {
+      "case_id": 108,
+      "engine": "chromium",
+      "binary_sha256": "af09314952c541583cc380057318e0a812a2dd1d7627327d564fc2e991736345",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065009.396649,
+      "readiness_inputs_sha256": [
+        "cd3decc6ae10bce5a2026902e131a8a07c0c17a041e4212cf4b36a74a12a23c0"
+      ],
+      "results": [
+        {
+          "before_action": 7,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"target\": \"first visible Filters control\",\n  \"controls_present\": true,\n  \"target_option_present\": true,\n  \"expand_interactive\": true,\n  \"knockout_component_contexts\": true,\n  \"wait_ms\": 3509\n}",
+          "duration_ms": 3511.341
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 3157.464,
+      "passed": true,
+      "finished_at_unix": 1790065024.397322
+    },
+    {
+      "case_id": 506,
+      "engine": "chromium",
+      "binary_sha256": "af09314952c541583cc380057318e0a812a2dd1d7627327d564fc2e991736345",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065024.398816,
+      "readiness_inputs_sha256": [
+        "7ce98fcf5dabbd9aba23385cc82c409fe39c5ce1c56517454c274b1e1140d4ce"
+      ],
+      "results": [
+        {
+          "before_action": 6,
+          "status": "error",
+          "result": "Evaluate failed: Page.evaluate: Error: Cart readiness timed out at catalogAddToCart form instance\n    at check (eval at evaluate (:290:30), <anonymous>:26:63)",
+          "duration_ms": 15023.31
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 7301.761,
+      "passed": false,
+      "error": "readiness predicate rejected actual page",
+      "finished_at_unix": 1790065053.171742
+    },
+    {
+      "case_id": 547,
+      "engine": "chromium",
+      "binary_sha256": "af09314952c541583cc380057318e0a812a2dd1d7627327d564fc2e991736345",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065053.174145,
+      "readiness_inputs_sha256": [
+        "21e64dc75780d0ed2428e17badbb4c802e3d12f4f07b60af125306e0bc4b7459"
+      ],
+      "results": [
+        {
+          "before_action": 3,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"target\": \"first Edit Configurations\",\n  \"component_binding\": true,\n  \"modal_action_contract\": true,\n  \"wait_ms\": 5085\n}",
+          "duration_ms": 5087.497
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 4276.735,
+      "passed": true,
+      "finished_at_unix": 1790065066.898709
+    },
+    {
+      "case_id": 714,
+      "engine": "chromium",
+      "binary_sha256": "af09314952c541583cc380057318e0a812a2dd1d7627327d564fc2e991736345",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065066.899969,
+      "readiness_inputs_sha256": [
+        "3671002554bf0ee22066016594ffa8420622d420f852c563a48383315f3275e4",
+        "b2f4966f3bd5b5ee7b872a1ef52ba3087f8a1ff3c57f2ac966e2f4ba89acfb18"
+      ],
+      "results": [
+        {
+          "before_action": 13,
+          "status": "success",
+          "result": "Wait completed.",
+          "duration_ms": 13.42
+        },
+        {
+          "before_action": 13,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"document_lifecycle\": \"complete\",\n  \"wait_ms\": 0\n}",
+          "duration_ms": 1.127
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 2878.437,
+      "passed": true,
+      "finished_at_unix": 1790065075.147205
+    },
+    {
+      "case_id": 108,
+      "engine": "moli",
+      "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065075.606828,
+      "readiness_inputs_sha256": [
+        "cd3decc6ae10bce5a2026902e131a8a07c0c17a041e4212cf4b36a74a12a23c0"
+      ],
+      "results": [
+        {
+          "before_action": 7,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"target\": \"first visible Filters control\",\n  \"controls_present\": true,\n  \"target_option_present\": true,\n  \"expand_interactive\": true,\n  \"knockout_component_contexts\": true,\n  \"wait_ms\": 4059\n}",
+          "duration_ms": 4070.497
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 3903.102,
+      "passed": true,
+      "finished_at_unix": 1790065089.2078452
+    },
+    {
+      "case_id": 506,
+      "engine": "moli",
+      "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065089.25876,
+      "readiness_inputs_sha256": [
+        "7ce98fcf5dabbd9aba23385cc82c409fe39c5ce1c56517454c274b1e1140d4ce"
+      ],
+      "results": [
+        {
+          "before_action": 6,
+          "status": "error",
+          "result": "Evaluate failed: Page.evaluate: Error: Cart readiness timed out at catalogAddToCart form instance\n    at check (eval at evaluate (:290:30), <anonymous>:26:63)",
+          "duration_ms": 15016.564
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 2341.336,
+      "passed": false,
+      "error": "readiness predicate rejected actual page",
+      "finished_at_unix": 1790065111.459508
+    },
+    {
+      "case_id": 547,
+      "engine": "moli",
+      "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065111.519595,
+      "readiness_inputs_sha256": [
+        "21e64dc75780d0ed2428e17badbb4c802e3d12f4f07b60af125306e0bc4b7459"
+      ],
+      "results": [
+        {
+          "before_action": 3,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"target\": \"first Edit Configurations\",\n  \"component_binding\": true,\n  \"modal_action_contract\": true,\n  \"wait_ms\": 4777\n}",
+          "duration_ms": 4863.263
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 5447.618,
+      "passed": true,
+      "finished_at_unix": 1790065128.844859
+    },
+    {
+      "case_id": 714,
+      "engine": "moli",
+      "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "started_at_unix": 1790065128.895413,
+      "readiness_inputs_sha256": [
+        "3671002554bf0ee22066016594ffa8420622d420f852c563a48383315f3275e4",
+        "b2f4966f3bd5b5ee7b872a1ef52ba3087f8a1ff3c57f2ac966e2f4ba89acfb18"
+      ],
+      "results": [
+        {
+          "before_action": 13,
+          "status": "success",
+          "result": "Wait completed.",
+          "duration_ms": 68.195
+        },
+        {
+          "before_action": 13,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"document_lifecycle\": \"complete\",\n  \"wait_ms\": 0\n}",
+          "duration_ms": 1.444
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 2486.667,
+      "passed": true,
+      "finished_at_unix": 1790065135.999465
+    },
+    {
+      "case_id": 595,
+      "engine": "chromium",
+      "binary_sha256": "af09314952c541583cc380057318e0a812a2dd1d7627327d564fc2e991736345",
+      "manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+      "started_at_unix": 1790065136.959154,
+      "readiness_inputs_sha256": [
+        "b3d94192bf57f3a77375e0e1a0b1c227567476a6dae42f07fc490170d584eb27"
+      ],
+      "results": [
+        {
+          "before_action": 13,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"document_lifecycle\": \"complete\",\n  \"wait_ms\": 0\n}",
+          "duration_ms": 1.211
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 2560.717,
+      "passed": true,
+      "finished_at_unix": 1790065143.422358
+    },
+    {
+      "case_id": 595,
+      "engine": "moli",
+      "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+      "manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+      "started_at_unix": 1790065143.9213948,
+      "readiness_inputs_sha256": [
+        "b3d94192bf57f3a77375e0e1a0b1c227567476a6dae42f07fc490170d584eb27"
+      ],
+      "results": [
+        {
+          "before_action": 13,
+          "status": "success",
+          "result": "{\n  \"ready\": true,\n  \"document_lifecycle\": \"complete\",\n  \"wait_ms\": 0\n}",
+          "duration_ms": 1.766
+        }
+      ],
+      "navigate_status": "success",
+      "navigate_ms": 7613.727,
+      "passed": true,
+      "finished_at_unix": 1790065156.0565052
+    }
+  ],
+  "inputs": {
+    "layout-b0f237b0": {
+      "manifest_sha256": "fcdb0bd31084df88976d5bbde10aaa075d89ef44052d1a3d7ae58462aee5b314",
+      "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92"
+    },
+    "network-db091f69": {
+      "manifest_sha256": "e2342fcd885fde1171460a9b2709ab78b5fe9b80e33d435b67f1f2f3f783ecd7",
+      "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a"
+    }
+  },
+  "finished_at_unix": 1790065156.130466,
+  "all_passed": false
+}

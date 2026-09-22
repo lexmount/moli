@@ -1,0 +1,118 @@
+{
+  "schema": "pr640-new-main-compatibility/1",
+  "old_main": "2793b2407fc7805afcb531e94fc02da4ac7bf33d",
+  "new_main": "793499865736c5e91eb5dc52ee501beea8db0912",
+  "combined_commit": "ed844e7cf8c2f1f7d79a6215936c6055b1eb3b65",
+  "combined_tree": "6fe6dd8f43edca8585379cd23b957057d902f0f1",
+  "virtual_merge_tree": "98be4e73eda6286445ea57d462edd9828cc3e53f",
+  "merge_exit_code": 0,
+  "isolated_object_directory": "/var/folders/0w/4fjd1k3d2kb7bhyx2r8wgz2h0000gn/T/main-79349986-object-audit-5bnjjh1b/objects",
+  "no_existing_refs_changed": true,
+  "upstream_files": [
+    "moli-renderer-v8/src/network_host.rs",
+    "moli-renderer-v8/src/network_host/xhr.rs",
+    "moli-renderer-v8/src/network_host/xhr/bindings/prototype.rs",
+    "moli-renderer-v8/src/network_host/xhr/send.rs",
+    "moli-renderer-v8/src/network_host/xhr/send/request.rs",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/mod.rs",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/send_body.rs",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/xhr.rs",
+    "moli-renderer-v8/src/worker/global_scope/mod.rs",
+    "moli-renderer-v8/src/worker/global_scope/xhr.rs",
+    "moli-renderer-v8/tests/fixtures/xhr-send-body-conversion.js"
+  ],
+  "split_overlap": [],
+  "per_pr_overlap": {
+    "engineering": [],
+    "layout": [],
+    "input": [],
+    "network": [],
+    "stop": [],
+    "forms": [],
+    "text": []
+  },
+  "merged_delta_files": [
+    "moli-renderer-v8/src/network_host.rs",
+    "moli-renderer-v8/src/network_host/xhr.rs",
+    "moli-renderer-v8/src/network_host/xhr/bindings/prototype.rs",
+    "moli-renderer-v8/src/network_host/xhr/send.rs",
+    "moli-renderer-v8/src/network_host/xhr/send/request.rs",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/mod.rs",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/send_body.rs",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/xhr.rs",
+    "moli-renderer-v8/src/worker/global_scope/mod.rs",
+    "moli-renderer-v8/src/worker/global_scope/xhr.rs",
+    "moli-renderer-v8/tests/fixtures/xhr-send-body-conversion.js"
+  ],
+  "delta_paths_equal_upstream": true,
+  "upstream_patch_id": "0153c50a8b9ac14aa900b07b51f5740d13231640",
+  "merged_delta_patch_id": "0153c50a8b9ac14aa900b07b51f5740d13231640",
+  "original_combined_split_patch_id": "df007ca6857a37e9ab208640ff10fe916ccd79ab",
+  "rebased_split_patch_id": "df007ca6857a37e9ab208640ff10fe916ccd79ab",
+  "upstream_blobs": [
+    {
+      "file": "moli-renderer-v8/src/network_host.rs",
+      "new_main_blob": "7f0aca1ff352617d29a491af8e62495d804560a2",
+      "merged_blob": "7f0aca1ff352617d29a491af8e62495d804560a2"
+    },
+    {
+      "file": "moli-renderer-v8/src/network_host/xhr.rs",
+      "new_main_blob": "59cf9a473cb06a1f68096fcb03c4dc1e09eae66d",
+      "merged_blob": "59cf9a473cb06a1f68096fcb03c4dc1e09eae66d"
+    },
+    {
+      "file": "moli-renderer-v8/src/network_host/xhr/bindings/prototype.rs",
+      "new_main_blob": "e89f85c015df419be67c2ddc3e0e1d09c1cc719d",
+      "merged_blob": "e89f85c015df419be67c2ddc3e0e1d09c1cc719d"
+    },
+    {
+      "file": "moli-renderer-v8/src/network_host/xhr/send.rs",
+      "new_main_blob": "afbfbf43a268d61d4cd9cbfca5c065b0d2fbdc4d",
+      "merged_blob": "afbfbf43a268d61d4cd9cbfca5c065b0d2fbdc4d"
+    },
+    {
+      "file": "moli-renderer-v8/src/network_host/xhr/send/request.rs",
+      "new_main_blob": "10ca609bd465671c594348bebee8551de674f091",
+      "merged_blob": "10ca609bd465671c594348bebee8551de674f091"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/mod.rs",
+      "new_main_blob": "224daa0eeda96ff6e5e91cab118e3740b63b0279",
+      "merged_blob": "224daa0eeda96ff6e5e91cab118e3740b63b0279"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/send_body.rs",
+      "new_main_blob": "66220cdf7e960ce37197ec9bc09b02ec4efafcba",
+      "merged_blob": "66220cdf7e960ce37197ec9bc09b02ec4efafcba"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/xhr.rs",
+      "new_main_blob": "8e65f8e6266160d4029a02ab4e638bceb76af117",
+      "merged_blob": "8e65f8e6266160d4029a02ab4e638bceb76af117"
+    },
+    {
+      "file": "moli-renderer-v8/src/worker/global_scope/mod.rs",
+      "new_main_blob": "baeaf93aba2e84d099112ced7f0ce346ef4630fd",
+      "merged_blob": "baeaf93aba2e84d099112ced7f0ce346ef4630fd"
+    },
+    {
+      "file": "moli-renderer-v8/src/worker/global_scope/xhr.rs",
+      "new_main_blob": "eb5f7b19973d032b83736c759e360aed3bda9103",
+      "merged_blob": "eb5f7b19973d032b83736c759e360aed3bda9103"
+    },
+    {
+      "file": "moli-renderer-v8/tests/fixtures/xhr-send-body-conversion.js",
+      "new_main_blob": "bcb2e330303342e9c3ea7a10b707068d529c119e",
+      "merged_blob": "bcb2e330303342e9c3ea7a10b707068d529c119e"
+    }
+  ],
+  "all_upstream_file_blobs_exact": true,
+  "build_or_tests_run": false,
+  "old_xhr_body_api_references_in_merged_tree": 0,
+  "source_review": {
+    "network": "Transport observer, redirect rules and durable response storage unchanged; XHR conversion occurs before send state checks upstream.",
+    "text": "Response MIME parsing and child/live document initialization unchanged. Document native send-body union classification is not a response parser change.",
+    "input": "Input activation/event routing unchanged; XHR invoked by event handlers sees updated WebIDL conversion/reentrancy ordering.",
+    "stop": "Cancellation ownership/load-gate split changes preserved; upstream error-before-send path does not create transport work."
+  }
+}

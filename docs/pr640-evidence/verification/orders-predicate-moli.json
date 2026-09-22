@@ -1,0 +1,22 @@
+{
+  "engine": "moli",
+  "read_only": true,
+  "not_case_retry": true,
+  "started_at_unix": 1790061898.754794,
+  "events": [],
+  "requests": [],
+  "load_ms": 3633.311,
+  "filters_at_load": 0,
+  "predicate_result": {
+    "ready": true,
+    "target": "first Filters control",
+    "controls_present": true,
+    "target_option_present": true,
+    "expand_interactive": true,
+    "knockout_component_contexts": true,
+    "wait_ms": 11754
+  },
+  "predicate_completed_ms": 15606.853,
+  "predicate_sha256": "5b8c663343b0936ec709642c9c55b45022679bc2320bc79ddad541ba295484f4",
+  "finished_at_unix": 1790061921.9850109
+}
