@@ -337,6 +337,7 @@ pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
     dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
     dispatch_simple_event_target_event_collecting_errors,
+    dispatch_simple_event_target_event_with_original_target,
     evaluate_match_media_query_list_with_viewport, install_simple_event_target_methods,
     install_simple_event_target_ordered_handlers, invoke_simple_event_listener,
     invoke_simple_event_target_listeners, mark_simple_event_target_slot,

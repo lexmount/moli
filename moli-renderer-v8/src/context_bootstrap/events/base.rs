@@ -152,8 +152,21 @@ pub(in crate::context_bootstrap) fn set_event_dispatch_fields<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) {
-    let _ = event.set(scope, v8str(scope, "target").into(), target.into());
-    let _ = event.set(scope, v8str(scope, "srcElement").into(), target.into());
+    set_event_dispatch_fields_with_original_target(scope, target, target, event);
+}
+
+pub(in crate::context_bootstrap) fn set_event_dispatch_fields_with_original_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    original_target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) {
+    let _ = event.set(scope, v8str(scope, "target").into(), original_target.into());
+    let _ = event.set(
+        scope,
+        v8str(scope, "srcElement").into(),
+        original_target.into(),
+    );
     let _ = event.set(scope, v8str(scope, "currentTarget").into(), target.into());
     let _ = event.set(
         scope,
