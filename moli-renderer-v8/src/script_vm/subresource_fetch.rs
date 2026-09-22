@@ -752,6 +752,11 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::DocumentAbort { internal_id } => AsyncSubresourceTraceFields {
+            event_kind: Some("document_abort"),
+            internal_id: Some(*internal_id),
+            ..AsyncSubresourceTraceFields::default()
+        },
         AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation { .. } => {
             AsyncSubresourceTraceFields {
                 event_kind: Some("csp_violation"),

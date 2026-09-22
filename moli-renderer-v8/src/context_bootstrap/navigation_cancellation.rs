@@ -109,6 +109,9 @@ impl WindowNavigationStop {
             // replacing this Window. A genuinely retired LocalWindow must not
             // cancel a new Window installed behind the same frame handle.
             if binding.is_current(unsafe { &*host_ptr }) {
+                if let OwnerDispatchScope::Child(handle) = self.target.dispatch_scope() {
+                    unsafe { &mut *host_ptr }.abort_child_document_parser_for_navigation(handle);
+                }
                 stop_navigation_for_window(scope, window);
             }
             set_private_value(
@@ -121,7 +124,7 @@ impl WindowNavigationStop {
     }
 }
 
-pub(super) fn stop_navigation_for_window_and_descendants<'s>(
+pub(crate) fn stop_navigation_for_window_and_descendants<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
     binding: WindowExecutionContextBinding,
