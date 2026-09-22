@@ -2642,6 +2642,9 @@ impl PageScriptHost {
     ) {
         clear_lightweight_popup_window_document_event_state(scope, window);
         self.clear_lightweight_popup_document_projection(popup_id);
+        // Blank navigations bypass the fetched-response path. Publish their
+        // committed Location before linking the new Document to that object.
+        sync_window_location_runtime_state(scope, window, document_url.as_str());
         let base_url = self
             .lightweight_popup_base_url(scope, popup_id)
             .unwrap_or_else(|| document_url.clone());
