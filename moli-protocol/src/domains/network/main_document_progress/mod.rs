@@ -350,14 +350,23 @@ fn materialize_navigation_load_outcome(
             materialize_download_navigation_progress(conn, state, *navigation),
         ),
         NavigationLoadOutcome::NetworkFailure(error_text) => {
+            let document_policy = failed_navigation_document_policy(&error_text);
             MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
                 conn,
                 state,
                 error_text,
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
+                document_policy,
                 FailedNavigationResponseMode::CdpErrorTextResult,
             ))
         }
+    }
+}
+
+fn failed_navigation_document_policy(error_text: &str) -> FailedNavigationDocumentPolicy {
+    if error_text == moli_fetch::NET_ERR_ABORTED_ERROR_TEXT {
+        FailedNavigationDocumentPolicy::PreserveCommittedDocument
+    } else {
+        FailedNavigationDocumentPolicy::InvalidateCommittedDocument
     }
 }
 
