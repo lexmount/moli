@@ -78,7 +78,7 @@ fn wrap_handle_object<'s>(
         .wrap_handle(scope, runtime_ptr, handle)
 }
 
-pub(in crate::native_bridge) fn submit_form_with_submit_event(
+pub(crate) fn submit_form_with_submit_event(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     form_handle: DomHandle,

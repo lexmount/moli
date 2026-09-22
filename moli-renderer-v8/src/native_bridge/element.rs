@@ -62,6 +62,7 @@ use trusted_types::{
 pub(crate) use forms::{
     autocomplete_field_name, autofill_related_form_control_elements, form_associated_form_owner,
     form_control_elements, form_data_control_elements, is_valid_submit_button,
+    submit_form_with_submit_event,
 };
 #[cfg(test)]
 pub(crate) use styles::iframe_width_attribute_viewport_width;
@@ -124,6 +125,7 @@ pub(crate) use activation::{
     navigate_named_iframe_target,
 };
 pub(crate) use activation::{
+    activate_default_submit_button_via_keyboard, activate_handle_after_pointer_release,
     activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
     activate_handle_via_synthetic_click, dispatched_click_activation_target,
     finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,
@@ -306,7 +308,7 @@ pub(super) use forms::{
     select_selected_index_getter_function, select_selected_index_setter_function,
     select_selected_options_getter_function, select_size_getter_function,
     select_size_setter_function, select_value_getter_function, select_value_setter_function,
-    set_select_indexed_option, submit_form_with_submit_event, text_control_select_callback,
+    set_select_indexed_option, text_control_select_callback,
     text_control_selection_direction_getter_function,
     text_control_selection_direction_setter_function, text_control_selection_end_getter_function,
     text_control_selection_end_setter_function, text_control_selection_start_getter_function,

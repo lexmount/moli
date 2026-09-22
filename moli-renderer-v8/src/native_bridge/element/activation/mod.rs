@@ -5,6 +5,7 @@ mod targets;
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
 pub(in crate::native_bridge) use default_action::navigate_form_target_browsing_context;
 pub(crate) use default_action::{
+    activate_default_submit_button_via_keyboard, activate_handle_after_pointer_release,
     activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
     activate_handle_via_synthetic_click, dispatched_click_activation_target,
     finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,

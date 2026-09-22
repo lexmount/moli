@@ -2977,6 +2977,7 @@ fn bidi_response_from_classic_input_error(id: u64, error: ClassicError) -> serde
         ClassicErrorCode::InvalidArgument
         | ClassicErrorCode::MoveTargetOutOfBounds
         | ClassicErrorCode::ElementNotInteractable
+        | ClassicErrorCode::ElementClickIntercepted
         | ClassicErrorCode::InvalidElementState
         | ClassicErrorCode::StaleElementReference
         | ClassicErrorCode::NoSuchFrame
@@ -3235,6 +3236,29 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn webdriver_classic_click_errors_use_existing_bidi_input_error_mapping() {
+        for (classic, expected) in [
+            (
+                ClassicErrorCode::ElementClickIntercepted,
+                "invalid argument",
+            ),
+            (ClassicErrorCode::ElementNotInteractable, "invalid argument"),
+            (ClassicErrorCode::InvalidArgument, "invalid argument"),
+            (ClassicErrorCode::NoSuchElement, "no such node"),
+            (ClassicErrorCode::UnknownError, "unknown error"),
+        ] {
+            let response = bidi_response_from_classic_input_error(
+                42,
+                ClassicError::new(classic, "input diagnostic"),
+            );
+            assert_eq!(response["type"], json!("error"));
+            assert_eq!(response["id"], json!(42));
+            assert_eq!(response["error"], json!(expected));
+            assert_eq!(response["message"], json!("input diagnostic"));
+        }
+    }
 
     #[test]
     fn protocol_output_hook_prefers_automation_sidecar_over_protocol_message_parse() {
