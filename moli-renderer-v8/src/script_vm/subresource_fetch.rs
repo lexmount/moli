@@ -4601,6 +4601,9 @@ impl ScriptVm {
         let trace_fields = async_subresource_trace_fields_for_event(&event);
         trace_async_subresource_stage("async_subresource_event_start", trace_fields, trace_started);
         let result = match event {
+            AsyncSubresourceFetchEvent::DocumentAbort { internal_id } => {
+                self.complete_window_request_document_abort(internal_id)
+            }
             AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation {
                 report_context,
                 violation,
@@ -4634,6 +4637,51 @@ impl ScriptVm {
         };
         trace_async_subresource_stage("async_subresource_event_done", trace_fields, trace_started);
         result
+    }
+
+    fn complete_window_request_document_abort(
+        &mut self,
+        internal_id: u64,
+    ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let Some(pending) = self
+            ._context_host
+            .borrow_mut()
+            .take_pending_window_request_abort(internal_id)
+        else {
+            return Ok(AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered);
+        };
+        let context_host = self._context_host.clone();
+        self.renderer_document_isolate.with_entered_renderer_document_isolate(|isolate| {
+            let scope = pin!(v8::HandleScope::new(isolate));
+            let scope = &mut scope.init();
+            let host_ptr = context_host.as_ptr();
+            let context = v8::Local::new(scope, pending.binding.context_global());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            let entered = pending.binding.with_current_scope(scope, host_ptr, |scope, owner| {
+                let previous = enter_subresource_owner_async_scope(&context_host, scope, owner);
+                match pending.continuation {
+                    crate::types::WindowRequestAbortContinuation::Fetch { resolver, body_source } => {
+                        let message = v8_string(scope, "Failed to fetch").expect("static abort message");
+                        let reason = v8::Exception::type_error(scope, message);
+                        if let Some(body_source) = body_source {
+                            crate::network_host::error_pending_network_body_stream_with_reason(scope, body_source, "The document load was aborted.".to_owned(), reason);
+                        }
+                        if let Some(resolver) = resolver {
+                            let resolver = v8::Local::new(scope, &resolver);
+                            let _ = resolver.reject(scope, reason);
+                        }
+                    }
+                    crate::types::WindowRequestAbortContinuation::Xhr(xhr) => {
+                        let xhr = v8::Local::new(scope, &xhr);
+                        if crate::network_host::xhr_state_number_property(scope, xhr, crate::network_host::XHR_ACTIVE_INTERNAL_ID_SLOT) == Some(internal_id as f64) {
+                            crate::network_host::apply_xhr_document_abort(scope, xhr);
+                        }
+                    }
+                }
+                defer_subresource_owner_async_scope(&context_host, scope, owner, previous);
+            }).is_some();
+            Ok(if entered { AsyncSubresourceFetchBodyActivity::WindowRealmEntered } else { AsyncSubresourceFetchBodyActivity::NoWindowRealmEntered })
+        })
     }
 
     fn report_async_fetch_csp_violation(
@@ -6659,6 +6707,11 @@ fn async_subresource_trace_fields_for_event(
     event: &AsyncSubresourceFetchEvent,
 ) -> AsyncSubresourceTraceFields {
     match event {
+        AsyncSubresourceFetchEvent::DocumentAbort { internal_id } => AsyncSubresourceTraceFields {
+            event_kind: Some("document_abort"),
+            internal_id: Some(*internal_id),
+            ..AsyncSubresourceTraceFields::default()
+        },
         AsyncSubresourceFetchEvent::ContentSecurityPolicyViolation { .. } => {
             AsyncSubresourceTraceFields {
                 event_kind: Some("csp_violation"),

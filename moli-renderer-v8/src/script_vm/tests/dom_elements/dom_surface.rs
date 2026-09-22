@@ -16304,6 +16304,7 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
             r#"
 (() => {
   globalThis.__childTextAfterNavigation = 'unset';
+  globalThis.__abortedChildDclCount = 0;
   globalThis.__childLoadHandlerStage = 'unset';
   globalThis.__childLoadListenerStage = 'unset';
   const frame = document.createElement('iframe');
@@ -16311,6 +16312,7 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
   frame.__childLoadListenerStage = 'unset';
   frame.srcdoc = `
     <script>
+      document.addEventListener('DOMContentLoaded', () => parent.__abortedChildDclCount++);
       const blob = new Blob(['PASS'], { type: 'text/html' });
       location.href = URL.createObjectURL(blob);
       frameElement.onload = () => {
@@ -16384,12 +16386,8 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
         "blob replacement must materialize its exact realm",
     )
     .await;
-    expect_one_child_frame_task_source(
-        &mut vm,
-        ChildFrameSemanticTurnKind::DocumentLifecycle,
-        "the older srcdoc DCL must stale-discard at the shared DOM head",
-    )
-    .await;
+    // Navigation aborted the srcdoc parser before EOF, so it must not enqueue
+    // the old Document's DOMContentLoaded task.
     for transition in ["interactive", "DOMContentLoaded", "complete"] {
         expect_child_frame_task_source_after_realm_prerequisite(
             &mut vm,
@@ -16441,6 +16439,7 @@ async fn child_script_document_open_after_location_navigation_is_noop() {
         .expect("child navigation result should evaluate"),
         "unset|unset|unset|unset|true|PASS|PASS|false"
     );
+    assert_eq!(vm.eval("String(__abortedChildDclCount)").unwrap(), "0");
 }
 
 #[test]

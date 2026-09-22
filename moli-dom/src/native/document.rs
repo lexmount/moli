@@ -52,6 +52,8 @@ pub struct Document {
     character_set: Box<str>,
     allow_declarative_shadow_roots: bool,
     ready_state: DocumentReadyState,
+    // Sticky for this Document; aborting a parser disables document.open/write.
+    active_parser_was_aborted: bool,
     // Retained with the Document when its Window is replaced during navigation.
     visibility_hidden: bool,
     quirks_mode: QuirksMode,
@@ -84,6 +86,7 @@ impl Document {
             character_set: "UTF-8".into(),
             allow_declarative_shadow_roots: false,
             ready_state: DocumentReadyState::Complete,
+            active_parser_was_aborted: false,
             visibility_hidden: false,
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Html,
@@ -103,6 +106,7 @@ impl Document {
             character_set: "UTF-8".into(),
             allow_declarative_shadow_roots: false,
             ready_state: DocumentReadyState::Complete,
+            active_parser_was_aborted: false,
             visibility_hidden: false,
             quirks_mode: QuirksMode::NoQuirks,
             kind: DocumentKind::Xml,
@@ -144,6 +148,21 @@ impl Document {
 
     pub fn ready_state(&self) -> DocumentReadyState {
         self.ready_state
+    }
+
+    pub fn active_parser_was_aborted(&self) -> bool {
+        self.active_parser_was_aborted
+    }
+
+    pub fn mark_active_parser_aborted(&mut self) {
+        self.active_parser_was_aborted = true;
+    }
+
+    pub(super) fn clone_for_new_document(&self) -> Self {
+        Self {
+            active_parser_was_aborted: false,
+            ..self.clone()
+        }
     }
 
     pub fn visibility_hidden(&self) -> bool {

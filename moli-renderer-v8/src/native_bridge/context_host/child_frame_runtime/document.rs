@@ -41,10 +41,26 @@ impl JsContextHost {
         entry.has_uncommitted_navigation_seed()
     }
 
-    fn child_document_stream_is_blocked_by_navigation(&self, handle: DomHandle) -> bool {
-        self.child_browsing_contexts
-            .get(&handle)
-            .is_some_and(|entry| entry.has_pending_live_navigation())
+    fn child_document_active_parser_was_aborted(&self, handle: DomHandle) -> bool {
+        self.child_browsing_context_document_handle(handle)
+            .and_then(|document| self.dom_host().node(document))
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.active_parser_was_aborted())
+    }
+
+    pub(crate) fn abort_child_document_parser_for_navigation(&mut self, handle: DomHandle) {
+        if !self.child_document_parser_is_active(handle) {
+            return;
+        }
+        if let Some(document) = self.child_browsing_context_document_handle(handle)
+            && let Some(document) = self
+                .dom_host_mut()
+                .node_mut(document)
+                .and_then(|node| node.data_mut().as_document_mut())
+        {
+            document.mark_active_parser_aborted();
+        }
+        self.cancel_child_document_script_work(handle);
     }
 
     pub(crate) fn child_browsing_context_document_wrapper<'s>(
@@ -299,7 +315,7 @@ impl JsContextHost {
         debug_assert!(std::ptr::eq(host_ptr, self));
         crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
             let host = unsafe { &mut *host_ptr };
-            if host.child_document_stream_is_blocked_by_navigation(child_handle) {
+            if host.child_document_active_parser_was_aborted(child_handle) {
                 return;
             }
             let has_open_stream = host
@@ -358,7 +374,7 @@ impl JsContextHost {
         debug_assert!(std::ptr::eq(host_ptr, self));
         crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
             let host = unsafe { &mut *host_ptr };
-            if host.child_document_stream_is_blocked_by_navigation(child_handle) {
+            if host.child_document_active_parser_was_aborted(child_handle) {
                 return;
             }
             // Only script-created streams accept EOF from document.close().
@@ -459,11 +475,11 @@ impl JsContextHost {
         if unsafe { &*host_ptr }.has_document_unload_counter(document_handle) {
             return None;
         }
-        if unsafe { &*host_ptr }.child_document_stream_is_blocked_by_navigation(child_handle) {
+        if unsafe { &*host_ptr }.child_document_active_parser_was_aborted(child_handle) {
             tracing::debug!(
                 ?child_handle,
                 ?document_handle,
-                "ignored child document stream replacement after navigation started"
+                "ignored child document stream replacement after parser abort"
             );
             return None;
         }
@@ -483,6 +499,34 @@ impl JsContextHost {
         };
         if unsafe { &*host_ptr }.child_document_is_executing_parser_script(document_handle) {
             return Some(script_context);
+        }
+        let has_ongoing_navigation = unsafe { &*host_ptr }
+            .child_browsing_contexts
+            .get(&child_handle)
+            .is_some_and(|entry| entry.has_pending_navigation_or_document_load())
+            && !unsafe { &*host_ptr }.child_browsing_context_has_pending_cross_document_traversal(child_handle);
+        if has_ongoing_navigation {
+            let window = script_context.global(scope);
+            if let Some(owner) =
+                unsafe { &*host_ptr }.current_window_execution_context_owner(OwnerDispatchScope::Child(child_handle))
+                && let Some(binding) = unsafe { &*host_ptr }.clone_window_execution_context_binding(
+                    scope,
+                    owner,
+                    OwnerDispatchScope::Child(child_handle),
+                )
+            {
+                crate::context_bootstrap::stop_navigation_for_window_and_descendants(
+                    scope, window, binding,
+                );
+            }
+            if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+                return None;
+            }
+            if let Some(owner) = unsafe { &*host_ptr }.current_child_document_task_owner(child_handle) {
+                unsafe { &mut *host_ptr }.abort_window_requests_for_document(
+                    crate::native_bridge::WindowDocumentOwner::Frame(owner),
+                );
+            }
         }
         let document_url = unsafe { &*host_ptr }.document_url_for_handle(document_handle);
         let document_base_url = unsafe { &*host_ptr }.document_base_url_for_handle(document_handle);
@@ -513,9 +557,8 @@ impl JsContextHost {
                 .cancel_child_browsing_context_attribute_navigation(child_handle);
         }
 
-        if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
-            != Some(document_handle)
-            || unsafe { &*host_ptr }.child_document_stream_is_blocked_by_navigation(child_handle)
+        if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle) != Some(document_handle)
+            || unsafe { &*host_ptr }.child_document_active_parser_was_aborted(child_handle)
         {
             return None;
         }

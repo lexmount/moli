@@ -2901,6 +2901,37 @@ mod tests {
     }
 
     #[test]
+    fn cloned_document_does_not_inherit_an_aborted_parser() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.document_handle();
+        host.node_mut(document)
+            .unwrap()
+            .data_mut()
+            .as_document_mut()
+            .unwrap()
+            .mark_active_parser_aborted();
+
+        for deep in [false, true] {
+            let cloned = host.clone_node(document, deep).unwrap();
+            assert!(
+                !host
+                    .node(cloned)
+                    .unwrap()
+                    .as_document()
+                    .unwrap()
+                    .active_parser_was_aborted()
+            );
+        }
+        assert!(
+            host.node(document)
+                .unwrap()
+                .as_document()
+                .unwrap()
+                .active_parser_was_aborted()
+        );
+    }
+
+    #[test]
     fn shallow_cloned_template_content_is_empty() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let template = host.create_element("template");
