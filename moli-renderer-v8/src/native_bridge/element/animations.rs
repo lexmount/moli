@@ -59,7 +59,7 @@ pub(crate) fn dispatch_animation_start_scan(
         EventTargetHandle::Node(handle) => {
             dispatch_animation_start_if_applies(scope, runtime_ptr, handle)
         }
-        EventTargetHandle::ChildWindow(_) => false,
+        EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_) => false,
     }
 }
 
