@@ -86,7 +86,14 @@ pub(super) fn refresh<'s>(
     }
     host.joint_histories.ensure_root(root, root_snapshot)?;
     let mut live = vec![root];
-    for handle in host.child_browsing_context_handles_in_document_order() {
+    // Popup history is committed before the new native Document is installed.
+    // Keep the root commit even when there are no child documents to collect yet.
+    let children = super::window_accessors::window_document_handle(scope, root_window, host)
+        .map(|document| {
+            host.child_browsing_context_handles_in_document_order_for_document(document)
+        })
+        .unwrap_or_default();
+    for handle in children {
         let Some(window) = host.existing_child_browsing_context_window_wrapper(scope, handle)
         else {
             continue;

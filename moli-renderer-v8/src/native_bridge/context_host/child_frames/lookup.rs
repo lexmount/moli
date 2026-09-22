@@ -35,9 +35,16 @@ impl JsContextHost {
     }
 
     pub(crate) fn child_browsing_context_handles_in_document_order(&self) -> Vec<DomHandle> {
+        self.child_browsing_context_handles_in_document_order_for_document(self.document_handle())
+    }
+
+    pub(crate) fn child_browsing_context_handles_in_document_order_for_document(
+        &self,
+        document: DomHandle,
+    ) -> Vec<DomHandle> {
         let mut handles = Vec::new();
         self.collect_child_browsing_context_handles_in_document_order_from_document(
-            self.document_handle(),
+            document,
             &mut handles,
         );
         handles
