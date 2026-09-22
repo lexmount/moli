@@ -2,6 +2,31 @@ use super::*;
 use moli_url::origin_ascii_serialization;
 
 #[test]
+fn indexed_db_first_use_ignores_public_constructor_overrides() {
+    let fixture = include_str!("../../../tests/fixtures/indexeddb-first-use.js");
+    for mode in ["number", "function", "getter", "delete"] {
+        let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-first-use.test/");
+        assert_eq!(
+            vm.lazy_constructor_materialization_count_for_test("IDBFactory")
+                .expect("initial IDBFactory materialization count"),
+            0,
+            "{mode}: IDBFactory must remain lazy before the probe"
+        );
+        assert_eq!(
+            vm.eval(&format!("({fixture})({mode:?})"))
+                .unwrap_or_else(|error| panic!("{mode}: first IndexedDB access failed: {error}")),
+            "ok"
+        );
+        assert_eq!(
+            vm.lazy_constructor_materialization_count_for_test("IDBFactory")
+                .expect("final IDBFactory materialization count"),
+            1,
+            "{mode}: first IndexedDB access must materialize the intrinsic exactly once"
+        );
+    }
+}
+
+#[test]
 fn indexed_db_runtime_state_is_created_on_first_use_without_window_slots() {
     let mut vm = new_storage_page_task_executor_test_vm("https://indexeddb-lazy-runtime.test/");
 

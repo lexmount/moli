@@ -1,4 +1,5 @@
 use super::*;
+use crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance;
 use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::web_api_interfaces;
 use moli_webapi_declare::WebApiObject;
@@ -14,7 +15,7 @@ const INDEXED_DB_READWRITE_TRANSACTION_QUEUE_FIELD: &str =
     "moli.IndexedDb.runtime.readwriteTransactionQueue";
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = web_api_interfaces::IDBFactory, require_prototype)]
+#[webapi(interface = web_api_interfaces::IDBFactory)]
 struct IndexedDbFactoryRuntimeDeclaration {
     #[webapi(slot = INDEXED_DB_EVENT_LISTENERS_SLOT, init = "null_object")]
     event_listeners: (),
@@ -306,15 +307,12 @@ pub(in crate::context_bootstrap::indexed_db) fn indexed_db_factory_storage_scope
 fn build_indexed_db_factory_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    // The factory is script-visible and must receive IDBFactory.prototype;
-    // only the private owner state around it is null-prototype.
-    let factory = IndexedDbFactoryRuntimeDeclaration {
-        event_listeners: (),
-    }
-    .bind(scope)
-    .ok()?;
-    let factory_proto = global_constructor_prototype(scope, "IDBFactory")?;
-    let _ = factory.set_prototype(scope, factory_proto.into());
+    // Materialize the realm's intrinsic before constructing the factory, without
+    // reading an author-replaced public IDBFactory binding on first use.
+    let factory = build_intrinsic_interface_instance(scope, "IDBFactory").ok()?;
+    IndexedDbFactoryRuntimeDeclaration::default()
+        .initialize(scope, factory)
+        .ok()?;
     let listeners = new_null_prototype_object(scope);
     set_indexed_db_slot_value(
         scope,
