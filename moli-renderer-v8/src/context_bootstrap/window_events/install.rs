@@ -56,7 +56,7 @@ pub(in crate::context_bootstrap) fn install_window_global_accessors<'s>(
     for name in WINDOW_EVENT_HANDLER_PROPERTIES {
         if matches!(
             *name,
-            "onerror" | "onunhandledrejection" | "onrejectionhandled"
+            "onerror" | "onmessageerror" | "onunhandledrejection" | "onrejectionhandled"
         ) {
             continue;
         }

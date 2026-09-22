@@ -63,6 +63,7 @@ pub(crate) const WINDOW_EVENT_HANDLER_PROPERTIES: &[&str] = &[
     "onloadstart",
     "onlostpointercapture",
     "onmessage",
+    "onmessageerror",
     "onmousedown",
     "onmousemove",
     "onmouseenter",

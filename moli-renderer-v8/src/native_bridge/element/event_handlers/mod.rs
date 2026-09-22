@@ -34,11 +34,7 @@ pub(super) fn body_or_frameset_window_owner(
     if !is_body_or_frameset_element(runtime, handle) {
         return None;
     }
-    match runtime.owner_dispatch_scope_for_node(handle)? {
-        owner @ (crate::native_bridge::OwnerDispatchScope::Top
-        | crate::native_bridge::OwnerDispatchScope::Child(_)) => Some(owner),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
-    }
+    runtime.owner_dispatch_scope_for_node(handle)
 }
 
 pub(crate) fn body_or_frameset_uses_runtime_window(
