@@ -80,7 +80,8 @@ pub(crate) fn apply_navigation_history_prune_plan(
         .collect();
     set_history_entries(scope, history, retained_entries);
     set_history_index(scope, history, current_index as u32);
-    super::navigation_serialize::sync_child_navigation_entry_seed_from_owner(scope, owner);
+    super::navigation_serialize::sync_navigation_entry_seed_from_owner(scope, owner);
+
     for removed_key in &plan.removed_entry_keys {
         if let Some((_, entry)) = removed_entries.iter().find(|(key, _)| key == removed_key) {
             dispatch_navigation_entry_dispose(scope, *entry);

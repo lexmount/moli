@@ -1547,6 +1547,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             resource_source,
             reserved_service_worker_client,
             main_document_commit.as_deref().cloned(),
+            load_inputs.navigation_history.clone(),
         );
     let prepared_future = async {
         prepared_future
@@ -1743,7 +1744,8 @@ impl CdpConnection {
         .with_main_document_commit_seed(
             RendererMainDocumentCommitSeed::from_navigation(navigation)
                 .with_browsing_context_group(group),
-        );
+        )
+        .with_navigation_history(navigation.navigation_history.clone());
         inputs.auxiliary_document_response = navigation.auxiliary_document_response.clone();
         if let Some(initiator) = navigation.navigation_initiator.as_ref() {
             inputs.navigation_initiator_url = Some(initiator.url().clone());
@@ -2049,6 +2051,7 @@ impl CdpConnection {
                 fetch_subresource_interception_resource_type,
                 load_inputs.root_frame_id.clone(),
                 top_level_storage_key,
+                None,
                 None,
             )
             .map_err(|error| {
@@ -3075,6 +3078,7 @@ impl CdpConnection {
                 fetch_subresource_interception_resource_type,
                 load_inputs.root_frame_id.clone(),
                 main_document_commit.as_deref().cloned(),
+                load_inputs.navigation_history.clone(),
             )
             .await
             .with_context(|| {
@@ -3332,6 +3336,7 @@ impl CdpConnection {
                 fetch_subresource_interception_resource_type,
                 load_inputs.root_frame_id.clone(),
                 main_document_commit.as_deref().cloned(),
+                load_inputs.navigation_history.clone(),
             )
             .await
             .with_context(|| format!("failed to execute scripts for page `{}`", requested_url))?;
@@ -3862,6 +3867,7 @@ async fn prepare_captured_document_response_with_engine_async(
             CommittedDocumentResourceSource::Synthetic,
             None,
             main_document_commit.as_deref().cloned(),
+            load_inputs.navigation_history.clone(),
         );
     let captured_body = body.clone();
     let body_capture_task = spawn_captured_body_replay(body, body_tx, completion_tx);

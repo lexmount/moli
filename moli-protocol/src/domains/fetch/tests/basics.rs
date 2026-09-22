@@ -1085,6 +1085,7 @@ async fn disable_clears_fetch_state() {
                 request_body_bytes: Some(bytes::Bytes::from_static(b"payload")),
                 request_headers: vec![("x-auth".to_owned(), "1".to_owned())].into(),
                 request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                navigation_history: None,
                 timestamp: 0.0,
                 source_document_security: Default::default(),
             },
@@ -1114,6 +1115,7 @@ async fn disable_clears_fetch_state() {
                     auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
+                    navigation_history: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_route(
                         crate::conn::CdpSessionRoute::Browser,
@@ -1347,6 +1349,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
+                    navigation_history: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1429,6 +1432,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                     auxiliary_document_response: None,
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
+                    navigation_history: None,
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
                     result_projection: crate::conn::NavigationResultProjection::Cdp(
@@ -1624,6 +1628,7 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
             request_body_bytes: Some(bytes::Bytes::from_static(b"payload")),
             request_headers: vec![("x-test".to_owned(), "yes".to_owned())].into(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            navigation_history: None,
             timestamp: 0.0,
             source_document_security: Default::default(),
         },
