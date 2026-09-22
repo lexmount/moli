@@ -2,7 +2,18 @@
 
 Original [PR #640](https://github.com/lexmount/moli/pull/640) and branch `codex/browser-eval-root-causes` remain at `ad0df2276d10e8f933f0216c30199229c6146b2e`.
 
-The split is based on main `7241328085c8fdf0e18cbd6a2ef4d0eec878efb5`. The six feature PRs use the engineering foundation branch as their direct base so their diffs and CI checks remain independent.
+The split is based on main `7241328085c8fdf0e18cbd6a2ef4d0eec878efb5`. Layout, network, text, stop-loading and forms use the engineering foundation as their direct base. Input depends on layout: its click preflight needs geometry invalidation after DOM and style changes. Each feature diff is shown against its direct prerequisite and has its own CI. [Input dependency evidence](input-layout-dependency.json) records the unchanged input patch across the rebase.
+
+```mermaid
+graph TD
+  main[main 72413280] --> engineering[725 Engineering]
+  engineering --> layout[726 Layout]
+  layout --> input[727 Input]
+  engineering --> network[728 Network]
+  engineering --> text[729 Text]
+  engineering --> stop[730 Stop loading]
+  engineering --> forms[732 Forms]
+```
 
 | PR | Responsibility | Functional case ownership |
 |---|---|---|

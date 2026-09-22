@@ -1,0 +1,10 @@
+{
+  "pr": 727,
+  "old_head": "1fb7c73f7af5e2fb1db25d6e2af353693c29806f",
+  "old_base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+  "new_head": "a25a2c7b6d0c00e4812a1b3f95f9ad786530d034",
+  "new_base": "63242ebdfbe7926cc85b774a91db05572d9f9c94",
+  "stable_patch_id_before_and_after": "d8f9cf8821b10de8b6bb341047a3348a40160f7b",
+  "production_and_test_patch_unchanged": true,
+  "reason": "Two unchanged CI click tests expose stale layout after insertion/style mutation; input now explicitly depends on general layout invalidation."
+}
