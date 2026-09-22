@@ -128,28 +128,34 @@ impl ResourceResponseBody {
 
     fn poll_transport(&self, cx: &mut Context<'_>) -> Poll<()> {
         let mut input = self.input.lock();
-        loop {
-            let BodyInputState::Streaming(response) = &mut input.state else {
-                return Poll::Ready(());
-            };
-            match response.poll_next_chunk(cx) {
-                Poll::Ready(Some(bytes)) => self.append(&mut input, bytes),
-                Poll::Ready(None) => {
-                    let result = match response.poll_finish(cx) {
-                        Poll::Ready(result) => result.map_err(|error| format!("{error:#}")),
-                        Poll::Pending => {
-                            input.transport = Some(cx.waker().clone());
-                            return Poll::Pending;
-                        }
-                    };
-                    drop(input);
-                    self.complete(result, None);
-                    return Poll::Ready(());
-                }
-                Poll::Pending => {
-                    input.transport = Some(cx.waker().clone());
-                    return Poll::Pending;
-                }
+        let BodyInputState::Streaming(response) = &mut input.state else {
+            return Poll::Ready(());
+        };
+        match response.poll_next_chunk(cx) {
+            Poll::Ready(Some(bytes)) => {
+                self.append(&mut input, bytes);
+                // Resource tasks share their Context executor with native
+                // admission and cancellation. A ready body must yield after
+                // publication so those owners can consume its receipts.
+                input.transport = Some(cx.waker().clone());
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
+            Poll::Ready(None) => {
+                let result = match response.poll_finish(cx) {
+                    Poll::Ready(result) => result.map_err(|error| format!("{error:#}")),
+                    Poll::Pending => {
+                        input.transport = Some(cx.waker().clone());
+                        return Poll::Pending;
+                    }
+                };
+                drop(input);
+                self.complete(result, None);
+                Poll::Ready(())
+            }
+            Poll::Pending => {
+                input.transport = Some(cx.waker().clone());
+                Poll::Pending
             }
         }
     }
@@ -442,6 +448,31 @@ mod tests {
             finished,
             cancel,
         )
+    }
+
+    #[tokio::test]
+    async fn a_ready_body_keeps_cancellation_runnable_before_completion() {
+        let (body, chunks, finished, cancel) = response();
+        for _ in 0..64 {
+            chunks.send(vec![0, 128]).unwrap();
+        }
+        drop(chunks);
+        finished.send(Ok(())).unwrap();
+        let mut pump = std::pin::pin!(std::future::poll_fn(|cx| body.poll_transport(cx)));
+        tokio::select! {
+            biased;
+            () = &mut pump => panic!("ready network input must not starve its owner's cancellation"),
+            first = body.read(0, 2) => assert_eq!(first.unwrap(), (vec![0, 128], false)),
+        }
+        body.discard();
+        assert!(cancel.is_cancelled());
+        pump.await;
+        let ResourceResponseFailure::PartialBody { body, .. } =
+            body.resource.failure("cancelled".into())
+        else {
+            panic!("cancellation must retain the actual received prefix")
+        };
+        assert_eq!(body.clone_body_bytes(), [0, 128].repeat(64));
     }
 
     #[tokio::test]

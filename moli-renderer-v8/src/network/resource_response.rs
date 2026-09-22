@@ -123,6 +123,9 @@ pub(crate) async fn collect_observed_response(
         if let Some(observer) = observer {
             observer.data_received(&chunk);
         }
+        // Let the Context owner admit the just-published receipt before a
+        // prebuffered body monopolizes the shared resource executor.
+        tokio::task::yield_now().await;
     }
     if let Err(error) = response.finish().await {
         return Err(ResourceResponseFailure::PartialBody {
@@ -307,6 +310,7 @@ impl ResourceResponseStream {
         });
         while let Some(bytes) = response.next_chunk().await {
             self.data_received(&bytes);
+            tokio::task::yield_now().await;
         }
         response
             .finish()

@@ -1353,16 +1353,6 @@ impl CdpConnection {
             .performance_metric_snapshot_for_target(&owner.target_id)
     }
 
-    pub(crate) fn network_log_entries_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<&[crate::domains::log_output_state::TargetNetworkLogEntry]> {
-        let owner = self.target_session_owner_ref_for_owner(owner)?;
-        owner
-            .browser_context
-            .network_log_entries_for_target(&owner.target_id)
-    }
-
     /// Captures the exact target-local Page residence currently addressed by
     /// `session_id`.
     ///

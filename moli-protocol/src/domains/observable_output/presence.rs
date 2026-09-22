@@ -415,17 +415,44 @@ pub(in crate::domains) fn live_log_prepared_outputs_for_renderer_network_fact(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> ObservablePreparedOutputs {
-    let owner_state = conn
-        .target_owner_state_for_owner(owner)
-        .cloned()
-        .unwrap_or_default();
     let Some(runtime_slot) = conn.runtime_session_owner_slot_for_owner(owner).ok() else {
         return ObservablePreparedOutputs::default();
     };
-    let Some(url) = conn.runtime_session_owner_target_url_for_owner(owner) else {
+    let Some(owner_state) = conn.target_owner_state_for_owner(owner) else {
         return ObservablePreparedOutputs::default();
     };
-    let Some(network_entries) = conn.network_log_entries_for_owner(owner) else {
+    let network_entries = runtime_slot.network_log_entries();
+    // Body progress is already a frozen Network fact. It must not wait for
+    // Browser reads or copy Log history when no session has a new HTTP error
+    // to observe. Log.enable owns replay; renderer error records own their
+    // lifecycle output independently of this Network publication.
+    let pending = conn
+        .page_event_session_ids_for_owner(owner)
+        .into_iter()
+        .any(|session| {
+            let event_owner = session
+                .as_deref()
+                .map(CommandOwnerScope::for_session)
+                .unwrap_or_else(|| owner.clone());
+            conn.target_devtools_session_state_for_owner(&event_owner)
+                .is_some_and(|state| {
+                    let output = &state.console_output_session_state;
+                    state.page_session_state.log_enabled
+                        && output
+                            .pending_log_cursor(
+                                owner_state.log_storage_state,
+                                output
+                                    .log_lifecycle_entries
+                                    .max(owner_state.log_storage_state.lifecycle_start()),
+                                network_entries.len(),
+                            )
+                            .is_some_and(|cursor| cursor.network_start() < network_entries.len())
+                })
+        });
+    if !pending {
+        return ObservablePreparedOutputs::default();
+    }
+    let Some(url) = conn.runtime_session_owner_target_url_for_owner(owner) else {
         return ObservablePreparedOutputs::default();
     };
     let queue = TargetObservableOutputQueue::from_log_storage(runtime_slot, network_entries);
@@ -439,7 +466,7 @@ pub(in crate::domains) fn live_log_prepared_outputs_for_renderer_network_fact(
         &queue,
         &url,
         document_id,
-        &owner_state,
+        owner_state,
         owner,
     );
     prepared

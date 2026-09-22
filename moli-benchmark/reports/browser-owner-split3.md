@@ -3,6 +3,61 @@
 The fresh frozen comparison below supersedes earlier measurements for the
 current branch. Historical results and failures remain unchanged afterward.
 
+## Native Network throughput, 2026-09-23
+
+The `7be1fd9b8c` release disconnects on a local burst of **32 concurrent 4 MiB
+responses**, with Log either disabled or enabled. Every TCP response completes;
+the WebSocket closes with code 1005. Detailed traces reproduce the failure:
+1,570 Network records are published but only 32 consumed before admission fails
+at the unchanged 1,536-observation budget. Concurrent eight-address diagnostics
+also reproduce Slack full-CDP disconnects in all three instrumented rounds.
+
+Live Network-to-Log preparation queries native page presence and copies history
+before checking whether any session has a pending error. Command-caused request
+starts additionally query Document identity, while ready response bodies can
+monopolize the Context executor that also handles admission and cancellation.
+The first, Log-only fix still disconnects; that failed attempt is retained.
+
+The final change uses existing Log subscriptions and generation-aware cursors
+before preparing error output, borrows the existing error storage, and removes
+the unused connection forwarding method. Record routing reuses the existing
+Core-validated Document lifetime binding. Ready body pumps and collectors yield
+after each chunk, keeping admission and cancellation runnable. There are no new
+queues, authority flags, coalescing rules, budgets or deadlines. Physical
+operations still validate their original handles.
+
+Ordinary release SHA-256:
+`1807a359f2c4952d66ad6b3d83d45bf92d3e61d30fb1cbd1d9162902524fd06f`.
+Both original local workloads pass: 8,225/8,226 data events, exactly 128 MiB,
+one response head and successful terminal per request, with all data between
+them. Main also passes but emits only 32 buffered data events, so its event
+count is not an equivalent streaming workload. The diagnostic release records
+8,319 Network facts both sent and consumed, peak pending depth 744, and **zero
+admission refusals**. Only four `document_handle` and fourteen
+`has_loaded_document` reads remain across setup and the entire burst.
+
+The public reproducer is `moli-benchmark/scripts/probe-browser-network-output.py`.
+It also checks HTTP-error delivery to enabled sessions, late-enable replay,
+target-shared clear, two-session fanout, disable and re-enable replay. Both
+initial Log settings pass. Three original eight-address/four-mode ordinary
+rounds retain all failures (17/32, 15/32, 14/32 pass); Slack passes every mode in
+all three, including full CDP. These concurrent runs establish behavior, not a
+small timing comparison with main.
+
+Fmt, strict workspace/all-targets/all-features Clippy, 172 targeted tests and
+final nextest pass: **19,531 passed / 13 configured skips**, run
+`936d6ef8-d3bd-4d05-a6bb-4dc144a4867b`. All 91 expected panic test/message pairs
+match the audited baseline. The same ordinary release passes 48 CDP groups /
+536 scenarios, 165 WebDriver cases and all three shared-page close origins.
+The added cancellation regression uses prebuffered input and checks both
+pre-EOF cancellation and preservation of the received prefix.
+
+All sources, failed attempts, binary pins, wire records and traces are retained
+in `target/smoke/native-throughput.txjx99ee/`. The six-file Rust patch SHA-256 is
+`cd87907978ab91d5b7af9d5f70cf4e5a9498417e836921322f96c14de81f71d2`.
+This closes the reproduced Network throughput failure. The fresh comparison
+with main's command latency remains the final performance gate.
+
 ## Navigation observation and admission reads, 2026-09-23
 
 This follow-up starts at `15b7fac30f` and consumes one coherent native

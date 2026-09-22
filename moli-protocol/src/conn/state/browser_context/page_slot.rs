@@ -651,6 +651,12 @@ impl BrowserContext {
     }
 
     pub(crate) fn target_document_id(&self, target_id: &str) -> Option<DocumentId> {
+        // Core invalidates the binding's lifetime before replacing or retiring
+        // its Document. A current binding already identifies that exact object;
+        // output projection need not queue a native read for every record.
+        if let Some(binding) = self.renderer_document_lifecycle_binding_for_target(target_id) {
+            return Some(binding.document_id);
+        }
         let handle = self.web_contents_handle_for_target(target_id)?;
         let id = self
             .browser_context

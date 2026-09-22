@@ -148,6 +148,10 @@ impl TargetRuntimeSlot {
         self.observable_queue.reset();
     }
 
+    pub(crate) fn network_log_entries(&self) -> &[TargetNetworkLogEntry] {
+        self.log_output_queue.network_entries()
+    }
+
     pub(crate) fn javascript_dialog_scope_observer(&self) -> TargetJavaScriptDialogScopeObserver {
         self.javascript_dialog_scope.observe()
     }
@@ -1140,8 +1144,7 @@ impl BrowserContext {
                 .get(target_id)
                 .expect("resolved target projection must remain live")
                 .runtime_slot
-                .log_output_queue
-                .network_entries()
+                .network_log_entries()
         })
     }
     #[cfg(test)]
