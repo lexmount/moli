@@ -75,7 +75,7 @@
   {
     "group": "text",
     "pr": "https://github.com/lexmount/moli/pull/740",
-    "head": "092b58063f3c3d3e3c4ba3ad58383d23923384d5",
+    "head": "ca2a8d39572644de1211e3aba30d239abf0ffb17",
     "base": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
     "base_branch": "codex/pr640-reliability-final",
     "case_ids": [

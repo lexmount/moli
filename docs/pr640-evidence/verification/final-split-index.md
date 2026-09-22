@@ -10,7 +10,7 @@
 | 布局几何与失效 | [#735](https://github.com/lexmount/moli/pull/735) | 29, 66, 108, 156, 163, 196, 314, 349, 374, 389, 399, 404, 415, 418, 441, 448, 506, 547, 576, 585, 590, 620, 640, 645, 658, 666, 714 | `b0f237b0` |
 | 输入激活与导航 | [#736](https://github.com/lexmount/moli/pull/736) | 274, 386, 465, 731 | `fa1c36ef` |
 | 网络记录与响应证据 | [#737](https://github.com/lexmount/moli/pull/737) | 339, 595, 676 | `db091f69` |
-| 文本响应解析 | [#740](https://github.com/lexmount/moli/pull/740) | 784 | `092b5806` |
+| 文本响应解析 | [#740](https://github.com/lexmount/moli/pull/740) | 784 | `ca2a8d39` |
 | 停止加载 | [#738](https://github.com/lexmount/moli/pull/738) | 专项功能契约，无历史任务认领 | `b43a213d` |
 | 表单命名属性 | [#739](https://github.com/lexmount/moli/pull/739) | 专项功能契约，无历史任务认领 | `7919ed09` |
 

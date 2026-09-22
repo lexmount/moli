@@ -11,5 +11,7 @@
     "parser_library_passed": 117,
     "failed": 0
   },
-  "integration_tests": "Existing child no-doctype test retained; projection and WebDriver main/iframe MIME tests included; final CI verifies these paths."
+  "integration_tests": "Existing child no-doctype test retained; projection and WebDriver main/iframe MIME tests included; final CI verifies these paths.",
+  "published_commit": "ca2a8d39572644de1211e3aba30d239abf0ffb17",
+  "publication_change": "Use public with_scripting_enabled(false) constructor in projection; avoids test-only constant in release builds."
 }
