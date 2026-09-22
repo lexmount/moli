@@ -7,7 +7,7 @@ use crate::{
 
 use super::super::super::node::node_runtime_and_handle_from_object_or_detached;
 use super::super::element_attribute;
-use super::shared::compile_event_attribute_handler;
+use super::shared::compile_event_attribute_handler_for_owner_with_context;
 
 fn body_or_frameset_window_event_handler_properties() -> impl Iterator<Item = &'static str> {
     BODY_OR_FRAMESET_WINDOW_EVENT_HANDLER_PROPERTIES
@@ -74,7 +74,7 @@ fn body_window_event_handler_getter_function<'s>(
         }
         Some(OwnerDispatchScope::Child(child_handle)) => unsafe { &mut *runtime_ptr }
             .child_window_event_handler_property_value(scope, child_handle, &handler_name),
-        Some(OwnerDispatchScope::LightweightPopup(popup_id)) => unsafe { &*runtime_ptr }
+        Some(OwnerDispatchScope::LightweightPopup(popup_id)) => unsafe { &mut *runtime_ptr }
             .lightweight_popup_event_handler_property_value(scope, popup_id, &handler_name),
         None => None,
     };
@@ -185,8 +185,30 @@ pub(crate) fn compile_body_window_event_attribute<'s>(
     owner: DomHandle,
     event_type: &str,
 ) -> Option<v8::Local<'s, v8::Function>> {
+    let runtime = unsafe { &*runtime_ptr };
+    let source = element_attribute(runtime, owner, &format!("on{event_type}"))?;
+    let window_owner = runtime.owner_dispatch_scope_for_node(owner)?;
+    let document = runtime.dom_host().owner_document_handle(owner)?;
+    let base_url = runtime.document_base_url_for_handle(document);
+    compile_window_event_attribute_handler(
+        scope,
+        runtime_ptr,
+        window_owner,
+        &base_url,
+        &source,
+        event_type,
+    )
+}
+
+pub(crate) fn compile_window_event_attribute_handler<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    window_owner: OwnerDispatchScope,
+    base_url: &url::Url,
+    source: &str,
+    event_type: &str,
+) -> Option<v8::Local<'s, v8::Function>> {
     let handler_name = format!("on{event_type}");
-    let source = element_attribute(unsafe { &*runtime_ptr }, owner, &handler_name)?;
     let argument_names: &[&str] = if event_type == "error" {
         &["event", "source", "lineno", "colno", "error"]
     } else {
@@ -199,8 +221,24 @@ pub(crate) fn compile_body_window_event_attribute<'s>(
     if arguments.len() != argument_names.len() {
         return None;
     }
-    let handler =
-        compile_event_attribute_handler(scope, runtime_ptr, owner, &source, &arguments, &[])?;
+    let runtime = unsafe { &*runtime_ptr };
+    // Lightweight popups share a V8 context with their opener. A body handler
+    // has only its Window in scope, even if the source element was adopted.
+    let extensions = match window_owner {
+        OwnerDispatchScope::LightweightPopup(popup_id) => {
+            vec![runtime.lightweight_popup_window(scope, popup_id)?]
+        }
+        OwnerDispatchScope::Top | OwnerDispatchScope::Child(_) => Vec::new(),
+    };
+    let handler = compile_event_attribute_handler_for_owner_with_context(
+        scope,
+        runtime_ptr,
+        window_owner,
+        base_url,
+        source,
+        &arguments,
+        &extensions,
+    )?;
     if let Some(name) = v8_string(scope, &handler_name) {
         handler.set_name(name);
     }
@@ -208,7 +246,7 @@ pub(crate) fn compile_body_window_event_attribute<'s>(
 }
 
 pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
-    _scope: &mut v8::PinScope<'_, '_>,
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) {
@@ -222,6 +260,7 @@ pub(crate) fn initialize_parser_inserted_body_window_event_handlers(
             .get_attribute(handle, handler_name)
             .is_some()
             && let Some(previous) = runtime.sync_event_handler_content_attribute(
+                scope,
                 runtime_ptr,
                 handle,
                 handler_name,
