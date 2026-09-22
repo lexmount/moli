@@ -3900,6 +3900,24 @@ fn cli_dump_json_keeps_transport_failures_as_process_errors() -> Result<()> {
 }
 
 #[test]
+fn cli_connection_failure_reports_curl_code_and_cause() -> Result<()> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let address = listener.local_addr()?;
+    drop(listener);
+    let url = format!("http://{address}/connection-refused");
+
+    let output = run_fetch_cli(&url)?;
+    let stdout = clean_output(&output.stdout);
+    let stderr = clean_output(&output.stderr);
+    assert!(!output.status.success(), "stdout={stdout}\nstderr={stderr}");
+    assert!(stdout.is_empty(), "stdout={stdout}");
+    assert_single_fetch_failure_reason(&stderr, &url, "curl request failed");
+    assert!(stderr.contains("[7]"), "stderr={stderr}");
+    assert!(stderr.contains("Failed to connect"), "stderr={stderr}");
+    Ok(())
+}
+
+#[test]
 fn cli_timeout_reports_waiting_for_response_headers_as_one_reason() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let listener = runtime.block_on(TcpListener::bind("127.0.0.1:0"))?;

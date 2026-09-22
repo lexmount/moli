@@ -249,7 +249,7 @@ fn with_fetch_context(error: anyhow::Error, url: &str) -> anyhow::Error {
     } else if let Some(timeout) = error.downcast_ref::<FetchReadinessTimeout>() {
         timeout.to_string()
     } else {
-        error.to_string()
+        format!("{error:#}")
     };
     with_fetch_context_reason(error, url, reason)
 }
@@ -314,9 +314,9 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn fetch_report_has_one_reason_line_without_rendering_the_source_chain() {
+    fn fetch_report_has_one_reason_line_including_the_source_chain() {
         let error = with_fetch_context(
-            anyhow::anyhow!("first failure line\nsecond failure line"),
+            anyhow::anyhow!("first failure line\nsecond failure line").context("request failed"),
             "https://example.test/",
         );
         let mut report = Vec::new();
@@ -326,7 +326,7 @@ mod tests {
 
         assert_eq!(
             report,
-            "Error: failed to fetch `https://example.test/`\nReason: first failure line second failure line\n"
+            "Error: failed to fetch `https://example.test/`\nReason: request failed: first failure line second failure line\n"
         );
         assert!(!report.contains("Caused by:"));
     }

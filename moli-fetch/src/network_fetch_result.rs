@@ -431,7 +431,7 @@ impl NetworkFetchFailureContext {
         observation_journal: NetworkObservationJournal,
     ) -> anyhow::Error {
         let network_error_text = crate::error::browser_network_error_text(&source);
-        let reason = source.to_string();
+        let reason = format!("{source:#}");
         source.context(Self {
             observation_journal,
             network_error_text,
@@ -446,7 +446,7 @@ impl NetworkFetchFailureContext {
         request_context: NetworkFetchFailureRequestContext,
     ) -> anyhow::Error {
         let network_error_text = crate::error::browser_network_error_text(&source);
-        let reason = source.to_string();
+        let reason = format!("{source:#}");
         source.context(Self {
             observation_journal,
             network_error_text,
@@ -463,8 +463,9 @@ impl NetworkFetchFailureContext {
         self.network_error_text
     }
 
-    /// Returns the single human-readable transport or policy reason captured
-    /// before this machine-readable context was attached.
+    /// Returns the human-readable transport or policy error chain captured
+    /// before this machine-readable context was attached, including the
+    /// underlying curl error code and detailed error buffer when available.
     pub fn reason(&self) -> &str {
         &self.reason
     }
@@ -583,6 +584,56 @@ impl<R> NetworkFetchResult<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_failure_reason_preserves_curl_code_and_details() {
+        for (code, detail, network_error_text) in [
+            (
+                curl_sys::CURLE_PEER_FAILED_VERIFICATION,
+                "SSL certificate problem: unable to get local issuer certificate",
+                "net::ERR_CERT_AUTHORITY_INVALID",
+            ),
+            (
+                curl_sys::CURLE_COULDNT_RESOLVE_HOST,
+                "Could not resolve host: example.test",
+                "net::ERR_NAME_NOT_RESOLVED",
+            ),
+            (
+                curl_sys::CURLE_COULDNT_CONNECT,
+                "Failed to connect to example.test: Connection refused",
+                "net::ERR_CONNECTION_REFUSED",
+            ),
+        ] {
+            for with_request_context in [false, true] {
+                let mut curl_error = curl::Error::new(code);
+                curl_error.set_extra(detail.to_owned());
+                let source = anyhow::Error::new(curl_error).context("curl request failed");
+                let journal = NetworkObservationJournal::default();
+                let error = if with_request_context {
+                    NetworkFetchFailureContext::attach_with_request_context(
+                        source,
+                        journal,
+                        NetworkFetchFailureRequestContext::new(
+                            Url::parse("https://example.test/").unwrap(),
+                            "GET".to_owned(),
+                            None,
+                            Vec::new().into(),
+                            Vec::new(),
+                        ),
+                    )
+                } else {
+                    NetworkFetchFailureContext::attach(source, journal)
+                };
+                let failure = error.downcast_ref::<NetworkFetchFailureContext>().unwrap();
+                let reason = failure.reason();
+                assert!(reason.starts_with("curl request failed: "), "{reason}");
+                assert!(reason.contains(&format!("[{code}]")), "{reason}");
+                assert!(reason.contains(detail), "{reason}");
+                assert_eq!(failure.network_error_text(), network_error_text);
+                assert_eq!(error.downcast_ref::<curl::Error>().unwrap().code(), code);
+            }
+        }
+    }
 
     #[test]
     fn network_fetch_failure_context_preserves_source_without_repeating_it() {

@@ -26,7 +26,7 @@ use url::Url;
 
 use crate::{
     FetchCancelHandle, FetchClient, FetchClientHandle, FetchConfig, RedirectInfo, RedirectSource,
-    Request, RequestCredentialsMode, RequestMode,
+    Request, RequestCredentialsMode, RequestMode, network_fetch_result::NetworkObservationRecorder,
 };
 
 use super::support::unique_test_cache_dir;
@@ -313,6 +313,49 @@ impl Transport {
         assert_eq!(body, "ok");
         Ok(())
     }
+}
+
+#[tokio::test]
+async fn tls_trust_failure_reports_curl_details_in_every_transport() -> Result<()> {
+    let credentials = TlsCredentials::new()?;
+    let server = TlsServer::spawn(&credentials).await?;
+    let mut config = FetchConfig::default();
+    config.set_http_proxy(Some(String::new()));
+    config.set_request_timeout_ms(5_000);
+    // The generated CA is intentionally absent from the client's trust store.
+    for transport in Transport::ALL {
+        let client = FetchClient::new(&config, new_shared_browser_cookie_store());
+        let request = Request::get(server.url.as_str())?
+            .with_network_observation_recorder(NetworkObservationRecorder::default());
+        let error = transport.fetch(&client, request).await.unwrap_err();
+        let curl_error = error.downcast_ref::<curl::Error>().unwrap();
+        assert!(curl_error.is_peer_failed_verification(), "{error:#}");
+        let detail = curl_error
+            .extra_description()
+            .expect("libcurl should preserve its TLS error buffer");
+        assert!(!detail.is_empty());
+        let reason = match transport {
+            // The callback API returns the original error chain, which the
+            // CLI's fallback formatting must also preserve.
+            Transport::Buffered => format!("{error:#}"),
+            Transport::Html | Transport::Raw => {
+                let failure = error
+                    .downcast_ref::<crate::NetworkFetchFailureContext>()
+                    .unwrap();
+                assert_eq!(
+                    failure.network_error_text(),
+                    "net::ERR_CERT_AUTHORITY_INVALID"
+                );
+                failure.reason().to_owned()
+            }
+        };
+        assert!(reason.contains("curl request failed"), "{reason}");
+        assert!(reason.contains("[60]"), "{reason}");
+        assert!(reason.contains(detail), "{reason}");
+        assert!(client.shutdown().is_clean());
+    }
+    assert!(server.requests.lock().is_empty());
+    Ok(())
 }
 
 #[tokio::test]
