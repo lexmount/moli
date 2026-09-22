@@ -3282,6 +3282,14 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     pub request_method: String,
     #[serde(default)]
     pub request_headers: Vec<(String, String)>,
+    /// Exact in-process transport observations for the actual child-navigation
+    /// hops. Serialized snapshots retain their historical lightweight shape.
+    #[serde(skip)]
+    pub network_observation_journal: moli_fetch::NetworkObservationJournal,
+    /// In-process browser-facing redirect metadata paired with the transport
+    /// journal. Serialized snapshots retain their historical lightweight shape.
+    #[serde(skip)]
+    pub redirect_chain: Vec<moli_fetch::RedirectInfo>,
     pub final_url: String,
     pub status: u16,
     #[serde(default)]

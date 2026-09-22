@@ -44,6 +44,7 @@ mod load_resource;
 mod main_document_progress;
 mod output;
 mod output_queue;
+mod redirect_request;
 mod response_body;
 pub(crate) mod settings;
 #[cfg(test)]
@@ -504,6 +505,14 @@ fn start_set_network_domain_enabled_command(
     cmd: &Cmd<'_>,
     enabled: bool,
 ) -> NetworkCommandTaskStep {
+    let durable_limits = if enabled {
+        match settings::durable_body_limits(cmd) {
+            Ok(limits) => limits,
+            Err(plan) => return NetworkCommandTaskStep::Complete(plan),
+        }
+    } else {
+        None
+    };
     let updated = if enabled {
         conn.enable_network_listener_for_session_owner(cmd.session_id)
     } else {
@@ -514,6 +523,10 @@ fn start_set_network_domain_enabled_command(
             -31998,
             "BrowserContextNotLoaded",
         ));
+    }
+
+    if enabled && let Ok(slot) = conn.runtime_session_owner_slot_mut(cmd.session_id) {
+        slot.configure_durable_response_bodies(cmd.session_id, durable_limits);
     }
 
     let kind = if enabled {
