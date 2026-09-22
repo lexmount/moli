@@ -1,0 +1,14 @@
+{
+  "case_id": 714,
+  "pr": "https://github.com/lexmount/moli/pull/735",
+  "head": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+  "actions_completed": 14,
+  "actions_total": 14,
+  "frozen_score": 0,
+  "server_state_observed": "downvote persisted (vote_is_up=false)",
+  "frozen_expected": "POST /sv/19459.json -> 200",
+  "observed": "POST /sv/19459 -> 302 native form submission",
+  "timeline": "Vote click preceded final document JavaScript requests; snapshot returned when body existed, before initialization.",
+  "independent_reproduction": "Chrome, old layout48 and final layoutb0 all use native fallback with held deferred script; all use AJAX after that document DOMContentLoaded. No early DCL observed.",
+  "decision": "Preserve failed frozen result. Validate a generic replay navigation readiness correction independently; do not add a browser delay or task-specific exception."
+}

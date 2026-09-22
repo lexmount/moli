@@ -1,0 +1,150 @@
+{
+  "scenario": "Identical element.click navigation -> 500ms -> body snapshot -> vote click; control waits for DOMContentLoaded before vote",
+  "cases": [
+    {
+      "engine": "chrome",
+      "gate": "body-only",
+      "passed": true,
+      "snapshot": {
+        "body": true,
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "button": true,
+        "path": "/form"
+      },
+      "before": {
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "path": "/form"
+      },
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ],
+      "dclBeforeScript": false
+    },
+    {
+      "engine": "chrome",
+      "gate": "DOMContentLoaded",
+      "passed": true,
+      "snapshot": {
+        "body": true,
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "button": true,
+        "path": "/form"
+      },
+      "before": {
+        "readyState": "complete",
+        "scriptExecuted": true,
+        "path": "/form"
+      },
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ],
+      "dclBeforeScript": false
+    },
+    {
+      "engine": "old48",
+      "gate": "body-only",
+      "passed": true,
+      "snapshot": {
+        "body": true,
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "button": true,
+        "path": "/form"
+      },
+      "before": {
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "path": "/form"
+      },
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ],
+      "dclBeforeScript": false
+    },
+    {
+      "engine": "old48",
+      "gate": "DOMContentLoaded",
+      "passed": true,
+      "snapshot": {
+        "body": true,
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "button": true,
+        "path": "/form"
+      },
+      "before": {
+        "readyState": "complete",
+        "scriptExecuted": true,
+        "path": "/form"
+      },
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ],
+      "dclBeforeScript": false
+    },
+    {
+      "engine": "finalb0",
+      "gate": "body-only",
+      "passed": true,
+      "snapshot": {
+        "body": true,
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "button": true,
+        "path": "/form"
+      },
+      "before": {
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "path": "/form"
+      },
+      "routes": [
+        {
+          "path": "/native",
+          "method": "POST"
+        }
+      ],
+      "dclBeforeScript": false
+    },
+    {
+      "engine": "finalb0",
+      "gate": "DOMContentLoaded",
+      "passed": true,
+      "snapshot": {
+        "body": true,
+        "readyState": "interactive",
+        "scriptExecuted": false,
+        "button": true,
+        "path": "/form"
+      },
+      "before": {
+        "readyState": "complete",
+        "scriptExecuted": true,
+        "path": "/form"
+      },
+      "routes": [
+        {
+          "path": "/vote.json",
+          "method": "POST"
+        }
+      ],
+      "dclBeforeScript": false
+    }
+  ],
+  "conclusion": "Chrome, old48 and finalb0 all take native form fallback before deferred binding; all take AJAX path with DOMContentLoaded gate. No early DCL observed for held form document."
+}
