@@ -4149,6 +4149,7 @@ impl PageVm {
                 self.creation_id,
                 self.state_capture_sequence,
             ),
+            navigation_history: self.vm().top_level_navigation_history(),
             final_url,
             document_title,
             document_content_type,

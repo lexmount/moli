@@ -123,6 +123,10 @@ impl PageScriptHost {
         );
     }
 
+    pub(crate) fn top_level_navigation_history(&self) -> crate::runtime::RendererNavigationHistory {
+        self.top_level_navigation_history.clone()
+    }
+
     pub(crate) fn document_is_completely_loaded(
         &self,
         document_handle: crate::document_runtime::DomHandle,

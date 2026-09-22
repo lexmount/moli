@@ -722,6 +722,7 @@ impl PreparedPopupNavigation {
             &[],
             request_kind,
             None,
+            None,
             auxiliary_navigation,
             document_response,
             initial_document_environment,

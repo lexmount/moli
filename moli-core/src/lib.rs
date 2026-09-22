@@ -26,7 +26,7 @@ pub use moli_renderer_v8::{
 };
 pub use moli_renderer_v8::{
     PageId, RendererBrowserContextRuntimeId, RendererDocumentLifecycleIdentity,
-    RendererDocumentTitleChanged, RendererOutputCursor, RendererOutputFence,
+    RendererDocumentTitleChanged, RendererNavigationHistory, RendererNavigationHistoryRequest, RendererOutputCursor, RendererOutputFence,
     RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
     RendererOutputPublicationOrdering, RendererOutputRecord, RendererOutputResidenceIdentity,
     RendererOutputStreamCloseReason, RendererOutputStreamControl, RendererOutputStreamEpoch,

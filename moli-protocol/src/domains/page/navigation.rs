@@ -53,6 +53,23 @@ use super::{
 mod automation;
 pub(crate) use automation::{AutomationNavigationResult, prepare_automation_navigation};
 
+mod before_unload;
+
+pub(super) use before_unload::PendingBeforeUnloadNavigationCommand;
+
+pub(crate) use before_unload::{
+    BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
+    PreparedBeforeUnloadNavigation,
+};
+
+struct PreparedMainDocumentNavigation {
+    token: DocumentNavigationToken,
+    state: NavigationDispatchState,
+    pending_fetch: Option<PendingFetchNavigation>,
+    fetch_request_stage: FetchRequestStage,
+    allow_background_navigation: bool,
+}
+
 pub(super) struct PendingNavigateLoadCommand {
     pub(super) prefix_events: Vec<BackgroundProtocolEvent>,
     pub(super) token: DocumentNavigationToken,
@@ -248,6 +265,7 @@ impl PendingSameDocumentHistoryTraversalCommand {
 }
 
 pub(super) enum NavigateCommandStart {
+    PendingBeforeUnload(Box<PendingBeforeUnloadNavigationCommand>),
     CompletePlan(CommandOutputPlan),
     CompleteImmediate(CommandOutputPlan),
     PendingLoad(Box<PendingNavigateLoadCommand>),
@@ -1486,18 +1504,21 @@ fn resolve_devtools_history_traversal_destination(
     let target_entry = entries.get(target_index).ok_or_else(|| {
         DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
     })?;
-    let same_document_delta = (current_entry.document_sequence_number.is_some()
-        && current_entry.document_sequence_number == target_entry.document_sequence_number)
-        .then(|| {
-            let current_index = i64::try_from(current_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?;
-            let target_index = i64::try_from(target_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?;
-            Ok::<_, DevToolsError>(target_index - current_index)
-        })
-        .transpose()?;
+    let delta = i64::try_from(target_index)
+        .ok()
+        .zip(i64::try_from(current_index).ok())
+        .map(|(target, current)| target - current)
+        .ok_or_else(|| {
+            DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
+        })?;
+    let same_document = conn
+        .renderer_navigation_history_for_owner(owner)
+        .and_then(|history| history.traversal_is_same_document(delta))
+        .unwrap_or(
+            current_entry.document_sequence_number.is_some()
+                && current_entry.document_sequence_number == target_entry.document_sequence_number,
+        );
+    let same_document_delta = same_document.then_some(delta);
     Ok(ResolvedDevToolsHistoryTraversal::Entry {
         entry_id: target_entry.id,
         url: target_entry.url.clone(),
@@ -1757,6 +1778,12 @@ pub(super) fn finish_started_navigation_command_for_parts(
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> PageCommandTaskStep {
     match &mut start {
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            &owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::CompletePlan(_) => {}
         NavigateCommandStart::CompleteImmediate(plan) => {
             clear_crash_state_after_navigation_into_plan(
@@ -1784,6 +1811,15 @@ pub(super) fn finish_started_navigation_command_for_parts(
         }
     }
     match start {
+        NavigateCommandStart::PendingBeforeUnload(pending) => {
+            PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
+                command_id,
+                owner_scope: owner.clone(),
+                kind: Box::new(super::PendingPageCommandKind::BeforeUnloadNavigation(
+                    pending,
+                )),
+            })
+        }
         NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::PendingLoad(pending) => {
@@ -1827,12 +1863,46 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     request_body: Option<&bytes::Bytes>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
     web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
     navigation_initiator: Option<moli_core::page::RendererNavigationInitiator>,
 ) -> NavigateCommandStart {
+    if let Some(history) = &navigation_history {
+        match history.navigation_type() {
+            Some("replace" | "reload") => {
+                conn.mark_next_navigation_history_replace_current_for_owner(owner);
+            }
+            Some("traverse") => {
+                let Some(delta) = history.traversal_delta() else {
+                    return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+                        -32000,
+                        "Missing history traversal source",
+                    ));
+                };
+                match resolve_devtools_history_traversal_destination(
+                    conn,
+                    owner,
+                    &DevToolsHistoryTraversalDestination::Delta(delta),
+                ) {
+                    Ok(ResolvedDevToolsHistoryTraversal::Entry { entry_id, .. }) => {
+                        conn.mark_next_navigation_history_traverse_to_entry_for_owner(
+                            owner, entry_id,
+                        );
+                    }
+                    _ => {
+                        return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+                            -32000,
+                            "History traversal destination was removed",
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     let session_id = owner.session_id();
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, owner);
     let result_payload = cdp_navigate_result_payload(
@@ -1841,7 +1911,8 @@ pub(super) fn start_session_owner_navigation_from_renderer(
         None,
         url,
     );
-    let start = if browser_navigation_kind == moli_fetch::BrowserNavigationRequestKind::Navigate
+    let start = if navigation_history.is_none()
+        && browser_navigation_kind == moli_fetch::BrowserNavigationRequestKind::Navigate
         && request_method.eq_ignore_ascii_case("GET")
         && session_owner_navigation_is_same_document_fragment(conn, owner, url)
     {
@@ -1893,6 +1964,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
                 }
             },
             NavigationStartInitiator::Renderer,
+            navigation_history,
             web_mcp_invocation,
             document_response,
             initial_document_environment,
@@ -2530,6 +2602,12 @@ fn clear_crash_state_for_renderer_navigation(
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> NavigateCommandStart {
     match &mut start {
+        NavigateCommandStart::PendingBeforeUnload(pending) => clear_crash_state_after_navigation(
+            conn,
+            &mut pending.prefix_events,
+            owner,
+            reloaded_after_crash_session_ids,
+        ),
         NavigateCommandStart::CompletePlan(_) => {}
         NavigateCommandStart::CompleteImmediate(plan) => {
             clear_crash_state_after_navigation_into_plan(
@@ -2587,6 +2665,7 @@ fn start_navigate_to_url_command_with_background_policy(
         None,
         None,
         None,
+        None,
     )
 }
 
@@ -2611,6 +2690,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     allow_background_navigation: bool,
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
+    navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
     web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
     initial_document_environment: Option<moli_core::page::RendererCapturedDocumentEnvironment>,
@@ -2663,6 +2743,12 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .as_ref()
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
+    let navigation_history = conn.renderer_navigation_request_for_owner(
+        owner,
+        &requested_url,
+        request_load_policy == NavigationRequestLoadPolicy::Reload,
+        navigation_history,
+    );
     let mut navigation_state = NavigationDispatchState {
         web_mcp_invocation,
         navigation_initiator,
@@ -2670,6 +2756,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         auxiliary_document_response: document_response,
         redirect_chain: Vec::new(),
         redirect_headers: None,
+        navigation_history,
         navigate_id: command_id,
         owner: owner.clone(),
         result_projection,
@@ -2819,6 +2906,39 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         );
     }
 
+    let navigation = PreparedMainDocumentNavigation {
+        token: document_navigation_token,
+        state: navigation_state,
+        pending_fetch: pending_fetch_navigation,
+        fetch_request_stage,
+        allow_background_navigation,
+    };
+    if beforeunload == BeforeUnloadCheck::Required
+        && requested_url.scheme() != "javascript"
+        && let Some(source) = conn.target_page_residence_identity_for_owner(owner)
+        && let Some(page) = conn.loaded_page_mut_for_owner(owner)
+    {
+        let pending = page.start_check_main_document_beforeunload();
+        return NavigateCommandStart::PendingBeforeUnload(Box::new(
+            PendingBeforeUnloadNavigationCommand::new(conn, source, navigation, pending, out),
+        ));
+    }
+    start_prepared_main_document_navigation(conn, navigation, out)
+}
+
+fn start_prepared_main_document_navigation(
+    conn: &mut CdpConnection,
+    navigation: PreparedMainDocumentNavigation,
+    mut out: Vec<BackgroundProtocolEvent>,
+) -> NavigateCommandStart {
+    let PreparedMainDocumentNavigation {
+        token: document_navigation_token,
+        state: mut navigation_state,
+        pending_fetch: pending_fetch_navigation,
+        fetch_request_stage,
+        allow_background_navigation,
+    } = navigation;
+    let owner = &navigation_state.owner.clone();
     if let Some(mut pending) = pending_fetch_navigation {
         let request_pause = fetch::prepare_navigation_request_pause(conn, &mut pending);
         if fetch_request_stage == FetchRequestStage::Request && request_pause {

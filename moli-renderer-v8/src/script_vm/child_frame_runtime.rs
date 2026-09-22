@@ -495,6 +495,10 @@ impl ScriptVm {
         )
     }
 
+    pub(super) fn top_level_navigation_history(&self) -> crate::runtime::RendererNavigationHistory {
+        self._context_host.borrow().top_level_navigation_history()
+    }
+
     pub(crate) fn take_pending_location_navigation_with_seed(
         &mut self,
     ) -> Option<crate::native_bridge::PendingLocationNavigation> {
@@ -559,6 +563,9 @@ impl ScriptVm {
                     pending.request_headers,
                     pending.browser_navigation_kind,
                     runtime_command_cause.clone(),
+                )
+                .with_navigation_history(
+                    pending.entry_seed.map(|seed| self.top_level_navigation_history().request(seed)),
                 )
                 .with_web_mcp_invocation(pending.web_mcp_invocation)
                 .with_history_mutation(history_mutation)
