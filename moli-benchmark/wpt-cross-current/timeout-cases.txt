@@ -1,6 +1,3 @@
-IndexedDB/idbfactory-databases-opaque-origin.html
-IndexedDB/idbfactory-deleteDatabase-opaque-origin.html
-IndexedDB/idbfactory-open-opaque-origin.html
 accessibility/crashtests/animated-textarea.html
 conformance-checkers/html-svg/struct-dom-01-b-isvalid.html
 conformance-checkers/html-svg/struct-svg-02-f-isvalid.html
@@ -139,7 +136,6 @@ html/browsers/windows/browsing-context-names/choose-_top-001.html
 html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
-html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-001.html
 html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
@@ -176,6 +172,7 @@ html/semantics/embedded-content/the-img-element/srcset/srcset-w-reselect-on-resi
 html/semantics/forms/the-button-element/button-submit-remove-children.html
 html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
+html/semantics/scripting-1/the-script-element/execution-timing/039.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
@@ -236,7 +233,6 @@ page-visibility/onvisibilitychange.html
 page-visibility/unload-bubbles.html
 page-visibility/unload.html
 preload/preload-link-cached-stylesheet-different-doc.html
-print/crashtests/reload-crash.html
 requestidlecallback/callback-suspended.html
 resource-timing/document-domain-no-impact-opener.html
 resource-timing/input-sequence-of-events.html
@@ -260,6 +256,7 @@ service-workers/service-worker/clients-matchall-frozen.https.html
 service-workers/service-worker/clients-matchall-include-uncontrolled.https.html
 service-workers/service-worker/clients-matchall-on-evaluation.https.html
 service-workers/service-worker/embed-and-object-are-not-intercepted.https.html
+service-workers/service-worker/fetch-cors-xhr.https.html
 service-workers/service-worker/fetch-event-add-async.https.html
 service-workers/service-worker/fetch-event-is-reload-iframe-navigation-manual.https.html
 service-workers/service-worker/fetch-request-css-base-url.https.html

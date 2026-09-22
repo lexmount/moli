@@ -8,6 +8,9 @@ FileAPI/file/File-constructor-endings.html
 FileAPI/filelist-section/filelist.html
 IndexedDB/database-names-by-origin.html
 IndexedDB/idb_webworkers.htm
+IndexedDB/idbfactory-databases-opaque-origin.html
+IndexedDB/idbfactory-deleteDatabase-opaque-origin.html
+IndexedDB/idbfactory-open-opaque-origin.html
 IndexedDB/idbfactory-origin-isolation.html
 IndexedDB/idbindex-cross-realm-methods.html
 IndexedDB/idbobjectstore-cross-realm-methods.html
@@ -521,6 +524,7 @@ css/css-conditional/js/supports-conditionText.html
 css/css-content/computed-value.html
 css/css-content/inheritance.html
 css/css-content/parsing/content-computed.html
+css/css-content/parsing/content-counter-valid.html
 css/css-content/parsing/content-invalid.html
 css/css-content/parsing/content-valid.html
 css/css-counter-styles/counter-style-at-rule/additive-symbols-syntax.html
@@ -1643,14 +1647,15 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-015.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
+css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
+css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
 css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
 css/css-grid/abspos/positioned-grid-items-001.html
@@ -3930,6 +3935,7 @@ dom/nodes/Node-removeChild.html
 dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
+dom/nodes/NodeList-static-length-getter-tampered-1.html
 dom/nodes/NodeList-static-length-getter-tampered-2.html
 dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
@@ -5608,6 +5614,7 @@ html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin
 html/browsers/browsing-the-web/navigating-across-documents/navigate-to-unparseable-url.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-form-submit.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-same-origin-fragment.html
+html/browsers/browsing-the-web/navigating-across-documents/refresh/same-document-refresh.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent-then-fragment.html
@@ -5621,6 +5628,7 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-cross-document-traversal.html
+html/browsers/browsing-the-web/read-text/load-text-plain.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-on-history-back.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-iframe.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-sticky-activation-popup.html
@@ -5663,6 +5671,7 @@ html/browsers/history/the-history-interface/history_go_no_argument.html
 html/browsers/history/the-history-interface/history_go_plus.html
 html/browsers/history/the-history-interface/history_go_to_uri.html
 html/browsers/history/the-history-interface/history_go_zero.html
+html/browsers/history/the-history-interface/history_properties_only_fully_active.html
 html/browsers/history/the-history-interface/history_pushstate.html
 html/browsers/history/the-history-interface/history_pushstate_err.html
 html/browsers/history/the-history-interface/history_pushstate_nooptionalparam.html
@@ -5678,6 +5687,9 @@ html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-whitespace.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
+html/browsers/history/the-location-interface/assign-replace-from-iframe.html
+html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
+html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/location-non-configurable-toString-valueOf.html
 html/browsers/history/the-location-interface/location-pathname-setter-question-mark.html
 html/browsers/history/the-location-interface/location-prevent-extensions.html
@@ -5701,6 +5713,7 @@ html/browsers/history/the-location-interface/location_reload.html
 html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/location_replace.html
 html/browsers/history/the-location-interface/reload_document_write.html
+html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/security_location_0.htm
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
 html/browsers/origin/inheritance/about-blank-iframe.html
@@ -5899,6 +5912,7 @@ html/infrastructure/fetching-resources/crossorigin-enumerated-ascii-case-insensi
 html/infrastructure/safe-passing-of-structured-data/cross-origin-transfer-resizable-arraybuffer.html
 html/infrastructure/safe-passing-of-structured-data/structured-cloning-error-extra.html
 html/infrastructure/safe-passing-of-structured-data/structuredclone_0.html
+html/infrastructure/terminology/plugins/text-plain.html
 html/infrastructure/urls/base-url/document-base-uri-synthetic-document.html
 html/infrastructure/urls/terminology-0/document-base-url.html
 html/interaction/focus/document-level-focus-apis/document-level-apis.html
@@ -6068,6 +6082,7 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-4.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back-2.html
+html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_back.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_history_go_forward.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_itself.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_escaping-1.html
@@ -6541,6 +6556,7 @@ html/semantics/popovers/popover-root-crash.html
 html/semantics/popovers/popover-shadowhost-focus.html
 html/semantics/popovers/popover-show-after-show-crash.html
 html/semantics/popovers/popover-source-crash.html
+html/semantics/popovers/popover-target-element-disabled.html
 html/semantics/popovers/popover-toggle-source.html
 html/semantics/popovers/popover-types.html
 html/semantics/popovers/popover-undefined-remove-crash.html
@@ -6601,7 +6617,6 @@ html/semantics/scripting-1/the-script-element/execution-timing/035.html
 html/semantics/scripting-1/the-script-element/execution-timing/036.html
 html/semantics/scripting-1/the-script-element/execution-timing/037.html
 html/semantics/scripting-1/the-script-element/execution-timing/038.html
-html/semantics/scripting-1/the-script-element/execution-timing/039.html
 html/semantics/scripting-1/the-script-element/execution-timing/040.html
 html/semantics/scripting-1/the-script-element/execution-timing/041.html
 html/semantics/scripting-1/the-script-element/execution-timing/046.html
@@ -7332,6 +7347,7 @@ html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-eve
 html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-event-listeners-2.html
 html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-event-listeners-3.html
 html/webappapis/scripting/processing-model-2/window-onerror-with-cross-frame-event-listeners-4.html
+html/webappapis/scripting/reporterror-cross-realm-method.html
 html/webappapis/scripting/reporterror-in-detached-window-crash.html
 html/webappapis/structured-clone/structured-clone-detached-window-crash.html
 html/webappapis/system-state-and-capabilities/the-navigator-object/navigator-indexed.html
@@ -7638,6 +7654,7 @@ navigation-api/navigation-methods/return-value/navigate-interrupted.html
 navigation-api/navigation-methods/return-value/navigate-invalid-url.html
 navigation-api/navigation-methods/return-value/navigate-javascript-url.html
 navigation-api/navigation-methods/return-value/navigate-opaque-origin.html
+navigation-api/navigation-methods/return-value/navigate-pagehide.html
 navigation-api/navigation-methods/return-value/navigate-preventDefault.html
 navigation-api/navigation-methods/return-value/navigate-push-initial-about-blank.html
 navigation-api/navigation-methods/return-value/navigate-push-javascript-url.html
@@ -7645,7 +7662,9 @@ navigation-api/navigation-methods/return-value/navigate-rejection-order-beforeun
 navigation-api/navigation-methods/return-value/navigate-rejection-order-detached-unserializablestate.html
 navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-beforeunload.html
 navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-detached.html
+navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-pagehide.html
 navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-unserializablestate.html
+navigation-api/navigation-methods/return-value/navigate-rejection-order-pagehide-unserializablestate.html
 navigation-api/navigation-methods/return-value/navigate-unserializable-state.html
 navigation-api/navigation-methods/return-value/navigate.html
 navigation-api/navigation-methods/return-value/reload-already-detached.html
@@ -7655,9 +7674,11 @@ navigation-api/navigation-methods/return-value/reload-detach-in-serialization.ht
 navigation-api/navigation-methods/return-value/reload-initial-about-blank.html
 navigation-api/navigation-methods/return-value/reload-intercept-rejected.html
 navigation-api/navigation-methods/return-value/reload-intercept.html
+navigation-api/navigation-methods/return-value/reload-pagehide.html
 navigation-api/navigation-methods/return-value/reload-preventDefault.html
 navigation-api/navigation-methods/return-value/reload-rejection-order-beforeunload-unserializablestate.html
 navigation-api/navigation-methods/return-value/reload-rejection-order-detached-unserializablestate.html
+navigation-api/navigation-methods/return-value/reload-rejection-order-pagehide-unserializablestate.html
 navigation-api/navigation-methods/return-value/reload-unserializable-state.html
 navigation-api/navigation-methods/return-value/reload.html
 navigation-api/navigation-methods/return-value/traverseTo-already-detached.html
@@ -7890,6 +7911,7 @@ quirks/unitless-length/quirks.html
 referrer-policy/generic/subresource-test/attr-referrer-invalid-value.html
 requestidlecallback/basic.html
 requestidlecallback/callback-exception.html
+requestidlecallback/callback-idle-periods.html
 requestidlecallback/callback-iframe-different-origin.html
 requestidlecallback/callback-iframe.html
 requestidlecallback/callback-invoked.html
@@ -8043,6 +8065,7 @@ service-workers/service-worker/ServiceWorkerGlobalScope/postmessage.https.html
 service-workers/service-worker/ServiceWorkerGlobalScope/service-worker-error-event.https.html
 service-workers/service-worker/activate-event-after-install-state-change.https.html
 service-workers/service-worker/activation-after-registration.https.html
+service-workers/service-worker/claim-fetch.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
 service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
@@ -8449,6 +8472,7 @@ svg/crashtests/firefox-bug-1883804.html
 svg/crashtests/firefox-bug-1966754.html
 svg/crashtests/firefox-bug-1980267.html
 svg/crashtests/firefox-bug-2018671.html
+svg/embedded/attr-image-fetchpriority.html
 svg/extensibility/foreignObject/foreign-object-circular-filter-reference-crash.html
 svg/extensibility/foreignObject/foreign-object-under-clip-path-crash.html
 svg/extensibility/foreignObject/foreign-object-under-defs-crash.html
@@ -8469,6 +8493,7 @@ svg/path/parsing/number-edge-case-decimal.html
 svg/path/parsing/number-exponent.html
 svg/path/parsing/quadratic-bezier-commands.html
 svg/path/parsing/whitespace-basic.html
+svg/scripted/attr-script-fetchpriority.html
 svg/scripted/script-invalid-script-type.html
 svg/scripted/script-runs-in-shadow-tree.html
 svg/sniffing-content-type.html
@@ -8483,6 +8508,8 @@ svg/styling/presentation-attributes-special-cases.html
 svg/styling/symbol-g-graphics-element.html
 svg/styling/vector-effect-invalid.html
 svg/svg-in-svg/svg-in-svg-circular-filter-reference-crash.html
+svg/types/SVGElement.ownerSVGElement-01.html
+svg/types/SVGElement.ownerSVGElement-02.html
 svg/types/scripted/SVGAnimatedLength.html
 svg/types/scripted/SVGAnimatedLengthList.html
 svg/types/scripted/SVGAnimatedNumberList.html
@@ -8602,6 +8629,7 @@ trusted-types/set-attributes-no-require-trusted-types.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-001.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-003.html
 trusted-types/trusted-types-duplicate-names-list-report-only.html
+trusted-types/trusted-types-eval-reporting-no-unsafe-eval.html
 trusted-types/trusted-types-reporting-for-DOMParser-parseFromString.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-DedicatedWorker-constructor.html
 trusted-types/trusted-types-reporting-for-DedicatedWorker-eval.html
@@ -9300,6 +9328,7 @@ xhr/open-url-multi-window-6.htm
 xhr/open-url-multi-window.htm
 xhr/open-url-worker-simple.htm
 xhr/open-user-password-non-same-origin.htm
+xhr/overridemimetype-blob.html
 xhr/overridemimetype-loading-state.htm
 xhr/overridemimetype-open-state-force-utf-8.htm
 xhr/overridemimetype-open-state-force-xml.htm
@@ -9318,6 +9347,7 @@ xhr/send-non-same-origin.htm
 xhr/send-sync-blocks-async.htm
 xhr/send-sync-timeout.htm
 xhr/setrequestheader-after-send.htm
+xhr/setrequestheader-allow-empty-value.htm
 xhr/setrequestheader-before-open.htm
 xhr/setrequestheader-open-setrequestheader.htm
 xhr/status-error.htm

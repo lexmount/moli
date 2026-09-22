@@ -1,4 +1,3 @@
-dom/nodes/NodeList-static-length-getter-tampered-1.html
 dom/ranges/Range-insertNode.html
 dom/ranges/Range-mutations-dataChange.html
 dom/ranges/Range-surroundContents.html
@@ -9,3 +8,4 @@ infrastructure/expected-fail/user-prompt.html?type=confirm&wait
 infrastructure/expected-fail/user-prompt.html?type=prompt
 infrastructure/expected-fail/user-prompt.html?type=prompt&wait
 navigation-api/navigate-event/signal-abort-replaceState-crash.html
+print/crashtests/reload-crash.html
