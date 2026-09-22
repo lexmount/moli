@@ -666,12 +666,9 @@ pub(in crate::native_bridge) fn detached_click_method_callback<'s>(
         }
         return;
     };
-    if !sync_detached_download_activation_attributes(scope, target, runtime_ptr, handle)
-        && let Some(delegate) = detached_live_delegate_object(scope, target)
-    {
-        let _ = call_object_method(scope, delegate, "click", &[]);
-        return;
-    }
+    // Reflected attributes already live in the native DOM. Reading public
+    // href/download properties here would invoke author getters and turn the
+    // default empty download value into a real download attribute.
     let outcome = crate::native_bridge::element::activate_handle_via_synthetic_click(
         scope,
         runtime_ptr,
@@ -687,53 +684,6 @@ pub(in crate::native_bridge) fn detached_click_method_callback<'s>(
     if let Some(file_chooser) = outcome.pending_file_chooser {
         unsafe { &mut *runtime_ptr }.record_pending_file_chooser_activation(file_chooser);
     }
-}
-
-fn sync_detached_download_activation_attributes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return false;
-    };
-    if !matches!(element.local_name(), "a" | "area") {
-        return false;
-    }
-
-    let property_href = detached_optional_string_property(scope, target, "href");
-    let property_download = detached_optional_string_property(scope, target, "download");
-    if let Some(href) = property_href {
-        let _ = write_detached_native_attribute(scope, target, "href", &href);
-    }
-    if let Some(download) = property_download {
-        let _ = write_detached_native_attribute(scope, target, "download", &download);
-    }
-
-    let runtime = unsafe { &*runtime_ptr };
-    runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| {
-            element.attribute("href").is_some() && element.attribute("download").is_some()
-        })
-}
-
-fn detached_optional_string_property<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    target: v8::Local<'s, v8::Object>,
-    name: &'static str,
-) -> Option<String> {
-    let value = target.get(scope, v8str(scope, name).into())?;
-    if value.is_undefined() {
-        return None;
-    }
-    value
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
 }
 
 pub(in crate::native_bridge::document) fn detached_compare_document_position_method_callback<'s>(

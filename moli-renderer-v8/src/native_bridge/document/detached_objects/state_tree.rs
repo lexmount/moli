@@ -783,42 +783,6 @@ pub(in crate::native_bridge::document) fn sync_detached_native_set_attribute_ns<
     );
 }
 
-pub(crate) fn write_detached_native_attribute<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-    name: &str,
-    value: &str,
-) -> bool {
-    let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return false;
-    };
-    let Some(handle) = detached_native_handle_for_runtime(scope, runtime_ptr, element) else {
-        return false;
-    };
-    if unsafe { &*runtime_ptr }
-        .dom_host()
-        .node(handle)
-        .and_then(|node| node.as_element())
-        .is_none()
-    {
-        return false;
-    }
-    clear_detached_iframe_context_before_navigation_attribute_change(
-        scope,
-        runtime_ptr,
-        element,
-        handle,
-        name,
-        Some(value),
-    );
-    let changed =
-        unsafe { &mut *runtime_ptr }.set_attribute(scope, runtime_ptr, handle, name, value);
-    if changed {
-        detached_record_tree_mutation(scope, element);
-    }
-    true
-}
-
 pub(crate) fn write_detached_native_attribute_appending_to_current_reaction_queue<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     element: v8::Local<'s, v8::Object>,
