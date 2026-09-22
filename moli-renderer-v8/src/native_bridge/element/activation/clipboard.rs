@@ -2,10 +2,14 @@ use crate::context_bootstrap::{
     build_clipboard_data_transfer, clipboard_data_transfer_contents,
     disable_clipboard_data_transfer,
 };
+#[cfg(feature = "devtools")]
 use crate::dom::{forms::InputType, native::Node};
 use crate::native_bridge::element::*;
+use crate::runtime::ClipboardSnapshot;
+#[cfg(feature = "devtools")]
 use crate::util::utf16_units;
 
+#[cfg(feature = "devtools")]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ClipboardAction {
     Copy,
@@ -13,6 +17,7 @@ enum ClipboardAction {
     Paste,
 }
 
+#[cfg(feature = "devtools")]
 impl ClipboardAction {
     fn for_key(key: &str, modifiers: u8) -> Option<Self> {
         let accelerator = if cfg!(target_os = "macos") { 4 } else { 2 };
@@ -36,12 +41,14 @@ impl ClipboardAction {
     }
 }
 
+#[cfg(feature = "devtools")]
 fn active_target(runtime: &PageScriptHost) -> Option<DomHandle> {
     runtime
         .active_element_handle()
         .or_else(|| runtime.document_focus_fallback_handle())
 }
 
+#[cfg(feature = "devtools")]
 fn is_password(runtime: &PageScriptHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
@@ -52,6 +59,7 @@ fn is_password(runtime: &PageScriptHost, handle: DomHandle) -> bool {
         })
 }
 
+#[cfg(feature = "devtools")]
 fn is_clipboard_text_control(runtime: &PageScriptHost, handle: DomHandle, writing: bool) -> bool {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return false;
@@ -72,6 +80,7 @@ fn is_clipboard_text_control(runtime: &PageScriptHost, handle: DomHandle, writin
         && (!writing || !element.has_attribute("readonly"))
 }
 
+#[cfg(feature = "devtools")]
 fn selected_control_text(runtime: &PageScriptHost, handle: DomHandle) -> Option<String> {
     if !is_clipboard_text_control(runtime, handle, false) || is_password(runtime, handle) {
         return None;
@@ -118,6 +127,7 @@ pub(crate) fn perform_clipboard_key_default_action(
     ))
 }
 
+#[cfg(feature = "devtools")]
 fn perform_clipboard_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut PageScriptHost,
@@ -126,7 +136,7 @@ fn perform_clipboard_action(
 ) -> bool {
     let clipboard = unsafe { &*runtime_ptr }.browser_context_runtime();
     let contents = if action == ClipboardAction::Paste {
-        clipboard.clipboard_data()
+        clipboard.clipboard_snapshot().representations
     } else {
         Vec::new()
     };
@@ -156,10 +166,13 @@ fn perform_clipboard_action(
                 return true;
             }
             if let Some(text) = selected_control_text(runtime, handle) {
-                clipboard.set_clipboard_data(vec![(
-                    "text/plain".to_owned(),
-                    native_clipboard_text_bytes(&text),
-                )]);
+                clipboard.set_clipboard_snapshot(ClipboardSnapshot {
+                    representations: vec![(
+                        "text/plain".to_owned(),
+                        native_clipboard_text_bytes(&text),
+                    )],
+                    ..ClipboardSnapshot::default()
+                });
                 if action == ClipboardAction::Cut {
                     replace_text_control_selection(
                         scope,
@@ -214,7 +227,10 @@ pub(super) fn dispatch_clipboard_action_event(
     disable_clipboard_data_transfer(scope, transfer);
     if !outcome.allows_default() {
         if !authored_contents.is_empty() {
-            clipboard.set_clipboard_data(authored_contents);
+            clipboard.set_clipboard_snapshot(ClipboardSnapshot {
+                representations: authored_contents,
+                ..ClipboardSnapshot::default()
+            });
         }
         return Some(false);
     }
