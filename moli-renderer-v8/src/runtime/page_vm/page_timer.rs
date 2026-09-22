@@ -12,10 +12,12 @@ use super::PageVm;
 /// The heap retains the exact Document/realm-bound payload. The descriptor
 /// carries only the observed head deadline, which is revalidated immediately
 /// before execution so a stale deadline wake cannot consume a different timer.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::runtime) enum PageTimerTurnAction {
     Consumed {
         deadline: Instant,
+        root_document: crate::runtime::RendererDocumentToken,
+        popup_parser_completions: Vec<crate::native_bridge::PopupDocumentParserCompletion>,
     },
     NoLongerRunnable {
         expected_deadline: Instant,
@@ -31,12 +33,15 @@ impl PageVm {
         &mut self,
         loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
+        let root_document = self.document_lifecycle.identity().document;
         let body = self.vm_mut().run_next_classic_defer_timer_callback_body()?;
         ensure!(
             body.consumed_heap_head(),
             "a ready classic-defer timer selected before DOMContentLoaded must consume its heap entry"
         );
-        self.finish_selected_page_callback_task(loader).await
+        let completions = self.vm_mut().take_completed_popup_javascript_url_parsers();
+        self.finish_popup_parser_producing_callback_task(root_document, completions, loader)
+            .await
     }
 
     /// Execute one already-selected timer body without committing its
@@ -53,6 +58,7 @@ impl PageVm {
     ) -> Result<PageOwnerTurnOutcome<PageTimerTurnAction>> {
         let actual_deadline = self.vm().next_ready_timeout_deadline(selection);
         let action = if actual_deadline == Some(expected_deadline) {
+            let root_document = self.document_lifecycle.identity().document;
             let body = self.vm_mut().run_next_due_timer_callback_body(selection)?;
             ensure!(
                 body.consumed_heap_head(),
@@ -60,6 +66,10 @@ impl PageVm {
             );
             PageTimerTurnAction::Consumed {
                 deadline: expected_deadline,
+                root_document,
+                popup_parser_completions: self
+                    .vm_mut()
+                    .take_completed_popup_javascript_url_parsers(),
             }
         } else {
             PageTimerTurnAction::NoLongerRunnable {
