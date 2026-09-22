@@ -1,8 +1,10 @@
+mod admission;
 mod apply;
 mod length;
 mod results;
 mod traversal;
 
+pub(super) use self::admission::require_fully_active_history_owner;
 pub(super) use self::apply::apply_history_entry;
 pub(crate) use self::length::{
     increment_top_level_history_length_for_runtime_owner,

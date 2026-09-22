@@ -1450,6 +1450,155 @@ fn history_navigation_arguments_use_webidl_conversion() {
 }
 
 #[test]
+fn history_operations_reject_a_removed_child_document() {
+    let mut vm = new_storage_test_vm("https://example.com/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const frame = document.createElement("iframe");
+              body.appendChild(frame);
+              const childHistory = frame.contentWindow.history;
+              const ChildDOMException = frame.contentWindow.DOMException;
+              frame.remove();
+
+              const probe = callback => {
+                try {
+                  callback();
+                  return "no throw";
+                } catch (error) {
+                  return `${error.name}:${error instanceof ChildDOMException}`;
+                }
+              };
+              return [
+                probe(() => childHistory.length),
+                probe(() => childHistory.scrollRestoration),
+                probe(() => childHistory.state),
+                probe(() => { childHistory.scrollRestoration = "manual"; }),
+                probe(() => childHistory.go()),
+                probe(() => childHistory.go(0)),
+                probe(() => childHistory.go(-1)),
+                probe(() => childHistory.go(1)),
+                probe(() => childHistory.go(Infinity)),
+                probe(() => childHistory.go(-Infinity)),
+                probe(() => childHistory.back()),
+                probe(() => childHistory.forward()),
+                probe(() => childHistory.pushState(1, "", "?x=1")),
+                probe(() => childHistory.replaceState(2, "", "?x=2"))
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("removed child History operations should be rejected");
+
+    assert_eq!(result, ["SecurityError:true"; 14].join("|"));
+}
+
+#[test]
+fn history_argument_errors_precede_inactive_document_errors() {
+    let mut vm = new_storage_test_vm("https://example.com/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const frame = document.createElement("iframe");
+              body.appendChild(frame);
+              const childHistory = frame.contentWindow.history;
+              frame.remove();
+
+              const conversionError = new RangeError("conversion");
+              const rejected = {
+                [Symbol.toPrimitive]() { throw conversionError; }
+              };
+              const probe = callback => {
+                try {
+                  callback();
+                  return "no throw";
+                } catch (error) {
+                  return error === conversionError ? "conversion" : error.name;
+                }
+              };
+              return [
+                probe(() => childHistory.go(Symbol())),
+                probe(() => childHistory.go(1n)),
+                probe(() => childHistory.go(rejected)),
+                probe(() => { childHistory.scrollRestoration = Symbol(); }),
+                probe(() => { childHistory.scrollRestoration = rejected; }),
+                probe(() => { childHistory.scrollRestoration = "invalid"; }),
+                probe(() => childHistory.pushState()),
+                probe(() => childHistory.pushState(null, Symbol())),
+                probe(() => childHistory.replaceState(null, "", Symbol())),
+                probe(() => childHistory.pushState(null, rejected)),
+                probe(() => childHistory.replaceState(null, "", rejected)),
+                probe(() => childHistory.pushState(() => {}, "")),
+                probe(() => childHistory.replaceState(() => {}, ""))
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("inactive History should preserve conversion and serialization error ordering");
+
+    assert_eq!(
+        result,
+        "TypeError|TypeError|conversion|TypeError|conversion|no throw|TypeError|TypeError|TypeError|conversion|conversion|SecurityError|SecurityError"
+    );
+}
+
+#[test]
+fn history_activity_is_checked_after_argument_conversion() {
+    let mut vm = new_storage_test_vm("https://example.com/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const root = document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              const body = document.body || root.appendChild(document.createElement("body"));
+              const operations = [
+                (history, convert) => history.go(convert(0)),
+                (history, convert) => history.go(convert(-1)),
+                (history, convert) => history.go(convert(Infinity)),
+                (history, convert) => { history.scrollRestoration = convert("manual"); },
+                (history, convert) => history.pushState(() => {}, convert("")),
+                (history, convert) => history.replaceState(() => {}, "", convert("?x=2"))
+              ];
+              return operations.map(operation => {
+                const frame = document.createElement("iframe");
+                body.appendChild(frame);
+                const childHistory = frame.contentWindow.history;
+                let conversions = 0;
+                const convert = value => ({
+                  [Symbol.toPrimitive]() {
+                    conversions++;
+                    frame.remove();
+                    return value;
+                  }
+                });
+                try {
+                  operation(childHistory, convert);
+                  return "no throw";
+                } catch (error) {
+                  return `${error.name}:${conversions}`;
+                }
+              }).join("|");
+            })()
+            "#,
+        )
+        .expect("History should reject a document removed during argument conversion");
+
+    assert_eq!(result, ["SecurityError:1"; 6].join("|"));
+}
+
+#[test]
 fn history_state_preserves_structured_clone_values_not_representable_as_json() {
     let mut vm = new_storage_test_vm("https://example.com/base");
 

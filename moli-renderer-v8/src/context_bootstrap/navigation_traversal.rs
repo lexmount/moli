@@ -1,5 +1,6 @@
 use super::history_runtime::{
     cancel_pending_precommit_history_traversal, pending_history_traversal_target_index,
+    require_fully_active_history_owner,
 };
 use super::location_navigation::{
     LocationNavigationKind, navigate_location_object,
@@ -69,14 +70,43 @@ pub(super) fn history_go_callback<'s>(
         );
         return;
     }
-    let delta = if args.length() == 0 {
+    let action = if args.length() == 0 {
         Some(HistoryGoAction::Reload)
     } else {
         coerce_history_go_delta(scope, args.get(0))
     };
-    match delta {
-        Some(HistoryGoAction::Reload) => {
-            let owner = runtime_window_owner(scope, args.this());
+    let Some(action) = action else {
+        return;
+    };
+    history_go_with_action(scope, args.this(), action);
+}
+
+pub(super) fn history_back_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    history_go_with_action(scope, args.this(), HistoryGoAction::Traverse(-1));
+}
+
+pub(super) fn history_forward_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    history_go_with_action(scope, args.this(), HistoryGoAction::Traverse(1));
+}
+
+fn history_go_with_action<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    history: v8::Local<'s, v8::Object>,
+    action: HistoryGoAction,
+) {
+    let Some(owner) = require_fully_active_history_owner(scope, history) else {
+        return;
+    };
+    match action {
+        HistoryGoAction::Reload => {
             let Some(location) = window_location_for_holder(scope, owner) else {
                 return;
             };
@@ -87,26 +117,9 @@ pub(super) fn history_go_callback<'s>(
                 None,
             );
         }
-        Some(HistoryGoAction::Traverse(delta)) => history_traverse(scope, args.this(), delta),
-        Some(HistoryGoAction::Noop) => {}
-        None => {}
+        HistoryGoAction::Traverse(delta) => history_traverse(scope, history, delta),
+        HistoryGoAction::Noop => {}
     }
-}
-
-pub(super) fn history_back_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    history_traverse(scope, args.this(), -1);
-}
-
-pub(super) fn history_forward_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    _rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    history_traverse(scope, args.this(), 1);
 }
 
 pub(super) fn navigation_back_callback<'s>(

@@ -1,3 +1,4 @@
+use super::super::history_runtime::require_fully_active_history_owner;
 use super::super::navigation_activation::{
     navigation_activation_value, navigation_current_entry_value, navigation_transition_value,
 };
@@ -151,6 +152,9 @@ fn history_length_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if require_fully_active_history_owner(scope, args.this()).is_none() {
+        return;
+    }
     let value = history_length_value(scope, args.this())
         .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
     rv.set(value);
@@ -161,6 +165,9 @@ fn history_state_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if require_fully_active_history_owner(scope, args.this()).is_none() {
+        return;
+    }
     let value = history_state_value(scope, args.this());
     rv.set(value);
 }
@@ -212,6 +219,9 @@ fn history_scroll_restoration_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if require_fully_active_history_owner(scope, args.this()).is_none() {
+        return;
+    }
     let value = history_scroll_restoration_value(scope, args.this())
         .unwrap_or_else(|| v8str(scope, "auto").into());
     rv.set(value);
@@ -232,6 +242,9 @@ fn history_scroll_restoration_setter_function<'s>(
     let Some(next_value) = ScrollRestoration::parse(&next_value) else {
         return;
     };
+    if require_fully_active_history_owner(scope, args.this()).is_none() {
+        return;
+    }
     set_history_scroll_restoration(scope, args.this(), next_value.label());
 }
 

@@ -1,3 +1,4 @@
+use super::history_runtime::require_fully_active_history_owner;
 use super::location_runtime::{location_href_slot, sync_location_object};
 use super::navigation_activation::bind_navigation_entry_runtime_owner;
 use super::navigation_callbacks::cancel_active_intercepted_same_document_navigation;
@@ -23,8 +24,7 @@ use super::navigation_result::{
 };
 use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::navigation_window::{
-    runtime_window_is_global, runtime_window_owner, window_location_for_holder,
-    window_navigation_for_holder,
+    runtime_window_is_global, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
@@ -104,11 +104,13 @@ fn mutate_history_object<'s>(
         return;
     };
     let _ = &parsed.unused;
+    let Some(owner) = require_fully_active_history_owner(scope, history) else {
+        return;
+    };
     let Some(state) = structured_clone_value_for_storage(scope, parsed.state) else {
         return;
     };
     let state_json = stringify_history_state(scope, state);
-    let owner = runtime_window_owner(scope, history);
     let Some(location) = window_location_for_holder(scope, owner) else {
         return;
     };
