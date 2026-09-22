@@ -4,6 +4,7 @@ mod child_window;
 mod compilation;
 mod object_values;
 mod popup;
+mod popup_window;
 
 #[test]
 fn document_visibility_handler_is_native_and_can_be_cleared() {
