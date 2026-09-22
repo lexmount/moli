@@ -47,9 +47,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_key_callbac
             store,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::ObjectStoreGetKey {
-                query: parsed.query,
-            },
+            IndexedDbTransactionOperation::ObjectStoreGetKey { query },
         );
         rv.set(request.into());
         return;

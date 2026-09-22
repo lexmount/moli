@@ -6,20 +6,11 @@ pub(in crate::context_bootstrap::indexed_db) fn execute_object_store_get_all_key
     request: v8::Local<'s, v8::Object>,
     handle: TransactionHandle,
     store_name: &str,
-    query_value: v8::Local<'s, v8::Value>,
-    count_value: v8::Local<'s, v8::Value>,
+    query: Option<&IdbKeyRangeQuery>,
+    count: Option<usize>,
     direction: CursorDirection,
 ) {
-    let Some((query, count)) = collection_parse::parse_collection_query_and_count(
-        scope,
-        request,
-        query_value,
-        count_value,
-        "getAllKeys",
-    ) else {
-        return;
-    };
-    match scan_object_store_entries(scope, handle, store_name, query.as_ref()) {
+    match scan_object_store_entries(scope, handle, store_name, query) {
         Ok(entries) => {
             let entries = apply_object_store_collection_direction(entries, direction);
             let limit = count.unwrap_or(entries.len());

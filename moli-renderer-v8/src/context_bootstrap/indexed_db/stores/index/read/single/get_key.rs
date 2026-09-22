@@ -47,9 +47,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_index_get_key_callback<'s>(
             index,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::IndexGetKey {
-                query: parsed.query,
-            },
+            IndexedDbTransactionOperation::IndexGetKey { query },
         );
         rv.set(request.into());
         return;

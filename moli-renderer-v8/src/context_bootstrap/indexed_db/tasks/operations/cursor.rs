@@ -15,7 +15,7 @@ pub(in crate::context_bootstrap::indexed_db) fn submit_cursor_open_operation<'s>
             source,
             request,
             store_name,
-            IndexedDbTransactionOperationInput::OpenCursor(operation),
+            IndexedDbTransactionOperation::OpenCursor(operation),
         );
         return;
     };

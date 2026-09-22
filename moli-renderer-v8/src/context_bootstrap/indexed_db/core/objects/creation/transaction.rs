@@ -34,10 +34,10 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
     store_names: &[String],
 ) -> Option<v8::Local<'s, v8::Object>> {
     let handle_raw = handle.map(|handle| handle.into_raw() as f64);
-    let mode: &'static str = mode.into();
+    let mode_label: &'static str = mode.into();
     let db_key = object_string_property(scope, db, INDEXED_DB_DATABASE_KEY_SLOT);
     let object_store_names = new_idb_dom_string_list(scope, store_names);
-    let tx = IdbTransactionObjectDeclaration::new(db, mode, object_store_names)
+    let tx = IdbTransactionObjectDeclaration::new(db, mode_label, object_store_names)
         .bind(scope)
         .ok()?;
     let storage_scope = indexed_db_typed_storage_scope(scope, db);
@@ -50,6 +50,13 @@ pub(in crate::context_bootstrap::indexed_db) fn create_transaction_object<'s>(
         owner,
         storage_scope,
     );
-    register_indexed_db_transaction_lifecycle(scope, tx, handle, handle_raw.is_some(), db_key);
+    register_indexed_db_transaction_lifecycle(
+        scope,
+        tx,
+        handle,
+        mode,
+        handle_raw.is_some(),
+        db_key,
+    );
     Some(tx)
 }

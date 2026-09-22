@@ -2,8 +2,7 @@ use super::*;
 use crate::webidl;
 use moli_indexeddb::{GetAllOptionsCandidate, should_parse_get_all_options};
 
-pub(in crate::context_bootstrap::indexed_db::stores) struct CollectionRequestArgs<'s> {
-    pub(in crate::context_bootstrap::indexed_db::stores) query_value: v8::Local<'s, v8::Value>,
+pub(in crate::context_bootstrap::indexed_db::stores) struct CollectionRequestArgs {
     pub(in crate::context_bootstrap::indexed_db::stores) query: Option<IdbKeyRangeQuery>,
     pub(in crate::context_bootstrap::indexed_db::stores) count: Option<usize>,
     pub(in crate::context_bootstrap::indexed_db::stores) direction: CursorDirection,
@@ -18,7 +17,7 @@ pub(in crate::context_bootstrap::indexed_db::stores) fn parse_collection_request
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     operation_name: &'static str,
-) -> Result<CollectionRequestArgs<'s>, CollectionRequestArgsError> {
+) -> Result<CollectionRequestArgs, CollectionRequestArgsError> {
     let positional_query = args.get(0);
     let parsed =
         if args.length() == 1 && should_parse_get_all_options_value(scope, positional_query) {
@@ -32,7 +31,6 @@ pub(in crate::context_bootstrap::indexed_db::stores) fn parse_collection_request
     let query = parse_key_or_range(scope, query_value)
         .map_err(|_| CollectionRequestArgsError::InvalidQuery)?;
     Ok(CollectionRequestArgs {
-        query_value,
         query,
         count,
         direction,

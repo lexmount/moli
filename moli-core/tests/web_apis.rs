@@ -1,3 +1,6 @@
+#[path = "web_apis/indexed_db_transaction.rs"]
+mod indexed_db_transaction;
+
 #[path = "web_apis/pipe_disturbed.rs"]
 mod pipe_disturbed;
 

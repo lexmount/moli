@@ -42,84 +42,25 @@ impl IndexedDbCursorOpenOperation {
     }
 }
 
-pub(super) enum IndexedDbTransactionOperationInput<'s> {
+pub(super) enum IndexedDbTransactionOperation {
     ObjectStoreGet {
-        query: v8::Local<'s, v8::Value>,
+        query: IdbKeyRangeQuery,
     },
     ObjectStoreGetAll {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
+        query: Option<IdbKeyRangeQuery>,
+        count: Option<usize>,
+        direction: CursorDirection,
     },
     ObjectStoreGetKey {
-        query: v8::Local<'s, v8::Value>,
+        query: IdbKeyRangeQuery,
     },
     ObjectStoreGetAllKeys {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
+        query: Option<IdbKeyRangeQuery>,
+        count: Option<usize>,
+        direction: CursorDirection,
     },
     ObjectStoreCount {
-        query: v8::Local<'s, v8::Value>,
-    },
-    OpenCursor(IndexedDbCursorOpenOperation),
-    ObjectStoreWrite {
-        value: v8::Local<'s, v8::Value>,
-        key: v8::Local<'s, v8::Value>,
-        add_only: bool,
-    },
-    ObjectStoreDelete {
-        key: v8::Local<'s, v8::Value>,
-    },
-    ObjectStoreClear,
-    IndexGet {
-        query: v8::Local<'s, v8::Value>,
-    },
-    IndexGetKey {
-        query: v8::Local<'s, v8::Value>,
-    },
-    IndexGetAll {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
-    },
-    IndexGetAllKeys {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
-    },
-    IndexCount {
-        query: v8::Local<'s, v8::Value>,
-    },
-}
-
-pub(super) struct IndexedDbPendingTransactionOperation {
-    owner: OwnerDispatchScope,
-    source: v8::Global<v8::Object>,
-    request: v8::Global<v8::Object>,
-    store_name: String,
-    kind: IndexedDbPendingTransactionOperationKind,
-}
-
-enum IndexedDbPendingTransactionOperationKind {
-    ObjectStoreGet {
-        query: v8::Global<v8::Value>,
-    },
-    ObjectStoreGetAll {
-        query: v8::Global<v8::Value>,
-        count: v8::Global<v8::Value>,
-        direction: v8::Global<v8::Value>,
-    },
-    ObjectStoreGetKey {
-        query: v8::Global<v8::Value>,
-    },
-    ObjectStoreGetAllKeys {
-        query: v8::Global<v8::Value>,
-        count: v8::Global<v8::Value>,
-        direction: v8::Global<v8::Value>,
-    },
-    ObjectStoreCount {
-        query: v8::Global<v8::Value>,
+        query: Option<IdbKeyRangeQuery>,
     },
     OpenCursor(IndexedDbCursorOpenOperation),
     ObjectStoreWrite {
@@ -128,86 +69,45 @@ enum IndexedDbPendingTransactionOperationKind {
         add_only: bool,
     },
     ObjectStoreDelete {
-        key: v8::Global<v8::Value>,
+        query: IdbKeyRangeQuery,
     },
     ObjectStoreClear,
     IndexGet {
-        query: v8::Global<v8::Value>,
+        query: IdbKeyRangeQuery,
     },
     IndexGetKey {
-        query: v8::Global<v8::Value>,
+        query: IdbKeyRangeQuery,
     },
     IndexGetAll {
-        query: v8::Global<v8::Value>,
-        count: v8::Global<v8::Value>,
-        direction: v8::Global<v8::Value>,
+        query: Option<IdbKeyRangeQuery>,
+        count: Option<usize>,
+        direction: CursorDirection,
     },
     IndexGetAllKeys {
-        query: v8::Global<v8::Value>,
-        count: v8::Global<v8::Value>,
-        direction: v8::Global<v8::Value>,
+        query: Option<IdbKeyRangeQuery>,
+        count: Option<usize>,
+        direction: CursorDirection,
     },
     IndexCount {
-        query: v8::Global<v8::Value>,
+        query: Option<IdbKeyRangeQuery>,
     },
+}
+
+// Query arguments are converted at the API boundary and retained as native snapshots.
+// Write requests retain their existing deferred value/key conversion behavior.
+pub(super) struct IndexedDbPendingTransactionOperation {
+    owner: OwnerDispatchScope,
+    source: v8::Global<v8::Object>,
+    request: v8::Global<v8::Object>,
+    store_name: String,
+    kind: IndexedDbTransactionOperation,
 }
 
 pub(super) struct IndexedDbTransactionOperationLocals<'s> {
     pub(super) source: v8::Local<'s, v8::Object>,
     pub(super) request: v8::Local<'s, v8::Object>,
     pub(super) store_name: String,
-    pub(super) kind: IndexedDbTransactionOperationKindLocals<'s>,
-}
-
-pub(super) enum IndexedDbTransactionOperationKindLocals<'s> {
-    ObjectStoreGet {
-        query: v8::Local<'s, v8::Value>,
-    },
-    ObjectStoreGetAll {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
-    },
-    ObjectStoreGetKey {
-        query: v8::Local<'s, v8::Value>,
-    },
-    ObjectStoreGetAllKeys {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
-    },
-    ObjectStoreCount {
-        query: v8::Local<'s, v8::Value>,
-    },
-    OpenCursor(IndexedDbCursorOpenOperation),
-    ObjectStoreWrite {
-        value: v8::Local<'s, v8::Value>,
-        key: v8::Local<'s, v8::Value>,
-        add_only: bool,
-    },
-    ObjectStoreDelete {
-        key: v8::Local<'s, v8::Value>,
-    },
-    ObjectStoreClear,
-    IndexGet {
-        query: v8::Local<'s, v8::Value>,
-    },
-    IndexGetKey {
-        query: v8::Local<'s, v8::Value>,
-    },
-    IndexGetAll {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
-    },
-    IndexGetAllKeys {
-        query: v8::Local<'s, v8::Value>,
-        count: v8::Local<'s, v8::Value>,
-        direction: v8::Local<'s, v8::Value>,
-    },
-    IndexCount {
-        query: v8::Local<'s, v8::Value>,
-    },
+    pub(super) kind: IndexedDbTransactionOperation,
 }
 
 impl IndexedDbPendingTransactionOperation {
@@ -217,81 +117,8 @@ impl IndexedDbPendingTransactionOperation {
         source: v8::Local<'s, v8::Object>,
         request: v8::Local<'s, v8::Object>,
         store_name: impl Into<String>,
-        input: IndexedDbTransactionOperationInput<'s>,
+        kind: IndexedDbTransactionOperation,
     ) -> Self {
-        use IndexedDbPendingTransactionOperationKind as Pending;
-        use IndexedDbTransactionOperationInput as Input;
-
-        let kind = match input {
-            Input::ObjectStoreGet { query } => Pending::ObjectStoreGet {
-                query: v8::Global::new(scope, query),
-            },
-            Input::ObjectStoreGetAll {
-                query,
-                count,
-                direction,
-            } => Pending::ObjectStoreGetAll {
-                query: v8::Global::new(scope, query),
-                count: v8::Global::new(scope, count),
-                direction: v8::Global::new(scope, direction),
-            },
-            Input::ObjectStoreGetKey { query } => Pending::ObjectStoreGetKey {
-                query: v8::Global::new(scope, query),
-            },
-            Input::ObjectStoreGetAllKeys {
-                query,
-                count,
-                direction,
-            } => Pending::ObjectStoreGetAllKeys {
-                query: v8::Global::new(scope, query),
-                count: v8::Global::new(scope, count),
-                direction: v8::Global::new(scope, direction),
-            },
-            Input::ObjectStoreCount { query } => Pending::ObjectStoreCount {
-                query: v8::Global::new(scope, query),
-            },
-            Input::OpenCursor(operation) => Pending::OpenCursor(operation),
-            Input::ObjectStoreWrite {
-                value,
-                key,
-                add_only,
-            } => Pending::ObjectStoreWrite {
-                value: v8::Global::new(scope, value),
-                key: v8::Global::new(scope, key),
-                add_only,
-            },
-            Input::ObjectStoreDelete { key } => Pending::ObjectStoreDelete {
-                key: v8::Global::new(scope, key),
-            },
-            Input::ObjectStoreClear => Pending::ObjectStoreClear,
-            Input::IndexGet { query } => Pending::IndexGet {
-                query: v8::Global::new(scope, query),
-            },
-            Input::IndexGetKey { query } => Pending::IndexGetKey {
-                query: v8::Global::new(scope, query),
-            },
-            Input::IndexGetAll {
-                query,
-                count,
-                direction,
-            } => Pending::IndexGetAll {
-                query: v8::Global::new(scope, query),
-                count: v8::Global::new(scope, count),
-                direction: v8::Global::new(scope, direction),
-            },
-            Input::IndexGetAllKeys {
-                query,
-                count,
-                direction,
-            } => Pending::IndexGetAllKeys {
-                query: v8::Global::new(scope, query),
-                count: v8::Global::new(scope, count),
-                direction: v8::Global::new(scope, direction),
-            },
-            Input::IndexCount { query } => Pending::IndexCount {
-                query: v8::Global::new(scope, query),
-            },
-        };
         Self {
             owner,
             source: v8::Global::new(scope, source),
@@ -316,84 +143,11 @@ impl IndexedDbPendingTransactionOperation {
         self,
         scope: &mut v8::PinScope<'s, '_>,
     ) -> IndexedDbTransactionOperationLocals<'s> {
-        use IndexedDbPendingTransactionOperationKind as Pending;
-        use IndexedDbTransactionOperationKindLocals as Locals;
-
-        let kind = match self.kind {
-            Pending::ObjectStoreGet { query } => Locals::ObjectStoreGet {
-                query: v8::Local::new(scope, &query),
-            },
-            Pending::ObjectStoreGetAll {
-                query,
-                count,
-                direction,
-            } => Locals::ObjectStoreGetAll {
-                query: v8::Local::new(scope, &query),
-                count: v8::Local::new(scope, &count),
-                direction: v8::Local::new(scope, &direction),
-            },
-            Pending::ObjectStoreGetKey { query } => Locals::ObjectStoreGetKey {
-                query: v8::Local::new(scope, &query),
-            },
-            Pending::ObjectStoreGetAllKeys {
-                query,
-                count,
-                direction,
-            } => Locals::ObjectStoreGetAllKeys {
-                query: v8::Local::new(scope, &query),
-                count: v8::Local::new(scope, &count),
-                direction: v8::Local::new(scope, &direction),
-            },
-            Pending::ObjectStoreCount { query } => Locals::ObjectStoreCount {
-                query: v8::Local::new(scope, &query),
-            },
-            Pending::OpenCursor(operation) => Locals::OpenCursor(operation),
-            Pending::ObjectStoreWrite {
-                value,
-                key,
-                add_only,
-            } => Locals::ObjectStoreWrite {
-                value: v8::Local::new(scope, &value),
-                key: v8::Local::new(scope, &key),
-                add_only,
-            },
-            Pending::ObjectStoreDelete { key } => Locals::ObjectStoreDelete {
-                key: v8::Local::new(scope, &key),
-            },
-            Pending::ObjectStoreClear => Locals::ObjectStoreClear,
-            Pending::IndexGet { query } => Locals::IndexGet {
-                query: v8::Local::new(scope, &query),
-            },
-            Pending::IndexGetKey { query } => Locals::IndexGetKey {
-                query: v8::Local::new(scope, &query),
-            },
-            Pending::IndexGetAll {
-                query,
-                count,
-                direction,
-            } => Locals::IndexGetAll {
-                query: v8::Local::new(scope, &query),
-                count: v8::Local::new(scope, &count),
-                direction: v8::Local::new(scope, &direction),
-            },
-            Pending::IndexGetAllKeys {
-                query,
-                count,
-                direction,
-            } => Locals::IndexGetAllKeys {
-                query: v8::Local::new(scope, &query),
-                count: v8::Local::new(scope, &count),
-                direction: v8::Local::new(scope, &direction),
-            },
-            Pending::IndexCount { query } => Locals::IndexCount {
-                query: v8::Local::new(scope, &query),
-            },
-        };
         IndexedDbTransactionOperationLocals {
             source: v8::Local::new(scope, &self.source),
             request: v8::Local::new(scope, &self.request),
             store_name: self.store_name,
-            kind,
+            kind: self.kind,
         }
     }
 }

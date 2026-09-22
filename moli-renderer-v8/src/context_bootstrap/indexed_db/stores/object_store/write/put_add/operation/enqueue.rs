@@ -10,13 +10,15 @@ pub(super) fn enqueue_deferred_object_store_write<'s>(
     key: v8::Local<'s, v8::Value>,
     add_only: bool,
 ) {
+    let value = v8::Global::new(scope, value);
+    let key = v8::Global::new(scope, key);
     enqueue_transaction_operation(
         scope,
         transaction,
         store,
         request,
         store_name,
-        IndexedDbTransactionOperationInput::ObjectStoreWrite {
+        IndexedDbTransactionOperation::ObjectStoreWrite {
             value,
             key,
             add_only,

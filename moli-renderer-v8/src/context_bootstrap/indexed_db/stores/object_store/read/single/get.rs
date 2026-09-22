@@ -47,9 +47,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_get_callback<'s
             store,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::ObjectStoreGet {
-                query: parsed.query,
-            },
+            IndexedDbTransactionOperation::ObjectStoreGet { query },
         );
         rv.set(request.into());
         return;

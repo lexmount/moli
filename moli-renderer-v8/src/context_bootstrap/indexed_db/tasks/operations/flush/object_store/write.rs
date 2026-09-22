@@ -5,32 +5,34 @@ pub(super) fn try_dispatch_object_store_write_operation<'s>(
     operation: &operation::QueuedTransactionOperation<'s>,
 ) -> bool {
     match &operation.kind {
-        IndexedDbTransactionOperationKindLocals::ObjectStoreWrite {
+        IndexedDbTransactionOperation::ObjectStoreWrite {
             value,
             key,
             add_only,
         } => {
+            let value = v8::Local::new(scope, value);
+            let key = v8::Local::new(scope, key);
             execute_object_store_write_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *value,
-                *key,
+                value,
+                key,
                 *add_only,
             );
         }
-        IndexedDbTransactionOperationKindLocals::ObjectStoreDelete { key } => {
+        IndexedDbTransactionOperation::ObjectStoreDelete { query } => {
             execute_object_store_delete_request(
                 scope,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *key,
+                query,
             );
         }
-        IndexedDbTransactionOperationKindLocals::ObjectStoreClear => {
+        IndexedDbTransactionOperation::ObjectStoreClear => {
             execute_object_store_clear_request(
                 scope,
                 operation.request,

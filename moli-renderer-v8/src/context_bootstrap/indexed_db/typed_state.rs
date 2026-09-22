@@ -352,6 +352,7 @@ impl IndexedDbRequestLifecycleState {
 }
 
 struct IndexedDbTransactionLifecycleState {
+    mode: TransactionMode,
     handle: Option<TransactionHandle>,
     active: bool,
     finished: bool,
@@ -367,8 +368,14 @@ struct IndexedDbTransactionLifecycleState {
 }
 
 impl IndexedDbTransactionLifecycleState {
-    fn new(handle: Option<TransactionHandle>, started: bool, db_key: Option<String>) -> Self {
+    fn new(
+        handle: Option<TransactionHandle>,
+        mode: TransactionMode,
+        started: bool,
+        db_key: Option<String>,
+    ) -> Self {
         Self {
+            mode,
             handle,
             active: true,
             finished: false,
@@ -686,15 +693,25 @@ pub(super) fn register_indexed_db_transaction_lifecycle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     transaction: v8::Local<'s, v8::Object>,
     handle: Option<TransactionHandle>,
+    mode: TransactionMode,
     started: bool,
     db_key: Option<String>,
 ) {
     let Some(id) = indexed_db_typed_state_id(scope, transaction) else {
         return;
     };
-    let state = IndexedDbTransactionLifecycleState::new(handle, started, db_key);
+    let state = IndexedDbTransactionLifecycleState::new(handle, mode, started, db_key);
     let table = indexed_db_runtime_state_table_for_object(scope, transaction);
     table.borrow_mut().transactions.insert(id, state);
+}
+
+pub(super) fn indexed_db_transaction_mode<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    transaction: v8::Local<'s, v8::Object>,
+) -> Option<TransactionMode> {
+    let id = indexed_db_typed_state_id(scope, transaction)?;
+    let table = indexed_db_runtime_state_table_for_object(scope, transaction);
+    table.borrow().transactions.get(&id).map(|state| state.mode)
 }
 
 pub(in crate::context_bootstrap::indexed_db) fn schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint<

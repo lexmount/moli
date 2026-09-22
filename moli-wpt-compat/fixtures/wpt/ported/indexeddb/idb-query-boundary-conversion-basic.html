@@ -117,7 +117,7 @@ promise_test(async () => {
     "objectStore.delete key is required"
   );
   assert_throws_name(
-    "TypeError",
+    "DataError",
     () => writeStore.delete(undefined),
     "objectStore.delete validates present undefined as a key"
   );

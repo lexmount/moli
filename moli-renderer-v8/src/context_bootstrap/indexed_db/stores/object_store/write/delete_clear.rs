@@ -1,4 +1,6 @@
 use super::*;
+use crate::context_bootstrap::indexed_db::indexed_db_transaction_mode;
+use moli_indexeddb::TransactionMode;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "IDBObjectStore.delete")]
@@ -16,7 +18,12 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         return;
     };
     let store = args.this();
-    let Some((request, transaction)) = create_store_request(scope, store) else {
+    let Some(transaction) =
+        indexed_db_object_store_transaction(scope, store).filter(|transaction| {
+            object_bool_property(scope, *transaction, INDEXED_DB_TRANSACTION_ACTIVE_SLOT)
+                .unwrap_or(false)
+        })
+    else {
         let error = dom_exception_value(
             scope,
             "The transaction is not active.",
@@ -26,16 +33,34 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         return;
     };
     let Some(store_name) = indexed_db_object_store_name(scope, store) else {
-        rv.set(request.into());
         return;
     };
-    match parse_idb_key(scope, parsed.key) {
-        Ok(Some(_)) => {}
-        _ => {
-            throw_type_error(scope, "Failed to execute 'delete': invalid key.");
+    if indexed_db_transaction_mode(scope, transaction) == Some(TransactionMode::ReadOnly) {
+        let error = dom_exception_value(scope, "The transaction is readonly.", "ReadOnlyError");
+        scope.throw_exception(error);
+        return;
+    }
+    let query = match parse_key_or_range(scope, parsed.key) {
+        Ok(Some(query)) => query,
+        Ok(None) => {
+            let error = dom_exception_value(
+                scope,
+                "The query is not a valid key or key range.",
+                "DataError",
+            );
+            scope.throw_exception(error);
             return;
         }
-    }
+        Err(message) => {
+            let error = dom_exception_value(scope, message, "DataError");
+            scope.throw_exception(error);
+            return;
+        }
+    };
+    let Some(request) = create_request_object(scope, store.into(), transaction) else {
+        return;
+    };
+    queue_transaction_request(scope, transaction, request);
     if !object_bool_property(scope, transaction, INDEXED_DB_TRANSACTION_STARTED_SLOT)
         .unwrap_or(false)
     {
@@ -45,7 +70,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
             store,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::ObjectStoreDelete { key: parsed.key },
+            IndexedDbTransactionOperation::ObjectStoreDelete { query },
         );
         rv.set(request.into());
         return;
@@ -59,7 +84,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
         scope.throw_exception(error);
         return;
     };
-    execute_object_store_delete_request(scope, request, handle, &store_name, parsed.key);
+    execute_object_store_delete_request(scope, request, handle, &store_name, &query);
     rv.set(request.into());
 }
 
@@ -91,7 +116,7 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_clear_callback<
             store,
             request,
             &store_name,
-            IndexedDbTransactionOperationInput::ObjectStoreClear,
+            IndexedDbTransactionOperation::ObjectStoreClear,
         );
         rv.set(request.into());
         return;

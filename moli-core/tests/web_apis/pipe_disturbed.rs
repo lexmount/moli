@@ -40,7 +40,7 @@ fn markup_url(server: &FixtureServer, markup: &str) -> String {
     url.into()
 }
 
-async fn run_probe(
+pub(super) async fn run_probe(
     browser: &Browser,
     server: &FixtureServer,
     target: &str,

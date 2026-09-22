@@ -5,68 +5,66 @@ pub(super) fn try_dispatch_index_read_operation<'s>(
     operation: &operation::QueuedTransactionOperation<'s>,
 ) -> bool {
     match &operation.kind {
-        IndexedDbTransactionOperationKindLocals::IndexGet { query } => {
+        IndexedDbTransactionOperation::IndexGet { query } => {
             execute_index_get_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query,
             );
         }
-        IndexedDbTransactionOperationKindLocals::IndexGetKey { query } => {
+        IndexedDbTransactionOperation::IndexGetKey { query } => {
             execute_index_get_key_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query,
             );
         }
-        IndexedDbTransactionOperationKindLocals::IndexGetAll {
+        IndexedDbTransactionOperation::IndexGetAll {
             query,
             count,
             direction,
         } => {
-            let direction = operation::collection_direction_from_value(scope, *direction);
             execute_index_get_all_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query.as_ref(),
                 *count,
-                direction,
+                *direction,
             );
         }
-        IndexedDbTransactionOperationKindLocals::IndexGetAllKeys {
+        IndexedDbTransactionOperation::IndexGetAllKeys {
             query,
             count,
             direction,
         } => {
-            let direction = operation::collection_direction_from_value(scope, *direction);
             execute_index_get_all_keys_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query.as_ref(),
                 *count,
-                direction,
+                *direction,
             );
         }
-        IndexedDbTransactionOperationKindLocals::IndexCount { query } => {
+        IndexedDbTransactionOperation::IndexCount { query } => {
             execute_index_count_request(
                 scope,
                 operation.source,
                 operation.request,
                 operation.handle,
                 &operation.store_name,
-                *query,
+                query.as_ref(),
             );
         }
         _ => return false,
