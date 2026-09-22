@@ -250,13 +250,14 @@ use self::access::{
     script_execution_lane_path,
 };
 pub(crate) use self::browser_context_runtime::ServiceWorkerControlState;
+pub(crate) use self::browser_context_runtime::{
+    ClipboardPresentationStyle, ClipboardSnapshot, RendererStoragePartitionIdentity,
+    RendererWorkerContextRuntime,
+};
 pub use self::browser_context_runtime::{
     DetachedParserScriptFetchContinuation, RendererBrowserContextRuntime,
     RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
     RendererReservedServiceWorkerClient, RendererServiceWorkerMainResourceFetch,
-};
-pub(crate) use self::browser_context_runtime::{
-    RendererStoragePartitionIdentity, RendererWorkerContextRuntime,
 };
 pub(crate) use self::document_lifecycle::{
     RendererDocumentLifecycleDriveAdmission, RendererDocumentLifecycleJournalHandle,

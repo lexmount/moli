@@ -2,6 +2,7 @@ use super::super::{SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT, SIMPLE_EVENT_TARGE
 use crate::web_api_interfaces;
 use crate::{
     blob,
+    runtime::{ClipboardPresentationStyle as PresentationStyle, ClipboardSnapshot},
     util::{context_host_ptr_from_context_slot, get_private_value, throw_type_error, v8_string},
     webidl,
 };
@@ -75,25 +76,6 @@ struct ClipboardItemPrototypeDeclaration {
 struct ClipboardItemConstructorDeclaration {
     #[webapi(static_method, length = 1, callback = clipboard_item_supports_callback)]
     supports: (),
-}
-
-#[derive(Clone, Copy, Default, webidl::WebIdlEnum)]
-#[webidl(name = "PresentationStyle", rename_all = "kebab-case")]
-enum PresentationStyle {
-    #[default]
-    Unspecified,
-    Inline,
-    Attachment,
-}
-
-impl PresentationStyle {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unspecified => "unspecified",
-            Self::Inline => "inline",
-            Self::Attachment => "attachment",
-        }
-    }
 }
 
 #[derive(Default, webidl::WebIdlDictionary)]
@@ -358,17 +340,17 @@ fn initialize_clipboard_item<'s>(
 fn build_clipboard_item<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entries: Vec<(String, v8::Local<'s, v8::Promise>)>,
+    presentation_style: PresentationStyle,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let object = ClipboardItemObjectDeclaration::new(
         v8::Object::new(scope),
         v8::Object::new(scope),
         v8::Array::new(scope, 0),
-        PresentationStyle::Unspecified.as_str().to_owned(),
+        presentation_style.as_str().to_owned(),
     )
     .bind(scope)
     .ok()?;
-    initialize_clipboard_item(scope, object, entries, PresentationStyle::Unspecified)
-        .then_some(object)
+    initialize_clipboard_item(scope, object, entries, presentation_style).then_some(object)
 }
 
 fn clipboard_item_data_to_blob_callback<'s>(
@@ -695,7 +677,10 @@ fn clipboard_write_text_callback<'s>(
     if reject_denied_clipboard_access(scope, args.this(), "clipboard-write", &mut rv) {
         return;
     }
-    runtime.set_clipboard_data(vec![("text/plain".to_owned(), parsed.data.into_bytes())]);
+    runtime.set_clipboard_snapshot(ClipboardSnapshot {
+        presentation_style: PresentationStyle::Unspecified,
+        representations: vec![("text/plain".to_owned(), parsed.data.into_bytes())],
+    });
     set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
 }
 
@@ -897,12 +882,12 @@ fn clipboard_store_validated_item_callback<'s>(
         let _ = resolver.reject(scope, reason);
         return;
     }
-    let Some(data) = clipboard_item_bytes(scope, item) else {
+    let Some(snapshot) = clipboard_item_snapshot(scope, item) else {
         let reason = type_error_value(scope, "Failed to read validated ClipboardItem data.");
         let _ = resolver.reject(scope, reason);
         return;
     };
-    runtime.set_clipboard_data(data);
+    runtime.set_clipboard_snapshot(snapshot);
     let _ = resolver.resolve(scope, v8::undefined(scope).into());
 }
 
@@ -1005,28 +990,36 @@ fn copy_clipboard_items<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     runtime: &crate::runtime::RendererBrowserContextRuntime,
 ) -> Option<v8::Local<'s, v8::Array>> {
-    let data = runtime.clipboard_data();
-    let result = v8::Array::new(scope, i32::from(!data.is_empty()));
-    if !data.is_empty() {
-        let mut entries = Vec::with_capacity(data.len());
-        for (mime_type, bytes) in data {
+    let ClipboardSnapshot {
+        presentation_style,
+        representations,
+    } = runtime.clipboard_snapshot();
+    let result = v8::Array::new(scope, i32::from(!representations.is_empty()));
+    if !representations.is_empty() {
+        let mut entries = Vec::with_capacity(representations.len());
+        for (mime_type, bytes) in representations {
             let blob = blob::build_blob_object(scope, bytes, mime_type.clone())?;
             let promise = resolved_promise(scope, blob.into())?;
             entries.push((mime_type, promise));
         }
-        let item = build_clipboard_item(scope, entries)?;
+        let item = build_clipboard_item(scope, entries, presentation_style)?;
         result.set_index(scope, 0, item.into())?;
     }
     Some(result)
 }
 
-fn clipboard_item_bytes<'s>(
+fn clipboard_item_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     item: v8::Local<'s, v8::Object>,
-) -> Option<Vec<(String, Vec<u8>)>> {
+) -> Option<ClipboardSnapshot> {
+    let style = get_private_value(scope, item, CLIPBOARD_ITEM_PRESENTATION_STYLE_SLOT)?;
+    let style = v8::Local::<v8::String>::try_from(style)
+        .ok()?
+        .to_rust_string_lossy(scope);
+    let presentation_style = <PresentationStyle as webidl::WebIdlEnum>::parse_token(&style)?;
     let types = get_private_value(scope, item, CLIPBOARD_ITEM_TYPES_SLOT)
         .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())?;
-    let mut data = Vec::with_capacity(types.length() as usize);
+    let mut representations = Vec::with_capacity(types.length() as usize);
     for index in 0..types.length() {
         let mime_type = types
             .get_index(scope, index)?
@@ -1037,9 +1030,12 @@ fn clipboard_item_bytes<'s>(
             return None;
         }
         let blob = v8::Local::<v8::Object>::try_from(promise.result(scope)).ok()?;
-        data.push((mime_type, blob::blob_bytes_from_object(scope, blob)?));
+        representations.push((mime_type, blob::blob_bytes_from_object(scope, blob)?));
     }
-    Some(data)
+    Some(ClipboardSnapshot {
+        presentation_style,
+        representations,
+    })
 }
 
 fn clipboard_item_data_promise<'s>(

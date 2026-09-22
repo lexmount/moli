@@ -46,6 +46,36 @@ fn clipboard_storage_reads_new_items_and_blobs_from_byte_snapshots() {
 }
 
 #[test]
+fn clipboard_storage_preserves_presentation_style_and_write_text_resets_it() {
+    let mut vm = new_storage_test_vm("https://clipboard-storage.test/");
+    assert_clipboard_probe(
+        &mut vm,
+        r#"
+(async () => {
+  const clipboard = navigator.clipboard;
+  for (const style of ['unspecified', 'attachment', 'inline']) {
+    const input = new ClipboardItem({'text/plain': style}, {presentationStyle: style});
+    Object.defineProperty(input, 'presentationStyle', {get() {throw Error('author style getter');}});
+    await clipboard.write([input]);
+    const output = (await clipboard.read())[0];
+    if (output.presentationStyle !== style) return style + ' was not preserved';
+    if (output === input || await (await output.getType('text/plain')).text() !== style) {
+      return 'incorrect item snapshot';
+    }
+    await clipboard.write([output]);
+    if ((await clipboard.read())[0].presentationStyle !== style) return 'rewritten style changed';
+  }
+  await clipboard.writeText('replacement');
+  const replacement = (await clipboard.read())[0];
+  if (replacement.presentationStyle !== 'unspecified') return 'writeText retained previous style';
+  if (await (await replacement.getType('text/plain')).text() !== 'replacement') return 'wrong replacement';
+  return 'ok';
+})()
+"#,
+    );
+}
+
+#[test]
 fn clipboard_storage_detached_handles_cannot_access_shared_data() {
     let mut vm = new_parsed_test_vm(
         "https://clipboard-storage.test/",
@@ -174,16 +204,18 @@ fn clipboard_storage_waits_for_all_representations_and_preserves_data_after_reje
         r#"
 (async () => {
   const clipboard = navigator.clipboard;
-  await clipboard.writeText('before');
+  await clipboard.write([new ClipboardItem({'text/plain': 'before'}, {presentationStyle: 'inline'})]);
   let resolve;
   const pending = new Promise(done => resolve = done);
   const write = clipboard.write([new ClipboardItem({
     'text/plain': Promise.resolve('after'), 'text/html': pending
-  })]);
+  }, {presentationStyle: 'attachment'})]);
   if (await clipboard.readText() !== 'before') return 'partially committed write';
+  if ((await clipboard.read())[0].presentationStyle !== 'inline') return 'partially committed style';
   resolve(new Blob(['<b>after</b>'], {type: 'text/html'}));
   await write;
   const item = (await clipboard.read())[0];
+  if (item.presentationStyle !== 'attachment') return 'style was not committed with data';
   if (item.types.join(',') !== 'text/plain,text/html') return 'representation order';
   if (await clipboard.readText() !== 'after' ||
       await (await item.getType('text/html')).text() !== '<b>after</b>') return 'representation bytes';
@@ -191,12 +223,13 @@ fn clipboard_storage_waits_for_all_representations_and_preserves_data_after_reje
     await clipboard.write([new ClipboardItem({
       'text/plain': 'bad replacement',
       'text/html': new Blob(['wrong type'], {type: 'text/plain'})
-    })]);
+    }, {presentationStyle: 'inline'})]);
     return 'accepted mismatched representation';
   } catch (error) {
     if (error.name !== 'NotAllowedError') return 'wrong rejection';
   }
   if (await clipboard.readText() !== 'after') return 'failed write replaced clipboard';
+  if ((await clipboard.read())[0].presentationStyle !== 'attachment') return 'failed write replaced style';
   const sentinel = Error('rejected representation');
   let reject;
   const rejection = new Promise((_, fail) => reject = fail);
@@ -205,6 +238,7 @@ fn clipboard_storage_waits_for_all_representations_and_preserves_data_after_reje
   try {await failedWrite; return 'accepted rejected representation';}
   catch (error) {if (error !== sentinel) return 'replaced rejection reason';}
   if (await clipboard.readText() !== 'after') return 'rejection cleared clipboard';
+  if ((await clipboard.read())[0].presentationStyle !== 'attachment') return 'rejection cleared style';
   return 'ok';
 })()
 "#,
@@ -323,13 +357,15 @@ const CLIPBOARD_FRAME_PROBE: &str = r#"
   await navigator.clipboard.writeText('parent → child');
   if (await child.navigator.clipboard.readText() !== 'parent → child') return 'parent write invisible';
   const childItem = (await child.navigator.clipboard.read())[0];
+  if (childItem.presentationStyle !== 'unspecified') return 'wrong writeText style in child';
   const childBlob = await childItem.getType('text/plain');
   if (!(childItem instanceof child.ClipboardItem) || !(childBlob instanceof child.Blob)) return 'child realm';
   await child.navigator.clipboard.write([new child.ClipboardItem({
     'text/plain': new child.Blob(['child → parent'], {type: 'text/plain'})
-  })]);
+  }, {presentationStyle: 'attachment'})]);
   if (await navigator.clipboard.readText() !== 'child → parent') return 'child write invisible';
   const parentItem = (await navigator.clipboard.read())[0];
+  if (parentItem.presentationStyle !== 'attachment') return 'child style invisible';
   if (!(parentItem instanceof ClipboardItem) || !((await parentItem.getType('text/plain')) instanceof Blob)) {
     return 'parent realm';
   }
@@ -337,6 +373,7 @@ const CLIPBOARD_FRAME_PROBE: &str = r#"
   document.body.focus();
   frame.remove();
   if (await navigator.clipboard.readText() !== 'child → parent') return 'frame removal cleared clipboard';
+  if ((await navigator.clipboard.read())[0].presentationStyle !== 'attachment') return 'frame removal cleared style';
   return 'ok';
 })()
 "#;

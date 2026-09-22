@@ -168,12 +168,37 @@ pub(crate) struct RendererStoragePartitionIdentity {
     profile_partition_id: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, moli_webidl::WebIdlEnum)]
+#[webidl(name = "PresentationStyle", rename_all = "kebab-case")]
+pub(crate) enum ClipboardPresentationStyle {
+    #[default]
+    Unspecified,
+    Inline,
+    Attachment,
+}
+
+impl ClipboardPresentationStyle {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unspecified => "unspecified",
+            Self::Inline => "inline",
+            Self::Attachment => "attachment",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ClipboardSnapshot {
+    pub(crate) presentation_style: ClipboardPresentationStyle,
+    pub(crate) representations: Vec<(String, Vec<u8>)>,
+}
+
 #[derive(Debug)]
 struct RendererBrowserContextRuntimeInner {
     id: super::RendererBrowserContextRuntimeId,
-    // Keep clipboard representations independent of any page's V8 objects so
-    // other pages and replacement documents can read them in their own realm.
-    clipboard_data: Mutex<Vec<(String, Vec<u8>)>>,
+    // Commit style and representations together, independently of any page's
+    // V8 objects, so other pages can read a coherent snapshot in their own realm.
+    clipboard_snapshot: Mutex<ClipboardSnapshot>,
     message_port_registry: crate::message_port_runtime::SharedMessagePortRegistry,
     broadcast_channel_registry: crate::broadcast_channel_runtime::SharedBroadcastChannelRegistry,
     browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -343,21 +368,22 @@ impl Default for RendererBrowserContextRuntimeOwner {
 }
 
 impl RendererBrowserContextRuntime {
-    pub(crate) fn clipboard_data(&self) -> Vec<(String, Vec<u8>)> {
-        self.inner.clipboard_data.lock().clone()
+    pub(crate) fn clipboard_snapshot(&self) -> ClipboardSnapshot {
+        self.inner.clipboard_snapshot.lock().clone()
     }
 
     pub(crate) fn clipboard_data_for_type(&self, mime_type: &str) -> Option<Vec<u8>> {
         self.inner
-            .clipboard_data
+            .clipboard_snapshot
             .lock()
+            .representations
             .iter()
             .find(|(candidate, _)| candidate == mime_type)
             .map(|(_, bytes)| bytes.clone())
     }
 
-    pub(crate) fn set_clipboard_data(&self, data: Vec<(String, Vec<u8>)>) {
-        *self.inner.clipboard_data.lock() = data;
+    pub(crate) fn set_clipboard_snapshot(&self, snapshot: ClipboardSnapshot) {
+        *self.inner.clipboard_snapshot.lock() = snapshot;
     }
 
     // A browser-context runtime is only valid while its thread-affine owner is
@@ -548,7 +574,7 @@ impl RendererBrowserContextRuntime {
         Self {
             inner: Arc::new(RendererBrowserContextRuntimeInner {
                 id,
-                clipboard_data: Mutex::new(Vec::new()),
+                clipboard_snapshot: Mutex::new(ClipboardSnapshot::default()),
                 message_port_registry,
                 broadcast_channel_registry,
                 browser_resource_runtime: browser_resource_runtime.clone(),
@@ -976,7 +1002,7 @@ mod tests {
 
     use moli_fetch::{FetchCancelHandle, Request};
 
-    use super::RendererBrowserContextRuntime;
+    use super::{ClipboardSnapshot, RendererBrowserContextRuntime};
     use crate::{
         network::ResourceRequestClient,
         runtime::{
@@ -1017,10 +1043,13 @@ mod tests {
     #[test]
     fn clipboard_data_for_type_returns_an_independent_copy_of_the_matching_bytes() {
         let runtime = RendererBrowserContextRuntime::new();
-        runtime.set_clipboard_data(vec![
-            ("image/png".to_owned(), vec![0; 1024]),
-            ("text/plain".to_owned(), b"hello".to_vec()),
-        ]);
+        runtime.set_clipboard_snapshot(ClipboardSnapshot {
+            representations: vec![
+                ("image/png".to_owned(), vec![0; 1024]),
+                ("text/plain".to_owned(), b"hello".to_vec()),
+            ],
+            ..ClipboardSnapshot::default()
+        });
 
         let mut text = runtime.clipboard_data_for_type("text/plain").unwrap();
         assert_eq!(text, b"hello");
@@ -1031,7 +1060,7 @@ mod tests {
         );
         assert!(runtime.clipboard_data_for_type("text/html").is_none());
 
-        runtime.set_clipboard_data(Vec::new());
+        runtime.set_clipboard_snapshot(ClipboardSnapshot::default());
         assert!(runtime.clipboard_data_for_type("text/plain").is_none());
     }
 
