@@ -20,6 +20,7 @@ pub(crate) enum PopupDocumentLifecycleStep {
 
 pub(crate) struct PopupDocumentLifecycleCheckpoint {
     window: PopupWindowEventTarget,
+    task: LightweightPopupNavigationTaskToken,
     continuation: PopupDocumentLifecycleContinuation,
 }
 
@@ -87,6 +88,7 @@ impl ScriptVm {
         Ok(PopupDocumentLifecycleStep::Checkpoint(
             PopupDocumentLifecycleCheckpoint {
                 window,
+                task: target,
                 continuation: match event {
                     PopupDocumentLifecycleEvent::DomContentLoaded => {
                         PopupDocumentLifecycleContinuation::FinishDomContentLoaded
@@ -109,6 +111,7 @@ impl ScriptVm {
         Ok(if entered {
             PopupDocumentLifecycleStep::Checkpoint(PopupDocumentLifecycleCheckpoint {
                 window: completion.window,
+                task: completion.task,
                 continuation: PopupDocumentLifecycleContinuation::FinishInteractive(completion),
             })
         } else {
@@ -136,6 +139,10 @@ impl ScriptVm {
             ._context_host
             .borrow()
             .popup_window_event_target_is_current(window)
+            || !self
+                ._context_host
+                .borrow()
+                .lightweight_popup_committed_navigation_task_is_current(checkpoint.task)
         {
             return Ok(PopupDocumentLifecycleStep::Completed);
         }
@@ -164,6 +171,7 @@ impl ScriptVm {
                 Ok(PopupDocumentLifecycleStep::Checkpoint(
                     PopupDocumentLifecycleCheckpoint {
                         window,
+                        task: checkpoint.task,
                         continuation: if dispatched {
                             PopupDocumentLifecycleContinuation::ContinuePageshow
                         } else {
@@ -183,6 +191,7 @@ impl ScriptVm {
                 Ok(PopupDocumentLifecycleStep::Checkpoint(
                     PopupDocumentLifecycleCheckpoint {
                         window,
+                        task: checkpoint.task,
                         continuation: PopupDocumentLifecycleContinuation::FinishLoad,
                     },
                 ))
