@@ -884,9 +884,10 @@ impl DocumentRuntime {
             runtime.clear_child_browsing_context_cached_snapshot_for_navigation(handle);
         }
         runtime.refresh_child_browsing_context_and_queue_ready_work(scope, handle);
-        if is_srcdoc {
-            runtime.sync_existing_child_browsing_context_window_state(scope, handle);
-        } else if is_navigation_attribute
+        // A srcdoc attribute change only queues a navigation. Keep the live
+        // Document's History and Navigation objects intact until it commits.
+        if !is_srcdoc
+            && is_navigation_attribute
             && (removed
                 || !runtime.child_browsing_context_attribute_bootstrap_requires_async_load(handle))
         {

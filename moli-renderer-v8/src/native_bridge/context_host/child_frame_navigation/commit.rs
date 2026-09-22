@@ -345,7 +345,10 @@ impl JsContextHost {
                 entry.apply_initial_attribute_target_navigation_entry(&url);
             } else if is_initial_attribute_target_seed {
                 entry.mark_initial_attribute_target_navigation_activation();
-            } else {
+            } else if !matches!(
+                attribute_bootstrap,
+                ChildBrowsingContextBootstrap::Srcdoc { .. }
+            ) {
                 entry.replace_navigation_in_entry_seed(&url);
             }
         }
@@ -391,6 +394,23 @@ impl JsContextHost {
             ChildDocumentNavigationInitiator::FrameOwnerElement,
             None,
         );
+        // Registering the initial entry does not add a joint history step.
+        // Let the scheduled realm task expose that entry: materializing a
+        // Window here would consume lifecycle work during NavigationCommit.
+        // An established history still needs replacement commits, even when
+        // no new step is appended.
+        let updates_joint_history = entry_snapshot.pending_top_level_history_length_increment()
+            || self
+                .joint_histories
+                .root_for_owner(crate::native_bridge::OwnerDispatchScope::Child(handle))
+                .is_some();
+        if updates_joint_history
+            && commit_result
+                .as_ref()
+                .is_some_and(|result| result.state == ChildDocumentCommitState::Ready)
+        {
+            self.commit_pending_child_joint_history_push(scope, handle);
+        }
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result
     }

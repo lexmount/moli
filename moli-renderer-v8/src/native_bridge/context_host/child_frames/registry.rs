@@ -114,30 +114,69 @@ impl JsContextHost {
                     .unwrap_or_else(|| {
                         Self::child_browsing_context_initial_live_bootstrap(&attribute_bootstrap)
                     });
+                let srcdoc_attribute_changed = attribute_bootstrap_changed
+                    && matches!(
+                        attribute_bootstrap,
+                        ChildBrowsingContextBootstrap::Srcdoc { .. }
+                    );
+                let attribute_pushes_history = srcdoc_attribute_changed
+                    && Self::child_browsing_context_navigation_entry_url(&attribute_bootstrap)
+                        .is_some_and(|url| {
+                            !self.child_frame_attribute_navigation_replaces_current_entry(
+                                handle, &url,
+                            )
+                        });
                 let navigation_entry_seed = if attribute_bootstrap_changed {
                     let mut seed = existing
                         .as_ref()
-                        .map(|entry| entry.navigation_entry_seed())
+                        .map(|entry| {
+                            if srcdoc_attribute_changed {
+                                entry.committed_navigation_entry_seed()
+                            } else {
+                                entry.navigation_entry_seed()
+                            }
+                        })
                         .unwrap_or_else(|| {
                             Self::child_browsing_context_single_entry_seed(&live_bootstrap)
                         });
                     if let Some(url) =
                         Self::child_browsing_context_navigation_entry_url(&attribute_bootstrap)
                     {
-                        let appends_committed_srcdoc_navigation = matches!(
-                            attribute_bootstrap,
-                            ChildBrowsingContextBootstrap::Srcdoc { .. }
-                        ) && existing
-                            .as_ref()
-                            .is_some_and(|entry| !entry.has_uncommitted_navigation_seed());
-                        if appends_committed_srcdoc_navigation {
+                        if attribute_pushes_history {
                             Self::apply_child_browsing_context_navigation_to_entry_seed(
                                 &mut seed, &url,
                             );
                         } else {
+                            // Srcdoc inherits its creator's origin. URL-origin
+                            // comparison alone treats about:srcdoc as opaque
+                            // and would lose a same-origin replacement's key.
+                            let replacement_key = (srcdoc_attribute_changed
+                                && self.child_frame_attribute_initiator_has_same_origin(handle)
+                                && !self
+                                    .child_browsing_context_sandbox_policy_from_owner(handle)
+                                    .forces_opaque_origin)
+                                .then(|| {
+                                    seed.entries
+                                        .iter()
+                                        .find(|entry| entry.history_index == seed.current_index)
+                                        .map(|entry| entry.key.clone())
+                                })
+                                .flatten();
                             Self::replace_child_browsing_context_navigation_in_entry_seed(
                                 &mut seed, &url, None, None,
                             );
+                            if let Some(key) = replacement_key {
+                                if let Some(entry) = seed
+                                    .entries
+                                    .iter_mut()
+                                    .find(|entry| entry.history_index == seed.current_index)
+                                {
+                                    entry.key = key.clone();
+                                }
+                                if let Some(activation) = seed.activation.as_mut() {
+                                    activation.entry.key = key;
+                                }
+                            }
                         }
                     }
                     seed
@@ -469,10 +508,13 @@ impl JsContextHost {
                         pending_service_worker_client_navigation: existing
                             .as_ref()
                             .and_then(|entry| entry.pending_service_worker_client_navigation()),
-                        pending_top_level_history_length_increment: existing
-                            .as_ref()
-                            .map(|entry| entry.pending_top_level_history_length_increment())
-                            .unwrap_or(false),
+                        pending_top_level_history_length_increment: if attribute_bootstrap_changed {
+                            attribute_pushes_history
+                        } else {
+                            existing.as_ref().is_some_and(|entry| {
+                                entry.pending_top_level_history_length_increment()
+                            })
+                        },
                     },
                 );
                 if attribute_bootstrap_changed {
