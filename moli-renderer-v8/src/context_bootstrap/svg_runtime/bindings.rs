@@ -1508,6 +1508,9 @@ define_svg_animated_number_accessors!(
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGElement, enumerable, receiver)]
 struct SvgElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "className", getter = svg_element_class_name_getter)]
+    class_name: (),
+
     #[webapi(
         accessor_property = "ownerSVGElement",
         getter = svg_element_owner_svg_element_getter
@@ -2109,22 +2112,6 @@ struct SvgMarkerElementPrototypeAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "SVGElement", enumerable)]
-struct SvgElementPrototypeAccessorsDeclaration {
-    #[webapi(
-        accessor_property = "className",
-        getter = svg_element_class_name_getter
-    )]
-    class_name: (),
-
-    #[webapi(
-        accessor_property = "ownerSVGElement",
-        getter = svg_element_owner_svg_element_getter
-    )]
-    owner_svg_element: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(name = "SVGURIReference", enumerable)]
 struct SvgUriReferencePrototypeAccessorsDeclaration {
     #[webapi(accessor_property = "href", getter = svg_uri_href_getter)]
@@ -2701,11 +2688,6 @@ pub(super) fn install_svg_element_accessor_bindings<'s>(
         }
         "SVGMarkerElement" => {
             SvgMarkerElementPrototypeAccessorsDeclaration::initialize_prototype_template(
-                scope, prototype,
-            );
-        }
-        "SVGElement" => {
-            SvgElementPrototypeAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
         }
