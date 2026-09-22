@@ -72,7 +72,8 @@ pub use request::{
     RequestAuthScheme, RequestAuthTarget, RequestCacheMode, RequestCredentialsMode,
     RequestHeaderOverride, RequestMode, RequestPriorityHints, RequestRedirectMode,
     RequestResourceType, ResourceLoadPriority, ScriptFetchRequestMetadata,
-    ScriptFetchSchedulerPriority, SubresourceRequestMetadata,
+    ScriptFetchSchedulerPriority, SubresourceRequestMetadata, is_request_body_header_name,
+    redirect_status_rewrites_to_get,
 };
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{

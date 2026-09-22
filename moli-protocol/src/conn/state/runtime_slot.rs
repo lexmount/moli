@@ -1133,6 +1133,19 @@ impl TargetRuntimeSlot {
         self.network_agent.clear_captured_response_bodies();
     }
 
+    pub(crate) fn configure_durable_response_bodies(
+        &mut self,
+        session_id: Option<&str>,
+        limits: Option<moli_bounded_buffer::ByteLimits>,
+    ) {
+        self.network_agent
+            .configure_durable_response_bodies(session_id, limits);
+    }
+
+    pub(crate) fn prepare_response_bodies_for_navigation(&mut self) {
+        self.network_agent.prepare_response_bodies_for_navigation();
+    }
+
     pub(crate) fn clear_network_body_artifacts(&mut self) {
         self.network_agent.clear_body_artifacts();
     }
