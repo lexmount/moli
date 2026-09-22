@@ -1,7 +1,9 @@
 use super::*;
 use crate::abort_signal_route::ResolvedAbortSignal;
 use crate::callback_invocation::CallbackInvocation;
-use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs};
+use crate::event_listener_args::{
+    AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
+};
 use crate::util::{
     get_private_object, get_private_value, new_null_prototype_object, set_private_value, v8_string,
 };
@@ -186,7 +188,8 @@ pub(crate) fn simple_object_event_target_add_listener<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     slot_name: &str,
 ) {
-    let Some(call) = webidl::parse_args::<AddEventListenerArgs>(scope, args) else {
+    let Some(call) = parse_listener_args::<AddEventListenerArgs>(scope, args, "addEventListener")
+    else {
         return;
     };
     let Some(listener) = call.listener else {
@@ -302,7 +305,9 @@ pub(crate) fn simple_object_event_target_remove_listener<'s>(
     args: &v8::FunctionCallbackArguments<'s>,
     slot_name: &str,
 ) {
-    let Some(call) = webidl::parse_args::<RemoveEventListenerArgs>(scope, args) else {
+    let Some(call) =
+        parse_listener_args::<RemoveEventListenerArgs>(scope, args, "removeEventListener")
+    else {
         return;
     };
     let Some(listener) = call.listener else {

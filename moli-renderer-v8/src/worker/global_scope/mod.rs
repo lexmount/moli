@@ -42,7 +42,6 @@ use moli_fetch::{
 };
 use moli_storage_key::MoliStorageKey;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
-use moli_webidl_callback::WebIdlCallbackInterface;
 use moli_websocket::{
     ConnectOptions as WebSocketConnectOptions, ConnectionHandle as WebSocketConnectionHandle,
     Event as WebSocketEvent, spawn_connection, spawn_failed_connection, websocket_cookie_url,
@@ -1501,7 +1500,6 @@ fn set_worker_exception_location_if_missing<'s>(
 /// Mutable state accessible from V8 callbacks inside the worker isolate.
 pub(super) struct WorkerMessagePortWrapperEntry {
     wrapper: v8::Global<v8::Object>,
-    listeners: crate::context_bootstrap::WorkerMessagePortEventListenerRegistry,
 }
 
 pub(crate) struct WorkerGlobalState {
@@ -6304,28 +6302,12 @@ pub(crate) fn register_worker_message_port_wrapper(
     let Some(state) = get_worker_state(scope) else {
         return;
     };
-    let (abort, retired_listener_ids) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let retired_listener_ids = state
-            .message_port_wrappers
-            .insert(
-                port_id,
-                WorkerMessagePortWrapperEntry {
-                    wrapper: v8::Global::new(scope, port),
-                    listeners:
-                        crate::context_bootstrap::WorkerMessagePortEventListenerRegistry::default(),
-                },
-            )
-            .map(|mut previous| previous.listeners.take_listener_ids())
-            .unwrap_or_default();
-        (abort, retired_listener_ids)
-    };
-    for listener_id in retired_listener_ids {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
-    }
+    state.borrow_mut().message_port_wrappers.insert(
+        port_id,
+        WorkerMessagePortWrapperEntry {
+            wrapper: v8::Global::new(scope, port),
+        },
+    );
 }
 
 pub(crate) fn register_shared_worker_connection_port(
@@ -6345,23 +6327,8 @@ pub(crate) fn forget_worker_message_port_wrapper(
     scope: &mut v8::PinScope<'_, '_>,
     port_id: MessagePortId,
 ) {
-    let Some(state) = get_worker_state(scope) else {
-        return;
-    };
-    let (abort, retired_listener_ids) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let retired_listener_ids = state
-            .message_port_wrappers
-            .remove(&port_id)
-            .map(|mut entry| entry.listeners.take_listener_ids())
-            .unwrap_or_default();
-        (abort, retired_listener_ids)
-    };
-    for listener_id in retired_listener_ids {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
+    if let Some(state) = get_worker_state(scope) {
+        state.borrow_mut().message_port_wrappers.remove(&port_id);
     }
 }
 
@@ -6375,127 +6342,6 @@ pub(crate) fn worker_message_port_wrapper<'s>(
         .message_port_wrappers
         .get(&port_id)
         .map(|entry| v8::Local::new(scope, &entry.wrapper))
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn register_worker_message_port_event_listener(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    event_type: String,
-    order: f64,
-    callback: WebIdlCallbackInterface,
-    options: crate::webidl::EventListenerOptions,
-) -> Option<crate::context_bootstrap::MessagePortEventListenerId> {
-    let state = get_worker_state(scope)?;
-    let mut state = state.borrow_mut();
-    let entry = state.message_port_wrappers.get_mut(&port_id)?;
-    entry.listeners.register(
-        scope,
-        event_type,
-        order,
-        callback,
-        options.capture,
-        options.once,
-        options.passive.unwrap_or(false),
-    )
-}
-
-pub(crate) fn remove_worker_message_port_event_listener(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    event_type: &str,
-    callback: &WebIdlCallbackInterface,
-    capture: bool,
-) -> bool {
-    let Some(state) = get_worker_state(scope) else {
-        return false;
-    };
-    let (abort, listener_id) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let listener_id = state
-            .message_port_wrappers
-            .get_mut(&port_id)
-            .and_then(|entry| {
-                entry
-                    .listeners
-                    .remove_matching(scope, event_type, callback, capture)
-            });
-        (abort, listener_id)
-    };
-    let Some(listener_id) = listener_id else {
-        return false;
-    };
-    abort
-        .borrow_mut()
-        .unregister_message_port_listener(port_id, listener_id);
-    true
-}
-
-pub(crate) fn remove_worker_message_port_event_listener_by_id(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-) -> bool {
-    let Some(state) = get_worker_state(scope) else {
-        return false;
-    };
-    let (abort, removed) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let removed = state
-            .message_port_wrappers
-            .get_mut(&port_id)
-            .is_some_and(|entry| entry.listeners.remove_listener_id(listener_id));
-        (abort, removed)
-    };
-    if removed {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
-    }
-    removed
-}
-
-pub(crate) fn worker_message_port_event_listener_snapshots(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    event_type: &str,
-) -> Vec<crate::context_bootstrap::MessagePortEventListenerSnapshot> {
-    let Some(state) = get_worker_state(scope) else {
-        return Vec::new();
-    };
-    state
-        .borrow()
-        .message_port_wrappers
-        .get(&port_id)
-        .map(|entry| entry.listeners.snapshots(event_type))
-        .unwrap_or_default()
-}
-
-pub(crate) fn claim_worker_message_port_event_listener(
-    scope: &mut v8::PinScope<'_, '_>,
-    port_id: MessagePortId,
-    listener_id: crate::context_bootstrap::MessagePortEventListenerId,
-) -> Option<crate::context_bootstrap::PreparedMessagePortEventListener> {
-    let state = get_worker_state(scope)?;
-    let (abort, claimed) = {
-        let mut state = state.borrow_mut();
-        let abort = state.abort.clone();
-        let claimed = state
-            .message_port_wrappers
-            .get_mut(&port_id)?
-            .listeners
-            .claim(scope, listener_id);
-        (abort, claimed)
-    };
-    let (prepared, removed_once) = claimed?;
-    if removed_once {
-        abort
-            .borrow_mut()
-            .unregister_message_port_listener(port_id, listener_id);
-    }
-    Some(prepared)
 }
 
 pub(crate) fn register_worker_broadcast_channel_wrapper(

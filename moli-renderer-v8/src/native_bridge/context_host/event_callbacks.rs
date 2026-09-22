@@ -401,7 +401,6 @@ impl JsContextHost {
         }
         self.remove_event_callback_registrations(&retired);
         self.retire_child_window_event_callbacks(&retired);
-        self.remove_message_port_event_callbacks(&retired);
         for callback_id in retired {
             self.unregister_abort_target_listener(callback_id);
         }

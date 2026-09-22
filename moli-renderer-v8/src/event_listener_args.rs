@@ -3,6 +3,26 @@
 use crate::abort_signal_route::{ResolvedAbortSignal, event_listener_signal_from_options_value};
 use crate::webidl;
 
+pub(crate) fn parse_listener_args<'s, T: webidl::WebIdlArguments<'s>>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    operation: &str,
+) -> Option<T> {
+    // Both listener operations require type and callback. Check the complete
+    // arity before derived field conversion can invoke the type's toString().
+    if args.length() < 2 {
+        webidl::throw_type_error(
+            scope,
+            &format!(
+                "Failed to execute '{operation}' on 'EventTarget': 2 arguments required, but only {} present.",
+                args.length(),
+            ),
+        );
+        return None;
+    }
+    webidl::parse_args(scope, args)
+}
+
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "EventTarget.addEventListener")]
 pub(crate) struct AddEventListenerArgs<'s> {

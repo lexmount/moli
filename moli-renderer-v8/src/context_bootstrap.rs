@@ -295,6 +295,7 @@ pub(crate) use self::media_cues::set_text_track_cue_track;
 pub(crate) use self::media_queries::{
     SimpleObjectEventListenerInspectorSnapshot, SimpleObjectEventListenerSnapshot,
     dispatch_media_query_list_change_events, dispatch_simple_event_target_event,
+    dispatch_simple_event_target_event_collecting_errors,
     evaluate_match_media_query_list_with_viewport, install_simple_event_target_methods,
     install_simple_event_target_ordered_handlers, invoke_simple_event_listener,
     mark_simple_event_target_slot, simple_event_target_add_event_listener_callback,
@@ -306,10 +307,7 @@ pub(crate) use self::media_queries::{
 };
 use self::message_ports::schedule_host_callback;
 pub(crate) use self::message_ports::{
-    MessagePortDeliveryRunResult, MessagePortEventListenerId, MessagePortEventListenerSnapshot,
-    MessagePortRealmBinding, PreparedMessagePortEventListener,
-    PreparedMessagePortEventListenerCallback, WindowMessagePortEventListenerRegistry,
-    WorkerMessagePortEventListenerRegistry, detach_message_port_owner_for_transfer,
+    MessagePortDeliveryRunResult, MessagePortRealmBinding, detach_message_port_owner_for_transfer,
     detach_transferred_message_port, dispatch_message_port_events_for_port_collecting_errors,
     dispatch_one_authorized_message_port_event, ensure_message_port_wrapper_for_id,
     ensure_message_port_wrapper_for_id_in_realm, message_port_id_from_object,

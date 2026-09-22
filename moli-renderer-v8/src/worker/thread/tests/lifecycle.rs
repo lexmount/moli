@@ -8255,10 +8255,10 @@ async fn worker_message_port_listeners_use_event_listener_callback_interface_sem
             port1.onmessage = event => {
                 calls.push(`handler:${event.data}`);
                 if (event.data === "second") {
-                    Promise.resolve().then(() => {
+                    setTimeout(() => {
                         postMessage({ calls, callableHandleEventLookups });
                         close();
-                    });
+                    }, 0);
                 }
             };
             port1.start();
@@ -8337,13 +8337,13 @@ async fn worker_message_port_listener_signal_controls_the_exact_registration() {
                     port2.postMessage("second");
                 } else if (event.data === "second") {
                     // This handler precedes the listener added above in event
-                    // order. Abort after the current dispatch so that the
-                    // replacement once-listener observes this event first.
-                    Promise.resolve().then(() => {
+                    // order. Use the next task: callback-cleanup microtasks
+                    // run before later listeners in the same event dispatch.
+                    setTimeout(() => {
                         primary.abort();
                         replacement.abort();
                         port2.postMessage("third");
-                    });
+                    }, 0);
                 } else {
                     postMessage({ calls, invalidSignalThrew });
                     close();

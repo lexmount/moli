@@ -1,11 +1,6 @@
 use super::*;
-use crate::callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker};
-use crate::context_bootstrap::events::{
-    clear_event_dispatch_fields, event_internal_bool_flag, mark_event_trusted,
-    set_event_dispatch_fields, set_event_internal_flag,
-};
-use crate::context_bootstrap::{EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT};
-use crate::exception_reporting::CallbackExceptionLogLevel;
+use crate::context_bootstrap::dispatch_simple_event_target_event_collecting_errors;
+use crate::context_bootstrap::events::mark_event_trusted;
 use crate::types::MessagePortId;
 use crate::worker::worker_message_port_wrapper;
 use moli_webapi_declare::WebApiObject;
@@ -19,26 +14,6 @@ struct MessagePortMessageEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
     #[webapi(data_property, enumerable)]
     ports: v8::Local<'scope, v8::Array>,
-}
-
-enum MessagePortEventCallback<'s> {
-    Handler {
-        order: f64,
-        label: &'static str,
-        callback: v8::Local<'s, v8::Function>,
-    },
-    Listener {
-        order: f64,
-        id: MessagePortEventListenerId,
-    },
-}
-
-impl MessagePortEventCallback<'_> {
-    fn order(&self) -> f64 {
-        match self {
-            Self::Handler { order, .. } | Self::Listener { order, .. } => *order,
-        }
-    }
 }
 
 enum MessagePortDispatchTarget<'s> {
@@ -230,9 +205,7 @@ fn dispatch_one_message_port_event_in_current_context<'s>(
     let Some(registry) = current_message_port_registry(scope) else {
         return MessagePortDeliveryRunResult::Idle;
     };
-    let onmessage = message_port_onmessage(scope, target);
-    let started = message_port_is_started(scope, target);
-    if onmessage.is_none() && !started {
+    if !message_port_is_started(scope, target) {
         if !registry.take_pending_message_port_close(port_id) {
             return MessagePortDeliveryRunResult::Idle;
         }
@@ -377,285 +350,42 @@ fn dispatch_message_port_event<'s>(
     target: v8::Local<'s, v8::Object>,
     event_type: &'static str,
     event: v8::Local<'s, v8::Object>,
-    mut callback_errors: Option<&mut Vec<V8ExceptionReport>>,
+    callback_errors: Option<&mut Vec<V8ExceptionReport>>,
 ) -> bool {
     mark_event_trusted(scope, event);
-    set_event_dispatch_fields(scope, target, event);
-
-    // MessagePort delivery is an async host callback surface. Keep the same
-    // local TryCatch contract as other event dispatch paths.
-    let mut callbacks = message_port_event_callbacks(scope, port_id, target, event_type);
-    callbacks.sort_by(|left, right| left.order().total_cmp(&right.order()));
-
     registry.begin_message_port_message_delivery(port_id);
-    let mut dispatched = false;
-    for callback in callbacks {
-        match callback {
-            MessagePortEventCallback::Handler {
-                label, callback, ..
-            } => {
-                if let Err(report) = invoke_callback_with_report(
-                    scope,
-                    "callback",
-                    "host callback threw",
-                    CallbackExceptionLogLevel::Debug,
-                    label,
-                    callback,
-                    target.into(),
-                    &[event.into()],
-                ) {
-                    project_legacy_message_port_handler_exception(
-                        scope,
-                        *report,
-                        callback_errors.as_deref_mut(),
-                    );
-                }
-                dispatched = true;
-            }
-            MessagePortEventCallback::Listener { id, .. } => {
-                let Some(listener) = claim_message_port_event_listener(scope, port_id, id) else {
-                    continue;
-                };
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                dispatched |= invoke_message_port_event_listener(
-                    scope,
-                    event_type,
-                    listener.callback,
-                    target,
-                    event,
-                    callback_errors.as_deref_mut(),
-                );
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
-            }
-        }
-        if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT) {
-            break;
-        }
-    }
+    let dispatched = dispatch_simple_event_target_event_collecting_errors(
+        scope,
+        target,
+        MESSAGE_PORT_EVENT_LISTENERS_SLOT,
+        event_type,
+        event,
+        callback_errors,
+    )
+    .dispatched;
     registry.finish_message_port_message_delivery(port_id);
-    clear_event_dispatch_fields(scope, event);
     dispatched
 }
 
 fn dispatch_message_port_close_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    port_id: MessagePortId,
+    _port_id: MessagePortId,
     target: v8::Local<'s, v8::Object>,
-    mut callback_errors: Option<&mut Vec<V8ExceptionReport>>,
+    callback_errors: Option<&mut Vec<V8ExceptionReport>>,
 ) -> bool {
     let Some(event) = new_simple_event(scope, "close") else {
         return false;
     };
     mark_event_trusted(scope, event);
-    set_event_dispatch_fields(scope, target, event);
-    let mut callbacks = message_port_event_callbacks(scope, port_id, target, "close");
-    callbacks.sort_by(|left, right| left.order().total_cmp(&right.order()));
-    let mut dispatched = false;
-    for callback in callbacks {
-        match callback {
-            MessagePortEventCallback::Handler {
-                label, callback, ..
-            } => {
-                if let Err(report) = invoke_callback_with_report(
-                    scope,
-                    "callback",
-                    "host callback threw",
-                    CallbackExceptionLogLevel::Debug,
-                    label,
-                    callback,
-                    target.into(),
-                    &[event.into()],
-                ) {
-                    project_legacy_message_port_handler_exception(
-                        scope,
-                        *report,
-                        callback_errors.as_deref_mut(),
-                    );
-                }
-                dispatched = true;
-            }
-            MessagePortEventCallback::Listener { id, .. } => {
-                let Some(listener) = claim_message_port_event_listener(scope, port_id, id) else {
-                    continue;
-                };
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                dispatched |= invoke_message_port_event_listener(
-                    scope,
-                    "close",
-                    listener.callback,
-                    target,
-                    event,
-                    callback_errors.as_deref_mut(),
-                );
-                set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
-            }
-        }
-        if event_internal_bool_flag(scope, event, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT) {
-            break;
-        }
-    }
-    clear_event_dispatch_fields(scope, event);
-    dispatched
-}
-
-fn message_port_event_callbacks<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    port_id: MessagePortId,
-    target: v8::Local<'s, v8::Object>,
-    event_type: &'static str,
-) -> Vec<MessagePortEventCallback<'s>> {
-    let mut callbacks = Vec::new();
-    match event_type {
-        "message" => {
-            if let Some(onmessage) = message_port_onmessage(scope, target) {
-                callbacks.push(MessagePortEventCallback::Handler {
-                    order: message_port_onmessage_order(scope, target).unwrap_or(-1.0),
-                    label: "MessagePort onmessage",
-                    callback: onmessage,
-                });
-            }
-        }
-        "messageerror" => {
-            if let Some(onmessageerror) = message_port_onmessageerror(scope, target) {
-                callbacks.push(MessagePortEventCallback::Handler {
-                    order: message_port_onmessageerror_order(scope, target).unwrap_or(-1.0),
-                    label: "MessagePort onmessageerror",
-                    callback: onmessageerror,
-                });
-            }
-        }
-        "close" => {
-            if let Some(onclose) = message_port_onclose(scope, target) {
-                callbacks.push(MessagePortEventCallback::Handler {
-                    order: message_port_onclose_order(scope, target).unwrap_or(-1.0),
-                    label: "MessagePort onclose",
-                    callback: onclose,
-                });
-            }
-        }
-        _ => {}
-    }
-
-    if event_type != "message" || message_port_is_started(scope, target) {
-        callbacks.extend(
-            message_port_event_listener_snapshots(scope, port_id, event_type)
-                .into_iter()
-                .map(|snapshot| MessagePortEventCallback::Listener {
-                    order: snapshot.order,
-                    id: snapshot.id,
-                }),
-        );
-    }
-    callbacks
-}
-
-fn invoke_message_port_event_listener<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    callback: PreparedMessagePortEventListenerCallback,
-    target: v8::Local<'s, v8::Object>,
-    event: v8::Local<'s, v8::Object>,
-    callback_errors: Option<&mut Vec<V8ExceptionReport>>,
-) -> bool {
-    let callback_name = match event_type {
-        "message" => "MessagePort message listener",
-        "messageerror" => "MessagePort messageerror listener",
-        "close" => "MessagePort close listener",
-        _ => "MessagePort listener",
-    };
-    let arguments = [event.into()];
-    let (invocation, relevant_identity) = match callback {
-        PreparedMessagePortEventListenerCallback::Window(callback) => {
-            let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                return false;
-            };
-            let relevant_identity = callback.relevant_identity();
-            (
-                CallbackInvocation::new(
-                    callback.callback(scope),
-                    target.into(),
-                    callback.relevant_context(scope),
-                    callback.incumbent_context(scope),
-                    callback.is_callable(),
-                    "handleEvent",
-                    &arguments,
-                    Some(event),
-                )
-                .with_execution_context_currentness(host_ptr, relevant_identity),
-                relevant_identity,
-            )
-        }
-        PreparedMessagePortEventListenerCallback::Worker(callback) => (
-            CallbackInvocation::new(
-                callback.callback(scope),
-                target.into(),
-                callback.relevant_context(scope),
-                callback.incumbent_context(scope),
-                callback.callable_at_conversion(),
-                "handleEvent",
-                &arguments,
-                None,
-            ),
-            None,
-        ),
-    };
-
-    match CallbackInvoker::invoke(
+    dispatch_simple_event_target_event_collecting_errors(
         scope,
-        "event listener",
-        "MessagePort event listener threw",
-        CallbackExceptionLogLevel::Debug,
-        callback_name,
-        invocation,
-    ) {
-        CallbackInvocationOutcome::Returned(_) => true,
-        CallbackInvocationOutcome::Threw(report) => {
-            project_message_port_callback_exception(
-                scope,
-                event_type,
-                relevant_identity,
-                *report,
-                callback_errors,
-            );
-            true
-        }
-        CallbackInvocationOutcome::Retired => false,
-    }
-}
-
-fn project_message_port_callback_exception(
-    scope: &mut v8::PinScope<'_, '_>,
-    event_type: &str,
-    relevant_identity: Option<crate::native_bridge::WindowExecutionContextIdentity>,
-    report: V8ExceptionReport,
-    callback_errors: Option<&mut Vec<V8ExceptionReport>>,
-) {
-    if let Some(callback_errors) = callback_errors {
-        callback_errors.push(report);
-    } else if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        crate::host::report_event_callback_exception(
-            scope,
-            host_ptr,
-            event_type,
-            relevant_identity,
-            None,
-            &report,
-        );
-    } else {
-        let _ = crate::worker::dispatch_current_worker_callback_exception(scope, report);
-    }
-}
-
-fn project_legacy_message_port_handler_exception(
-    scope: &mut v8::PinScope<'_, '_>,
-    report: V8ExceptionReport,
-    callback_errors: Option<&mut Vec<V8ExceptionReport>>,
-) {
-    if let Some(callback_errors) = callback_errors {
-        callback_errors.push(report);
-    } else {
-        let _ = crate::worker::dispatch_current_worker_callback_exception(scope, report);
-    }
+        target,
+        MESSAGE_PORT_EVENT_LISTENERS_SLOT,
+        "close",
+        event,
+        callback_errors,
+    )
+    .dispatched
 }
 
 fn new_message_event<'s>(

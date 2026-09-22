@@ -7,9 +7,7 @@
 //! produces a short-lived capability that delegates state and algorithm
 //! registration back to the owning store.
 
-use crate::context_bootstrap::MessagePortEventListenerId;
 use crate::context_bootstrap::context_host_ptr_from_global_bridge;
-use crate::types::MessagePortId;
 use crate::util::{throw_type_error, v8str};
 
 #[derive(Clone, Copy)]
@@ -132,35 +130,6 @@ impl<'s> ResolvedAbortSignal<'s> {
                     scope,
                     self.signal,
                     algorithm,
-                )
-            }
-        }
-    }
-
-    pub(crate) fn register_message_port_listener(
-        self,
-        scope: &mut v8::PinScope<'s, '_>,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) -> bool {
-        match self.owner {
-            AbortSignalOwner::Window => {
-                let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                    return false;
-                };
-                unsafe { &mut *host_ptr }.register_abort_message_port_listener(
-                    scope,
-                    self.signal,
-                    port_id,
-                    listener_id,
-                )
-            }
-            AbortSignalOwner::Worker => {
-                crate::worker::abort::register_worker_abort_signal_message_port_listener(
-                    scope,
-                    self.signal,
-                    port_id,
-                    listener_id,
                 )
             }
         }

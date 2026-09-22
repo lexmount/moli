@@ -3,8 +3,7 @@ use std::collections::HashMap;
 
 use super::super::document_runtime::EventTargetHandle;
 use super::super::util::{get_private_value, set_private_value, v8str};
-use crate::context_bootstrap::{MessagePortEventListenerId, new_dom_exception_value};
-use crate::types::MessagePortId;
+use crate::context_bootstrap::new_dom_exception_value;
 use moli_webapi_declare::WebApiObject;
 
 mod controller;
@@ -44,7 +43,6 @@ struct AbortSignalState {
     reason: Option<v8::Global<v8::Value>>,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
     linked_target_listeners: Vec<AbortLinkedTargetListener>,
-    linked_message_port_listeners: Vec<AbortLinkedMessagePortListener>,
     dependent_signals: Vec<u32>,
 }
 
@@ -53,11 +51,6 @@ struct AbortLinkedTargetListener {
     event_type: String,
     callback_id: super::EventCallbackId,
     capture: bool,
-}
-
-struct AbortLinkedMessagePortListener {
-    port_id: MessagePortId,
-    listener_id: MessagePortEventListenerId,
 }
 
 #[derive(WebApiObject)]
@@ -273,40 +266,6 @@ impl AbortStore {
         }
     }
 
-    pub(super) fn register_message_port_listener<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) -> bool {
-        let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
-            return false;
-        };
-        let Some(state) = self.signal_state_mut(signal_id) else {
-            return false;
-        };
-        state
-            .linked_message_port_listeners
-            .push(AbortLinkedMessagePortListener {
-                port_id,
-                listener_id,
-            });
-        true
-    }
-
-    pub(super) fn unregister_message_port_listener(
-        &mut self,
-        port_id: MessagePortId,
-        listener_id: MessagePortEventListenerId,
-    ) {
-        for state in self.signals.values_mut() {
-            state
-                .linked_message_port_listeners
-                .retain(|linked| linked.port_id != port_id || linked.listener_id != listener_id);
-        }
-    }
-
     pub(super) fn abort_signal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -317,12 +276,7 @@ impl AbortStore {
         let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
             return;
         };
-        let Some((
-            abort_algorithms,
-            linked_target_listeners,
-            linked_message_port_listeners,
-            dependent_signals,
-        )) = ({
+        let Some((abort_algorithms, linked_target_listeners, dependent_signals)) = ({
             let Some(state) = self.signal_state_mut(signal_id) else {
                 return;
             };
@@ -333,26 +287,12 @@ impl AbortStore {
             state.reason = Some(v8::Global::new(scope, reason));
             let abort_algorithms = std::mem::take(&mut state.abort_algorithms);
             let linked_target_listeners = std::mem::take(&mut state.linked_target_listeners);
-            let linked_message_port_listeners =
-                std::mem::take(&mut state.linked_message_port_listeners);
             let dependent_signals = state.dependent_signals.clone();
-            Some((
-                abort_algorithms,
-                linked_target_listeners,
-                linked_message_port_listeners,
-                dependent_signals,
-            ))
-        })
-        else {
+            Some((abort_algorithms, linked_target_listeners, dependent_signals))
+        }) else {
             return;
         };
         event::invoke_abort_algorithms(scope, signal, reason, abort_algorithms);
-        for linked in linked_message_port_listeners {
-            host.remove_message_port_event_listener_after_signal_abort(
-                linked.port_id,
-                linked.listener_id,
-            );
-        }
         abort_signal_events::dispatch_abort(scope, signal);
         for linked in linked_target_listeners {
             host.remove_registered_event_listener_by_id(

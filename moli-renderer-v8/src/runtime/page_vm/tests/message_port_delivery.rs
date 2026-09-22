@@ -726,9 +726,9 @@ document.body.appendChild(frame);
       message => parent.__transferredPortEvents.push(`second:${message.data}`)
     );
     port.start();
-    // The new wrapper restarts its local listener-id sequence. These ids
-    // collide with one manually removed registration and one registration
-    // retired by transfer. Neither old signal may remove the new listeners.
+    // Registrations stay on their original JS object across transfer.
+    // Neither an old removed listener's signal nor an old retained listener's
+    // signal may remove listeners from this new wrapper.
     parent.__manualSignalController.abort();
     parent.__transferSignalController.abort();
   };

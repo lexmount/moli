@@ -72,18 +72,10 @@ pub(in crate::context_bootstrap) const MESSAGE_CHANNEL_PORT2_SLOT: &str =
 pub(in crate::context_bootstrap) const MESSAGE_PORT_PEER_SLOT: &str = "__moliMessagePortPeer";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_ONMESSAGE_HANDLER_SLOT: &str =
     "__lmMessagePortOnmessageHandler";
-pub(in crate::context_bootstrap) const MESSAGE_PORT_ONMESSAGE_ORDER_SLOT: &str =
-    "__lmMessagePortOnmessageOrder";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_ONMESSAGEERROR_HANDLER_SLOT: &str =
     "__lmMessagePortOnmessageerrorHandler";
-pub(in crate::context_bootstrap) const MESSAGE_PORT_ONMESSAGEERROR_ORDER_SLOT: &str =
-    "__lmMessagePortOnmessageerrorOrder";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_ONCLOSE_HANDLER_SLOT: &str =
     "__lmMessagePortOncloseHandler";
-pub(in crate::context_bootstrap) const MESSAGE_PORT_ONCLOSE_ORDER_SLOT: &str =
-    "__lmMessagePortOncloseOrder";
-pub(in crate::context_bootstrap) const MESSAGE_PORT_NEXT_LISTENER_ORDER_SLOT: &str =
-    "__lmMessagePortNextListenerOrder";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_STARTED_SLOT: &str = "__moliMessagePortStarted";
 pub(in crate::context_bootstrap) const MESSAGE_PORT_CLOSED_SLOT: &str = "__moliMessagePortClosed";
 pub(in crate::context_bootstrap) const FILE_READER_LISTENERS_SLOT: &str =

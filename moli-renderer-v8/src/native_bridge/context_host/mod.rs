@@ -297,7 +297,6 @@ pub(crate) struct MessagePortWrapperEntry {
     pub(crate) identity: WindowExecutionContextIdentity,
     pub(crate) context: v8::Global<v8::Context>,
     pub(crate) wrapper: v8::Global<v8::Object>,
-    pub(crate) listeners: crate::context_bootstrap::WindowMessagePortEventListenerRegistry,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
