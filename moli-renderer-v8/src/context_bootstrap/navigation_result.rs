@@ -10,6 +10,7 @@ use super::navigation_lifecycle::{
 pub(super) use super::navigation_lifecycle::{
     perform_navigation_scroll_if_needed, reset_navigation_focus_if_unchanged,
 };
+use super::navigation_window::navigation_has_disabled_entries;
 use super::*;
 use crate::util::{get_private_value, set_private_value};
 use moli_webapi_declare::WebApiObject;
@@ -272,6 +273,9 @@ pub(super) fn queue_same_document_navigation_success<'s>(
     signal: Option<v8::Local<'s, v8::Object>>,
     href: &str,
 ) {
+    if navigation_has_disabled_entries(scope, navigation) {
+        return;
+    }
     queue_same_document_navigation_finished(
         scope, navigation, signal, None, None, None, None, None, href,
     );

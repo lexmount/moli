@@ -15,8 +15,9 @@ use super::super::navigation_lifecycle::{
     settle_navigation_transition_finished_local,
 };
 use super::super::navigation_window::{
-    navigation_document_can_update_current_entry, navigation_document_has_disabled_entries,
-    navigation_document_is_active, navigation_unload_event_active,
+    navigation_can_update_current_entry, navigation_document_is_active,
+    navigation_document_is_initial_empty, navigation_has_current_document,
+    navigation_has_disabled_entries, navigation_unload_event_active,
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
@@ -54,7 +55,7 @@ pub(in crate::context_bootstrap) fn navigation_entries_callback<'s>(
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
-    if navigation_document_has_disabled_entries(scope, owner) {
+    if navigation_has_disabled_entries(scope, navigation) {
         rv.set(v8::Array::new(scope, 0).into());
         return;
     }
@@ -122,9 +123,8 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         return;
     };
     let current_href = location_href_slot(scope, location).unwrap_or_default();
-    let raw_url = parsed.url;
     let Some(next_url) =
-        resolve_navigation_navigate_target(scope, owner, &current_href, raw_url.clone())
+        resolve_navigation_navigate_target(scope, owner, &current_href, parsed.url)
     else {
         rv.set(
             navigation_rejected_dom_exception_result(scope, "Invalid URL", "SyntaxError").into(),
@@ -135,6 +135,19 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
     let Some(navigate_history_kind) = parse_navigation_navigate_history_kind(scope, options) else {
         return;
     };
+    if navigation_document_is_initial_empty(scope, owner)
+        && matches!(navigate_history_kind, NavigationNavigateHistoryKind::Push)
+    {
+        rv.set(
+            navigation_rejected_dom_exception_result(
+                scope,
+                "Cannot push a navigation in the initial about:blank document",
+                "NotSupportedError",
+            )
+            .into(),
+        );
+        return;
+    }
     let cloned_navigation_state = match clone_navigation_state_arg_for_result(scope, options) {
         Ok(state) => state,
         Err(error) => {
@@ -142,7 +155,9 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
             return;
         }
     };
-    if !navigation_document_is_active(scope, owner) {
+    if !navigation_has_current_document(scope, args.this())
+        || !navigation_document_is_active(scope, owner)
+    {
         rv.set(
             navigation_rejected_dom_exception_result(
                 scope,
@@ -196,30 +211,6 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         );
         return;
     }
-    if current_href == "about:blank"
-        && raw_url.starts_with('#')
-        && matches!(navigate_history_kind, NavigationNavigateHistoryKind::Push)
-    {
-        rv.set(
-            navigation_rejected_dom_exception_result(
-                scope,
-                "Cannot push a same-document navigation in the initial about:blank document",
-                "NotSupportedError",
-            )
-            .into(),
-        );
-        return;
-    }
-    if current_href == "about:blank"
-        && raw_url.starts_with('#')
-        && matches!(
-            navigate_history_kind,
-            NavigationNavigateHistoryKind::Default
-        )
-    {
-        rv.set(navigation_pending_result(scope).into());
-        return;
-    }
     let navigation_info = options.and_then(|options| {
         options
             .get(scope, v8str(scope, "info").into())
@@ -238,7 +229,21 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         return;
     };
     let current_url = url::Url::parse(&current_href).ok();
-    let can_update_current_entry = navigation_document_can_update_current_entry(scope, owner);
+    let can_update_current_entry = navigation_can_update_current_entry(scope, args.this());
+    if !can_update_current_entry
+        && is_same_document_fragment_navigation(current_url.as_ref(), &next_url)
+    {
+        // Disabled Navigation entries suppress API tracking, not the underlying
+        // fragment navigation or its legacy History/Location behavior.
+        super::super::location_navigation::navigate_location_object(
+            scope,
+            location,
+            same_document_kind,
+            Some(next_url.to_string()),
+        );
+        rv.set(navigation_pending_result(scope).into());
+        return;
+    }
     let exact_same_url_push = matches!(navigate_history_kind, NavigationNavigateHistoryKind::Push)
         && next_url.as_str() == current_href;
     if can_update_current_entry
@@ -1877,7 +1882,7 @@ pub(in crate::context_bootstrap) fn navigation_update_current_entry_callback<'s>
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return;
     };
-    if !navigation_document_can_update_current_entry(scope, owner) {
+    if !navigation_can_update_current_entry(scope, args.this()) {
         throw_dom_exception(
             scope,
             "InvalidStateError",

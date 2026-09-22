@@ -316,6 +316,7 @@ impl FrameOwnerStore {
             .lifecycle_progress
             .document_open_load_continuation();
         let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
+        let is_initial_empty = retired_document.creation_kind.is_initial_empty();
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -334,7 +335,7 @@ impl FrameOwnerStore {
                 document_handle,
                 url,
                 base_url: base_url.clone(),
-                creation_kind: DocumentCreationKind::DocumentOpen,
+                creation_kind: DocumentCreationKind::DocumentOpen { is_initial_empty },
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
@@ -891,6 +892,7 @@ impl FrameOwnerStore {
             .lifecycle_progress
             .document_open_load_continuation();
         let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
+        let is_initial_empty = retired_document.creation_kind.is_initial_empty();
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -909,7 +911,7 @@ impl FrameOwnerStore {
                 document_handle,
                 url,
                 base_url: base_url.clone(),
-                creation_kind: DocumentCreationKind::DocumentOpen,
+                creation_kind: DocumentCreationKind::DocumentOpen { is_initial_empty },
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),

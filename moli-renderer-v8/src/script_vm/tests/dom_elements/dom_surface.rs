@@ -10721,11 +10721,19 @@ fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() 
 fn detached_iframe_navigation_entry_properties_are_invalidated() {
     let mut vm = new_storage_test_vm("https://detached-navigation-entry.test/page.html");
 
+    vm.eval(
+        r#"
+const frame = document.createElement('iframe');
+frame.srcdoc = '<p>committed child</p>';
+(document.body || document.documentElement || document).appendChild(frame);
+"#,
+    )
+    .expect("committed child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
     let result = vm
         .eval(
             r#"
-const frame = document.createElement('iframe');
-(document.body || document.documentElement || document).appendChild(frame);
 const entry = frame.contentWindow.navigation.currentEntry;
 const before = [
   entry.sameDocument,
@@ -11080,13 +11088,21 @@ fn navigation_runtime_state_ignores_proto_pollution_slots() {
 fn targeted_anchor_click_dispatches_navigate_on_named_child_window() {
     let mut vm = new_storage_test_vm("https://targeted-child-navigate.test/page.html");
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 const frame = document.createElement('iframe');
+frame.srcdoc = '<p>committed child</p>';
 frame.name = 'target';
 const root = document.body || document.documentElement || document;
 root.appendChild(frame);
+"#,
+    )
+    .expect("committed child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
 const link = document.createElement('a');
 link.href = '/next.html';
 link.target = 'target';
@@ -11114,7 +11130,7 @@ seen.join('|')
         )
         .expect("targeted anchor click should dispatch child navigate");
 
-    // The child inherits the parent's origin, but its about:blank URL cannot
+    // The child inherits the parent's origin, but its about:srcdoc URL cannot
     // be rewritten to an HTTPS URL, so this navigation cannot be intercepted.
     assert_eq!(
         result,
@@ -11231,16 +11247,24 @@ async fn base_target_navigation_exposes_replacement_document_before_iframe_load(
 fn targeted_anchor_click_reports_same_document_hash_change_for_child_window() {
     let mut vm = new_storage_test_vm("https://targeted-child-hash.test/page.html");
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 const frame = document.createElement('iframe');
+frame.srcdoc = '<p>committed child</p>';
 frame.name = 'target';
 const root = document.body || document.documentElement || document;
 root.appendChild(frame);
-frame.contentWindow.history.replaceState(null, '', 'about:blank#child');
+"#,
+    )
+    .expect("committed child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+frame.contentWindow.history.replaceState(null, '', 'about:srcdoc#child');
 const link = document.createElement('a');
-link.href = 'about:blank#next';
+link.href = 'about:srcdoc#next';
 link.target = 'target';
 root.appendChild(link);
 let seen = [];
@@ -11258,7 +11282,7 @@ seen.join('|')
         )
         .expect("targeted same-document anchor click should dispatch child navigate");
 
-    assert_eq!(result, "true,true,about:blank#next,-1");
+    assert_eq!(result, "true,true,about:srcdoc#next,-1");
 }
 #[test]
 fn anchor_click_to_identical_url_dispatches_replace_navigate_event() {
@@ -12129,7 +12153,7 @@ const frame = document.querySelector('iframe');
 return [
   frame.contentWindow.location.href,
   frame.contentWindow.navigation.entries().length,
-  frame.contentWindow.navigation.currentEntry.url,
+  frame.contentWindow.navigation.currentEntry === null,
   frame.contentWindow.navigation.activation === null
 ].join('|')
 })()
@@ -12137,7 +12161,7 @@ return [
         )
         .expect("no-src iframe navigation activation should evaluate");
 
-    assert_eq!(result, "about:blank|1|about:blank|true");
+    assert_eq!(result, "about:blank|0|true|true");
 }
 
 #[test]
@@ -12271,7 +12295,7 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
 
     assert_eq!(
         result,
-        r##"{"initialJointLength":1,"observed":["load|about:blank|about:blank|about:blank|about:blank|true|1|1","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true|1|1","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true|1|1"]}"##
+        r##"{"initialJointLength":1,"observed":["load|about:blank|about:blank|about:blank||true|1|1","load|about:blank#foo|about:blank#foo|about:blank#foo||true|1|1","load|about:blank?foo|about:blank?foo|about:blank?foo||true|1|1"]}"##
     );
     assert!(
         !vm.has_pending_child_navigation_commit_for_test(),
@@ -14977,14 +15001,14 @@ child.location.href = "about:blank#2";
 [
   child.location.href,
   child.navigation.entries().length,
-  child.navigation.currentEntry.url,
+  child.navigation.currentEntry === null,
   events.join(",")
 ].join("|")
 "##,
         )
         .expect("initial about:blank fragment navigation should evaluate");
 
-    assert_eq!(result, "about:blank#2|1|about:blank|");
+    assert_eq!(result, "about:blank#2|0|true|");
 }
 #[test]
 fn contextual_fragment_scripts_run_when_inserted() {

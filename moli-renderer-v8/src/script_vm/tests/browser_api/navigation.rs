@@ -1,5 +1,132 @@
 use super::*;
 
+#[tokio::test]
+async fn navigation_entries_and_events_follow_document_initialness() {
+    for mode in [
+        "initial",
+        "initial-fragment",
+        "initial-history",
+        "initial-open",
+        "srcdoc",
+        "javascript",
+        "loaded-blank",
+        "loaded-blank-fragment",
+        "initial-navigate-fragment",
+        "initial-navigate-relative",
+        "initial-navigate-cross",
+        "initial-navigate-push",
+        "initial-anchor",
+        "loaded-blank-navigate-fragment",
+        "javascript-navigate-fragment",
+    ] {
+        let crossed = matches!(
+            mode,
+            "initial-navigate-relative" | "initial-navigate-cross" | "initial-anchor"
+        );
+        let requested = if mode == "initial-navigate-relative" {
+            vec!["/parent"]
+        } else if crossed || mode.starts_with("loaded-") {
+            vec!["/child"]
+        } else {
+            vec![]
+        };
+        let server = StaticHttpServer::spawn(requested.len()).await;
+        let parent_url = server.base_url().join("parent").unwrap();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        let script = include_str!("../../../../tests/fixtures/navigation-initial-document.js");
+        vm.eval(&format!(
+            "{script}\nglobalThis.initialResult = 'pending';\n\
+             initialNavigationProbe({mode:?}).then(\n\
+               value => initialResult = value, error => initialResult = String(error));"
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(initialResult !== 'pending')",
+            "true",
+            mode,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(initialResult)").unwrap()).unwrap();
+        let initial = mode.starts_with("initial");
+        let before_url = if mode == "srcdoc" {
+            "about:srcdoc"
+        } else {
+            "about:blank"
+        };
+        let after_url = if mode.ends_with("-fragment") {
+            "about:blank#fragment"
+        } else {
+            match mode {
+                "initial-history" => "about:blank#second",
+                "initial-open" => "<origin>/parent",
+                "initial-navigate-relative" => "<origin>/parent#relative",
+                "initial-navigate-cross" | "initial-anchor" => "<origin>/child",
+                _ => before_url,
+            }
+        };
+        let snapshot = |url: &str, entries: Vec<&str>, current: Option<&str>, back: bool| {
+            serde_json::json!({
+                "url": url, "entries": entries, "current": current, "activation": initial,
+                "transition": true, "back": back, "forward": false,
+            })
+        };
+        let before = snapshot(
+            before_url,
+            if initial { vec![] } else { vec![before_url] },
+            (!initial).then_some(before_url),
+            false,
+        );
+        let fragment = !initial && mode.ends_with("-fragment");
+        let after = snapshot(
+            after_url,
+            if initial {
+                vec![]
+            } else if fragment {
+                vec![before_url, after_url]
+            } else {
+                vec![after_url]
+            },
+            (!initial).then_some(after_url),
+            fragment,
+        );
+        let events = if initial {
+            vec![]
+        } else if fragment {
+            vec![
+                "navigate",
+                "currententrychange",
+                "navigatesuccess",
+                "currententrychange",
+            ]
+        } else {
+            vec!["currententrychange"]
+        };
+        let promises = if mode == "initial-navigate-push" {
+            vec!["committed:NotSupportedError", "finished:NotSupportedError"]
+        } else if fragment && mode.contains("-navigate-") {
+            vec!["committed:fulfilled", "finished:fulfilled"]
+        } else {
+            vec![]
+        };
+        assert_eq!(
+            result,
+            serde_json::json!({
+                "before": before, "after": after,
+                "update": if initial { serde_json::json!("InvalidStateError") } else { serde_json::json!(3) },
+                "events": events, "promises": promises, "sameNavigation": !crossed,
+                "newCurrent": if crossed || !initial { Some(after_url) } else { None },
+            }),
+            "{mode}"
+        );
+        assert_eq!(server.finish_targets().await, requested, "{mode}");
+    }
+}
+
 #[test]
 fn location_assign_before_complete_load_respects_user_activation() {
     for activation in ["none", "protocol", "input"] {
@@ -5228,10 +5355,10 @@ async fn reset_navigation_history_updates_prebootstrapped_child_default_realm() 
     assert_eq!(
         vm.eval_in_child_default_context(
             child_context_id,
-            "JSON.stringify({ historyLength: history.length, navigationLength: navigation.entries().length, currentIndex: navigation.currentEntry.index })",
+            "JSON.stringify({ historyLength: history.length, navigationLength: navigation.entries().length, currentEntryNull: navigation.currentEntry === null })",
         )
         .expect("materialized child reset history state should evaluate"),
-        r#"{"historyLength":1,"navigationLength":1,"currentIndex":0}"#
+        r#"{"historyLength":1,"navigationLength":0,"currentEntryNull":true}"#
     );
 }
 
