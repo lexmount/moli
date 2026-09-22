@@ -4,7 +4,8 @@ use moli_cookie_jar::{
 };
 use moli_fetch::{
     NegotiatedHttpVersion, NetworkExchangeObservation, NetworkObservationJournal,
-    NetworkRequestObservation, NetworkResponseObservation, RedirectInfo,
+    NetworkRequestExtraInfo, NetworkRequestObservation, NetworkResponseExtraInfo,
+    NetworkResponseObservation, RedirectInfo,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc::unbounded_channel;
@@ -46,6 +47,22 @@ fn observation_journal(
             })
             .collect(),
     )
+}
+
+fn response_extra_info(
+    request_headers: Vec<(String, String)>,
+    status: u16,
+    response_headers: Vec<(String, String)>,
+) -> NetworkResponseExtraInfo {
+    NetworkResponseExtraInfo {
+        request_extra_info: NetworkRequestExtraInfo {
+            headers: request_headers,
+            cookie_report: StoredCookieQueryReport::default(),
+        },
+        status,
+        headers: response_headers,
+        cookie_set_reports: Vec::new(),
+    }
 }
 
 fn completed_progress_context() -> CompletedMainDocumentProgressContext {
@@ -419,25 +436,36 @@ fn live_progress_source_serializes_through_progress_emissions() {
         from_cache: false,
         negotiated_http_version: None,
     };
-    let journal = observation_journal(vec![
-        (
-            vec![("Host".to_owned(), "example.test".to_owned())],
-            302,
-            vec![("Location".to_owned(), final_url.to_string())],
+    let journal = NetworkObservationJournal::from_exchanges(vec![
+        NetworkExchangeObservation::new(
+            NetworkRequestObservation::new_with_method(
+                "POST",
+                vec![("Host".to_owned(), "example.test".to_owned())],
+            ),
+            Some(NetworkResponseObservation::new(
+                302,
+                vec![("Location".to_owned(), final_url.to_string())],
+            )),
         ),
-        (
-            vec![("Host".to_owned(), "example.test".to_owned())],
-            200,
-            vec![("Content-Type".to_owned(), "text/html".to_owned())],
+        NetworkExchangeObservation::new(
+            NetworkRequestObservation::new_with_method(
+                "GET",
+                vec![("Host".to_owned(), "example.test".to_owned())],
+            ),
+            Some(NetworkResponseObservation::new(
+                200,
+                vec![("Content-Type".to_owned(), "text/html".to_owned())],
+            )),
         ),
     ]);
 
+    let redirects = vec![redirect];
     source.emit_redirect_requests(
-        "GET",
-        None,
+        "POST",
+        Some("account=1"),
         &[("Accept".to_owned(), "text/html".to_owned())],
         None,
-        &[redirect],
+        &redirects,
         &journal,
         true,
     );
@@ -447,7 +475,7 @@ fn live_progress_source_serializes_through_progress_emissions() {
         &[("Content-Type".to_owned(), "text/html".to_owned())],
         &[],
         &journal,
-        1,
+        &redirects,
         true,
         false,
         None,
@@ -475,6 +503,11 @@ fn live_progress_source_serializes_through_progress_emissions() {
         json!("Network.requestWillBeSent")
     );
     assert_eq!(redirect_request["params"]["requestId"], json!("REQ-1"));
+    assert_eq!(
+        redirect_request["params"]["request"]["method"],
+        json!("GET")
+    );
+    assert!(redirect_request["params"]["request"]["postData"].is_null());
     assert_eq!(
         redirect_request["params"]["redirectResponse"]["status"],
         json!(302)
@@ -544,6 +577,135 @@ fn live_progress_source_serializes_through_progress_emissions() {
     ));
     assert_eq!(finished["method"], json!("Network.loadingFinished"));
     assert_eq!(finished["params"]["encodedDataLength"], json!(17));
+}
+
+#[test]
+fn redirect_request_preserves_post_body_when_transport_preserves_method() {
+    let (source, mut receiver) = live_progress_source();
+    let final_url = Url::parse("http://example.test/final").unwrap();
+    let redirect = RedirectInfo {
+        source: moli_fetch::RedirectSource::Network,
+        from_url: Url::parse("http://example.test/start").unwrap(),
+        to_url: final_url.clone(),
+        status: 307,
+        headers: vec![("Location".to_owned(), final_url.to_string())],
+        network_extra_info_available: true,
+        request_extra_info: None,
+        response_extra_info: None,
+        redirect_has_extra_info: true,
+        request_cookie_report: None,
+        cookie_set_reports: Vec::new(),
+        from_cache: false,
+        negotiated_http_version: None,
+    };
+    let journal = NetworkObservationJournal::from_exchanges(vec![
+        NetworkExchangeObservation::new(
+            NetworkRequestObservation::new_with_method("POST", Vec::new()),
+            Some(NetworkResponseObservation::new(307, Vec::new())),
+        ),
+        NetworkExchangeObservation::new(
+            NetworkRequestObservation::new_with_method("POST", Vec::new()),
+            Some(NetworkResponseObservation::new(200, Vec::new())),
+        ),
+    ]);
+
+    source.emit_redirect_requests(
+        "POST",
+        Some("account=1"),
+        &[],
+        None,
+        &[redirect],
+        &journal,
+        true,
+    );
+
+    let _initial_request_extra = receiver
+        .try_recv()
+        .expect("initial request extra info event");
+    let (redirect_request, _) = receiver
+        .try_recv()
+        .expect("redirect request event")
+        .into_parts();
+    assert_eq!(
+        redirect_request["params"]["request"]["method"],
+        json!("POST")
+    );
+    assert_eq!(
+        redirect_request["params"]["request"]["postData"],
+        json!("account=1")
+    );
+}
+
+#[test]
+fn observed_request_headers_do_not_restore_a_referrer_removed_by_transport_policy() {
+    let journal = NetworkObservationJournal::from_exchanges(vec![NetworkExchangeObservation::new(
+        NetworkRequestObservation::new_with_method(
+            "GET",
+            vec![("Host".to_owned(), "example.test".to_owned())],
+        ),
+        Some(NetworkResponseObservation::new(200, Vec::new())),
+    )]);
+
+    let headers = super::observed_request_headers(
+        &journal,
+        &[] as &[RedirectInfo],
+        0,
+        &[("Referer".to_owned(), "https://stale.test/".to_owned())],
+    );
+
+    assert_eq!(
+        headers,
+        vec![("Host".to_owned(), "example.test".to_owned())]
+    );
+}
+
+#[test]
+fn truncated_observation_journal_falls_back_instead_of_guessing_redirect_alignment() {
+    let final_url = Url::parse("http://example.test/final").unwrap();
+    let redirect = RedirectInfo {
+        source: moli_fetch::RedirectSource::Network,
+        from_url: Url::parse("http://example.test/start").unwrap(),
+        to_url: final_url.clone(),
+        status: 302,
+        headers: vec![("Location".to_owned(), final_url.to_string())],
+        network_extra_info_available: true,
+        request_extra_info: None,
+        response_extra_info: None,
+        redirect_has_extra_info: true,
+        request_cookie_report: None,
+        cookie_set_reports: Vec::new(),
+        from_cache: false,
+        negotiated_http_version: None,
+    };
+    let journal = NetworkObservationJournal::from_exchanges(
+        (0..33)
+            .map(|index| {
+                NetworkExchangeObservation::new(
+                    NetworkRequestObservation::new_with_method(
+                        "GET",
+                        vec![("X-Wire-Hop".to_owned(), index.to_string())],
+                    ),
+                    Some(NetworkResponseObservation::new(200, Vec::new())),
+                )
+            })
+            .collect(),
+    );
+    assert!(journal.truncated());
+
+    let fallback_headers = vec![("X-Logical-Hop".to_owned(), "final".to_owned())];
+    assert_eq!(
+        super::observed_request_headers(
+            &journal,
+            std::slice::from_ref(&redirect),
+            1,
+            &fallback_headers
+        ),
+        fallback_headers
+    );
+    assert_eq!(
+        super::observed_request_method(&journal, &[redirect], 1, "POST"),
+        "POST"
+    );
 }
 
 #[test]
@@ -773,19 +935,46 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {
         from_cache: false,
         negotiated_http_version: None,
     }];
-    events = events.with_network_observation_journal(observation_journal(vec![
-        (
-            vec![("X-Request-Hop".to_owned(), "initial".to_owned())],
-            302,
-            vec![("X-Response-Hop".to_owned(), "redirect".to_owned())],
-        ),
-        (
-            vec![("X-Request-Hop".to_owned(), "final".to_owned())],
-            200,
-            vec![("X-Response-Hop".to_owned(), "final".to_owned())],
-        ),
-    ]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    events.request_method = "POST".to_owned();
+    events =
+        events.with_network_observation_journal(NetworkObservationJournal::from_exchanges(vec![
+            NetworkExchangeObservation::new(
+                NetworkRequestObservation::new_with_method(
+                    "POST",
+                    vec![("X-Request-Hop".to_owned(), "initial".to_owned())],
+                ),
+                Some(NetworkResponseObservation::new(
+                    302,
+                    vec![("X-Response-Hop".to_owned(), "redirect".to_owned())],
+                )),
+            ),
+            NetworkExchangeObservation::new(
+                NetworkRequestObservation::new_with_method(
+                    "GET",
+                    vec![("X-Request-Hop".to_owned(), "final".to_owned())],
+                ),
+                Some(NetworkResponseObservation::new(
+                    200,
+                    vec![("X-Response-Hop".to_owned(), "final".to_owned())],
+                )),
+            ),
+        ]));
+    let context = CompletedMainDocumentProgressContext::new(
+        vec![Some("SID-1".to_owned())],
+        Some("REQ-1".to_owned()),
+        false,
+        Url::parse("http://example.test/start").unwrap(),
+        "POST".to_owned(),
+        Some("account=1".to_owned()),
+        vec![(
+            "Content-Type".to_owned(),
+            "application/x-www-form-urlencoded".to_owned(),
+        )],
+        "LOADER-1".to_owned(),
+        "FRAME-1".to_owned(),
+        12.5,
+    );
+    let batches = context.event_batches(&events, &final_url, 17);
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -826,6 +1015,11 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {
         redirected_request["params"]["redirectHasExtraInfo"],
         json!(true)
     );
+    assert_eq!(
+        redirected_request["params"]["request"]["method"],
+        json!("GET")
+    );
+    assert!(redirected_request["params"]["request"]["postData"].is_null());
     let request_extras = out
         .iter()
         .filter(|message| message["method"] == json!("Network.requestWillBeSentExtraInfo"))
@@ -931,7 +1125,14 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro
         headers: vec![("Location".to_owned(), navigation_url.to_string())],
         network_extra_info_available: false,
         request_extra_info: None,
-        response_extra_info: None,
+        response_extra_info: Some(response_extra_info(
+            vec![("Sec-CH-UA".to_owned(), "\"Chromium\";v=\"145\"".to_owned())],
+            403,
+            vec![
+                ("Accept-CH".to_owned(), "Sec-CH-UA-Arch".to_owned()),
+                ("Critical-CH".to_owned(), "Sec-CH-UA-Arch".to_owned()),
+            ],
+        )),
         redirect_has_extra_info: false,
         request_cookie_report: None,
         cookie_set_reports: Vec::new(),
@@ -993,6 +1194,69 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro
     );
     assert_eq!(relevant[5]["params"]["statusCode"], json!(200));
     assert_eq!(relevant[6]["params"]["hasExtraInfo"], json!(true));
+}
+
+#[test]
+fn transportless_https_upgrade_attributes_wire_headers_to_upgraded_request() {
+    let initial_url = Url::parse("http://example.test/start").unwrap();
+    let final_url = Url::parse("https://example.test/start").unwrap();
+    let journal = NetworkObservationJournal::from_exchanges(vec![NetworkExchangeObservation::new(
+        NetworkRequestObservation::new_with_method(
+            "GET",
+            vec![("X-Wire-Upgraded".to_owned(), "yes".to_owned())],
+        ),
+        Some(NetworkResponseObservation::new(
+            200,
+            vec![("Content-Type".to_owned(), "text/html".to_owned())],
+        )),
+    )]);
+    let mut events = completed_events().with_network_observation_journal(journal);
+    events.network_extra_info_available = true;
+    events.redirect_chain = vec![moli_core::page::NavigationRedirect {
+        source: moli_fetch::RedirectSource::Internal,
+        from_url: initial_url,
+        to_url: final_url.clone(),
+        status: 307,
+        headers: vec![("Location".to_owned(), final_url.to_string())],
+        network_extra_info_available: false,
+        request_extra_info: None,
+        response_extra_info: None,
+        redirect_has_extra_info: false,
+        request_cookie_report: None,
+        cookie_set_reports: Vec::new(),
+        from_cache: false,
+        negotiated_http_version: Some(NegotiatedHttpVersion::Http11),
+    }];
+
+    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let mut drain =
+        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
+    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
+    let out = drain_into_protocol_messages(&mut drain);
+
+    let redirected_request = out
+        .iter()
+        .filter(|message| message["method"] == json!("Network.requestWillBeSent"))
+        .nth(1)
+        .expect("upgraded request");
+    assert_eq!(
+        redirected_request["params"]["request"]["headers"]["X-Wire-Upgraded"],
+        json!("yes"),
+        "the sole wire exchange belongs to the post-upgrade HTTPS request"
+    );
+    let request_extras = out
+        .iter()
+        .filter(|message| message["method"] == json!("Network.requestWillBeSentExtraInfo"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        request_extras.len(),
+        1,
+        "a transportless internal hop must not receive wire ExtraInfo"
+    );
+    assert_eq!(
+        request_extras[0]["params"]["headers"]["X-Wire-Upgraded"],
+        json!("yes")
+    );
 }
 
 #[test]

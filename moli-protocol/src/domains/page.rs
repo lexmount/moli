@@ -4121,6 +4121,8 @@ mod producer_tests {
                     request_url: "https://example.test/child".to_owned(),
                     request_method: "GET".to_owned(),
                     request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
+                    network_observation_journal: Default::default(),
+                    redirect_chain: Vec::new(),
                     final_url: "https://example.test/child".to_owned(),
                     status: 200,
                     response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
@@ -4259,6 +4261,8 @@ mod producer_tests {
                     request_url: "https://example.test/retired-child".to_owned(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
+                    network_observation_journal: Default::default(),
+                    redirect_chain: Vec::new(),
                     final_url: "https://example.test/retired-child".to_owned(),
                     status: 200,
                     response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
@@ -4367,6 +4371,8 @@ mod producer_tests {
             request_url: "https://example.test/legacy-child".to_owned(),
             request_method: "GET".to_owned(),
             request_headers: Vec::new(),
+            network_observation_journal: Default::default(),
+            redirect_chain: Vec::new(),
             final_url: "https://example.test/legacy-child".to_owned(),
             status: 200,
             response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
@@ -4406,6 +4412,110 @@ mod producer_tests {
             -32000,
             "No data found for resource with given identifier",
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn child_document_network_reports_actual_redirect_methods_and_request_headers() {
+        let mut conn = CdpConnection::default();
+        let mut bc = BrowserContext::new("BID-1".into());
+        bc.set_active_target_id("TID-1");
+        bc.attach_active_session("SID-1");
+        conn.install_browser_context_fixture_for_test(bc);
+        assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
+        let final_url = url::Url::parse("https://example.test/done").unwrap();
+        let snapshot = ChildFrameDocumentNetworkSnapshot {
+            request_url: "https://example.test/profile".to_owned(),
+            request_method: "POST".to_owned(),
+            request_headers: Vec::new(),
+            network_observation_journal: moli_fetch::NetworkObservationJournal::from_exchanges(
+                vec![
+                    moli_fetch::NetworkExchangeObservation::new(
+                        moli_fetch::NetworkRequestObservation::new_with_method(
+                            "POST",
+                            vec![(
+                                "Referer".to_owned(),
+                                "https://example.test/source".to_owned(),
+                            )],
+                        ),
+                        Some(moli_fetch::NetworkResponseObservation::new(
+                            302,
+                            vec![("Location".to_owned(), final_url.to_string())],
+                        )),
+                    ),
+                    moli_fetch::NetworkExchangeObservation::new(
+                        moli_fetch::NetworkRequestObservation::new_with_method(
+                            "GET",
+                            vec![(
+                                "Referer".to_owned(),
+                                "https://example.test/source".to_owned(),
+                            )],
+                        ),
+                        Some(moli_fetch::NetworkResponseObservation::new(
+                            200,
+                            vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                        )),
+                    ),
+                ],
+            ),
+            redirect_chain: vec![moli_fetch::RedirectInfo {
+                source: moli_fetch::RedirectSource::Network,
+                from_url: url::Url::parse("https://example.test/profile").unwrap(),
+                to_url: final_url.clone(),
+                status: 302,
+                headers: vec![("Location".to_owned(), final_url.to_string())],
+                network_extra_info_available: true,
+                request_extra_info: None,
+                response_extra_info: None,
+                redirect_has_extra_info: true,
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            }],
+            final_url: final_url.to_string(),
+            status: 200,
+            response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+            encoded_data_length: 0,
+            response_body: None,
+            from_cache: false,
+        };
+        let mut background_events = Vec::new();
+
+        crate::domains::network::emit_child_document_navigation_network_background_events(
+            &mut conn,
+            &mut background_events,
+            Some("SID-1"),
+            "CHILD-FRAME-REDIRECT",
+            "LID-CHILD-REDIRECT",
+            "LID-CHILD-REDIRECT",
+            12.5,
+            &snapshot,
+        );
+
+        let messages = protocol_messages_from_background_events(background_events);
+        let requests = messages
+            .iter()
+            .filter(|message| message["method"] == json!("Network.requestWillBeSent"))
+            .collect::<Vec<_>>();
+        assert_eq!(requests.len(), 2, "redirect hop must remain observable");
+        assert_eq!(requests[0]["params"]["request"]["method"], json!("POST"));
+        assert_eq!(requests[1]["params"]["request"]["method"], json!("GET"));
+        assert_eq!(
+            requests[1]["params"]["redirectResponse"]["status"],
+            json!(302)
+        );
+        assert_eq!(
+            requests[0]["params"]["request"]["headers"]["Referer"],
+            json!("https://example.test/source")
+        );
+        let request_extra = messages
+            .iter()
+            .filter(|message| message["method"] == json!("Network.requestWillBeSentExtraInfo"))
+            .collect::<Vec<_>>();
+        assert_eq!(request_extra.len(), 2);
+        assert!(request_extra.iter().all(|message| {
+            message["params"]["headers"]["Referer"] == json!("https://example.test/source")
+        }));
     }
 
     #[tokio::test(flavor = "multi_thread")]
