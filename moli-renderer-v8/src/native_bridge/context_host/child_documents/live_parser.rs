@@ -772,6 +772,10 @@ impl JsContextHost {
             .current_child_document_task_owner(child_handle)
             .expect("committed child document-open parser must have a task owner");
         assert_eq!(task_owner.document_owner(), owner);
+        // open() resets the mode before any input is consumed. The new parser
+        // can select quirks mode later, after a complete doctype token or EOF.
+        self.dom_host_mut()
+            .set_html_quirks_mode_for_parser_document(document_handle, QuirksMode::NoQuirks);
         let parser = DocumentParserSession::start_open_live_document(
             document_url,
             document_handle,
