@@ -48,15 +48,13 @@ pub struct RendererOutputPublication {
 /// after its renderer turn has ended.
 ///
 /// This grants no capture capability and does not name an HTML task source.
-/// It only preserves the observable rule that post-load Page effects cannot
-/// overtake an exact pending `Page.loadEventFired` observation.
+/// Timer and load-handler Page effects yield to a pending client command
+/// before publication. Network facts retain their immediate ingress ordering.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RendererOutputPublicationOrdering {
     #[default]
     Unconstrained,
-    AfterPendingPageLoad {
-        source_document: crate::runtime::RendererDocumentLifecycleIdentity,
-    },
+    AfterClientTurn,
 }
 
 impl RendererOutputPublication {

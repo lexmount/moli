@@ -14,8 +14,8 @@ use super::conn::{
 };
 use crate::devtools_runtime::{DevToolsCommand, DevToolsCommandResult, DevToolsError};
 use crate::domains::activity::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RendererCommandResponseCompletion,
-    RendererCommandResponseOrder, RendererCommandResponsePermit,
+    ProtocolSchedulerWork, RendererCommandResponseCompletion, RendererCommandResponseOrder,
+    RendererCommandResponsePermit,
 };
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputFence, RendererOutputStreamControl,
@@ -1628,37 +1628,7 @@ impl TestContext {
         &mut self,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
-        loop {
-            let selected_index = match self.pending_protocol_scheduler_work.front() {
-                Some(front) if front.is_ready() => 0,
-                Some(front)
-                    if front.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction =>
-                {
-                    let Some(index) =
-                        self.pending_protocol_scheduler_work
-                            .iter()
-                            .position(|candidate| {
-                                candidate.is_ready()
-                                    && candidate.is_top_level_location_navigation_owner_action()
-                            })
-                    else {
-                        return;
-                    };
-                    // Production checks the pending load observer out of the
-                    // FIFO while it waits for the renderer. An unconstrained
-                    // location owner action may then run and replace that
-                    // exact source Document, which completes the observer as
-                    // Superseded. Keeping the pending observer at the front in
-                    // this protocol-only harness would deadlock the action
-                    // needed to make it terminal.
-                    index
-                }
-                Some(_) | None => return,
-            };
-            let protocol_work = self
-                .pending_protocol_scheduler_work
-                .remove(selected_index)
-                .expect("ready protocol work must remain resident");
+        while let Some(protocol_work) = self.pending_protocol_scheduler_work.pop_front() {
             let (events, scheduler_events) = self
                 .conn
                 .complete_ready_protocol_scheduler_work_turn(protocol_work)
@@ -2012,10 +1982,6 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
     let mut queue = VecDeque::new();
     enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
     while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
-        assert!(
-            protocol_work.is_ready(),
-            "the stateless compatibility materializer cannot own pending protocol work; use TestContext or the production CdpScheduler"
-        );
         let (events, nested_scheduler_events) = conn
             .complete_ready_protocol_scheduler_work_turn(protocol_work)
             .await

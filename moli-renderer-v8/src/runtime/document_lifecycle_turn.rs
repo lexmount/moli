@@ -48,16 +48,14 @@ impl DocumentLifecycleTurnAction {
     /// Freeze lifecycle-relative publication ordering before the exact
     /// Document turn is restored to the Page residence.
     ///
-    /// A navigation requested by a load handler is produced after the
-    /// authoritative load fact. Protocol may therefore have to retain this
-    /// batch behind that exact Document's pending `Page.loadEventFired`.
+    /// A load-handler navigation gives the pending client command a turn
+    /// before publishing its Page effects.
     pub(super) const fn renderer_output_ordering(self) -> super::RendererOutputPublicationOrdering {
         match self {
             Self::RequestedTopLevelNavigation {
-                source_document,
                 timing: DocumentLifecycleNavigationTiming::AfterMilestone,
                 ..
-            } => super::RendererOutputPublicationOrdering::AfterPendingPageLoad { source_document },
+            } => super::RendererOutputPublicationOrdering::AfterClientTurn,
             _ => super::RendererOutputPublicationOrdering::Unconstrained,
         }
     }

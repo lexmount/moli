@@ -314,49 +314,6 @@ async fn wait_for_visible_renderer_load(
         .expect("real scheduler input should make renderer load protocol-visible")
 }
 
-async fn wait_for_authoritative_renderer_load(
-    ctx: &mut TestContext,
-    session_id: &str,
-) -> moli_core::page::RendererLifecycleEventStamp {
-    ctx.wait_until_scheduler_state("authoritative renderer load lifecycle", |conn| {
-        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(Some(session_id))
-            .is_some_and(|(_, snapshot)| snapshot.load.is_some())
-    })
-    .await;
-    ctx.conn
-        .renderer_document_lifecycle_authoritative_state_for_session_owner(Some(session_id))
-        .and_then(|(_, snapshot)| snapshot.load)
-        .expect("real scheduler input should make renderer load authoritative")
-}
-
-fn take_released_renderer_load_event(
-    ctx: &mut TestContext,
-    session_id: &str,
-    load_stamp: moli_core::page::RendererLifecycleEventStamp,
-) -> moli_core::page::RendererDocumentLifecycleEvent {
-    let released = ctx
-        .conn
-        .release_renderer_document_load_visibility_barrier_for_owner(
-            &crate::conn::CommandOwnerScope::for_session(session_id),
-            LOADER_ID,
-        )
-        .expect("load visibility barrier should remain active");
-    let load_event = released
-        .into_iter()
-        .find(|event| {
-            matches!(
-                event.kind,
-                RendererDocumentLifecycleEventKind::Milestone(
-                    RendererDocumentLifecycleMilestone::Load
-                )
-            )
-        })
-        .expect("releasing the visibility barrier should publish renderer load");
-    assert_eq!(load_event.sequence, load_stamp.sequence);
-    assert_eq!(load_event.timestamp_micros, load_stamp.timestamp_micros);
-    load_event
-}
-
 fn console_message_index(messages: &[serde_json::Value], value: &str) -> usize {
     messages
         .iter()
@@ -616,19 +573,8 @@ async fn enable_non_blank_initial_url_loads_through_pending_navigation_path() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("non-about:blank Page.enable should start initial URL navigation");
-    let (mut messages, scheduler_events) =
-        complete_pending_command_task_for_test(&mut ctx, pending).await;
-    assert!(
-        !scheduler_events.iter().any(|event| matches!(
-            event,
-            CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.kind()
-                    == crate::domains::activity::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-                    && work.main_document_load_session_id()
-                        == Some("SID-PAGE-ENABLE-DATA")
-        )),
-        "Browser-owned initial navigation must not schedule the retired Protocol load executor: {scheduler_events:?}"
-    );
+    let (mut messages, _) = complete_pending_command_task_for_test(&mut ctx, pending).await;
+
     let prefix = ctx.sent.len();
     let is_initial_commit = |event: &serde_json::Value| {
         event["method"] == "Page.frameNavigated"
@@ -906,89 +852,70 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         "SID-visible",
         "about:blank",
     );
-    // Observe native load without draining the source FIFO into Protocol.
+    let (_, mut native_events) = ctx.conn.subscribe_browser_events().unwrap();
     ctx.conn
         .install_navigation_fixture_for_session_owner_for_test(
             "data:text/html,<body>visible lifecycle</body>",
             Some("SID-visible"),
         )
         .await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .renderer_document_lifecycle_binding_for_target("TID-visible")
-            .is_some()
-    );
-    assert!(
-        ctx.conn
-            .begin_renderer_document_load_visibility_barrier_for_owner(
-                &crate::conn::CommandOwnerScope::for_session("SID-visible"),
-                LOADER_ID,
-            )
-    );
-    let load_stamp = wait_for_authoritative_renderer_load(&mut ctx, "SID-visible").await;
-    ctx.wait_until_scheduler_state("exact renderer load reached the hidden tail", |conn| {
-        conn.browser_context
-            .as_ref()
-            .and_then(|context| {
-                context.renderer_document_lifecycle_projected_sequence_for_target("TID-visible")
-            })
-            .is_some_and(|sequence| sequence >= load_stamp.sequence)
+    let native_load = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if let Some(stamp) = ctx
+                .conn
+                .renderer_document_lifecycle_authoritative_state_for_session_owner(Some(
+                    "SID-visible",
+                ))
+                .and_then(|(_, snapshot)| snapshot.load)
+            {
+                break stamp;
+            }
+            native_events.recv().await.unwrap();
+        }
     })
-    .await;
+    .await
+    .expect("native load must progress without Protocol ingress");
+    let visible = ctx
+        .conn
+        .renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-visible"))
+        .unwrap()
+        .1;
     assert!(
-        ctx.conn
-            .renderer_document_lifecycle_authoritative_state_for_session_owner(Some("SID-visible"))
-            .is_some_and(|(_, snapshot)| snapshot.load.is_some()),
-        "authoritative lifecycle state should reach load while delivery is gated"
-    );
-    assert!(
-        ctx.conn
-            .renderer_document_lifecycle_visible_state_for_session_owner(Some("SID-visible"))
-            .is_some_and(|(_, snapshot)| snapshot.load.is_none()),
-        "protocol-visible lifecycle state must not cross the load barrier"
+        visible.load.is_none(),
+        "native load cannot make an unconsumed publication visible"
     );
     ctx.sent.clear();
-
-    ctx.process_async(json!({
-        "id": 3,
-        "method": "Page.setLifecycleEventsEnabled",
-        "sessionId": "SID-visible",
-        "params": { "enabled": true }
-    }))
-    .await;
-    let dcl = ctx.take_one();
-    assert_eq!(dcl["method"], "Page.lifecycleEvent");
-    assert_eq!(dcl["params"]["name"], "DOMContentLoaded");
+    let events = ctx.process_command_only_async(json!({
+        "id": 3, "method": "Page.setLifecycleEventsEnabled", "sessionId": "SID-visible", "params": {"enabled": true}
+    })).await;
+    assert!(events.is_empty());
+    if visible.dom_content_loaded.is_some() {
+        let dcl = ctx.take_one();
+        assert_eq!(dcl["method"], "Page.lifecycleEvent");
+        assert_eq!(dcl["params"]["name"], "DOMContentLoaded");
+    }
     ctx.expect_result(3, json!({}), Some("SID-visible"));
-    assert!(ctx.sent.is_empty(), "hidden load must not be replayed");
-
-    ctx.process_async(json!({
-        "id": 4,
-        "method": "Page.setLifecycleEventsEnabled",
-        "sessionId": "SID-visible",
-        "params": { "enabled": false }
-    }))
-    .await;
+    assert!(ctx.sent.is_empty(), "unprojected load must not be replayed");
+    let events = ctx.process_command_only_async(json!({
+        "id": 4, "method": "Page.setLifecycleEventsEnabled", "sessionId": "SID-visible", "params": {"enabled": false}
+    })).await;
+    assert!(events.is_empty());
     ctx.expect_result(4, json!({}), Some("SID-visible"));
-    let load_event = take_released_renderer_load_event(&mut ctx, "SID-visible", load_stamp);
-
+    assert_eq!(
+        wait_for_visible_renderer_load(&mut ctx, "SID-visible").await,
+        native_load
+    );
+    ctx.sent.clear();
     ctx.process_async(json!({
-        "id": 5,
-        "method": "Page.setLifecycleEventsEnabled",
-        "sessionId": "SID-visible",
-        "params": { "enabled": true }
-    }))
-    .await;
+        "id": 5, "method": "Page.setLifecycleEventsEnabled", "sessionId": "SID-visible", "params": {"enabled": true}
+    })).await;
     let dcl = ctx.take_one();
     assert_eq!(dcl["params"]["name"], "DOMContentLoaded");
     let load = ctx.take_one();
     assert_eq!(load["params"]["name"], "load");
     assert_eq!(
         load["params"]["timestamp"],
-        json!(load_event.timestamp_micros as f64 / 1_000_000.0)
+        json!(native_load.timestamp_micros as f64 / 1_000_000.0)
     );
     ctx.expect_result(5, json!({}), Some("SID-visible"));
     assert!(ctx.sent.is_empty());

@@ -16,12 +16,6 @@ use moli_core::{
 };
 
 #[cfg(test)]
-use crate::conn::state::document_lifecycle_observer::RendererDocumentLifecycleObserver;
-use crate::conn::state::document_lifecycle_observer::{
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
-};
-
-#[cfg(test)]
 mod document_host_tests;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -78,7 +72,6 @@ struct RendererDocumentLifecycleProtocolState {
     binding: Option<ObservedRendererDocumentBinding>,
     visible: Option<RendererDocumentLifecycleSnapshot>,
     last_sequence: Option<u64>,
-    load_visibility: RendererDocumentLoadVisibility,
 }
 
 #[derive(Debug)]
@@ -104,12 +97,6 @@ impl RendererDocumentLifecycleProtocolState {
     }
 }
 
-#[derive(Debug, Default)]
-struct RendererDocumentLoadVisibility {
-    barrier_loader_id: Option<String>,
-    deferred_tail: Vec<RendererDocumentLifecycleEvent>,
-}
-
 #[derive(Debug)]
 struct RegisteredRendererDocumentLifecycleWaiter {
     id: RendererDocumentLifecycleWaiterId,
@@ -118,7 +105,6 @@ struct RegisteredRendererDocumentLifecycleWaiter {
     frame_id: String,
     loader_id: String,
     waiter: RendererDocumentLifecycleWaiter,
-    observer_publisher: Option<RendererDocumentLifecycleObservationPublisher>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -136,22 +122,6 @@ impl RendererDocumentLifecycleWaiterId {
             .checked_add(1)
             .expect("renderer Document lifecycle waiter id overflow");
         *self
-    }
-}
-
-fn lifecycle_observation_from_wait_outcome(
-    outcome: RendererDocumentLifecycleWaitOutcome,
-) -> RendererDocumentLifecycleObservation {
-    match outcome {
-        RendererDocumentLifecycleWaitOutcome::Pending => {
-            RendererDocumentLifecycleObservation::Pending
-        }
-        RendererDocumentLifecycleWaitOutcome::Reached(_) => {
-            RendererDocumentLifecycleObservation::Reached
-        }
-        RendererDocumentLifecycleWaitOutcome::Interrupted(_) => {
-            RendererDocumentLifecycleObservation::Interrupted
-        }
     }
 }
 
@@ -276,9 +246,6 @@ impl TargetPageSlot {
     }
 
     pub(super) fn retire_for_target_close(&mut self) {
-        self.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Superseded,
-        );
         self.pending_renderer_page = None;
         self.loaded_page_absence_reason = TargetPageAbsenceReason::TargetClosed;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
@@ -293,126 +260,10 @@ impl TargetPageSlot {
             .map(|(_, projection)| projection.loader_id.as_str())
     }
 
-    #[cfg(test)]
-    pub(crate) fn begin_renderer_document_load_visibility_barrier(
-        &mut self,
-        loader_id: &str,
-    ) -> bool {
-        let binding_matches = self
-            .renderer_document_lifecycle
-            .binding()
-            .is_some_and(|binding| binding.loader_id == loader_id);
-        if !binding_matches {
-            return false;
-        }
-        if let Some(active_loader_id) = self
-            .renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id
-            .as_deref()
-        {
-            return active_loader_id == loader_id;
-        }
-        debug_assert!(
-            self.renderer_document_lifecycle
-                .load_visibility
-                .deferred_tail
-                .is_empty(),
-            "a new load visibility barrier must not inherit deferred events"
-        );
-        self.renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id = Some(loader_id.to_owned());
-        true
-    }
-
-    pub(crate) fn release_renderer_document_load_visibility_barrier(
-        &mut self,
-        loader_id: &str,
-    ) -> Option<Vec<RendererDocumentLifecycleEvent>> {
-        if self
-            .renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id
-            .as_deref()
-            != Some(loader_id)
-        {
-            return None;
-        }
-        self.renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id = None;
-        let deferred_tail = std::mem::take(
-            &mut self
-                .renderer_document_lifecycle
-                .load_visibility
-                .deferred_tail,
-        );
-        if let Some(snapshot) = self.renderer_document_lifecycle.visible.as_mut() {
-            for event in &deferred_tail {
-                snapshot.apply_event(*event);
-            }
-        }
-        Some(deferred_tail)
-    }
-
-    pub(crate) fn cancel_renderer_document_load_visibility_barrier(
-        &mut self,
-        loader_id: &str,
-    ) -> bool {
-        if self
-            .renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id
-            .as_deref()
-            != Some(loader_id)
-        {
-            return false;
-        }
-        self.renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id = None;
-        self.renderer_document_lifecycle
-            .load_visibility
-            .deferred_tail
-            .clear();
-        true
-    }
-
-    #[cfg(test)]
-    fn renderer_document_load_visibility_barrier_active(&self) -> bool {
-        self.renderer_document_lifecycle
-            .load_visibility
-            .barrier_loader_id
-            .is_some()
-    }
-
     pub(crate) fn renderer_document_lifecycle_visible_snapshot(
         &self,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
         self.renderer_document_lifecycle.visible
-    }
-
-    fn finish_renderer_document_lifecycle_observers(
-        &mut self,
-        observation: RendererDocumentLifecycleObservation,
-    ) {
-        assert!(
-            observation.is_terminal(),
-            "retiring lifecycle waiters requires a terminal observation"
-        );
-        self.renderer_document_lifecycle_waiters
-            .retain(|registration| {
-                let Some(publisher) = registration.observer_publisher.as_ref() else {
-                    // Polling DevTools wait keys own their explicit release
-                    // protocol. Preserve their reached/interrupted result
-                    // across a successor binding until that consumer reads
-                    // and releases the exact registration.
-                    return true;
-                };
-                publisher.publish(observation);
-                false
-            });
     }
 
     pub(crate) fn renderer_document_lifecycle_waiter_outcome(
@@ -597,13 +448,6 @@ impl BrowserContext {
         has_document: bool,
         absence_reason: TargetPageAbsenceReason,
     ) {
-        if self.target_document_id(target_id).is_some() || has_document {
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .finish_renderer_document_lifecycle_observers(
-                    RendererDocumentLifecycleObservation::Superseded,
-                );
-        }
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .loaded_page_absence_reason = if has_document {
@@ -830,11 +674,7 @@ impl BrowserContext {
         let web_contents = self
             .web_contents_handle_for_target(target_id)
             .expect("registered Target must reference live WebContents");
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
+
         let document = self
             .browser_context
             .materialize_initial_document_for_test(web_contents)
@@ -881,9 +721,7 @@ impl BrowserContext {
         let slot = self
             .page_slot_for_target_mut(target_id)
             .expect("registered Target projection");
-        slot.finish_renderer_document_lifecycle_observers(
-            RendererDocumentLifecycleObservation::Superseded,
-        );
+
         slot.pending_renderer_page = None;
         self.retain_navigation_projections_for_target(target_id);
     }
@@ -1513,11 +1351,7 @@ impl BrowserContext {
             .expect("registered Target projection")
             .runtime_slot
             .retire_javascript_dialog_scope();
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .finish_renderer_document_lifecycle_observers(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
+
         let handle = self
             .web_contents_handle_for_target(target_id)
             .expect("registered Target must reference live WebContents");
@@ -1632,19 +1466,7 @@ impl BrowserContext {
             browser_sequence,
             document_open_replacement_epoch: None,
         };
-        if self
-            .page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .renderer_document_lifecycle
-            .binding()
-            != Some(&binding)
-        {
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .finish_renderer_document_lifecycle_observers(
-                    RendererDocumentLifecycleObservation::Superseded,
-                );
-        }
+
         tracing::trace!(
             target: "moli_renderer_document_lifecycle",
             renderer_document = ?active_document,
@@ -1663,7 +1485,6 @@ impl BrowserContext {
             }),
             visible: Some(initial_snapshot),
             last_sequence: None,
-            load_visibility: RendererDocumentLoadVisibility::default(),
         };
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -1706,28 +1527,6 @@ impl BrowserContext {
         }
         let mut accepted = Vec::new();
         for event in events {
-            let load_visibility_barrier_active = self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .renderer_document_lifecycle
-                .load_visibility
-                .barrier_loader_id
-                .is_some();
-            let load_visibility_tail_started = !self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .renderer_document_lifecycle
-                .load_visibility
-                .deferred_tail
-                .is_empty();
-            let defer_load_visibility = load_visibility_barrier_active
-                && (load_visibility_tail_started
-                    || matches!(
-                        event.kind,
-                        RendererDocumentLifecycleEventKind::Milestone(
-                            RendererDocumentLifecycleMilestone::Load
-                        )
-                    ));
             let restarts_same_document = self
                 .page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
@@ -1753,7 +1552,7 @@ impl BrowserContext {
                 continue;
             }
             // Native progress may already be ahead of this FIFO. Deduplication
-            // belongs to the projection, including its not-yet-visible tail.
+            // belongs to the projection of this FIFO.
             let protocol = &mut self
                 .page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
@@ -1766,11 +1565,6 @@ impl BrowserContext {
             }
             protocol.last_sequence = Some(event.sequence);
             if restarts_same_document {
-                self.page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .finish_renderer_document_lifecycle_observers(
-                        RendererDocumentLifecycleObservation::Superseded,
-                    );
                 self.page_slot_for_target_mut(target_id)
                     .expect("registered Target projection")
                     .renderer_document_lifecycle
@@ -1797,60 +1591,19 @@ impl BrowserContext {
                 .renderer_document_lifecycle_waiters
             {
                 registration.waiter.observe(event);
-                let observation =
-                    lifecycle_observation_from_wait_outcome(registration.waiter.outcome());
-                if observation.is_terminal()
-                    && let Some(publisher) = registration.observer_publisher.as_ref()
-                {
-                    publisher.publish(observation);
-                }
             }
-            self.page_slot_for_target_mut(target_id)
+            if let Some(snapshot) = self
+                .page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
-                .renderer_document_lifecycle_waiters
-                .retain(|registration| {
-                    registration
-                        .observer_publisher
-                        .as_ref()
-                        .is_none_or(|publisher| {
-                            publisher.has_observer()
-                                && !lifecycle_observation_from_wait_outcome(
-                                    registration.waiter.outcome(),
-                                )
-                                .is_terminal()
-                        })
-                });
-            if defer_load_visibility {
-                self.page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .renderer_document_lifecycle
-                    .load_visibility
-                    .deferred_tail
-                    .push(event);
-            } else {
-                if let Some(snapshot) = self
-                    .page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .renderer_document_lifecycle
-                    .visible
-                    .as_mut()
-                {
-                    snapshot.apply_event(event);
-                }
-                accepted.push(event);
+                .renderer_document_lifecycle
+                .visible
+                .as_mut()
+            {
+                snapshot.apply_event(event);
             }
+            accepted.push(event);
         }
         accepted
-    }
-
-    #[cfg(test)]
-    pub(crate) fn renderer_document_lifecycle_projected_sequence_for_target(
-        &self,
-        target_id: &str,
-    ) -> Option<u64> {
-        self.page_slot_for_target(target_id)?
-            .renderer_document_lifecycle
-            .last_sequence
     }
 
     pub(crate) fn renderer_document_lifecycle_binding_for_target(
@@ -1889,13 +1642,7 @@ impl BrowserContext {
         let protocol = &self
             .page_slot_for_target(target_id)?
             .renderer_document_lifecycle;
-        let mut snapshot = protocol.visible?;
-        // A DevTools waiter observes FIFO receipt, including output held by a
-        // visibility barrier. Native progress alone cannot release that gate.
-        for &event in &protocol.load_visibility.deferred_tail {
-            snapshot.apply_event(event);
-        }
-        Some(snapshot)
+        protocol.visible
     }
 
     #[cfg(test)]
@@ -1952,73 +1699,8 @@ impl BrowserContext {
                 frame_id: binding.frame_id.clone(),
                 loader_id: binding.loader_id.clone(),
                 waiter: RendererDocumentLifecycleWaiter::from_snapshot(snapshot, milestone),
-                observer_publisher: None,
             });
         Some((id, binding))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn register_exact_renderer_document_lifecycle_observer_for_target(
-        &mut self,
-        target_id: &str,
-        expected_binding: &CommittedRendererDocumentBinding,
-        milestone: RendererDocumentLifecycleMilestone,
-    ) -> RendererDocumentLifecycleObserver {
-        let Some(binding) = self
-            .page_slot_for_target(target_id)
-            .expect("registered Target projection")
-            .renderer_document_lifecycle
-            .binding()
-            .cloned()
-        else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
-        };
-        if &binding != expected_binding {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Superseded,
-            );
-        }
-        let Some(snapshot) =
-            self.renderer_document_lifecycle_projected_snapshot_for_target(target_id)
-        else {
-            return RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            );
-        };
-        let waiter = RendererDocumentLifecycleWaiter::from_snapshot(snapshot, milestone);
-        let observation = lifecycle_observation_from_wait_outcome(waiter.outcome());
-        let (publisher, observer) = RendererDocumentLifecycleObserver::channel(observation);
-        if observation == RendererDocumentLifecycleObservation::Pending {
-            let id = self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .next_renderer_document_lifecycle_waiter_id
-                .allocate_next();
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .renderer_document_lifecycle_waiters
-                .retain(|registration| {
-                    registration
-                        .observer_publisher
-                        .as_ref()
-                        .is_none_or(RendererDocumentLifecycleObservationPublisher::has_observer)
-                });
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .renderer_document_lifecycle_waiters
-                .push(RegisteredRendererDocumentLifecycleWaiter {
-                    id,
-                    renderer_document: binding.renderer_document,
-                    renderer_epoch: binding.renderer_epoch,
-                    frame_id: binding.frame_id.clone(),
-                    loader_id: binding.loader_id.clone(),
-                    waiter,
-                    observer_publisher: Some(publisher),
-                });
-        }
-        observer
     }
 
     pub(crate) fn arm_root_post_load_observation_for_target(
@@ -2723,7 +2405,7 @@ mod renderer_document_lifecycle_tests {
     use super::*;
     use moli_core::page::{
         RendererDocumentLifecycleEventKind, RendererDocumentTerminationReason,
-        RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
+        RendererLifecycleStartReason,
     };
 
     fn event(
@@ -2892,44 +2574,7 @@ mod renderer_document_lifecycle_tests {
             "LOADER-9".to_owned(),
         );
         assert_eq!(accepted, vec![started, dcl]);
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .begin_renderer_document_load_visibility_barrier("LOADER-9")
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_load_visibility_barrier_active()
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .release_renderer_document_load_visibility_barrier("LOADER-stale")
-                .is_none()
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_load_visibility_barrier_active()
-        );
-        assert_eq!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .release_renderer_document_load_visibility_barrier("LOADER-9"),
-            Some(Vec::new())
-        );
-        assert!(
-            !browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_load_visibility_barrier_active()
-        );
+
         assert_eq!(
             browser_context
                 .renderer_document_lifecycle_binding_for_target(PAGE_SLOT_TEST_TARGET)
@@ -2962,430 +2607,6 @@ mod renderer_document_lifecycle_tests {
                 .load
                 .is_none()
         );
-    }
-
-    #[tokio::test]
-    async fn load_visibility_barrier_exposes_dcl_and_defers_only_load_delivery() {
-        let page_id = moli_core::PageId::new_for_testing(10);
-        let document = RendererDocumentToken::new_for_testing(page_id, 1);
-        let epoch = RendererLifecycleEpoch(1);
-        let started = event(
-            document,
-            epoch,
-            1,
-            RendererDocumentLifecycleEventKind::Started {
-                reason: RendererLifecycleStartReason::InitialDocument,
-            },
-        );
-        let dcl = event(
-            document,
-            epoch,
-            2,
-            RendererDocumentLifecycleEventKind::Milestone(
-                RendererDocumentLifecycleMilestone::DomContentLoaded,
-            ),
-        );
-        let load = event(
-            document,
-            epoch,
-            3,
-            RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
-        );
-        let terminated = event(
-            document,
-            epoch,
-            4,
-            RendererDocumentLifecycleEventKind::Terminated {
-                last_reached: Some(RendererDocumentLifecycleMilestone::Load),
-                reason: RendererDocumentTerminationReason::Stopped,
-            },
-        );
-        let mut browser_context = context_with_attachment().await;
-        browser_context
-            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 5)
-            .await;
-        let navigation = browser_context
-            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-10".to_owned());
-        assert!(
-            browser_context.commit_pending_document_navigation_if_matches_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                &navigation
-            )
-        );
-        assert_eq!(
-            browser_context.bind_renderer_document_lifecycle_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                RendererPageCreationArtifacts {
-                    active_document: document,
-                    active_epoch: epoch,
-                    lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
-                        frame: started.frame,
-                        document,
-                        epoch,
-                        started: RendererLifecycleEventStamp {
-                            sequence: 1,
-                            timestamp_micros: 10,
-                        },
-                        dom_content_loaded: None,
-                        load: None,
-                        terminated: None,
-                    },
-                    initial_lifecycle_events: vec![started],
-                },
-                Some(navigation),
-                "FRAME-10".to_owned(),
-                "LOADER-10".to_owned(),
-            ),
-            vec![started]
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .begin_renderer_document_load_visibility_barrier("LOADER-10")
-        );
-        let (load_waiter_id, load_waiter_binding) = browser_context
-            .register_renderer_document_lifecycle_waiter_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                RendererDocumentLifecycleMilestone::Load,
-                "LOADER-10",
-            )
-            .expect("load waiter should bind to the authoritative document state");
-
-        assert_eq!(
-            browser_context.ingest_renderer_document_lifecycle_events_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                vec![dcl, load, terminated]
-            ),
-            vec![dcl],
-            "DOMContentLoaded remains visible while the ordered tail from load is gated"
-        );
-        assert_eq!(
-            browser_context
-                .renderer_document_lifecycle_authoritative_snapshot_for_target(
-                    PAGE_SLOT_TEST_TARGET
-                )
-                .and_then(|snapshot| snapshot.load),
-            Some(RendererLifecycleEventStamp {
-                sequence: 3,
-                timestamp_micros: 30,
-            }),
-            "load readiness is authoritative even while its protocol event is hidden"
-        );
-        assert_eq!(
-            browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_lifecycle_waiter_outcome(
-                    load_waiter_id,
-                    load_waiter_binding.renderer_document,
-                    load_waiter_binding.renderer_epoch,
-                    &load_waiter_binding.frame_id,
-                    &load_waiter_binding.loader_id,
-                ),
-            Some(RendererDocumentLifecycleWaitOutcome::Reached(
-                RendererLifecycleEventStamp {
-                    sequence: 3,
-                    timestamp_micros: 30,
-                }
-            )),
-            "navigation waiters observe authoritative load readiness"
-        );
-        let visible_before_release = browser_context
-            .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-            .unwrap()
-            .renderer_document_lifecycle_visible_snapshot()
-            .expect("visible lifecycle cursor");
-        assert_eq!(
-            visible_before_release.dom_content_loaded,
-            Some(RendererLifecycleEventStamp {
-                sequence: 2,
-                timestamp_micros: 20,
-            })
-        );
-        assert_eq!(visible_before_release.load, None);
-        assert_eq!(visible_before_release.terminated, None);
-        assert_eq!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .release_renderer_document_load_visibility_barrier("LOADER-10"),
-            Some(vec![load, terminated]),
-            "events after load must not overtake the delayed load milestone"
-        );
-        let visible_after_release = browser_context
-            .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-            .unwrap()
-            .renderer_document_lifecycle_visible_snapshot()
-            .expect("released visible lifecycle cursor");
-        assert_eq!(
-            visible_after_release.load,
-            Some(RendererLifecycleEventStamp {
-                sequence: 3,
-                timestamp_micros: 30,
-            })
-        );
-        assert_eq!(
-            visible_after_release.terminated,
-            Some(RendererLifecycleTerminationStamp {
-                sequence: 4,
-                timestamp_micros: 40,
-                reason: RendererDocumentTerminationReason::Stopped,
-            })
-        );
-    }
-
-    #[tokio::test]
-    async fn cancelling_load_visibility_barrier_discards_tail_without_revealing_it() {
-        let page_id = moli_core::PageId::new_for_testing(16);
-        let document = RendererDocumentToken::new_for_testing(page_id, 1);
-        let epoch = RendererLifecycleEpoch(1);
-        let started = event(
-            document,
-            epoch,
-            1,
-            RendererDocumentLifecycleEventKind::Started {
-                reason: RendererLifecycleStartReason::InitialDocument,
-            },
-        );
-        let load = event(
-            document,
-            epoch,
-            2,
-            RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
-        );
-        let mut browser_context = context_with_attachment().await;
-        browser_context.bind_renderer_document_lifecycle_for_target(
-            PAGE_SLOT_TEST_TARGET,
-            RendererPageCreationArtifacts {
-                active_document: document,
-                active_epoch: epoch,
-                lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
-                    frame: started.frame,
-                    document,
-                    epoch,
-                    started: RendererLifecycleEventStamp {
-                        sequence: 1,
-                        timestamp_micros: 10,
-                    },
-                    dom_content_loaded: None,
-                    load: None,
-                    terminated: None,
-                },
-                initial_lifecycle_events: vec![started],
-            },
-            None,
-            "FRAME-16".to_owned(),
-            "LOADER-16".to_owned(),
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .begin_renderer_document_load_visibility_barrier("LOADER-16")
-        );
-        assert!(
-            browser_context
-                .ingest_renderer_document_lifecycle_events_for_target(
-                    PAGE_SLOT_TEST_TARGET,
-                    vec![load]
-                )
-                .is_empty()
-        );
-        assert!(
-            browser_context
-                .renderer_document_lifecycle_authoritative_snapshot_for_target(
-                    PAGE_SLOT_TEST_TARGET
-                )
-                .is_some_and(|snapshot| snapshot.load.is_some())
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .cancel_renderer_document_load_visibility_barrier("LOADER-16")
-        );
-        assert!(
-            !browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_load_visibility_barrier_active()
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_lifecycle_visible_snapshot()
-                .is_some_and(|snapshot| snapshot.load.is_none()),
-            "discarding a stale output tail must not make it replayable"
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .release_renderer_document_load_visibility_barrier("LOADER-16")
-                .is_none()
-        );
-        assert!(
-            !browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .cancel_renderer_document_load_visibility_barrier("LOADER-16")
-        );
-    }
-
-    #[tokio::test]
-    async fn load_visibility_barrier_keeps_later_epoch_behind_deferred_load_tail() {
-        let page_id = moli_core::PageId::new_for_testing(11);
-        let document = RendererDocumentToken::new_for_testing(page_id, 1);
-        let first_epoch = RendererLifecycleEpoch(1);
-        let second_epoch = RendererLifecycleEpoch(2);
-        let started = event(
-            document,
-            first_epoch,
-            1,
-            RendererDocumentLifecycleEventKind::Started {
-                reason: RendererLifecycleStartReason::InitialDocument,
-            },
-        );
-        let dcl = event(
-            document,
-            first_epoch,
-            2,
-            RendererDocumentLifecycleEventKind::Milestone(
-                RendererDocumentLifecycleMilestone::DomContentLoaded,
-            ),
-        );
-        let load = event(
-            document,
-            first_epoch,
-            3,
-            RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
-        );
-        let terminated = event(
-            document,
-            first_epoch,
-            4,
-            RendererDocumentLifecycleEventKind::Terminated {
-                last_reached: Some(RendererDocumentLifecycleMilestone::Load),
-                reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
-            },
-        );
-        let restarted = event(
-            document,
-            second_epoch,
-            5,
-            RendererDocumentLifecycleEventKind::Started {
-                reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
-            },
-        );
-        let restarted_dcl = event(
-            document,
-            second_epoch,
-            6,
-            RendererDocumentLifecycleEventKind::Milestone(
-                RendererDocumentLifecycleMilestone::DomContentLoaded,
-            ),
-        );
-        let mut browser_context = context_with_attachment().await;
-        browser_context
-            .set_document_id_for_test_for_target(PAGE_SLOT_TEST_TARGET, 6)
-            .await;
-        let navigation = browser_context
-            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-11".to_owned());
-        assert!(
-            browser_context.commit_pending_document_navigation_if_matches_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                &navigation
-            )
-        );
-        assert_eq!(
-            browser_context.bind_renderer_document_lifecycle_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                RendererPageCreationArtifacts {
-                    active_document: document,
-                    active_epoch: first_epoch,
-                    lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
-                        frame: started.frame,
-                        document,
-                        epoch: first_epoch,
-                        started: RendererLifecycleEventStamp {
-                            sequence: 1,
-                            timestamp_micros: 10,
-                        },
-                        dom_content_loaded: Some(RendererLifecycleEventStamp {
-                            sequence: dcl.sequence,
-                            timestamp_micros: dcl.timestamp_micros,
-                        }),
-                        load: None,
-                        terminated: None,
-                    },
-                    initial_lifecycle_events: vec![started, dcl],
-                },
-                Some(navigation),
-                "FRAME-11".to_owned(),
-                "LOADER-11".to_owned(),
-            ),
-            vec![started, dcl]
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .begin_renderer_document_load_visibility_barrier("LOADER-11")
-        );
-        assert!(
-            browser_context
-                .ingest_renderer_document_lifecycle_events_for_target(
-                    PAGE_SLOT_TEST_TARGET,
-                    vec![load, terminated, restarted, restarted_dcl,]
-                )
-                .is_empty(),
-            "nothing after the hidden load may overtake its visibility boundary"
-        );
-
-        let authoritative = browser_context
-            .renderer_document_lifecycle_authoritative_snapshot_for_target(PAGE_SLOT_TEST_TARGET)
-            .expect("authoritative restarted lifecycle");
-        assert_eq!(authoritative.epoch, second_epoch);
-        assert_eq!(
-            authoritative.dom_content_loaded,
-            Some(RendererLifecycleEventStamp {
-                sequence: 6,
-                timestamp_micros: 60,
-            })
-        );
-        let visible = browser_context
-            .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-            .unwrap()
-            .renderer_document_lifecycle_visible_snapshot()
-            .expect("visible lifecycle before release");
-        assert_eq!(visible.epoch, first_epoch);
-        assert_eq!(visible.dom_content_loaded.unwrap().sequence, 2);
-        assert_eq!(visible.load, None);
-
-        assert_eq!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .release_renderer_document_load_visibility_barrier("LOADER-11"),
-            Some(vec![load, terminated, restarted, restarted_dcl])
-        );
-        let visible = browser_context
-            .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-            .unwrap()
-            .renderer_document_lifecycle_visible_snapshot()
-            .expect("visible lifecycle after release");
-        assert_eq!(visible.epoch, second_epoch);
-        assert_eq!(
-            visible.dom_content_loaded,
-            Some(RendererLifecycleEventStamp {
-                sequence: 6,
-                timestamp_micros: 60,
-            })
-        );
-        assert_eq!(visible.load, None);
-        assert_eq!(visible.terminated, None);
     }
 
     #[tokio::test]
@@ -3568,7 +2789,7 @@ mod renderer_document_lifecycle_tests {
     }
 
     #[tokio::test]
-    async fn successor_document_binding_discards_deferred_tail_but_preserves_reached_waiter() {
+    async fn successor_document_binding_preserves_reached_waiter() {
         let page_id = moli_core::PageId::new_for_testing(14);
         let document = RendererDocumentToken::new_for_testing(page_id, 1);
         let epoch = RendererLifecycleEpoch(1);
@@ -3638,18 +2859,13 @@ mod renderer_document_lifecycle_tests {
             3,
             RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load),
         );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .begin_renderer_document_load_visibility_barrier("LOADER-14")
-        );
+
         assert_eq!(
             browser_context.ingest_renderer_document_lifecycle_events_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 vec![load]
             ),
-            Vec::new()
+            vec![load]
         );
         assert!(
             browser_context
@@ -3663,7 +2879,7 @@ mod renderer_document_lifecycle_tests {
                 .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
                 .unwrap()
                 .renderer_document_lifecycle_visible_snapshot()
-                .is_some_and(|snapshot| snapshot.load.is_none())
+                .is_some_and(|snapshot| snapshot.load.is_some())
         );
 
         let successor = RendererDocumentToken::new_for_testing(page_id, 2);
@@ -3700,20 +2916,6 @@ mod renderer_document_lifecycle_tests {
             "LOADER-15".to_owned(),
         );
 
-        assert!(
-            !browser_context
-                .page_slot_for_target(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .renderer_document_load_visibility_barrier_active()
-        );
-        assert!(
-            browser_context
-                .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
-                .unwrap()
-                .release_renderer_document_load_visibility_barrier("LOADER-14")
-                .is_none(),
-            "a successor binding must discard the previous document's deferred tail"
-        );
         assert!(
             browser_context
                 .page_slot_for_target(PAGE_SLOT_TEST_TARGET)

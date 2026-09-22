@@ -16,8 +16,7 @@ use crate::testing::{
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
-    RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
-    RendererDocumentLifecycleMilestone, RendererDocumentToken, RendererFrameToken,
+    RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererFrameToken,
     RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId, RendererJavaScriptDialogSource,
     RendererLifecycleEpoch, RendererPendingJavaScriptDialog, RendererServiceWorkerVersionStatus,
 };

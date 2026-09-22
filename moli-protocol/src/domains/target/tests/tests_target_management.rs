@@ -1574,7 +1574,7 @@ async fn send_message_to_target_observes_native_navigation_without_legacy_load_a
     .to_string();
 
     let outcome = ctx.conn.process_message_with_turn_outcome_async(&raw).await;
-    let (messages, scheduler_events) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
 
     assert!(
         messages
@@ -1597,15 +1597,7 @@ async fn send_message_to_target_observes_native_navigation_without_legacy_load_a
         }),
         "nested Page.navigate result should be wrapped in a Target event: {messages:?}"
     );
-    assert!(
-        !scheduler_events.iter().any(|event| matches!(
-            event,
-            crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work }
-                if work.kind()
-                    == crate::domains::activity::ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-        )),
-        "nested navigation must not recreate the old Protocol load executor: {scheduler_events:?}"
-    );
+
     let navigation = messages
         .iter()
         .filter_map(|message| {

@@ -3,6 +3,40 @@
 The frozen comparison below covers `d743043ab7`. Historical results and failures
 remain unchanged; they do not validate later source changes.
 
+## Deferred-load deletion, 2026-09-23
+
+The obsolete deferred main-document load family is removed as one change:
+Protocol load admissions and exports, adapter completion channels, load IDs
+and predecessor lists, Page-slot load visibility, watch observers, and manual
+body-visibility wrappers. Their remaining producers were test-only. Actual
+navigation failure projection, DevTools lifecycle wait keys and the native
+Document projection fence remain in their existing owners.
+
+Timer/load-handler Page effects still yield to a pending client turn. That
+ordering now uses `AfterClientTurn`; Network facts cross ingress immediately.
+The Runtime response test checks the exact same-stream prefix while retaining
+another stream and later output. The lifecycle replay test waits for native
+load on a separate Browser subscription while leaving Protocol's source FIFO
+unconsumed, then proves replay becomes visible only after actual ingress.
+
+Root fmt and strict workspace Clippy pass. Full default-profile nextest passes
+19,497/19,497, with 13 configured skips and no retries, run
+`e3036b59-aa64-4f16-b13b-e9a5615f9a11` (103.101s test execution).
+All 91 expected panic records match the previous baseline. The count decreases
+by 36 because tests of deleted states were removed or replaced; header,
+auth-retry, 304, protocol, cache and redirect payload assertions are retained.
+The migration inventory, three failed intermediate Clippy attempts, source
+hashes and final logs are in `target/smoke/deferred-load-removal.yuy7hu8o/`.
+
+The ordinary release SHA256 is
+`f1e67949a16cf0f091394a93b7dbbf02adc7a8a6eddedd1989de5966004170d8`.
+All tracked Rust/build source entries match the root freeze. This binary passes
+48 CDP groups / 536 scenarios, the 165-case WebDriver suite and shared-page
+lifecycle from all three frontends. Both Network probes (Log disabled/enabled)
+receive exactly 32 × 4 MiB with one terminal per request, preserving head/data/
+terminal order and Log replay/clear behavior. These checks cover this deletion;
+the older full performance comparison retains its own source pin below.
+
 ## Native Document test ownership, 2026-09-23
 
 Protocol no longer owns a fallback `DocumentFixture` with its own identity,

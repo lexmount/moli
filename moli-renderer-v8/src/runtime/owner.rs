@@ -4232,18 +4232,12 @@ impl RendererOwnerHandle {
             }
             RendererPageScheduledTurn::Ordinary(scheduled_task) => *scheduled_task,
         };
-        // Freeze the exact Document at task selection. A timer callback may
-        // synchronously replace the Document; its protocol output still
-        // belongs after the load boundary of the Document that authorized
-        // this owner turn, never whichever Document is current at settlement.
-        let turn_source_document = entry.page_vm().document_lifecycle.identity();
+        // Timer effects yield to the pending client command before publication.
         let output_ordering = if matches!(
             &scheduled_task,
             crate::page_task_queue::RendererPageSchedulerTask::Timer { .. }
         ) {
-            RendererOutputPublicationOrdering::AfterPendingPageLoad {
-                source_document: turn_source_document,
-            }
+            RendererOutputPublicationOrdering::AfterClientTurn
         } else {
             RendererOutputPublicationOrdering::Unconstrained
         };

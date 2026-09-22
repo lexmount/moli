@@ -6,9 +6,8 @@ use std::{
 use moli_core::{RendererOutputFence, RendererOutputTransportMessage};
 use moli_protocol::{
     BackgroundProtocolEvent, CdpSchedulerEvent, CommandDispatchContext,
-    CompletedCdpCommandDispatch, CompletedPageScreencastCapture,
-    DeferredMainDocumentLoadObservationId, ParsedCdpCommand, PendingCdpCommandDispatch,
-    conn::RuntimeInspectorResponseReady,
+    CompletedCdpCommandDispatch, CompletedPageScreencastCapture, ParsedCdpCommand,
+    PendingCdpCommandDispatch, conn::RuntimeInspectorResponseReady,
 };
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -1139,12 +1138,10 @@ async fn handle_adapter_scheduler_input(
 ) -> bool {
     let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
     let advance = adapter_scheduler.advance_input(scheduler, input).await;
-    let (kind, observation_id, ok) = match advance {
-        ProtocolAdapterSchedulerAdvance::Idle => ("idle", None, true),
-        ProtocolAdapterSchedulerAdvance::ClientTurnYielded => ("client_turn_yielded", None, true),
-        ProtocolAdapterSchedulerAdvance::DeferredLoadStarted { observation_id } => {
-            ("deferred_load_started", Some(observation_id), true)
-        }
+    let (kind, ok) = match advance {
+        ProtocolAdapterSchedulerAdvance::Idle => ("idle", true),
+        ProtocolAdapterSchedulerAdvance::ClientTurnYielded => ("client_turn_yielded", true),
+
         ProtocolAdapterSchedulerAdvance::ProtocolResidenceCompleted(output) => {
             let ok = flush_protocol_output_with_runtime_deferred_reply_routing(
                 frontend_router,
@@ -1153,27 +1150,7 @@ async fn handle_adapter_scheduler_input(
                 output,
             )
             .await;
-            ("protocol_residence_completed", None, ok)
-        }
-        ProtocolAdapterSchedulerAdvance::DeferredLoadCompleted {
-            observation_id,
-            output,
-        } => {
-            let ok = flush_protocol_output_with_runtime_deferred_reply_routing(
-                frontend_router,
-                scheduler,
-                pending_runtime_deferred_replies,
-                output,
-            )
-            .await;
-            ("deferred_load_completed", Some(observation_id), ok)
-        }
-        ProtocolAdapterSchedulerAdvance::StaleDeferredLoadCompletion { observation_id } => {
-            tracing::debug!(
-                ?observation_id,
-                "dropping stale shared adapter load completion"
-            );
-            ("stale_deferred_load_completion", Some(observation_id), true)
+            ("protocol_residence_completed", ok)
         }
     };
     if let Some(started) = trace_started {
@@ -1181,7 +1158,6 @@ async fn handle_adapter_scheduler_input(
             target: "moli_cdp_runtime",
             stage = "protocol_adapter_input_done",
             advance = kind,
-            ?observation_id,
             ok,
             elapsed_us = %started.elapsed().as_micros(),
         );
@@ -1908,7 +1884,6 @@ fn trace_scheduler_input(input: &SchedulerInput, stage: &'static str) {
         target: "moli_cdp_runtime",
         stage = stage,
         input = scheduler_input_kind(input),
-        observation_id = ?scheduler_input_observation_id(input),
     );
 }
 
@@ -1922,20 +1897,6 @@ fn scheduler_input_kind(input: &SchedulerInput) -> &'static str {
         SchedulerInput::AdapterScheduler(ProtocolAdapterSchedulerInput::Turn) => {
             "protocol_adapter_turn"
         }
-        SchedulerInput::AdapterScheduler(
-            ProtocolAdapterSchedulerInput::DeferredLoadCompletion(_),
-        ) => "deferred_load_completion",
-    }
-}
-
-fn scheduler_input_observation_id(
-    input: &SchedulerInput,
-) -> Option<DeferredMainDocumentLoadObservationId> {
-    match input {
-        SchedulerInput::AdapterScheduler(
-            ProtocolAdapterSchedulerInput::DeferredLoadCompletion(completion),
-        ) => Some(completion.observation_id()),
-        _ => None,
     }
 }
 

@@ -270,8 +270,6 @@ mod tests {
 
 #[derive(Default)]
 pub(super) struct CdpConnectionSchedulerState {
-    #[cfg(test)]
-    next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
     scheduler_events: Vec<CdpSchedulerEvent>,
@@ -289,19 +287,6 @@ impl CdpConnectionSchedulerState {
             .expect("protocol work publish sequence exhausted");
         crate::domains::activity::ProtocolWorkPublishSequence::new(
             self.next_protocol_work_publish_sequence,
-        )
-    }
-
-    #[cfg(test)]
-    pub(super) fn allocate_deferred_main_document_load_observation_id(
-        &mut self,
-    ) -> super::DeferredMainDocumentLoadObservationId {
-        self.next_deferred_main_document_load_observation_id = self
-            .next_deferred_main_document_load_observation_id
-            .checked_add(1)
-            .expect("deferred main-document load observation identity exhausted");
-        super::DeferredMainDocumentLoadObservationId(
-            self.next_deferred_main_document_load_observation_id,
         )
     }
 

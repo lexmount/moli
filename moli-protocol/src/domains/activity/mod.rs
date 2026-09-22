@@ -10,12 +10,7 @@ mod scheduler_work;
 mod subresource;
 
 pub(in crate::domains) use contextual_projection::ProtocolOutputProjectionContext;
-#[cfg(test)]
-pub(crate) use main_document::DeferredMainDocumentLoadCompletionAdmission;
-pub(crate) use main_document::{
-    CompletedDeferredMainDocumentLoadCompletionActivity, MainDocumentFailedNavigationActivity,
-    PendingDeferredMainDocumentLoadCompletionActivity,
-};
+pub(crate) use main_document::MainDocumentFailedNavigationActivity;
 pub(crate) use output_ingress::{
     OrderedRendererOutputIngress, RendererOutputIngressAdmission,
     ingest_renderer_output_transport_async, project_protocol_local_command_outputs,

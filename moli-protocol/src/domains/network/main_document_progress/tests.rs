@@ -12,9 +12,8 @@ use url::Url;
 
 use super::gate::{
     MainDocumentFailedNavigationProgressSource, MainDocumentProgressDrain,
-    MainDocumentProgressEventBatch, MainDocumentProgressOutputBoundary,
-    MainDocumentProgressOutputTarget, MainDocumentProgressPhase, MainDocumentProgressSource,
-    MainDocumentProgressSourceKind,
+    MainDocumentProgressEventBatch, MainDocumentProgressOutputTarget, MainDocumentProgressPhase,
+    MainDocumentProgressSource, MainDocumentProgressSourceKind,
 };
 use super::*;
 
@@ -225,28 +224,6 @@ fn drain_into_background_events(
 
 fn drain_into_protocol_messages(drain: &mut MainDocumentProgressDrain) -> Vec<Value> {
     protocol_messages_from_background_events(drain_into_background_events(drain))
-}
-
-fn drain_gate_until_response_metadata_visible_into_protocol_messages(
-    gate: &mut MainDocumentProgressGate,
-) -> Vec<Value> {
-    let mut events = Vec::new();
-    MainDocumentProgressBackgroundEventBarrier::drain_until_response_metadata_visible(
-        &mut events,
-        gate,
-    );
-    protocol_messages_from_background_events(events)
-}
-
-fn drain_gate_until_body_finished_visible_into_protocol_messages(
-    gate: &mut MainDocumentProgressGate,
-) -> Vec<Value> {
-    let mut events = Vec::new();
-    MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
-        &mut events,
-        gate,
-    );
-    protocol_messages_from_background_events(events)
 }
 
 fn response_progress_batch_for_output_target() -> MainDocumentProgressEventBatch {
@@ -545,12 +522,7 @@ fn completed_body_http_response_emits_correlated_empty_cookie_extra_info() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let mut events = completed_events();
     events.network_extra_info_available = true;
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
     let network_methods = out
         .iter()
         .filter_map(|message| message["method"].as_str())
@@ -599,12 +571,7 @@ fn completed_body_extra_info_uses_transport_observed_headers() {
         200,
         vec![("X-Raw-Response".to_owned(), "observed".to_owned())],
     )]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
     let request_extra = out
         .iter()
         .find(|message| message["method"] == json!("Network.requestWillBeSentExtraInfo"))
@@ -654,12 +621,7 @@ fn completed_body_auth_retry_uses_initial_request_and_final_response_observation
             vec![("X-Final-Response".to_owned(), "yes".to_owned())],
         ),
     ]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
     let request_extra = out
         .iter()
         .find(|message| message["method"] == json!("Network.requestWillBeSentExtraInfo"))
@@ -696,12 +658,7 @@ fn completed_body_revalidation_keeps_raw_304_extra_info() {
         304,
         vec![("ETag".to_owned(), "\"v1\"".to_owned())],
     )]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
     let response_extra = out
         .iter()
         .find(|message| message["method"] == json!("Network.responseReceivedExtraInfo"))
@@ -724,12 +681,7 @@ fn completed_body_revalidation_keeps_raw_304_extra_info() {
 fn completed_body_http_service_worker_response_does_not_infer_extra_info_from_url() {
     let final_url = Url::parse("http://example.test/sw-controlled").unwrap();
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
 
     assert!(
         !out.iter().any(|message| {
@@ -782,12 +734,7 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {
             vec![("X-Response-Hop".to_owned(), "final".to_owned())],
         ),
     ]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
     let network_methods = out
         .iter()
         .filter_map(|message| message["method"].as_str())
@@ -869,12 +816,7 @@ fn completed_body_redirect_without_transport_extra_info_keeps_flag_false() {
         from_cache: false,
         negotiated_http_version: None,
     }];
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
 
     let redirect_request = out
         .iter()
@@ -942,11 +884,7 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro
         negotiated_http_version: Some(NegotiatedHttpVersion::Http11),
     }];
 
-    let batches = completed_progress_context().event_batches(&events, &navigation_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &navigation_url);
     let relevant = out
         .iter()
         .filter(|message| {
@@ -1021,12 +959,7 @@ fn completed_body_uses_negotiated_protocol_for_redirect_and_final_response() {
         from_cache: false,
         negotiated_http_version: Some(NegotiatedHttpVersion::Http10),
     }];
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = completed_messages(&events, &final_url);
     let redirect = out
         .iter()
         .find(|message| message["params"]["redirectResponse"].is_object())
@@ -1047,16 +980,16 @@ fn cached_completed_body_emits_served_from_cache_before_response() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let mut events = completed_events();
     events.response_from_cache = true;
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
+    let context = completed_progress_context();
 
-    let request = drain_into_protocol_messages(&mut drain);
+    let request = protocol_messages_from_background_events(project_events(
+        context.request_and_redirect_progress_events(&events),
+    ));
     assert_eq!(request.len(), 1);
     assert_eq!(request[0]["method"], json!("Network.requestWillBeSent"));
 
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
-    let mut response_events = drain_into_background_events(&mut drain);
+    let mut response_events =
+        project_events(context.response_received_progress_events(&events, &final_url, 17));
     assert_eq!(response_events.len(), 2);
 
     let (cached, cached_sidecar) = response_events.remove(0).into_parts();
@@ -1102,11 +1035,11 @@ fn cached_completed_body_redirect_emits_cache_event_before_next_request() {
         from_cache: true,
         negotiated_http_version: None,
     }];
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
+    let context = completed_progress_context();
 
-    let out = drain_into_protocol_messages(&mut drain);
+    let out = protocol_messages_from_background_events(project_events(
+        context.request_and_redirect_progress_events(&events),
+    ));
     assert_eq!(out.len(), 3);
     assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
     assert_eq!(out[1]["method"], json!("Network.requestServedFromCache"));
@@ -1240,155 +1173,6 @@ fn progress_output_queue_buffers_body_finished_until_response_received() {
 }
 
 #[test]
-fn completed_body_progress_queue_drains_network_events_by_milestone() {
-    let final_url = Url::parse("http://example.test/final").unwrap();
-    let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    let mut out = drain_into_protocol_messages(&mut drain);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
-    assert_eq!(out[0]["params"]["requestId"], json!("REQ-1"));
-    assert_eq!(out[0]["params"]["loaderId"], json!("LOADER-1"));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
-    out = drain_into_protocol_messages(&mut drain);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0]["method"], json!("Network.responseReceived"));
-    assert_eq!(
-        out[0]["params"]["response"]["url"],
-        json!(final_url.as_str())
-    );
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    out = drain_into_protocol_messages(&mut drain);
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0]["method"], json!("Network.dataReceived"));
-    assert_eq!(out[0]["params"]["dataLength"], json!(17));
-    assert_eq!(out[1]["method"], json!("Network.loadingFinished"));
-    assert_eq!(out[1]["params"]["encodedDataLength"], json!(17));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    out = drain_into_protocol_messages(&mut drain);
-    assert!(
-        out.is_empty(),
-        "repeating the same milestone must not duplicate Network events"
-    );
-}
-
-#[test]
-fn completed_body_progress_queue_can_release_all_materialized_events_at_body_finished() {
-    let final_url = Url::parse("http://example.test/final").unwrap();
-    let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let out = drain_into_protocol_messages(&mut drain);
-
-    assert_eq!(out.len(), 4);
-    assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
-    assert_eq!(out[1]["method"], json!("Network.responseReceived"));
-    assert_eq!(out[2]["method"], json!("Network.dataReceived"));
-    assert_eq!(out[2]["params"]["dataLength"], json!(17));
-    assert_eq!(out[3]["method"], json!("Network.loadingFinished"));
-    assert_eq!(out[3]["params"]["encodedDataLength"], json!(17));
-}
-
-#[test]
-fn completed_body_progress_drain_keeps_mark_ready_separate_from_output_drain() {
-    let final_url = Url::parse("http://example.test/final").unwrap();
-    let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut drain =
-        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
-
-    let mut out = drain_into_protocol_messages(&mut drain);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
-    out = drain_into_protocol_messages(&mut drain);
-    assert_eq!(out.len(), 1);
-    assert_eq!(out[0]["method"], json!("Network.responseReceived"));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    out = drain_into_protocol_messages(&mut drain);
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0]["method"], json!("Network.dataReceived"));
-    assert_eq!(out[0]["params"]["dataLength"], json!(17));
-    assert_eq!(out[1]["method"], json!("Network.loadingFinished"));
-    assert_eq!(out[1]["params"]["encodedDataLength"], json!(17));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    out = drain_into_protocol_messages(&mut drain);
-    assert!(
-        out.is_empty(),
-        "draining a second time must not replay queued progress"
-    );
-}
-
-#[test]
-fn progress_output_barrier_drains_source_generated_progress_before_cdp_output() {
-    let final_url = Url::parse("http://example.test/final").unwrap();
-    let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut gate = MainDocumentProgressGate::new(MainDocumentProgressDrain::from_source(
-        MainDocumentProgressSource::completed_body(batches),
-    ));
-
-    let mut out = drain_gate_until_response_metadata_visible_into_protocol_messages(&mut gate);
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
-    assert_eq!(out[1]["method"], json!("Network.responseReceived"));
-
-    out = drain_gate_until_body_finished_visible_into_protocol_messages(&mut gate);
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0]["method"], json!("Network.dataReceived"));
-    assert_eq!(out[0]["params"]["dataLength"], json!(17));
-    assert_eq!(out[1]["method"], json!("Network.loadingFinished"));
-    assert_eq!(out[1]["params"]["encodedDataLength"], json!(17));
-
-    out = drain_gate_until_body_finished_visible_into_protocol_messages(&mut gate);
-    assert!(
-        out.is_empty(),
-        "body-finished milestones must be idempotent after the body is released"
-    );
-
-    let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
-    let mut gate = MainDocumentProgressGate::new(MainDocumentProgressDrain::from_source(
-        MainDocumentProgressSource::completed_body(batches),
-    ));
-
-    let mut out = {
-        let mut events = Vec::new();
-        let mut barrier =
-            MainDocumentProgressBackgroundEventBarrier::background_events(&mut events, &mut gate);
-        barrier.drain_progress();
-        protocol_messages_from_background_events(events)
-    };
-    crate::domains::command_output::CommandOutputPlan::result(json!({"ok": true})).emit_into(
-        &mut out,
-        Some(99),
-        Some("SID-1"),
-    );
-    assert_eq!(out.len(), 2);
-    assert_eq!(out[0]["method"], json!("Network.requestWillBeSent"));
-    assert_eq!(out[1]["id"], json!(99));
-
-    let out = drain_gate_until_body_finished_visible_into_protocol_messages(&mut gate);
-    assert_eq!(out.len(), 3);
-    assert_eq!(out[0]["method"], json!("Network.responseReceived"));
-    assert_eq!(out[1]["method"], json!("Network.dataReceived"));
-    assert_eq!(out[2]["method"], json!("Network.loadingFinished"));
-}
-
-#[test]
 fn failed_navigation_progress_drain_prequeues_loading_failed() {
     let target = MainDocumentProgressEventTarget {
         session_ids: vec![Some("SID-1".to_owned())],
@@ -1437,46 +1221,6 @@ fn failed_navigation_progress_drain_prequeues_loading_failed() {
 }
 
 #[test]
-fn error_page_progress_releases_failed_before_finished_at_separate_boundaries() {
-    let target = MainDocumentProgressEventTarget {
-        session_ids: vec![Some("SID-1".to_owned())],
-        request_id: "REQ-1".to_owned(),
-        loader_id: "LOADER-1".to_owned(),
-        frame_id: "FRAME-1".to_owned(),
-        timestamp: 12.5,
-    };
-    let source = MainDocumentProgressSource::error_page(
-        Some(MainDocumentNavigationProgressEvent::LoadingFailed {
-            target: target.clone(),
-            error_text: "net::ERR_CONNECTION_REFUSED".to_owned(),
-        }),
-        Some(MainDocumentNavigationProgressEvent::LoadingFinished {
-            target,
-            encoded_data_length: 0,
-        }),
-    );
-    let mut drain = MainDocumentProgressDrain::from_source(source);
-
-    assert!(drain_into_protocol_messages(&mut drain).is_empty());
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
-    let failed = drain_into_protocol_messages(&mut drain);
-    assert_eq!(failed.len(), 1);
-    assert_eq!(failed[0]["method"], json!("Network.loadingFailed"));
-    assert_eq!(failed[0]["params"]["requestId"], json!("REQ-1"));
-    assert_eq!(failed[0]["params"]["canceled"], json!(false));
-
-    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    let finished = drain_into_protocol_messages(&mut drain);
-    assert_eq!(finished.len(), 1);
-    assert_eq!(finished[0]["method"], json!("Network.loadingFinished"));
-    assert_eq!(finished[0]["params"]["requestId"], json!("REQ-1"));
-    assert_eq!(finished[0]["params"]["encodedDataLength"], json!(0));
-
-    assert!(drain_into_protocol_messages(&mut drain).is_empty());
-}
-
-#[test]
 fn aborted_navigation_progress_marks_loading_failed_canceled() {
     let target = MainDocumentProgressEventTarget {
         session_ids: vec![Some("SID-1".to_owned())],
@@ -1500,4 +1244,27 @@ fn aborted_navigation_progress_marks_loading_failed_canceled() {
     assert_eq!(out[0]["method"], json!("Network.loadingFailed"));
     assert_eq!(out[0]["params"]["errorText"], json!("net::ERR_ABORTED"));
     assert_eq!(out[0]["params"]["canceled"], json!(true));
+}
+
+fn project_events(
+    events: Vec<MainDocumentNavigationProgressEvent>,
+) -> Vec<BackgroundProtocolEvent> {
+    let mut output = Vec::new();
+    for event in events {
+        event.emit_into(&mut MainDocumentProgressOutputTarget::background_events(
+            &mut output,
+        ));
+    }
+    output
+}
+
+fn completed_messages(events: &CompletedMainDocumentNetworkEvents, final_url: &Url) -> Vec<Value> {
+    let context = completed_progress_context();
+    let mut progress = context.request_and_redirect_progress_events(events);
+    progress.extend(context.response_received_progress_events(events, final_url, 17));
+    progress.push(MainDocumentNavigationProgressEvent::LoadingFinished {
+        target: context.progress_target().unwrap(),
+        encoded_data_length: 17,
+    });
+    protocol_messages_from_background_events(project_events(progress))
 }

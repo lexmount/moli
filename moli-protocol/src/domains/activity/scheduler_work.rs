@@ -1,19 +1,9 @@
 use std::fmt;
 
-use moli_core::RendererOutputTransportMessage;
-
-use crate::{
-    conn::{
-        BidiChannelOwnerAction, CdpConnection, DeferredMainDocumentLoadCompletionOutputAction,
-        DeferredMainDocumentLoadCompletionOutputInterest,
-        PendingDeferredMainDocumentLoadCompletion, TargetStartupOwnerAction,
-        TopLevelLocationNavigationOwnerAction,
-    },
-    devtools_runtime::DevToolsCommandContext,
+use crate::conn::{
+    BidiChannelOwnerAction, TargetStartupOwnerAction, TopLevelLocationNavigationOwnerAction,
 };
 
-#[cfg(test)]
-use super::main_document::DeferredMainDocumentLoadCompletionActivity;
 use super::output_work::ProtocolOutputWork;
 
 /// Monotonic sequence assigned when protocol-owned scheduler work becomes
@@ -45,7 +35,7 @@ impl ProtocolWorkPublishSequence {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolSchedulerWorkKind {
     ProtocolObservation,
-    MainDocumentLoadOwnerAction,
+
     BidiChannelOwnerAction,
     TopLevelLocationNavigationOwnerAction,
     TargetStartupOwnerAction,
@@ -67,8 +57,7 @@ pub struct ProtocolSchedulerWork {
 
 enum ProtocolSchedulerWorkPayload {
     ProtocolObservation(ProtocolOutputWork),
-    #[cfg(test)]
-    MainDocumentLoadOwnerAction(Box<DeferredMainDocumentLoadCompletionActivity>),
+
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelLocationNavigationOwnerAction(TopLevelLocationNavigationOwnerAction),
     TargetStartupOwnerAction(TargetStartupOwnerAction),
@@ -85,21 +74,7 @@ impl fmt::Debug for ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 debug.field("payload", output);
             }
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                debug
-                    .field("observation_id", &completion.observation_id())
-                    .field("session_id", &completion.session_id())
-                    .field(
-                        "renderer_page",
-                        &completion.renderer_page_residence_identity(),
-                    )
-                    .field(
-                        "renderer_document",
-                        &completion.renderer_document_identity(),
-                    )
-                    .field("terminal", &completion.has_terminal_lifecycle_observation());
-            }
+
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(action) => {
                 debug
                     .field("action", &action.kind())
@@ -134,19 +109,6 @@ impl ProtocolSchedulerWork {
         Self {
             publish_sequence,
             payload: ProtocolSchedulerWorkPayload::ProtocolObservation(output),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn main_document_load_owner_action(
-        publish_sequence: ProtocolWorkPublishSequence,
-        completion: DeferredMainDocumentLoadCompletionActivity,
-    ) -> Self {
-        Self {
-            publish_sequence,
-            payload: ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(Box::new(
-                completion,
-            )),
         }
     }
 
@@ -199,10 +161,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(_) => {
                 ProtocolSchedulerWorkKind::ProtocolObservation
             }
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => {
-                ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction
-            }
+
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::BidiChannelOwnerAction
             }
@@ -215,26 +174,6 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => {
                 ProtocolSchedulerWorkKind::PageTargetTerminationOwnerAction
             }
-        }
-    }
-
-    /// Reports whether this work can be completed without blocking its
-    /// scheduler.
-    ///
-    /// Protocol observations and already-materialized BiDi owner actions are
-    /// intrinsically ready. A main-document load action becomes ready only
-    /// when its exact lifecycle observer has published a typed terminal.
-    pub fn is_ready(&self) -> bool {
-        match &self.payload {
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_) => true,
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                completion.has_terminal_lifecycle_observation()
-            }
-            ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_) => true,
-            ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
         }
     }
 
@@ -251,8 +190,6 @@ impl ProtocolSchedulerWork {
             | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => true,
             ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_) => false,
             ProtocolSchedulerWorkPayload::ProtocolObservation(_) => false,
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(_) => false,
         }
     }
 
@@ -261,10 +198,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 output.navigation_gate_target_id()
             }
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                Some(completion.target_id())
-            }
+
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(action) => {
                 action.owner().target_id()
             }
@@ -303,85 +237,6 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output)
                 if output.is_root_frame_stopped_loading()
         )
-    }
-
-    pub fn main_document_load_output_interest(
-        &self,
-    ) -> Option<DeferredMainDocumentLoadCompletionOutputInterest> {
-        match &self.payload {
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                Some(DeferredMainDocumentLoadCompletionOutputInterest::new(
-                    completion.renderer_page_residence_identity(),
-                    completion.renderer_document_identity(),
-                ))
-            }
-            _ => None,
-        }
-    }
-
-    pub fn main_document_load_observation_id(
-        &self,
-    ) -> Option<crate::conn::DeferredMainDocumentLoadObservationId> {
-        match &self.payload {
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                Some(completion.observation_id())
-            }
-            _ => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn main_document_load_session_id(&self) -> Option<&str> {
-        let ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) = &self.payload
-        else {
-            return None;
-        };
-        completion.session_id()
-    }
-
-    pub fn route_renderer_output_while_main_document_load_waits(
-        &self,
-        output: &RendererOutputTransportMessage,
-    ) -> Option<DeferredMainDocumentLoadCompletionOutputAction> {
-        self.main_document_load_output_interest()
-            .map(|interest| interest.route_output_while_waiting(output))
-    }
-
-    pub fn observes_main_document_load_for_devtools_context(
-        &self,
-        conn: &CdpConnection,
-        context: &DevToolsCommandContext,
-    ) -> bool {
-        let owner: Option<&crate::conn::CommandOwnerScope> = match &self.payload {
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                Some(completion.owner_scope())
-            }
-            _ => None,
-        };
-        owner.is_some_and(|owner| {
-            conn.command_owner_scope_for_devtools_context(context)
-                .as_ref()
-                == Some(owner)
-        })
-    }
-
-    pub fn start_main_document_load_wait(self) -> PendingDeferredMainDocumentLoadCompletion {
-        match self.payload {
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                PendingDeferredMainDocumentLoadCompletion::new((*completion).start_scheduler_step())
-            }
-            ProtocolSchedulerWorkPayload::ProtocolObservation(_)
-            | ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::TopLevelLocationNavigationOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::TargetStartupOwnerAction(_)
-            | ProtocolSchedulerWorkPayload::PageTargetTerminationOwnerAction(_) => {
-                panic!("only main-document load owner work can start a lifecycle wait")
-            }
-        }
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -425,10 +280,7 @@ impl ProtocolSchedulerWork {
 
 pub(crate) enum ReadyProtocolSchedulerWork {
     ProtocolObservation(ProtocolOutputWork),
-    #[cfg(test)]
-    MainDocumentLoadOwnerAction(
-        Box<super::main_document::CompletedDeferredMainDocumentLoadCompletionActivity>,
-    ),
+
     BidiChannelOwnerAction(BidiChannelOwnerAction),
     TopLevelLocationNavigationOwnerAction(TopLevelLocationNavigationOwnerAction),
     TargetStartupOwnerAction(TargetStartupOwnerAction),
@@ -441,15 +293,7 @@ impl ProtocolSchedulerWork {
             ProtocolSchedulerWorkPayload::ProtocolObservation(output) => {
                 ReadyProtocolSchedulerWork::ProtocolObservation(output)
             }
-            #[cfg(test)]
-            ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction(completion) => {
-                let completion = completion.try_complete().unwrap_or_else(|_| {
-                    panic!(
-                        "pending main-document load work cannot be completed by a nonblocking scheduler turn"
-                    )
-                });
-                ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(Box::new(completion))
-            }
+
             ProtocolSchedulerWorkPayload::BidiChannelOwnerAction(action) => {
                 ReadyProtocolSchedulerWork::BidiChannelOwnerAction(action)
             }

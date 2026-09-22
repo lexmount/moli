@@ -93,17 +93,7 @@ impl CdpConnection {
         activation: PreparedDownloadActivation,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
-        self.handle_prepared_download_activation_async(out, activation, true, command_context)
-            .await
-    }
-
-    pub(crate) async fn handle_prepared_download_activation_inline_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        activation: PreparedDownloadActivation,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<(), String> {
-        self.handle_prepared_download_activation_async(out, activation, false, command_context)
+        self.handle_prepared_download_activation_async(out, activation, command_context)
             .await
     }
 
@@ -111,7 +101,6 @@ impl CdpConnection {
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
         prepared: PreparedDownloadActivation,
-        allow_background_events: bool,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
         let PreparedDownloadActivation {
@@ -189,7 +178,6 @@ impl CdpConnection {
                 DownloadProjection::new(frame_id, event_route, observation.guid().to_owned()),
                 observation,
                 out,
-                allow_background_events,
                 command_context,
             )
             .await;
@@ -202,14 +190,13 @@ impl CdpConnection {
         mut projection: DownloadProjection,
         mut observation: DownloadObservation,
         out: &mut Vec<BackgroundProtocolEvent>,
-        allow_background_events: bool,
         command_context: &mut CommandDispatchContext,
     ) {
         let initial = observation.event();
         projection.observation = Some(observation.clone());
         let terminal = initial.snapshot.state != DownloadState::Active;
         let events = projection.observe(&initial);
-        if allow_background_events && let Some(sender) = self.background_event_sender() {
+        if let Some(sender) = self.background_event_sender() {
             let response_flush = command_context.response_flush().receiver();
             if response_flush.is_some() {
                 command_context.extend_post_response_events(events);

@@ -757,28 +757,6 @@ impl CompletedMainDocumentProgressContext {
         }
     }
 
-    #[cfg(test)]
-    fn event_batches(
-        &self,
-        events: &CompletedMainDocumentNetworkEvents,
-        final_url: &Url,
-        encoded_data_length: usize,
-    ) -> MainDocumentNavigationProgressEventBatches {
-        MainDocumentNavigationProgressEventBatches::new(
-            self.request_and_redirect_progress_events(events),
-            self.response_received_progress_events(events, final_url, encoded_data_length),
-            self.progress_target()
-                .map(
-                    |target| MainDocumentNavigationProgressEvent::LoadingFinished {
-                        target,
-                        encoded_data_length,
-                    },
-                )
-                .into_iter()
-                .collect(),
-        )
-    }
-
     fn request_and_redirect_progress_events(
         &self,
         events: &CompletedMainDocumentNetworkEvents,
@@ -968,13 +946,6 @@ impl CompletedMainDocumentProgressContext {
     }
 }
 
-#[cfg(test)]
-struct MainDocumentNavigationProgressEventBatches {
-    request_started: Vec<MainDocumentNavigationProgressEvent>,
-    response_received: Vec<MainDocumentNavigationProgressEvent>,
-    body_finished: Vec<MainDocumentNavigationProgressEvent>,
-}
-
 #[derive(Clone)]
 pub(crate) struct MainDocumentProgressEventTarget {
     pub(crate) session_ids: Vec<Option<String>>,
@@ -1093,33 +1064,6 @@ fn observed_response_metadata(
         .and_then(NetworkExchangeObservation::response)
         .map(|response| (response.status(), response.headers().to_vec()))
         .unwrap_or_else(|| (fallback_status, fallback_headers.to_vec()))
-}
-
-#[cfg(test)]
-impl MainDocumentNavigationProgressEventBatches {
-    fn new(
-        request_started: Vec<MainDocumentNavigationProgressEvent>,
-        response_received: Vec<MainDocumentNavigationProgressEvent>,
-        body_finished: Vec<MainDocumentNavigationProgressEvent>,
-    ) -> Self {
-        Self {
-            request_started,
-            response_received,
-            body_finished,
-        }
-    }
-
-    fn take_request_started(&mut self) -> Vec<MainDocumentNavigationProgressEvent> {
-        std::mem::take(&mut self.request_started)
-    }
-
-    fn take_response_received(&mut self) -> Vec<MainDocumentNavigationProgressEvent> {
-        std::mem::take(&mut self.response_received)
-    }
-
-    fn take_body_finished(&mut self) -> Vec<MainDocumentNavigationProgressEvent> {
-        std::mem::take(&mut self.body_finished)
-    }
 }
 
 impl MainDocumentNavigationProgressEvent {

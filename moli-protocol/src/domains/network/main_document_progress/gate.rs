@@ -9,8 +9,6 @@ use crate::conn::BackgroundEventSender;
 use crate::conn::{BackgroundProtocolEvent, build_event};
 
 use super::MainDocumentNavigationProgressEvent;
-#[cfg(test)]
-use super::MainDocumentNavigationProgressEventBatches;
 
 pub(crate) struct MainDocumentProgressGate {
     queue: MainDocumentProgressQueueHandle,
@@ -38,16 +36,8 @@ pub(super) struct MainDocumentProgressEmission {
 #[derive(Default)]
 struct MainDocumentProgressOutputQueue {
     source_ready_until: MainDocumentProgressPhase,
-    output_visible_until: MainDocumentProgressPhase,
     response_received_emitted: bool,
     pending: Vec<MainDocumentProgressEmission>,
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-pub(super) enum MainDocumentProgressOutputBoundary {
-    #[cfg(test)]
-    ResponseMetadataVisible,
-    BodyFinishedVisible,
 }
 
 pub(super) enum MainDocumentProgressOutputTarget<'a> {
@@ -63,10 +53,6 @@ pub(super) struct MainDocumentProgressEventBatch {
 pub(super) enum MainDocumentProgressSourceKind {
     Streaming,
     FailedNavigation(Box<MainDocumentFailedNavigationProgressSource>),
-    #[cfg(test)]
-    ErrorPage(Box<MainDocumentErrorPageProgressSource>),
-    #[cfg(test)]
-    CompletedBody(MainDocumentCompletedBodyProgressSource),
 }
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd, Default)]
@@ -78,19 +64,8 @@ pub(super) enum MainDocumentProgressPhase {
     BodyFinished,
 }
 
-#[cfg(test)]
-pub(super) struct MainDocumentCompletedBodyProgressSource {
-    event_batches: MainDocumentNavigationProgressEventBatches,
-}
-
 pub(super) struct MainDocumentFailedNavigationProgressSource {
     pub(super) failure_event: Option<MainDocumentNavigationProgressEvent>,
-}
-
-#[cfg(test)]
-pub(super) struct MainDocumentErrorPageProgressSource {
-    pub(super) failure_event: Option<MainDocumentNavigationProgressEvent>,
-    pub(super) finish_event: Option<MainDocumentNavigationProgressEvent>,
 }
 
 pub(super) struct MainDocumentProgressSource {
@@ -102,31 +77,11 @@ impl MainDocumentProgressSource {
         Self::new(MainDocumentProgressSourceKind::Streaming)
     }
 
-    #[cfg(test)]
-    pub(super) fn completed_body(batches: MainDocumentNavigationProgressEventBatches) -> Self {
-        Self::new(MainDocumentProgressSourceKind::CompletedBody(
-            MainDocumentCompletedBodyProgressSource::new(batches),
-        ))
-    }
-
     pub(super) fn failed_navigation(
         failure_event: Option<MainDocumentNavigationProgressEvent>,
     ) -> Self {
         Self::new(MainDocumentProgressSourceKind::FailedNavigation(Box::new(
             MainDocumentFailedNavigationProgressSource { failure_event },
-        )))
-    }
-
-    #[cfg(test)]
-    pub(super) fn error_page(
-        failure_event: Option<MainDocumentNavigationProgressEvent>,
-        finish_event: Option<MainDocumentNavigationProgressEvent>,
-    ) -> Self {
-        Self::new(MainDocumentProgressSourceKind::ErrorPage(Box::new(
-            MainDocumentErrorPageProgressSource {
-                failure_event,
-                finish_event,
-            },
         )))
     }
 
@@ -140,22 +95,8 @@ impl MainDocumentProgressSource {
 }
 
 impl MainDocumentProgressGate {
-    #[cfg(test)]
-    pub(super) fn new(drain: MainDocumentProgressDrain) -> Self {
-        Self::from_queue(MainDocumentProgressQueueHandle::new(drain))
-    }
-
     pub(super) fn from_queue(queue: MainDocumentProgressQueueHandle) -> Self {
         Self { queue }
-    }
-
-    fn drain_visible_until_into_background_events(
-        &mut self,
-        boundary: MainDocumentProgressOutputBoundary,
-        out: &mut Vec<BackgroundProtocolEvent>,
-    ) {
-        self.queue.mark_output_visible_until(boundary);
-        self.queue.drain_into_background_events(out);
     }
 
     fn drain_into_background_events(&mut self, out: &mut Vec<BackgroundProtocolEvent>) {
@@ -171,29 +112,6 @@ impl<'a> MainDocumentProgressBackgroundEventBarrier<'a> {
         Self { out, progress_gate }
     }
 
-    #[cfg(test)]
-    pub(crate) fn drain_until_response_metadata_visible(
-        out: &'a mut Vec<BackgroundProtocolEvent>,
-        progress_gate: &'a mut MainDocumentProgressGate,
-    ) {
-        let mut barrier = Self::background_events(out, progress_gate);
-        barrier
-            .mark_output_visible_until(MainDocumentProgressOutputBoundary::ResponseMetadataVisible);
-    }
-
-    pub(crate) fn drain_until_body_finished_visible(
-        out: &'a mut Vec<BackgroundProtocolEvent>,
-        progress_gate: &'a mut MainDocumentProgressGate,
-    ) {
-        let mut barrier = Self::background_events(out, progress_gate);
-        barrier.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
-    }
-
-    fn mark_output_visible_until(&mut self, boundary: MainDocumentProgressOutputBoundary) {
-        self.progress_gate
-            .drain_visible_until_into_background_events(boundary, self.out);
-    }
-
     pub(crate) fn drain_progress(&mut self) {
         self.progress_gate.drain_into_background_events(self.out);
     }
@@ -201,9 +119,9 @@ impl<'a> MainDocumentProgressBackgroundEventBarrier<'a> {
 
 impl MainDocumentProgressDrain {
     pub(super) fn new() -> Self {
-        let mut output_queue = MainDocumentProgressOutputQueue::new();
-        output_queue.mark_output_visible_until(MainDocumentProgressPhase::RequestStarted);
-        Self { output_queue }
+        Self {
+            output_queue: MainDocumentProgressOutputQueue::default(),
+        }
     }
 
     #[cfg(test)]
@@ -217,25 +135,7 @@ impl MainDocumentProgressDrain {
         source.append_to_drain(self);
     }
 
-    pub(super) fn mark_output_visible_until(
-        &mut self,
-        boundary: MainDocumentProgressOutputBoundary,
-    ) {
-        self.output_queue
-            .mark_output_visible_until(boundary.progress_phase());
-    }
-
     pub(super) fn append_ready_emission(
-        &mut self,
-        ready_until: MainDocumentProgressPhase,
-        emission: MainDocumentProgressEmission,
-    ) {
-        self.output_queue.mark_source_ready_until(ready_until);
-        self.output_queue.mark_output_visible_until(ready_until);
-        self.output_queue.push(emission);
-    }
-
-    fn append_source_ready_emission(
         &mut self,
         ready_until: MainDocumentProgressPhase,
         emission: MainDocumentProgressEmission,
@@ -285,10 +185,6 @@ impl MainDocumentProgressQueueHandle {
         self.lock_drain().append_source(source);
     }
 
-    fn mark_output_visible_until(&self, boundary: MainDocumentProgressOutputBoundary) {
-        self.lock_drain().mark_output_visible_until(boundary);
-    }
-
     fn drain_into_background_events(&self, out: &mut Vec<BackgroundProtocolEvent>) {
         let ready = self.take_ready_emissions();
         let mut output = MainDocumentProgressOutputTarget::background_events(out);
@@ -316,21 +212,8 @@ impl MainDocumentProgressQueueHandle {
 }
 
 impl MainDocumentProgressOutputQueue {
-    fn new() -> Self {
-        Self {
-            source_ready_until: MainDocumentProgressPhase::Created,
-            output_visible_until: MainDocumentProgressPhase::Created,
-            response_received_emitted: false,
-            pending: Vec::new(),
-        }
-    }
-
     fn mark_source_ready_until(&mut self, phase: MainDocumentProgressPhase) {
         self.source_ready_until = self.source_ready_until.max(phase);
-    }
-
-    fn mark_output_visible_until(&mut self, phase: MainDocumentProgressPhase) {
-        self.output_visible_until = self.output_visible_until.max(phase);
     }
 
     fn push(&mut self, emission: MainDocumentProgressEmission) {
@@ -343,7 +226,7 @@ impl MainDocumentProgressOutputQueue {
     fn drain_ready(&mut self) -> Vec<MainDocumentProgressEmission> {
         let mut ready_candidates = Vec::new();
         let mut pending = Vec::new();
-        let drain_until = self.source_ready_until.min(self.output_visible_until);
+        let drain_until = self.source_ready_until;
         for emission in std::mem::take(&mut self.pending) {
             if emission.ready_at <= drain_until {
                 ready_candidates.push(emission);
@@ -367,16 +250,6 @@ impl MainDocumentProgressOutputQueue {
         }
         self.pending = pending;
         ready
-    }
-}
-
-impl MainDocumentProgressOutputBoundary {
-    fn progress_phase(self) -> MainDocumentProgressPhase {
-        match self {
-            #[cfg(test)]
-            Self::ResponseMetadataVisible => MainDocumentProgressPhase::ResponseReceived,
-            Self::BodyFinishedVisible => MainDocumentProgressPhase::BodyFinished,
-        }
     }
 }
 
@@ -467,10 +340,6 @@ impl MainDocumentProgressSourceKind {
         match self {
             Self::Streaming => {}
             Self::FailedNavigation(source) => source.append_to_drain(drain),
-            #[cfg(test)]
-            Self::ErrorPage(source) => source.append_to_drain(drain),
-            #[cfg(test)]
-            Self::CompletedBody(source) => source.append_to_drain(drain),
         }
     }
 }
@@ -478,7 +347,7 @@ impl MainDocumentProgressSourceKind {
 impl MainDocumentFailedNavigationProgressSource {
     fn append_to_drain(self, drain: &mut MainDocumentProgressDrain) {
         if let Some(event) = self.failure_event {
-            drain.append_source_ready_emission(
+            drain.append_ready_emission(
                 MainDocumentProgressPhase::RequestStarted,
                 MainDocumentProgressEmission::new(
                     MainDocumentProgressPhase::RequestStarted,
@@ -486,66 +355,5 @@ impl MainDocumentFailedNavigationProgressSource {
                 ),
             );
         }
-    }
-}
-
-#[cfg(test)]
-impl MainDocumentErrorPageProgressSource {
-    fn append_to_drain(self, drain: &mut MainDocumentProgressDrain) {
-        if let Some(event) = self.failure_event {
-            drain.append_source_ready_emission(
-                MainDocumentProgressPhase::ResponseReceived,
-                MainDocumentProgressEmission::new(
-                    MainDocumentProgressPhase::ResponseReceived,
-                    MainDocumentProgressEventBatch::from_events(vec![event]),
-                ),
-            );
-        }
-        if let Some(event) = self.finish_event {
-            drain.append_source_ready_emission(
-                MainDocumentProgressPhase::BodyFinished,
-                MainDocumentProgressEmission::new(
-                    MainDocumentProgressPhase::BodyFinished,
-                    MainDocumentProgressEventBatch::from_events(vec![event]),
-                ),
-            );
-        }
-    }
-}
-
-#[cfg(test)]
-impl MainDocumentCompletedBodyProgressSource {
-    fn new(event_batches: MainDocumentNavigationProgressEventBatches) -> Self {
-        Self { event_batches }
-    }
-
-    fn append_to_drain(mut self, drain: &mut MainDocumentProgressDrain) {
-        drain.append_source_ready_emission(
-            MainDocumentProgressPhase::RequestStarted,
-            MainDocumentProgressEmission::new(
-                MainDocumentProgressPhase::RequestStarted,
-                MainDocumentProgressEventBatch::from_events(
-                    self.event_batches.take_request_started(),
-                ),
-            ),
-        );
-        drain.append_source_ready_emission(
-            MainDocumentProgressPhase::ResponseReceived,
-            MainDocumentProgressEmission::new(
-                MainDocumentProgressPhase::ResponseReceived,
-                MainDocumentProgressEventBatch::from_events(
-                    self.event_batches.take_response_received(),
-                ),
-            ),
-        );
-        drain.append_source_ready_emission(
-            MainDocumentProgressPhase::BodyFinished,
-            MainDocumentProgressEmission::new(
-                MainDocumentProgressPhase::BodyFinished,
-                MainDocumentProgressEventBatch::from_events(
-                    self.event_batches.take_body_finished(),
-                ),
-            ),
-        );
     }
 }

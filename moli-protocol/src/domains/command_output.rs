@@ -448,11 +448,6 @@ pub(crate) struct CommandOutputBuffer {
     plan: CommandOutputPlan,
 }
 
-#[derive(Default)]
-pub(crate) struct BackgroundProtocolEventBuffer {
-    events: Vec<BackgroundProtocolEvent>,
-}
-
 impl CommandOutputBuffer {
     pub(crate) fn extend_background_events_after_messages(
         &mut self,
@@ -471,29 +466,8 @@ impl CommandOutputBuffer {
         self.plan.push_error(code, message);
     }
 
-    #[cfg(test)]
-    pub(crate) fn insert_renderer_output_boundary_after_messages(
-        &mut self,
-        cursor: moli_core::RendererOutputFence,
-    ) {
-        self.plan.insert_renderer_output_boundary(cursor);
-    }
-
     pub(crate) fn into_plan(self) -> CommandOutputPlan {
         self.plan
-    }
-}
-
-impl BackgroundProtocolEventBuffer {
-    pub(crate) fn extend_background_events(
-        &mut self,
-        events: impl IntoIterator<Item = BackgroundProtocolEvent>,
-    ) {
-        self.events.extend(events);
-    }
-
-    pub(crate) fn into_events(self) -> Vec<BackgroundProtocolEvent> {
-        self.events
     }
 }
 

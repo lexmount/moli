@@ -13,9 +13,8 @@ use moli_core::page::{
     SubresourceNetworkRequestHandle,
 };
 
-use super::contextual_projection::MainDocumentBodyCompleteProjection;
 use crate::domains::network::{
-    MainDocumentProgressGate, NetworkBacklogPreferredRequestId, NetworkBacklogProjectionContext,
+    NetworkBacklogPreferredRequestId, NetworkBacklogProjectionContext,
     emit_pending_network_backlog_activity_background_events,
     network_backlog_prepared_outputs_for_owner,
 };
@@ -764,11 +763,4 @@ fn record_subresource_network_request_handle(
             request_id.to_owned(),
         );
     }
-}
-
-pub(super) fn flush_main_document_body_complete_activity_background_events(
-    out: &mut Vec<BackgroundProtocolEvent>,
-    progress_gate: &mut MainDocumentProgressGate,
-) {
-    MainDocumentBodyCompleteProjection::new(progress_gate).project_background_events(out);
 }

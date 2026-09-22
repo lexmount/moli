@@ -1,7 +1,4 @@
-use crate::conn::{BackgroundProtocolEvent, CommandDispatchContext, CommandOwnerScope};
-use crate::domains::network::{
-    MainDocumentProgressBackgroundEventBarrier, MainDocumentProgressGate,
-};
+use crate::conn::{CommandDispatchContext, CommandOwnerScope};
 
 /// Exact protocol projection context for one already-frozen output batch.
 ///
@@ -32,25 +29,6 @@ impl<'a> ProtocolOutputProjectionContext<'a> {
 
     pub(in crate::domains) fn owner(&self) -> &CommandOwnerScope {
         self.owner
-    }
-}
-
-/// Projection guard for main-document background events captured before the
-/// response body becomes externally visible.
-pub(super) struct MainDocumentBodyCompleteProjection<'a> {
-    progress_gate: &'a mut MainDocumentProgressGate,
-}
-
-impl<'a> MainDocumentBodyCompleteProjection<'a> {
-    pub(super) fn new(progress_gate: &'a mut MainDocumentProgressGate) -> Self {
-        Self { progress_gate }
-    }
-
-    pub(super) fn project_background_events(self, out: &mut Vec<BackgroundProtocolEvent>) {
-        MainDocumentProgressBackgroundEventBarrier::drain_until_body_finished_visible(
-            out,
-            self.progress_gate,
-        );
     }
 }
 

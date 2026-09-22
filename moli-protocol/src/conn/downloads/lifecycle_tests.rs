@@ -112,14 +112,8 @@ async fn transfer_during_response_flush(abandon: bool) {
     let (projection, observation) = projection(&mut conn, body);
     let mut monitor = observation.clone();
     let mut inline = Vec::new();
-    conn.observe_download(
-        projection,
-        observation,
-        &mut inline,
-        true,
-        &mut command_context,
-    )
-    .await;
+    conn.observe_download(projection, observation, &mut inline, &mut command_context)
+        .await;
     assert!(inline.is_empty());
     let initial = command_context.take_post_response_events();
     assert_eq!(
@@ -190,7 +184,6 @@ async fn download_flush_and_native_updates_share_one_frontend_fifo() {
         projection,
         observation,
         &mut Vec::new(),
-        true,
         &mut command_context,
     )
     .await;
@@ -256,7 +249,6 @@ async fn admitted_download_freezes_context_policy_and_observation_separately() {
         projection,
         observation,
         &mut out,
-        false,
         &mut CommandDispatchContext::default(),
     )
     .await;
@@ -345,7 +337,6 @@ async fn retiring_context_cancels_download_and_new_same_wire_context_cannot_read
         projection,
         observation,
         &mut Vec::new(),
-        true,
         &mut CommandDispatchContext::default(),
     )
     .await;

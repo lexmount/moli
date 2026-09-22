@@ -423,8 +423,7 @@ mod tests {
     use super::renderer_record_owner;
 
     #[tokio::test]
-    async fn native_lifecycle_ingress_precedes_missing_routes_projection_filters_and_load_visibility()
-     {
+    async fn native_lifecycle_ingress_precedes_missing_routes_and_projection_filters() {
         use super::*;
         use moli_core::{
             RendererOutputCursor, RendererOutputRecord, RendererProtocolObservation,
@@ -512,12 +511,7 @@ mod tests {
             );
             conn.install_browser_context_fixture_for_test(context);
             let owner = CommandOwnerScope::capture(&conn, None);
-            assert!(
-                conn.begin_renderer_document_load_visibility_barrier_for_owner(
-                    &owner,
-                    "LOADER-ingress"
-                )
-            );
+
             let dcl = RendererDocumentLifecycleEvent {
                 sequence: 2,
                 timestamp_micros: 20,
@@ -551,15 +545,21 @@ mod tests {
                 .renderer_document_lifecycle_binding_for_target(TARGET)
                 .unwrap()
                 .clone();
-            let observer = context.register_exact_renderer_document_lifecycle_observer_for_target(
-                TARGET,
-                &binding,
-                RendererDocumentLifecycleMilestone::Load,
-            );
-            assert_eq!(
-                observer.observation(),
-                crate::conn::RendererDocumentLifecycleObservation::Pending
-            );
+            let command_context = crate::devtools_runtime::DevToolsCommandContext {
+                protocol: crate::devtools_runtime::DevToolsProtocol::Cdp,
+                session_id: None,
+                target_id: Some(crate::devtools_runtime::DevToolsTargetId::from(TARGET)),
+                browser_context_id: Some(crate::devtools_runtime::DevToolsBrowserContextId::from(
+                    CONTEXT,
+                )),
+            };
+            let waiter = conn
+                .capture_devtools_document_lifecycle_wait_key(
+                    &command_context,
+                    &binding.loader_id,
+                    RendererDocumentLifecycleMilestone::Load,
+                )
+                .unwrap();
             let records = [dcl, load, dcl]
                 .into_iter()
                 .map(|event| {
@@ -609,35 +609,32 @@ mod tests {
                 .unwrap();
             assert_eq!(native.dom_content_loaded.unwrap().sequence, dcl.sequence);
             assert_eq!(native.load.unwrap().sequence, load.sequence);
-            let expected = if projection == Some(RendererPublicationProjection::CurrentOwner) {
-                crate::conn::RendererDocumentLifecycleObservation::Reached
-            } else {
-                crate::conn::RendererDocumentLifecycleObservation::Pending
-            };
-            assert_eq!(observer.observation(), expected);
-            let late_observer = conn
-                .browser_context_by_id_mut(CONTEXT)
+            let expected_load = (projection == Some(RendererPublicationProjection::CurrentOwner))
+                .then_some(load.sequence);
+            let visible = conn
+                .renderer_document_lifecycle_visible_state_for_session_owner(None)
                 .unwrap()
-                .register_exact_renderer_document_lifecycle_observer_for_target(
-                    TARGET,
-                    &binding,
+                .1;
+            assert_eq!(visible.load.map(|stamp| stamp.sequence), expected_load);
+            let late_waiter = conn
+                .capture_devtools_document_lifecycle_wait_key(
+                    &command_context,
+                    &binding.loader_id,
                     RendererDocumentLifecycleMilestone::Load,
-                );
-            assert_eq!(late_observer.observation(), expected);
-            let deferred = conn
-                .release_renderer_document_load_visibility_barrier_for_owner(
-                    &owner,
-                    "LOADER-ingress",
                 )
                 .unwrap();
-            assert_eq!(
-                deferred,
-                if projection == Some(RendererPublicationProjection::CurrentOwner) {
-                    vec![load]
-                } else {
-                    vec![]
-                }
-            );
+            // Both an admitted and a late navigation waiter observe only FIFO receipt.
+            for key in [waiter, late_waiter] {
+                assert_eq!(
+                    conn.devtools_document_lifecycle_wait_state(&command_context, &key),
+                    if expected_load.is_some() {
+                        crate::DevToolsDocumentLifecycleWaitState::Reached
+                    } else {
+                        crate::DevToolsDocumentLifecycleWaitState::Pending
+                    }
+                );
+                conn.release_devtools_document_lifecycle_wait_key(&command_context, &key);
+            }
             assert_eq!(
                 conn.browser_context_by_id(CONTEXT)
                     .unwrap()

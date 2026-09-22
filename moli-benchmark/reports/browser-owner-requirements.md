@@ -50,18 +50,17 @@ Standalone Protocol passes 3,780 tests, and root fmt, strict Clippy and full
 nextest pass (19,533 tests, 13 configured skips). The acceptance report records
 both source freezes separately. The older full benchmarks apply to `d743043ab7`.
 
+The subsequent deferred-load deletion removes that scheduler, its exports,
+completion channels, watch observers and both manual visibility barriers. Real
+client-turn ordering remains in the existing shared scheduler. Native-load
+versus Protocol-replay visibility now has a real-source regression; exact
+Runtime output-prefix and successor-waiter behavior remain covered. Root fmt,
+strict Clippy and full nextest pass (19,497 tests, 13 configured skips), with
+the test migration and unchanged 91 expected panic records retained in the
+acceptance report's artifact directory.
+
 The plan is not yet certified complete. The following remain open:
 
-- Delete the old deferred main-document load scheduler and load-visibility
-  barrier. `ProtocolSchedulerWorkPayload::MainDocumentLoadOwnerAction` and its
-  enqueue/constructor paths in [scheduler_work.rs](../../moli-protocol/src/domains/activity/scheduler_work.rs)
-  and [conn.rs](../../moli-protocol/src/conn.rs) are test-only, but
-  [the adapter](../../moli-protocol-server/src/cdp_scheduler/adapter_scheduler.rs)
-  still retains production wait channels and predecessor bookkeeping. The
-  load-visibility barrier in `page_slot.rs` likewise has only a test producer.
-  Preserve the native Document/fence ordering coverage while removing these
-  consumers and obsolete fixtures; making their constructors test-only did
-  not finish the deletion required by Commit 30.
 - Complete the final producer/deletion inventory and frozen comparison after
   the remaining source changes. The entries above identify checked boundaries;
   they do not turn an incomplete inventory into a complete one.

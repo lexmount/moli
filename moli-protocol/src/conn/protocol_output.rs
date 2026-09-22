@@ -280,13 +280,7 @@ impl CdpConnection {
                     Vec::new(),
                 )
             }
-            #[cfg(test)]
-            ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
-                self.complete_deferred_main_document_load_completion_for_scheduler(
-                    super::CompletedDeferredMainDocumentLoadCompletion::new(*completion),
-                )
-                .await
-            }
+
             ReadyProtocolSchedulerWork::BidiChannelOwnerAction(action) => {
                 let mut protocol_events = Vec::new();
                 self.complete_bidi_channel_owner_action_with_background_events_async(

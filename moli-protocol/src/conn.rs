@@ -16,12 +16,11 @@ use crate::devtools_runtime::{
     AutomationEvent, DevToolsCommandContext, DevToolsTargetFilterEntry, DevToolsTargetInfo,
     DevToolsTargetKind,
 };
-use crate::domains::command_output::BackgroundProtocolEventBuffer;
 
 #[cfg(test)]
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::{
-    LayoutPolicy, RendererOutputPublicationOrdering, RendererOutputTransportMessage,
+    LayoutPolicy,
     browser::BrowserHandle,
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
@@ -592,7 +591,6 @@ pub(crate) use state::{
     PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait, PerformanceTimeDomain,
     PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
     RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererPageResidenceIdentity, ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
     SharedWorkerTargetState, SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
     TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity, TargetPageSessionState,
@@ -624,55 +622,6 @@ pub(crate) use target::{
 pub(crate) use target_startup_work::TargetStartupOwnerAction;
 pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
 
-pub struct PendingDeferredMainDocumentLoadCompletion {
-    inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
-}
-
-pub struct CompletedDeferredMainDocumentLoadCompletion {
-    inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
-}
-
-/// Stable identity of one exact deferred-load lifecycle observation.
-///
-/// The protocol owner allocates this identity before an adapter starts an
-/// asynchronous wait. CDP, BiDi, and Classic carry it through the typed
-/// completion instead of manufacturing adapter-local observation generations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DeferredMainDocumentLoadObservationId(u64);
-
-impl DeferredMainDocumentLoadObservationId {
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn from_test_value(value: u64) -> Self {
-        assert_ne!(value, 0, "load observation identity starts at one");
-        Self(value)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeferredMainDocumentLoadCompletionOutputInterest {
-    renderer_page: Option<RendererPageResidenceIdentity>,
-    renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
-}
-
-/// Exact scope of concrete renderer output that may still acquire a
-/// main-document load predecessor from the command turn currently completing.
-///
-/// This value is derived while consuming a one-shot renderer publication. It
-/// retains only the Page/Document identity needed for a later load action to
-/// prove causality; it carries neither a renderer source capability nor
-/// permission to rescan Page state.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct DeferredMainDocumentLoadPredecessorCandidate {
-    renderer_page: RendererPageResidenceIdentity,
-    renderer_document: moli_core::RendererDocumentLifecycleIdentity,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeferredMainDocumentLoadCompletionOutputAction {
-    ProcessNow,
-    Queue,
-}
-
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ConnectionNetworkRequestIdAllocator {
     next_sequence: u64,
@@ -694,135 +643,6 @@ impl ConnectionNetworkRequestIdAllocator {
     #[cfg(test)]
     pub(crate) fn next_sequence_for_test(&self) -> u64 {
         self.next_sequence
-    }
-}
-
-impl PendingDeferredMainDocumentLoadCompletion {
-    #[cfg(test)]
-    pub(crate) fn new(
-        inner: crate::domains::activity::PendingDeferredMainDocumentLoadCompletionActivity,
-    ) -> Self {
-        Self { inner }
-    }
-
-    pub fn session_id(&self) -> Option<&str> {
-        self.inner.session_id()
-    }
-
-    pub fn output_interest(&self) -> DeferredMainDocumentLoadCompletionOutputInterest {
-        DeferredMainDocumentLoadCompletionOutputInterest::new(
-            self.inner.renderer_page_residence_identity(),
-            self.inner.renderer_document_identity(),
-        )
-    }
-
-    pub fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
-        self.inner.observation_id()
-    }
-
-    pub async fn wait(self) -> CompletedDeferredMainDocumentLoadCompletion {
-        CompletedDeferredMainDocumentLoadCompletion {
-            inner: self.inner.wait().await,
-        }
-    }
-}
-
-impl CompletedDeferredMainDocumentLoadCompletion {
-    #[cfg(test)]
-    pub(crate) fn new(
-        inner: crate::domains::activity::CompletedDeferredMainDocumentLoadCompletionActivity,
-    ) -> Self {
-        Self { inner }
-    }
-
-    pub fn session_id(&self) -> Option<&str> {
-        self.inner.session_id()
-    }
-
-    pub fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
-        self.inner.observation_id()
-    }
-}
-
-impl DeferredMainDocumentLoadCompletionOutputInterest {
-    pub(crate) fn new(
-        renderer_page: Option<RendererPageResidenceIdentity>,
-        renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
-    ) -> Self {
-        Self {
-            renderer_page,
-            renderer_document,
-        }
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn from_test_residence(
-        renderer_page: RendererPageResidenceIdentity,
-        renderer_document: Option<moli_core::RendererDocumentLifecycleIdentity>,
-    ) -> Self {
-        Self::new(Some(renderer_page), renderer_document)
-    }
-
-    pub fn route_output_while_waiting(
-        &self,
-        message: &RendererOutputTransportMessage,
-    ) -> DeferredMainDocumentLoadCompletionOutputAction {
-        let RendererOutputTransportMessage::Publication(publication) = message else {
-            return DeferredMainDocumentLoadCompletionOutputAction::ProcessNow;
-        };
-        let residence = publication.cursor().stream().residence();
-        if !self
-            .renderer_page
-            .is_some_and(|renderer_page| renderer_page.matches_residence(residence))
-        {
-            return DeferredMainDocumentLoadCompletionOutputAction::ProcessNow;
-        }
-        match publication.ordering() {
-            RendererOutputPublicationOrdering::AfterPendingPageLoad { source_document }
-                if self.renderer_document == Some(source_document) =>
-            {
-                DeferredMainDocumentLoadCompletionOutputAction::Queue
-            }
-            RendererOutputPublicationOrdering::Unconstrained
-            | RendererOutputPublicationOrdering::AfterPendingPageLoad { .. } => {
-                DeferredMainDocumentLoadCompletionOutputAction::ProcessNow
-            }
-        }
-    }
-
-    pub fn observes_predecessor_candidate(
-        &self,
-        candidate: DeferredMainDocumentLoadPredecessorCandidate,
-    ) -> bool {
-        self.renderer_page == Some(candidate.renderer_page)
-            && self.renderer_document == Some(candidate.renderer_document)
-    }
-}
-
-impl DeferredMainDocumentLoadPredecessorCandidate {
-    /// Selects only work whose browser-visible effects are ordered after the
-    /// exact Page's load boundary.
-    ///
-    /// Parser, module, child-frame and ordinary lifecycle output are load
-    /// prerequisites and therefore return `None`. A timer is Page-scoped;
-    /// lifecycle action output additionally carries its exact source
-    /// Document.
-    pub fn from_renderer_publication(publication: &RendererOutputTransportMessage) -> Option<Self> {
-        let RendererOutputTransportMessage::Publication(publication) = publication else {
-            return None;
-        };
-        let RendererOutputPublicationOrdering::AfterPendingPageLoad { source_document } =
-            publication.ordering()
-        else {
-            return None;
-        };
-        Some(Self {
-            renderer_page: RendererPageResidenceIdentity::from_residence(
-                publication.cursor().stream().residence(),
-            )
-            .expect("post-load publication ordering is only valid for a Page stream"),
-            renderer_document: source_document,
-        })
     }
 }
 
@@ -1747,42 +1567,6 @@ impl CdpConnection {
     }
 
     #[cfg(test)]
-    pub(crate) fn begin_renderer_document_load_visibility_barrier_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) -> bool {
-        self.runtime_session_owner_slot_mut_for_owner(owner)
-            .is_ok_and(|slot| {
-                slot.page_slot_mut()
-                    .begin_renderer_document_load_visibility_barrier(loader_id)
-            })
-    }
-
-    pub(crate) fn release_renderer_document_load_visibility_barrier_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) -> Option<Vec<moli_core::page::RendererDocumentLifecycleEvent>> {
-        self.runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()?
-            .page_slot_mut()
-            .release_renderer_document_load_visibility_barrier(loader_id)
-    }
-
-    pub(crate) fn cancel_renderer_document_load_visibility_barrier_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) -> bool {
-        self.runtime_session_owner_slot_mut_for_owner(owner)
-            .is_ok_and(|slot| {
-                slot.page_slot_mut()
-                    .cancel_renderer_document_load_visibility_barrier(loader_id)
-            })
-    }
-
-    #[cfg(test)]
     pub(crate) async fn set_document_fixture_for_owner_test(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1832,35 +1616,6 @@ impl CdpConnection {
                     .renderer_document_lifecycle_authoritative_snapshot_for_target(&target_id)?
             },
         ))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn register_exact_renderer_document_lifecycle_observer_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        expected_binding: Option<&CommittedRendererDocumentBinding>,
-        milestone: moli_core::page::RendererDocumentLifecycleMilestone,
-    ) -> RendererDocumentLifecycleObserver {
-        let unavailable = || {
-            RendererDocumentLifecycleObserver::resolved(
-                RendererDocumentLifecycleObservation::Unavailable,
-            )
-        };
-        let Some(expected_binding) = expected_binding else {
-            return unavailable();
-        };
-        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
-        else {
-            return unavailable();
-        };
-        let Some(context) = self.browser_context_by_id_mut(&context_id) else {
-            return unavailable();
-        };
-        context.register_exact_renderer_document_lifecycle_observer_for_target(
-            &target_id,
-            expected_binding,
-            milestone,
-        )
     }
 
     pub(crate) fn renderer_document_lifecycle_visible_state_for_session_owner(
@@ -2145,20 +1900,6 @@ impl CdpConnection {
             }
     }
 
-    pub(crate) fn accepts_document_body_completion_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-        token: &NavigationId,
-    ) -> bool {
-        self.resolved_page_owner_identity_for_owner(owner)
-            .is_some_and(|(context_id, target_id)| {
-                self.browser_context_by_id(&context_id)
-                    .is_some_and(|context| {
-                        context.accepts_document_body_completion_event_for_target(&target_id, token)
-                    })
-            })
-    }
-
     pub(crate) fn clear_pending_document_navigation_for_owner_if_matches(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2233,33 +1974,6 @@ impl CdpConnection {
         }));
     }
 
-    #[cfg(test)]
-    pub(crate) fn enqueue_deferred_main_document_load_completion(
-        &mut self,
-        admission: crate::domains::activity::DeferredMainDocumentLoadCompletionAdmission,
-    ) {
-        if !admission.is_still_current_for_scheduler(self) {
-            tracing::debug!(
-                session_id = admission.session_id(),
-                "dropping obsolete deferred main-document load completion before enqueue"
-            );
-            return;
-        }
-        let observation_id = self
-            .scheduler_state
-            .allocate_deferred_main_document_load_observation_id();
-        let completion = admission.bind_lifecycle_observer(self, observation_id);
-        let publish_sequence = self
-            .scheduler_state
-            .allocate_protocol_work_publish_sequence();
-        let work = crate::domains::activity::ProtocolSchedulerWork::main_document_load_owner_action(
-            publish_sequence,
-            completion,
-        );
-        self.scheduler_state
-            .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
-    }
-
     /// Publishes a top-level navigation already moved into prepared output.
     ///
     /// The prepared value retains its exact Page residence. The route is
@@ -2323,19 +2037,6 @@ impl CdpConnection {
             );
         self.scheduler_state
             .push_scheduler_event(CdpSchedulerEvent::ProtocolWorkPublished { work });
-    }
-
-    pub async fn complete_deferred_main_document_load_completion_for_scheduler(
-        &mut self,
-        completion: CompletedDeferredMainDocumentLoadCompletion,
-    ) -> CdpTurnOutcome {
-        let mut output = BackgroundProtocolEventBuffer::default();
-        completion.inner.emit_async(self, &mut output).await;
-        CdpTurnOutcome::new_with_protocol_and_post_response_events(
-            output.into_events(),
-            Vec::new(),
-            self.take_scheduler_events(),
-        )
     }
 
     pub(crate) fn response_body_materialize_limit(&self) -> usize {

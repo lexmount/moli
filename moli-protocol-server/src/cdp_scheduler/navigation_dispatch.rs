@@ -135,14 +135,9 @@ impl CdpScheduler {
             .devtools_document_lifecycle_wait_state(&pending.context, &pending.key);
         if state == DevToolsDocumentLifecycleWaitState::Pending
             || (state == DevToolsDocumentLifecycleWaitState::Reached
-                && (!self
+                && !self
                     .conn
-                    .devtools_document_lifecycle_wait_is_visible(&pending.context, &pending.key)
-                    || (pending.key.milestone()
-                        == moli_core::page::RendererDocumentLifecycleMilestone::Load
-                        && self.has_deferred_main_document_load_completion_for_devtools_context(
-                            &pending.context,
-                        ))))
+                    .devtools_document_lifecycle_wait_is_visible(&pending.context, &pending.key))
         {
             return DevToolsNavigationCommandProgress::PendingLifecycle {
                 pending,
