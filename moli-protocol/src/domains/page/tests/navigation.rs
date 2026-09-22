@@ -5465,6 +5465,373 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {
     }
 }
 #[tokio::test(flavor = "multi_thread")]
+async fn stop_loading_cancels_inflight_unpaused_navigation_transport() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    let token = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .start_document_navigation_for_active_target("LOADER-inflight-stop".to_owned())
+        .unwrap();
+    let cancellation = ctx
+        .conn
+        .document_navigation_cancellation_handle(&token)
+        .unwrap();
+    ctx.conn.arm_background_navigation_completion(&token, None);
+    assert!(!cancellation.is_cancelled());
+
+    ctx.process_async(json!({
+        "id": 901,
+        "method": "Page.stopLoading",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(901, json!({}), Some("SID-1"));
+    assert!(
+        cancellation.is_cancelled(),
+        "stopLoading must cancel an ordinary HTTP navigation, not only Fetch-paused requests"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_loading_before_response_preserves_document_and_allows_next_navigation() {
+    assert_stopped_provisional_navigation_preserves_document(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_loading_during_xml_body_preserves_document_and_allows_next_navigation() {
+    assert_stopped_provisional_navigation_preserves_document(Some((200, "application/xml"))).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_loading_during_http_error_body_preserves_document_and_allows_next_navigation() {
+    assert_stopped_provisional_navigation_preserves_document(Some((500, "text/html"))).await;
+}
+
+async fn assert_stopped_provisional_navigation_preserves_document(
+    response_head: Option<(u16, &'static str)>,
+) {
+    let request_received = std::sync::Arc::new(tokio::sync::Notify::new());
+    let release_response = std::sync::Arc::new(tokio::sync::Notify::new());
+    let handler_received = request_received.clone();
+    let handler_release = release_response.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let app = axum::Router::new()
+            .route(
+                "/held",
+                axum::routing::get(move || {
+                    let received = handler_received.clone();
+                    let release = handler_release.clone();
+                    async move {
+                        received.notify_one();
+                        let (status, content_type) = if let Some(head) = response_head {
+                            head
+                        } else {
+                            release.notified().await;
+                            return axum::http::Response::builder()
+                                .header("content-type", "text/html")
+                                .body(axum::body::Body::from("<body>cancelled response</body>"))
+                                .unwrap();
+                        };
+                        let body = futures_util::stream::once(async move {
+                            release.notified().await;
+                            Ok::<_, std::convert::Infallible>(axum::body::Bytes::from_static(
+                                b"<body>cancelled response</body>",
+                            ))
+                        });
+                        axum::http::Response::builder()
+                            .status(status)
+                            .header("content-type", content_type)
+                            .body(axum::body::Body::from_stream(body))
+                            .unwrap()
+                    }
+                }),
+            )
+            .route(
+                "/ready",
+                axum::routing::get(|| async {
+                    axum::response::Html("<body>subsequent document</body>")
+                }),
+            );
+        axum::serve(listener, app).await.unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    let initial_url = "data:text/html,<body>previous committed document</body>";
+    ctx.install_navigation_fixture_for_session_owner(initial_url, Some("SID-1"))
+        .await;
+    wait_until_renderer_document_load(&mut ctx, Some("SID-1"), "TID-1", LOADER_ID).await;
+    for (id, method) in [
+        (910, "Page.enable"),
+        (911, "DOM.enable"),
+        (912, "Network.enable"),
+        (913, "Runtime.enable"),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": method,
+            "sessionId": "SID-1"
+        }))
+        .await;
+        assert_eq!(take_response_by_id(&mut ctx, id)["result"], json!({}));
+    }
+    let previous_html = loaded_page_html_for_test(&mut ctx).await;
+    ctx.sent.clear();
+    ctx.enable_background_navigation_scheduler_for_test();
+
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            ctx.process_async(json!({
+                "id": 914,
+                "method": "Page.navigate",
+                "sessionId": "SID-1",
+                "params": { "url": format!("http://{addr}/held") }
+            }))
+            .await;
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                request_received.notified(),
+            )
+            .await
+            .expect("the ordinary HTTP navigation should reach the held response");
+            if let Some((status, _)) = response_head {
+                wait_until_scheduler_message(
+                    &mut ctx,
+                    "held document response headers",
+                    |message| {
+                        message["method"] == json!("Network.responseReceived")
+                            && message["params"]["type"] == json!("Document")
+                            && message["params"]["response"]["status"] == json!(status)
+                    },
+                )
+                .await;
+            } else {
+                assert!(ctx.sent.iter().all(|message| message["id"] != json!(914)));
+            }
+
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 915,
+                "method": "Page.stopLoading",
+                "sessionId": "SID-1"
+            }))
+            .await;
+            assert_eq!(take_response_by_id(&mut ctx, 915)["result"], json!({}));
+            wait_until_scheduler_message(&mut ctx, "cancelled navigation response", |message| {
+                message["id"] == json!(914)
+            })
+            .await;
+            let navigation = take_response_by_id(&mut ctx, 914);
+            assert_eq!(navigation["result"]["frameId"], json!("TID-1"));
+            if response_head.is_some_and(|(status, _)| status == 200) {
+                // Successful response headers acknowledge navigation before
+                // XML buffering completes; cancellation must not send a
+                // second reply or replace the still-committed old Document.
+                assert!(navigation["result"].get("errorText").is_none());
+            } else {
+                assert_eq!(navigation["result"]["errorText"], json!("net::ERR_ABORTED"));
+            }
+            wait_until_scheduler_message(
+                &mut ctx,
+                "cancelled navigation network event",
+                |message| {
+                    message["method"] == json!("Network.loadingFailed")
+                        && message["params"]["errorText"] == json!("net::ERR_ABORTED")
+                },
+            )
+            .await;
+            let failure = ctx
+                .sent
+                .iter()
+                .find(|message| message["method"] == json!("Network.loadingFailed"))
+                .expect("cancelled request failure");
+            assert_eq!(failure["params"]["canceled"], json!(true));
+            assert_eq!(failure["params"]["type"], json!("Document"));
+            assert!(ctx.sent.iter().all(|message| message["id"] != json!(914)));
+            assert_eq!(loaded_page_html_for_test(&mut ctx).await, previous_html);
+            assert_eq!(
+                ctx.conn.browser_context.as_ref().unwrap().target_url(),
+                initial_url
+            );
+            for method in [
+                "Page.frameNavigated",
+                "DOM.documentUpdated",
+                "Runtime.executionContextsCleared",
+                "Runtime.executionContextCreated",
+                "Page.domContentEventFired",
+                "Page.loadEventFired",
+            ] {
+                assert!(
+                    ctx.sent
+                        .iter()
+                        .all(|message| message["method"] != json!(method)),
+                    "cancelled pre-response navigation must not replace the document: {method}"
+                );
+            }
+
+            // The response remains held until cancellation has completed. No
+            // server delay or timing race can masquerade as transport abort.
+            release_response.notify_one();
+            ctx.sent.clear();
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 916,
+                "method": "Page.navigate",
+                "sessionId": "SID-1",
+                "params": { "url": format!("http://{addr}/ready") }
+            }))
+            .await;
+            let navigation = take_response_by_id(&mut ctx, 916);
+            assert!(navigation["result"].get("errorText").is_none());
+            wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+            let html = loaded_page_html_for_test(&mut ctx).await;
+            assert!(html.contains("subsequent document"));
+            assert!(!html.contains("cancelled response"));
+            assert_eq!(
+                ctx.conn.browser_context.as_ref().unwrap().target_url(),
+                format!("http://{addr}/ready")
+            );
+        })
+        .await;
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_loading_after_commit_cancels_transport_without_replacing_partial_document() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let prefix_parsed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let transport_closed = std::sync::Arc::new(tokio::sync::Notify::new());
+    let server_parsed = prefix_parsed.clone();
+    let server_closed = transport_closed.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let parsed = server_parsed.clone();
+            let closed = server_closed.clone();
+            tokio::spawn(async move {
+                let mut request = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !request.ends_with(b"\r\n\r\n") {
+                    if socket.read(&mut byte).await.unwrap() == 0 {
+                        return;
+                    }
+                    request.push(byte[0]);
+                }
+                if request.starts_with(b"GET /stream ") {
+                    let prefix = b"<!doctype html><body><main id='prefix'>committed prefix</main><script>fetch('/parsed')</script>";
+                    let tail = b"<main id='tail'>unreceived tail</main></body>";
+                    let headers = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        prefix.len() + tail.len()
+                    );
+                    socket.write_all(headers.as_bytes()).await.unwrap();
+                    socket.write_all(prefix).await.unwrap();
+                    socket.flush().await.unwrap();
+                    // The server never supplies EOF or the tail. Completion
+                    // here can only come from the client's transport close.
+                    let read = socket.read(&mut byte).await;
+                    assert!(
+                        matches!(read, Ok(0)) || read.is_err(),
+                        "client must close the held transfer: {read:?}"
+                    );
+                    closed.notify_one();
+                } else if request.starts_with(b"GET /parsed ") {
+                    socket
+                        .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                        .await
+                        .unwrap();
+                    parsed.notify_one();
+                } else {
+                    socket.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 26\r\nConnection: close\r\n\r\n<body>complete page</body>").await.unwrap();
+                }
+            });
+        }
+    });
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.enable_background_navigation_scheduler_for_test();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 920, "method": "Page.navigate", "sessionId": "SID-1",
+                "params": { "url": format!("http://{addr}/stream") }
+            }))
+            .await;
+            assert!(
+                take_response_by_id(&mut ctx, 920)["result"]
+                    .get("errorText")
+                    .is_none()
+            );
+            wait_until_scheduler_message(&mut ctx, "streaming document commit", |message| {
+                message["method"] == json!("Page.frameNavigated")
+            })
+            .await;
+            tokio::time::timeout(std::time::Duration::from_secs(5), prefix_parsed.notified())
+                .await
+                .expect("committed prefix script must execute before stopping");
+            assert!(
+                loaded_page_html_for_test(&mut ctx)
+                    .await
+                    .contains("committed prefix")
+            );
+            ctx.sent.clear();
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 921, "method": "Page.stopLoading", "sessionId": "SID-1"
+            }))
+            .await;
+            assert_eq!(take_response_by_id(&mut ctx, 921)["result"], json!({}));
+            tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                transport_closed.notified(),
+            )
+            .await
+            .expect("explicit document stop must cancel the committed response transport");
+            let html = loaded_page_html_for_test(&mut ctx).await;
+            assert!(html.contains("committed prefix"));
+            assert!(!html.contains("unreceived tail"));
+            assert_eq!(
+                ctx.conn.browser_context.as_ref().unwrap().target_url(),
+                format!("http://{addr}/stream")
+            );
+            assert!(
+                ctx.sent
+                    .iter()
+                    .all(|message| message["method"] != json!("Page.frameNavigated"))
+            );
+
+            ctx.sent.clear();
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 922, "method": "Page.navigate", "sessionId": "SID-1",
+                "params": { "url": format!("http://{addr}/complete") }
+            }))
+            .await;
+            assert!(
+                take_response_by_id(&mut ctx, 922)["result"]
+                    .get("errorText")
+                    .is_none()
+            );
+            wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
+            let completed_html = loaded_page_html_for_test(&mut ctx).await;
+            assert!(completed_html.contains("complete page"));
+            ctx.process_and_wait_for_response_async(json!({
+                "id": 923, "method": "Page.stopLoading", "sessionId": "SID-1"
+            }))
+            .await;
+            assert_eq!(take_response_by_id(&mut ctx, 923)["result"], json!({}));
+            assert_eq!(loaded_page_html_for_test(&mut ctx).await, completed_html);
+        })
+        .await;
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn stop_loading_without_browser_context_returns_empty_result() {
     let mut ctx = TestContext::new();
 
