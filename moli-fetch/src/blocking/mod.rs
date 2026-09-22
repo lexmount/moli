@@ -421,8 +421,8 @@ fn append_browser_subresource_headers(
                 | crate::RequestResourceType::ClassicAsyncOrDeferScript
                 | crate::RequestResourceType::LatePreloadScript
         ) {
-            append_header_if_missing(outgoing, "Accept", "*/*".to_owned());
-            append_header_if_missing(
+            append_encoded_header_if_missing(outgoing, "Accept", "*/*".to_owned());
+            append_encoded_header_if_missing(
                 outgoing,
                 "Accept-Language",
                 request
@@ -430,17 +430,17 @@ fn append_browser_subresource_headers(
                     .accept_language()
                     .to_owned(),
             );
-            append_header_if_missing(
+            append_encoded_header_if_missing(
                 outgoing,
                 "Sec-Fetch-Site",
                 request_sec_fetch_site(request, request_url),
             );
-            append_header_if_missing(
+            append_encoded_header_if_missing(
                 outgoing,
                 "Sec-Fetch-Mode",
                 request.request_mode.as_ref().to_owned(),
             );
-            append_header_if_missing(outgoing, "Sec-Fetch-Dest", "script".to_owned());
+            append_encoded_header_if_missing(outgoing, "Sec-Fetch-Dest", "script".to_owned());
             append_browser_client_hints(outgoing, request.browser_identity(config));
         }
         return;

@@ -389,7 +389,8 @@ async fn script_cors_redirects_drop_authorization_apply_referrer_policy_and_pres
         request.request_headers = vec![
             ("Authorization".to_owned(), "Bearer test-only".to_owned()),
             ("X-Embedder".to_owned(), "preserved".to_owned()),
-        ];
+        ]
+        .into();
         let response = fetch_script(&document, request, callback).await.unwrap();
         assert_eq!(response.final_url.fragment(), Some("module-fragment"));
         assert_eq!(redirect.request_count(), 1);

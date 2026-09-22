@@ -505,7 +505,7 @@ impl ControlledResourceLoad {
                     crate::network_host::local_url_response_with_blob_entry(
                         &self.request.url,
                         &self.request.method,
-                        &self.request.request_headers,
+                        &self.request.request_headers.to_byte_strings(),
                         self.blob_url_entry.as_ref(),
                     )
                     .expect("local resource routing")

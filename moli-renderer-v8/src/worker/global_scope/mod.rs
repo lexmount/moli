@@ -58,7 +58,7 @@ use crate::network_host::{
     capture_xhr_upload_listener_flag, close_pending_network_body_stream, convert_xhr_send_body_from_args, dispatch_xhr_loadstart,
     apply_xhr_upload_event, enqueue_pending_network_body_chunk,
     error_pending_network_body_stream_with_reason, filter_cors_exposed_response_headers,
-    filter_headers_for_guard, local_url_response_result, parse_fetch_init, request_headers_guard_for_mode,
+    filter_headers_for_guard, parse_fetch_init, request_headers_guard_for_mode,
     request_object_credentials_mode, resolve_context_url, set_xhr_state_number,
     throw_synchronous_xhr_failure, xhr_author_request_headers, xhr_ensure_send_allowed,
     xhr_state_bool_property, xhr_state_number_property, xhr_state_string_property,
