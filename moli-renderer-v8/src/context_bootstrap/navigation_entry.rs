@@ -274,7 +274,7 @@ pub(super) fn navigation_entry_referrer_policy_value<'s>(
     navigation_entry_stored_string(scope, entry, NAVIGATION_ENTRY_REFERRER_POLICY_SLOT)
 }
 
-pub(super) fn navigation_entry_public_token(token: &str) -> String {
+pub(crate) fn navigation_entry_public_token(token: &str) -> String {
     if token.is_empty() || is_uuid_v4_like(token) {
         return token.to_owned();
     }

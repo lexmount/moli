@@ -113,6 +113,28 @@ pub(super) fn refresh<'s>(
         if pushing == Some(child) {
             child_snapshot = before_push(child_snapshot);
         }
+        if let Some(current) = child_snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.index == child_snapshot.current_index)
+            && let Some(positions) = host
+                .take_restored_child_history_positions(handle, &current.key)
+                .or_else(|| {
+                    if host
+                        .joint_histories
+                        .get(root)?
+                        .navigable_history(child)
+                        .is_some()
+                    {
+                        return None;
+                    }
+                    host.saved_child_history_positions(handle, &current.key)
+                })
+        {
+            host.joint_histories
+                .get_mut(root)?
+                .restore_child(child, positions, &current.key);
+        }
         host.joint_histories
             .get_mut(root)?
             .ensure_child(child, child_snapshot);
@@ -120,6 +142,7 @@ pub(super) fn refresh<'s>(
     host.joint_histories
         .get_mut(root)?
         .retain_navigables(|owner| live.contains(&owner));
+    host.remember_nested_histories(root);
     Some(root)
 }
 
@@ -261,7 +284,7 @@ fn apply_plan(
     host: &mut JsContextHost,
     source_target: WindowTaskTarget,
     root: OwnerDispatchScope,
-    plan: JointHistoryTraversal,
+    mut plan: JointHistoryTraversal,
     mut method: Option<PendingHistoryTraversal>,
 ) {
     if plan.targets.iter().any(|target| {
@@ -305,9 +328,47 @@ fn apply_plan(
             host.record_pending_top_level_history_traversal(
                 i64::from(target.index) - i64::from(current),
             );
+            host.top_level_navigation_history()
+                .select_joint_traversal(target.key.clone(), plan.step);
             return;
         }
     }
+    // A replaced parent reconstructs its descendants from the target
+    // Document's nested histories. Traversing the old descendants as well
+    // can commit into a subtree whose parent is already being retired.
+    let mut replacing_documents = Vec::new();
+    for target in &plan.targets {
+        let Some(window) = window_for_owner(scope, host, target.owner) else {
+            continue;
+        };
+        let Some(history) = window_history_for_holder(scope, window) else {
+            continue;
+        };
+        let current = history_index(scope, history);
+        if super::navigation_seed::history_entry_seed_for_traversal(
+            scope,
+            window,
+            current,
+            target.index,
+        )
+        .is_some()
+        {
+            replacing_documents.push(target.owner);
+        }
+    }
+    plan.targets.retain(|target| {
+        let mut owner = target.owner;
+        while let OwnerDispatchScope::Child(handle) = owner {
+            let Some(parent) = host.owner_dispatch_scope_for_node(handle) else {
+                break;
+            };
+            if replacing_documents.contains(&parent) {
+                return false;
+            }
+            owner = parent;
+        }
+        true
+    });
     let targets = plan
         .targets
         .iter()
@@ -437,6 +498,22 @@ pub(crate) fn commit<'s>(
     let Some(snapshot) = snapshot(scope, history) else {
         return;
     };
+    if pushing.is_some() {
+        let root_window = runtime_top_window_owner(scope, owner);
+        if let Some(seed) = super::navigation_serialize::capture_navigation_entry_seed_for_holder(
+            scope,
+            root_window,
+        ) && let Some(joint) = host.joint_histories.get(root)
+        {
+            let step = joint.source_step();
+            let roots = seed
+                .entries
+                .iter()
+                .map(|entry| entry.document_id.clone())
+                .collect::<Vec<_>>();
+            host.nested_history_store(root).prune(step, &roots);
+        }
+    }
     let Some(joint) = host.joint_histories.get_mut(root) else {
         return;
     };
@@ -466,6 +543,7 @@ pub(crate) fn commit<'s>(
     set_history_length(scope, history, length);
     prune_runtime_entries(scope, host, removed);
     finish_traversal(scope, host, root);
+    host.remember_nested_histories(root);
 }
 
 fn finish_traversal(

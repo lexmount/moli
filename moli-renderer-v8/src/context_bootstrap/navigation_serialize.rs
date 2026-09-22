@@ -21,7 +21,7 @@ use crate::{
     referrer_policy::normalize_referrer_policy, util::context_host_ptr_from_window_object,
 };
 
-fn capture_navigation_entry_seed_for_holder<'s>(
+pub(crate) fn capture_navigation_entry_seed_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<NavigationHistoryEntrySeed> {
@@ -32,6 +32,14 @@ fn capture_navigation_entry_seed_for_holder<'s>(
         current_index: history_index(scope, history),
         activation: serialize_navigation_activation_seed(scope, navigation),
     })
+}
+
+pub(crate) fn history_document_id_for_holder<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<NavigationHistoryDocumentId> {
+    let entry = navigation_current_entry(scope, owner)?;
+    navigation_entry_document_id(scope, entry).map(NavigationHistoryDocumentId::from_serialized)
 }
 
 pub(super) fn sync_navigation_entry_seed_from_owner<'s>(

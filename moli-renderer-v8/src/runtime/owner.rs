@@ -6915,6 +6915,9 @@ impl RendererOwnerHandle {
                         .as_ref()
                         .map(|request| request.resolve(&final_url))
                         .transpose()?,
+                    navigation_history_source: navigation_history
+                        .as_ref()
+                        .map(|request| request.source_history()),
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };
@@ -7215,6 +7218,7 @@ impl RendererOwnerHandle {
                     main_document_commit,
                     top_level_storage_key: None,
                     navigation_bootstrap_entry: navigation_history.as_ref().map(|request| request.resolve(&final_url)).transpose()?,
+                    navigation_history_source: navigation_history.as_ref().map(|request| request.source_history()),
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };

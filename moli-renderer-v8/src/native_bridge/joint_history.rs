@@ -7,6 +7,10 @@ use std::collections::{BTreeSet, HashMap, VecDeque};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SessionHistoryStep(u64);
 
+impl SessionHistoryStep {
+    pub(crate) const INITIAL: Self = Self(0);
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct JointHistoryEntry {
     pub(crate) index: u32,
@@ -26,10 +30,101 @@ struct EntryPosition {
     step: SessionHistoryStep,
 }
 
-#[derive(Debug)]
-struct NavigableHistory {
+#[derive(Clone, Debug)]
+pub(crate) struct NavigableHistory {
     entries: Vec<EntryPosition>,
     current_key: String,
+}
+
+impl NavigableHistory {
+    pub(crate) fn new(
+        snapshot: JointHistorySnapshot,
+        first_step: SessionHistoryStep,
+    ) -> Option<Self> {
+        let current_key = snapshot
+            .entries
+            .iter()
+            .find(|entry| entry.index == snapshot.current_index)?
+            .key
+            .clone();
+        Some(Self {
+            entries: snapshot
+                .entries
+                .into_iter()
+                .map(|entry| EntryPosition {
+                    step: SessionHistoryStep(first_step.0 + u64::from(entry.navigation_index)),
+                    entry,
+                })
+                .collect(),
+            current_key,
+        })
+    }
+    pub(crate) fn entry_at(&self, step: SessionHistoryStep) -> Option<&JointHistoryEntry> {
+        self.entries
+            .iter()
+            .rev()
+            .find(|entry| entry.step <= step)
+            .map(|entry| &entry.entry)
+    }
+
+    pub(crate) fn retain_through(&mut self, step: SessionHistoryStep) {
+        self.entries.retain(|entry| entry.step <= step);
+    }
+
+    pub(crate) fn contains(&self, key: &str) -> bool {
+        self.entries.iter().any(|entry| entry.entry.key == key)
+    }
+}
+
+/// Committed history positions survive the renderer and DOM handles that
+/// happened to present them. Child entries are restored separately when their
+/// parent Document recreates its navigables.
+#[derive(Clone, Debug)]
+pub(crate) struct JointHistoryRestoration {
+    root: NavigableHistory,
+    current_step: SessionHistoryStep,
+    steps: BTreeSet<SessionHistoryStep>,
+}
+
+impl JointHistoryRestoration {
+    pub(crate) fn current_step(&self) -> SessionHistoryStep {
+        self.current_step
+    }
+    pub(crate) fn for_navigation(
+        self,
+        snapshot: JointHistorySnapshot,
+        navigation_type: Option<&str>,
+        target_step: Option<SessionHistoryStep>,
+    ) -> Option<Self> {
+        let root = OwnerDispatchScope::Top;
+        let mut histories = JointSessionHistories::default();
+        histories.restore_root(root, self);
+        let joint = histories.get_mut(root)?;
+        match navigation_type {
+            Some("push") => {
+                joint.push(root, snapshot);
+            }
+            Some("traverse") => {
+                let key = &snapshot
+                    .entries
+                    .iter()
+                    .find(|entry| entry.index == snapshot.current_index)?
+                    .key;
+                let target = joint.plan_entry(root, key)?;
+                let entry_step = joint
+                    .navigables
+                    .get(&root)?
+                    .entries
+                    .iter()
+                    .find(|entry| &entry.entry.key == key)?
+                    .step;
+                joint.update_current(root, snapshot, Some(entry_step));
+                joint.current_step = target_step.unwrap_or(target.step);
+            }
+            _ => joint.replace(root, snapshot),
+        }
+        joint.restoration(root)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +180,24 @@ pub(crate) struct JointSessionHistories {
 }
 
 impl JointSessionHistories {
+    pub(crate) fn restore_root(
+        &mut self,
+        owner: OwnerDispatchScope,
+        restoration: JointHistoryRestoration,
+    ) {
+        self.histories.insert(
+            owner,
+            JointSessionHistory {
+                current_step: restoration.current_step,
+                revision: 0,
+                navigables: IndexMap::from([(owner, restoration.root)]),
+                retired_steps: restoration.steps,
+                pending_traversal: None,
+                deferred_mutations: VecDeque::new(),
+                completed_traversal: None,
+            },
+        );
+    }
     pub(crate) fn root_for_owner(&self, owner: OwnerDispatchScope) -> Option<OwnerDispatchScope> {
         self.histories
             .iter()
@@ -127,6 +240,33 @@ impl JointSessionHistories {
 }
 
 impl JointSessionHistory {
+    pub(crate) fn restoration(&self, root: OwnerDispatchScope) -> Option<JointHistoryRestoration> {
+        Some(JointHistoryRestoration {
+            root: self.navigables.get(&root)?.clone(),
+            current_step: self.current_step,
+            steps: self.used_steps().into_iter().collect(),
+        })
+    }
+
+    pub(crate) fn navigable_history(&self, owner: OwnerDispatchScope) -> Option<NavigableHistory> {
+        self.navigables.get(&owner).cloned()
+    }
+
+    pub(crate) fn restore_child(
+        &mut self,
+        owner: OwnerDispatchScope,
+        mut history: NavigableHistory,
+        current_key: &str,
+    ) {
+        history.current_key = current_key.to_owned();
+        self.navigables.insert(owner, history);
+    }
+
+    pub(crate) fn destination_step(&self) -> SessionHistoryStep {
+        self.pending_traversal
+            .as_ref()
+            .map_or(self.current_step, |pending| pending.step)
+    }
     pub(crate) fn reset(&mut self, snapshots: Vec<(OwnerDispatchScope, JointHistorySnapshot)>) {
         self.navigables.clear();
         self.retired_steps.clear();
@@ -573,6 +713,63 @@ mod tests {
                 .collect(),
             current_index,
         }
+    }
+
+    #[test]
+    fn restored_root_and_children_preserve_interleaved_session_history_steps() {
+        let root = OwnerDispatchScope::Top;
+        let old_a = OwnerDispatchScope::Child(DomHandle::new(1));
+        let old_b = OwnerDispatchScope::Child(DomHandle::new(2));
+        let mut histories = JointSessionHistories::default();
+        let original = histories
+            .ensure_root(root, snapshot(&["parent"], 0))
+            .unwrap();
+        original.ensure_child(old_a, snapshot(&["a0"], 0));
+        original.ensure_child(old_b, snapshot(&["b0"], 0));
+        original.push(old_a, snapshot(&["a0", "a1"], 1));
+        original.push(old_b, snapshot(&["b0", "b1"], 1));
+        original.push(old_a, snapshot(&["a0", "a1", "a2"], 2));
+        let a = original.navigable_history(old_a).unwrap();
+        let b = original.navigable_history(old_b).unwrap();
+        let source = original.restoration(root).unwrap();
+        let away = source
+            .for_navigation(snapshot(&["parent", "away"], 1), Some("push"), None)
+            .unwrap();
+        let back = away
+            .for_navigation(
+                snapshot(&["parent", "away"], 0),
+                Some("traverse"),
+                Some(SessionHistoryStep(3)),
+            )
+            .unwrap();
+        drop(histories);
+
+        let mut histories = JointSessionHistories::default();
+        histories.restore_root(root, back);
+        let restored = histories.get_mut(root).unwrap();
+        let new_a = OwnerDispatchScope::Child(DomHandle::new(101));
+        let new_b = OwnerDispatchScope::Child(DomHandle::new(102));
+        restored.restore_child(new_a, a.clone(), "a2");
+        restored.restore_child(new_b, b.clone(), "b1");
+        assert_eq!(restored.length(), 5);
+        for (owner, key) in [(new_a, "a1"), (new_b, "b0"), (new_a, "a0")] {
+            let plan = restored.plan_delta(restored.current_step(), -1).unwrap();
+            assert_eq!(plan.targets.len(), 1);
+            assert_eq!(plan.targets[0].owner, owner);
+            assert_eq!(plan.targets[0].key, key);
+            restored.begin_traversal(plan);
+            restored.commit_traversal_entry(owner, key);
+        }
+        assert_eq!(restored.current_step(), SessionHistoryStep(0));
+        assert_eq!(
+            restored
+                .plan_delta(restored.current_step(), 4)
+                .unwrap()
+                .step,
+            SessionHistoryStep(4)
+        );
+        assert_eq!(a.entry_at(SessionHistoryStep(1)).unwrap().key, "a1");
+        assert_eq!(b.entry_at(SessionHistoryStep(1)).unwrap().key, "b0");
     }
 
     #[test]

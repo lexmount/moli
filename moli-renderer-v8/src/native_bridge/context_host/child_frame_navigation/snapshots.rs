@@ -75,7 +75,11 @@ impl JsContextHost {
         let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
             return false;
         };
-        entry.set_navigation_entry_seed(entry_seed)
+        let committed = entry.set_navigation_entry_seed(entry_seed);
+        if committed {
+            self.remember_child_history(handle);
+        }
+        committed
     }
 
     pub(crate) fn pending_child_browsing_context_navigation_position(

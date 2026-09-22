@@ -476,6 +476,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) {
+        let restoring = self.take_child_history_restoration(handle);
         let increments_joint_history = self
             .child_browsing_contexts
             .get_mut(&handle)
@@ -493,7 +494,7 @@ impl JsContextHost {
                 });
             let update = if increments_joint_history {
                 moli_page_types::SameDocumentHistoryUpdate::Push
-            } else if traversing {
+            } else if traversing && !restoring {
                 moli_page_types::SameDocumentHistoryUpdate::Traverse { delta: 0 }
             } else {
                 moli_page_types::SameDocumentHistoryUpdate::Replace

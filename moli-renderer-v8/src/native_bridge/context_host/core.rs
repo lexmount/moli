@@ -339,6 +339,8 @@ impl JsContextHost {
             opfs_owner_state: None,
             history_queue: HistoryQueueState::default(),
             joint_histories: super::super::joint_history::JointSessionHistories::default(),
+            popup_nested_histories: HashMap::new(),
+            claimed_child_histories: HashMap::new(),
             rendering_updates: super::rendering_updates::RenderingUpdateState::default(),
             scroll_observable_effect_batch:
                 super::interaction_batch::ScrollObservableEffectBatchState::default(),

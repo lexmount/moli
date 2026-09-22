@@ -699,6 +699,7 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         layout_policy: crate::real_layout_test_policy(),
         wpt_extensions_enabled: false,
         navigation_bootstrap_entry: None,
+        navigation_history_source: None,
         reserved_service_worker_client_id: None,
     }
 }

@@ -98,6 +98,16 @@ impl JsContextHost {
         self.top_level_navigation_history.clone()
     }
 
+    pub(crate) fn restore_top_level_navigation_history(
+        &mut self,
+        source: &crate::runtime::RendererNavigationHistory,
+        seed: &NavigationHistoryEntrySeed,
+    ) {
+        self.top_level_navigation_history = source.restore_for(seed);
+        self.top_level_navigation_history
+            .install_joint_history(&mut self.joint_histories);
+    }
+
     pub(in crate::native_bridge::context_host) fn child_frame_attribute_initiator_has_same_origin(
         &self,
         handle: DomHandle,
