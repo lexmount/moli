@@ -405,6 +405,9 @@ impl PageScriptHost {
         if entry.document_sandbox_forces_opaque_origin() {
             return Some("null".to_owned());
         }
+        if let Some(origin) = entry.current_srcdoc_history_origin() {
+            return Some(origin.serialized_origin());
+        }
         if entry.security_origin_inherited() {
             return Some(self.child_browsing_context_creator_origin(handle));
         }

@@ -188,6 +188,11 @@ impl PageScriptHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
+        let bootstrap = self
+            .child_browsing_contexts
+            .get(&handle)
+            .and_then(|entry| entry.srcdoc_history_bootstrap(&entry_seed))
+            .unwrap_or_else(|| ChildBrowsingContextBootstrap::Url(url.clone()));
         self.reject_replaced_service_worker_child_client_navigation(
             handle,
             "The navigation was canceled.".to_owned(),
@@ -196,12 +201,7 @@ impl PageScriptHost {
             entry.replace_navigation_entry_seed(entry_seed);
         }
         if self
-            .set_child_browsing_context_pending_navigation(
-                handle,
-                ChildBrowsingContextBootstrap::Url(url.clone()),
-                initiator_url,
-                false,
-            )
+            .set_child_browsing_context_pending_navigation(handle, bootstrap, initiator_url, false)
             .is_none()
         {
             return false;
