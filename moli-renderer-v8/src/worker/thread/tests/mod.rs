@@ -1,3 +1,4 @@
+mod abort_signal_events;
 use std::pin::pin;
 use std::sync::Arc;
 use std::time::Duration;

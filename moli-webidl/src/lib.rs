@@ -49,11 +49,11 @@ pub use convert::{
 };
 pub use error::{Context, WebIdlError, WebIdlErrorKind};
 pub use helpers::{
-    dictionary_arg, dictionary_value, event_listener_once_option, event_listener_once_value,
-    event_listener_options, event_listener_options_value, is_nullish, optional_number_property,
-    optional_object_arg, optional_string_property, property, property_non_nullish,
-    property_non_undefined, property_result, symbol_property_result, throw_dom_exception,
-    throw_error, throw_index_size_error, throw_type_error, v8_string,
+    add_event_listener_options_value, dictionary_arg, dictionary_value, event_listener_once_option,
+    event_listener_once_value, event_listener_options, event_listener_options_value, is_nullish,
+    optional_number_property, optional_object_arg, optional_string_property, property,
+    property_non_nullish, property_non_undefined, property_result, symbol_property_result,
+    throw_dom_exception, throw_error, throw_index_size_error, throw_type_error, v8_string,
 };
 pub use moli_webidl_callback::{
     PreparedWebIdlCallbackFunction, PreparedWebIdlCallbackInterface, WebIdlCallbackFunction,

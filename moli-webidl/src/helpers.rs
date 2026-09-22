@@ -232,3 +232,25 @@ pub fn event_listener_once_option<'s>(
 ) -> bool {
     event_listener_options(scope, args, index, false).once
 }
+
+/// Converts `(AddEventListenerOptions or boolean)` through `passive`.
+///
+/// The caller must convert the platform-specific `signal` member next, before
+/// changing the listener list. Getter exceptions stop conversion immediately.
+pub fn add_event_listener_options_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<EventListenerOptions, WebIdlError> {
+    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return Ok(EventListenerOptions {
+            capture: value.boolean_value(scope),
+            ..EventListenerOptions::default()
+        });
+    };
+    let parsed = parse_dictionary_object::<EventListenerOptionsMembers>(scope, object)?;
+    Ok(EventListenerOptions {
+        capture: parsed.capture,
+        once: parsed.once,
+        passive: parsed.passive,
+    })
+}

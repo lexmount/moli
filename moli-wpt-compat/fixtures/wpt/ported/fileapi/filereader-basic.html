@@ -69,10 +69,20 @@ test(function () {
   reader.addEventListener(undefined, listener);
   reader.removeEventListener(undefined, listener);
 
-  reader.addEventListener("load");
+  assert_throws_name(
+    "TypeError",
+    () => reader.addEventListener("load"),
+    "addEventListener callback is required"
+  );
+  assert_throws_name(
+    "TypeError",
+    () => reader.removeEventListener("load"),
+    "removeEventListener callback is required"
+  );
   reader.addEventListener("load", null);
-  reader.removeEventListener("load");
+  reader.addEventListener("load", undefined);
   reader.removeEventListener("load", null);
+  reader.removeEventListener("load", undefined);
 }, "FileReader listener arguments follow WebIDL boundary conversion");
 
 test(function () {

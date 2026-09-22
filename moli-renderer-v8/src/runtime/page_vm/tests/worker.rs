@@ -4464,7 +4464,7 @@ async fn shared_worker_declared_surface_ignores_reflection_and_spoofing() {
                         if (typeof worker.onerror !== "function") {
                             throw new Error("onerror getter should ignore public slot spoofing");
                         }
-                        worker.dispatchEvent({ type: "error" });
+                        worker.dispatchEvent(new Event("error"));
                         const dispatchResult = __sharedWorkerSurfaceCalls.join("|");
                         if (dispatchResult !== "listener:error|handler:error") {
                             throw new Error(`SharedWorker ordered dispatch was spoofed: ${dispatchResult}`);

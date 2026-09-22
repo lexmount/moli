@@ -13,13 +13,7 @@ use super::global_scope::{
     TimerInfo, get_worker_state, reject_worker_fetches_for_signal, worker_isolate_timer_queues,
 };
 
-mod event_listener;
-
-use event_listener::WorkerAbortListener;
-pub(crate) use event_listener::{
-    worker_abort_signal_add_event_listener_callback, worker_abort_signal_dispatch_event_callback,
-    worker_abort_signal_remove_event_listener_callback,
-};
+use crate::context_bootstrap::abort_signal_events;
 
 const WORKER_ABORT_SIGNAL_ID_SLOT: &str = "__lmWorkerAbortSignalId";
 const WORKER_ABORT_CONTROLLER_ID_SLOT: &str = "__lmWorkerAbortControllerId";
@@ -30,7 +24,6 @@ const WORKER_ABORT_SIGNAL_REASON_SLOT: &str = "__lmWorkerAbortSignalReason";
 pub(super) struct WorkerAbortStore {
     next_signal_id: u32,
     next_controller_id: u32,
-    next_listener_id: u64,
     signals: HashMap<u32, WorkerAbortSignalState>,
     controllers: HashMap<u32, u32>,
 }
@@ -40,8 +33,6 @@ pub(super) struct WorkerAbortSignalState {
     signal: Option<v8::Global<v8::Object>>,
     aborted: bool,
     reason: Option<v8::Global<v8::Value>>,
-    onabort: Option<v8::Global<v8::Function>>,
-    listeners: HashMap<String, Vec<WorkerAbortListener>>,
     abort_algorithms: Vec<v8::Global<v8::Function>>,
     linked_message_port_listeners: Vec<WorkerAbortLinkedMessagePortListener>,
     dependent_signals: Vec<u32>,
@@ -76,19 +67,6 @@ impl WorkerAbortStore {
         self.next_controller_id
     }
 
-    fn define_hidden_value(
-        scope: &mut v8::PinScope<'_, '_>,
-        object: v8::Local<'_, v8::Object>,
-        key: &str,
-        value: v8::Local<'_, v8::Value>,
-    ) {
-        let Some(key) = v8_string(scope, key) else {
-            return;
-        };
-        let _ =
-            object.define_own_property(scope, key.into(), value, v8::PropertyAttribute::DONT_ENUM);
-    }
-
     pub(super) fn signal_id_from_object<'s>(
         scope: &mut v8::PinScope<'s, '_>,
         object: v8::Local<'s, v8::Object>,
@@ -109,10 +87,10 @@ impl WorkerAbortStore {
             .map(|value| value as u32)
     }
 
-    fn init_signal(
+    fn init_signal<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        signal: v8::Local<'_, v8::Object>,
+        scope: &mut v8::PinScope<'s, '_>,
+        signal: v8::Local<'s, v8::Object>,
         aborted: bool,
         reason: Option<v8::Local<'_, v8::Value>>,
     ) -> u32 {
@@ -135,14 +113,15 @@ impl WorkerAbortStore {
         if let Some(reason) = reason {
             set_private_value(scope, signal, WORKER_ABORT_SIGNAL_REASON_SLOT, reason);
         }
+        abort_signal_events::initialize(scope, signal);
         signal_id
     }
 
-    fn init_controller(
+    fn init_controller<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         controller: v8::Local<'_, v8::Object>,
-        signal: v8::Local<'_, v8::Object>,
+        signal: v8::Local<'s, v8::Object>,
     ) {
         let signal_id = self.init_signal(scope, signal, false, None);
         let controller_id = self.alloc_controller_id();
@@ -290,12 +269,7 @@ fn abort_worker_signal<'s>(
     let Some(signal_id) = WorkerAbortStore::signal_id_from_object(scope, signal) else {
         return;
     };
-    let Some((
-        abort_algorithms,
-        linked_message_port_listeners,
-        dependent_signals,
-        dispatch_snapshot,
-    )) = ({
+    let Some((abort_algorithms, linked_message_port_listeners, dependent_signals)) = ({
         let mut store = store.borrow_mut();
         let Some(state) = store.signal_state_mut(signal_id) else {
             return;
@@ -313,14 +287,11 @@ fn abort_worker_signal<'s>(
             abort_algorithms,
             linked_message_port_listeners,
             state.dependent_signals.clone(),
-            state.dispatch_snapshot("abort"),
         ))
-    })
-    else {
+    }) else {
         return;
     };
 
-    let signal = local_object_in_scope(scope, signal);
     reject_worker_fetches_for_signal(scope, signal_id, reason);
     invoke_worker_abort_algorithms(scope, signal, reason, abort_algorithms);
     for linked in linked_message_port_listeners {
@@ -330,7 +301,7 @@ fn abort_worker_signal<'s>(
             linked.listener_id,
         );
     }
-    event_listener::dispatch_abort(store, scope, signal, signal_id, dispatch_snapshot);
+    abort_signal_events::dispatch_abort(scope, signal);
     for dependent_signal_id in dependent_signals {
         let dependent_signal = {
             let store = store.borrow();
@@ -359,14 +330,6 @@ fn invoke_worker_abort_algorithms<'s>(
             &[reason],
         );
     }
-}
-
-fn local_object_in_scope<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
-    let global = v8::Global::new(scope, object);
-    v8::Local::new(scope, global)
 }
 
 fn create_signal_with_prototype<'s>(
@@ -465,40 +428,6 @@ pub(crate) fn abort_worker_signal_by_id<'s>(
         return;
     };
     abort_worker_signal(&store, scope, signal, reason);
-}
-
-fn worker_abort_signal_onabort<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    signal: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Function>> {
-    worker_abort_store(scope)
-        .and_then(|state| {
-            WorkerAbortStore::signal_id_from_object(scope, signal).and_then(|id| {
-                state
-                    .borrow()
-                    .signal_state(id)
-                    .and_then(|s| s.onabort.clone())
-            })
-        })
-        .map(|onabort| v8::Local::new(scope, &onabort))
-}
-
-fn set_worker_abort_signal_onabort<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    signal: v8::Local<'s, v8::Object>,
-    value: v8::Local<'s, v8::Value>,
-) {
-    let Some(store) = worker_abort_store(scope) else {
-        return;
-    };
-    let Some(signal_id) = WorkerAbortStore::signal_id_from_object(scope, signal) else {
-        return;
-    };
-    if let Some(signal_state) = store.borrow_mut().signal_state_mut(signal_id) {
-        signal_state.onabort = v8::Local::<v8::Function>::try_from(value)
-            .ok()
-            .map(|function| v8::Global::new(scope, function));
-    }
 }
 
 pub(super) fn worker_dom_exception_value<'s>(
@@ -768,31 +697,6 @@ pub(crate) fn worker_abort_signal_reason_getter_function<'s>(
         return;
     };
     rv.set(reason);
-}
-
-pub(crate) fn worker_abort_signal_onabort_getter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(onabort) = worker_abort_signal_onabort(scope, args.this()) else {
-        rv.set_null();
-        return;
-    };
-    rv.set(onabort.into());
-}
-
-pub(crate) fn worker_abort_signal_onabort_setter_function<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    if args.length() > 0 {
-        set_worker_abort_signal_onabort(scope, args.this(), args.get(0));
-    } else {
-        set_worker_abort_signal_onabort(scope, args.this(), v8::undefined(scope).into());
-    }
-    rv.set_undefined();
 }
 
 pub(crate) fn worker_abort_signal_throw_if_aborted_callback<'s>(

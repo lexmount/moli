@@ -183,9 +183,6 @@ pub(crate) fn event_listener_signal_from_options_value<'s>(
         return Some(None);
     };
     let signal_key = v8str(scope, "signal");
-    if !options.has(scope, signal_key.into()).unwrap_or(false) {
-        return Some(None);
-    }
     let signal_value = options.get(scope, signal_key.into())?;
     if signal_value.is_undefined() {
         return Some(None);

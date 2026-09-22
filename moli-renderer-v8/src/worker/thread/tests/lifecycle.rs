@@ -7897,7 +7897,7 @@ async fn worker_abort_signal_internal_id_is_not_page_visible_or_forgeable() {
                 hasVisibleSlot: "__lmWorkerAbortSignalId" in signal,
                 ownNames: Object.getOwnPropertyNames(signal),
                 anyForged: probe(() => AbortSignal.any([forged])),
-                getterForged: abortedGetter.call(forged)
+                getterForged: probe(() => abortedGetter.call(forged))
             });
             close();
         })();
@@ -7912,7 +7912,7 @@ async fn worker_abort_signal_internal_id_is_not_page_visible_or_forgeable() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"hasVisibleSlot":false,"ownNames":[],"anyForged":"TypeError","getterForged":false}"#
+        r#"{"hasVisibleSlot":false,"ownNames":[],"anyForged":"TypeError","getterForged":"TypeError"}"#
     );
 }
 

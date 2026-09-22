@@ -32,8 +32,7 @@ pub(super) use self::events::{
     DispatchStatus, HostEventTargetRegistry, PublicEventDispatchResult, create_host_event,
     dispatch_host_event, dispatch_public_event, dispatch_public_event_with_original_target,
     event_dispatch_status, event_target_value, host_event_defaults, invoke_prepared_event_callback,
-    invoke_prepared_event_callback_on_object, report_event_callback_exception,
-    report_event_listener_exception,
+    report_event_callback_exception, report_event_listener_exception,
 };
 pub(crate) use self::events::{EventListenerInspectorSnapshot, EventListenerRegistration};
 pub(super) use self::scripts::{

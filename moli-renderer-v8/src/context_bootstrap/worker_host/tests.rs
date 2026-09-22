@@ -56,6 +56,14 @@ fn setup_worker_context() -> (v8::OwnedIsolate, v8::Global<v8::Context>) {
         let ctx_scope = &mut v8::ContextScope::new(scope, context);
         let global = context.global(ctx_scope);
 
+        crate::context_bootstrap::exposed_interfaces::install_worker_exposed_interfaces(
+            ctx_scope,
+            global,
+            crate::context_bootstrap::exposed_interfaces::RealmKind::DedicatedWorker,
+            false,
+            vec![crate::context_bootstrap::find_constructor_spec("Event").expect("Event spec")],
+        )
+        .expect("standalone Worker tests need intrinsic event constructors");
         install_dom_exception(ctx_scope, global);
         let form_data_template =
             crate::context_bootstrap::build_named_constructor_template(ctx_scope, "FormData")
@@ -545,7 +553,7 @@ fn constructor_declared_event_target_slots_ignore_reflection_and_spoofing() {
             if (typeof w.onmessage !== "function") {
                 throw new Error("onmessage getter should ignore public slot spoofing");
             }
-            w.dispatchEvent({ type: "message" });
+            w.dispatchEvent(new Event("message"));
             const result = calls.join("|");
             if (result !== "listener:message|handler:message") {
                 throw new Error(`Worker ordered dispatch was spoofed: ${result}`);

@@ -36,12 +36,13 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     ("custom_elements/definition.rs", 10),
     ("custom_elements/definition_callbacks.rs", 1),
     ("host/timers.rs", 1),
-    ("native_bridge/abort.rs", 3),
+    // AbortSignal listeners and onabort now use the shared typed EventTarget
+    // registry. These remaining roots own browser-created abort algorithms.
+    ("native_bridge/abort.rs", 1),
     ("native_bridge/abort/event.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),
-    ("worker/abort.rs", 3),
-    ("worker/abort/event_listener.rs", 1),
+    ("worker/abort.rs", 2),
     ("worker/timer_callback.rs", 1),
 ];
 

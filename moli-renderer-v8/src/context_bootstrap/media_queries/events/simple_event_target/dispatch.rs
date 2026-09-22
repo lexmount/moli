@@ -2,13 +2,12 @@ use super::*;
 use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
-        EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, clear_event_composed_path,
-        clear_event_dispatch_fields, event_internal_bool_flag, set_event_composed_path,
-        set_event_dispatch_fields, set_event_internal_flag,
+        EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, event_internal_bool_flag,
+        set_event_default_prevented, set_event_internal_flag,
     },
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
-    util::{context_host_ptr_from_global_bridge, serialize_v8_array},
+    util::context_host_ptr_from_global_bridge,
 };
 
 fn event_stop_immediate_propagation<'s>(
@@ -26,26 +25,14 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) fn 
     slot_name: &str,
     rv: &mut v8::ReturnValue<'s, v8::Value>,
 ) {
-    let event_value = args.get(0);
-    if !event_value.is_object() || event_value.is_function() {
-        throw_type_error(
+    let Some((event, event_type)) =
+        crate::context_bootstrap::event_target_dispatch::prepare_script_dispatch(
             scope,
-            "Failed to execute 'dispatchEvent': parameter 1 is not an object.",
-        );
-        return;
-    }
-    let Ok(event) = v8::Local::<v8::Object>::try_from(event_value) else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'dispatchEvent': parameter 1 is not an object.",
-        );
-        return;
-    };
-    let Some(event_type) = object_string_property_defined(scope, event, "type") else {
-        throw_type_error(
-            scope,
-            "Failed to execute 'dispatchEvent': event type is required.",
-        );
+            args.this(),
+            args.get(0),
+        )
+    else {
+        rv.set_bool(false);
         return;
     };
 
@@ -62,11 +49,10 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
     event_type: &str,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
-    set_event_dispatch_fields(scope, target, event);
-    let path = serialize_v8_array(scope, [target]).unwrap_or_else(|| v8::Array::new(scope, 1));
-    set_event_composed_path(scope, event, path);
+    let can_invoke =
+        crate::context_bootstrap::event_target_dispatch::begin_dispatch(scope, target, event);
 
-    if !simple_event_target_uses_ordered_handlers(scope, target) {
+    if can_invoke && !simple_event_target_uses_ordered_handlers(scope, target) {
         let handler_name = format!("on{event_type}");
         if let Some(handler_key) = v8_string(scope, &handler_name)
             && let Some(handler_value) = target.get(scope, handler_key.into())
@@ -78,7 +64,7 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 .get_creation_context(scope)
                 .unwrap_or(current_context);
             let incumbent_context = scope.get_incumbent_context().unwrap_or(current_context);
-            let _ = invoke_simple_event_callback(
+            let returned = invoke_simple_event_callback(
                 scope,
                 event_type,
                 &format!("simple event target {handler_name}"),
@@ -90,57 +76,61 @@ pub(crate) fn dispatch_simple_event_target_event<'s>(
                 &[event.into()],
                 event,
             );
+            if let Some(returned) = returned {
+                apply_handler_return_value(scope, event, v8::Local::new(scope, &returned));
+            }
         }
     }
 
-    if !event_stop_immediate_propagation(scope, event) {
-        let listeners =
-            simple_object_event_listeners_snapshot(scope, target, slot_name, event_type);
+    if !event_internal_bool_flag(
+        scope,
+        event,
+        crate::context_bootstrap::EVENT_STOP_PROPAGATION_SLOT,
+    ) {
         'phases: for capture_phase in [true, false] {
+            // Capture listeners may add listeners for the subsequent bubble phase.
+            let listeners =
+                simple_object_event_listeners_snapshot(scope, target, slot_name, event_type);
             for listener in listeners
                 .iter()
                 .filter(|listener| listener.capture == capture_phase)
             {
-                if !simple_object_event_listener_is_registered(
-                    scope,
-                    target,
-                    slot_name,
-                    event_type,
-                    listener.original,
-                    listener.capture,
-                ) {
+                let Some(listener) =
+                    listener.prepare_for_invocation(scope, target, slot_name, event_type)
+                else {
                     continue;
-                }
-                if listener.once {
-                    simple_object_event_remove_listener_value_for_type(
-                        scope,
-                        target,
-                        slot_name,
-                        event_type,
-                        listener.original,
-                        listener.capture,
-                    );
-                }
+                };
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, listener.passive);
-                let _ = invoke_simple_event_listener(
+                let returned = invoke_simple_event_listener(
                     scope,
                     event_type,
                     &format!("simple event target {event_type} listener"),
-                    listener,
+                    &listener,
                     target.into(),
                     &[event.into()],
                     event,
                 );
+                if listener.handler_slot.is_some()
+                    && let Some(returned) = returned
+                {
+                    apply_handler_return_value(scope, event, v8::Local::new(scope, &returned));
+                }
                 set_event_internal_flag(scope, event, EVENT_PASSIVE_SLOT, false);
                 if event_stop_immediate_propagation(scope, event) {
                     break 'phases;
                 }
             }
+            if event_internal_bool_flag(
+                scope,
+                event,
+                crate::context_bootstrap::EVENT_STOP_PROPAGATION_SLOT,
+            ) {
+                break;
+            }
         }
     }
 
-    clear_event_dispatch_fields(scope, event);
-    clear_event_composed_path(scope, event);
+    crate::context_bootstrap::event_target_dispatch::finish_dispatch(scope, event);
     let default_prevented = object_bool_property(scope, event, "defaultPrevented").unwrap_or(false);
     !default_prevented
 }
@@ -257,9 +247,24 @@ fn invoke_simple_event_callback_with_invocation<'s>(
                     None,
                     &report,
                 );
+            } else {
+                let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
             }
             None
         }
         CallbackInvocationOutcome::Retired => None,
+    }
+}
+
+fn apply_handler_return_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    returned: v8::Local<'s, v8::Value>,
+) {
+    if returned.is_false()
+        && object_bool_property(scope, event, "cancelable").unwrap_or(false)
+        && !event_internal_bool_flag(scope, event, EVENT_PASSIVE_SLOT)
+    {
+        set_event_default_prevented(scope, event);
     }
 }
