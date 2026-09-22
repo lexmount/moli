@@ -395,7 +395,8 @@ fn parse_browsing_context_document_snapshot(
     if let Some(content_type) =
         content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime))
     {
-        let stream = HtmlParser::SCRIPTING_DISABLED.start_text_document(document_url, content_type);
+        let stream = HtmlParser::with_scripting_enabled(false)
+            .start_text_document(document_url, content_type);
         stream.feed(source);
         return (stream.finish_dom_host(), DetachedDocumentKind::Html);
     }
