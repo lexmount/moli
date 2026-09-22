@@ -1,6 +1,148 @@
 use super::*;
 
 #[test]
+fn history_snapshots_restore_structured_state_after_source_vm_is_dropped() {
+    let mut source = new_storage_test_vm("https://history-snapshot.test/current");
+    source
+        .eval(
+            r#"
+        const buffer = new ArrayBuffer(4);
+        new Uint8Array(buffer).set([1, 2, 3, 4]);
+        const state = {
+          map: new Map(), bytes: new Uint8Array(buffer), view: new DataView(buffer),
+          bigint: 123n, date: new Date(123), blob: new Blob(['state']),
+          exception: new DOMException('message', 'DataError'), point: new DOMPoint(1, 2)
+        };
+        state.map.set(state, state);
+        history.replaceState(state, '');
+        navigation.updateCurrentEntry({state});
+        location.reload();
+        "queued"
+    "#,
+        )
+        .unwrap();
+    let seed = source
+        .take_pending_location_navigation_with_seed()
+        .unwrap()
+        .entry_seed
+        .unwrap();
+    drop(source);
+
+    let mut restored = new_storage_test_vm("https://history-snapshot.test/current");
+    restored.install_navigation_bootstrap_entry(Some(seed));
+    assert_eq!(
+        restored
+            .eval(
+                r#"
+        [history.state, navigation.currentEntry.getState()].every(state =>
+          state.map instanceof Map && state.map.get(state) === state &&
+          state.bytes instanceof Uint8Array && state.view instanceof DataView &&
+          state.bytes.buffer === state.view.buffer && state.view.getUint8(2) === 3 &&
+          state.bigint === 123n && state.date instanceof Date && +state.date === 123 &&
+          state.blob instanceof Blob && state.blob.size === 5 &&
+          state.exception instanceof DOMException && state.exception.name === 'DataError' &&
+          state.point instanceof DOMPoint && state.point.x === 1 && state.point.y === 2)
+    "#
+            )
+            .unwrap(),
+        "true"
+    );
+}
+
+#[tokio::test]
+async fn history_structured_state_survives_document_and_entry_changes_without_json() {
+    for mode in [
+        "reload",
+        "traverse",
+        "traverse-builtins",
+        "fragment",
+        "null-reload",
+        "undefined-reload",
+    ] {
+        let requests = match mode {
+            "traverse" | "traverse-builtins" => vec![
+                "/common/blank.html?state",
+                "/common/blank.html?away",
+                "/common/blank.html?state",
+            ],
+            "fragment" => vec!["/common/blank.html?state"],
+            _ => vec!["/common/blank.html?state", "/common/blank.html?state"],
+        };
+        let server = StaticHttpServer::spawn(requests.len()).await;
+        let base = server.base_url().origin().ascii_serialization();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/parent"), &loader);
+        let script = include_str!("../../../tests/fixtures/history-structured-state.js");
+        vm.eval(&format!(
+            "{script}\nglobalThis.stateResult = 'pending';\n\
+             historyStructuredState({base:?}, {mode:?}).then(\n\
+               value => stateResult = value, error => stateResult = String(error));"
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(stateResult !== 'pending')",
+            "true",
+            mode,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(stateResult)").unwrap()).unwrap();
+        let primitive = mode.starts_with("null") || mode.starts_with("undefined");
+        assert_eq!(result["jsonCalls"], 0, "{mode}: {result}");
+        assert_eq!(
+            result["getterCalls"],
+            if primitive { 0 } else { 2 },
+            "{mode}: {result}"
+        );
+        for stage in ["before", "after"] {
+            for api in ["history", "navigation"] {
+                let checks = result[stage][api]
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{mode}: {result}"));
+                let cleared = mode == "fragment" && stage == "after" && api == "history";
+                assert_eq!(
+                    checks.len(),
+                    if primitive || cleared {
+                        1
+                    } else if mode == "traverse-builtins" {
+                        15
+                    } else {
+                        17
+                    },
+                    "{mode}/{stage}/{api}"
+                );
+                for (property, valid) in checks {
+                    assert_eq!(valid, true, "{mode}/{stage}/{api}/{property}: {result}");
+                }
+            }
+        }
+        assert_eq!(server.finish_targets().await, requests, "{mode}");
+    }
+}
+
+#[test]
+fn navigation_state_uses_storage_serialization_before_dispatch() {
+    let mut vm = new_storage_test_vm("https://history-snapshot.test/current");
+    let script = include_str!("../../../tests/fixtures/history-structured-state.js");
+    vm.eval(&format!(
+        "{script}\nglobalThis.storageResult = null; historyStateStoragePolicy().then(value => storageResult = value);"
+    )).unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(&vm.eval("JSON.stringify(storageResult)").unwrap()).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({
+            "errors": ["DataCloneError", "DataCloneError", "DataCloneError", "DataCloneError", "DataCloneError", "DataCloneError"],
+            "events": 0, "entryUnchanged": true, "history": "safe", "navigation": true,
+            "runtimeCloneAllowed": true,
+        })
+    );
+}
+
+#[test]
 fn history_snapshots_ignore_navigation_entry_property_overrides() {
     let mut vm = new_storage_test_vm("https://history-snapshot.test/current");
     let identity: serde_json::Value = serde_json::from_str(
