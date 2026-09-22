@@ -721,6 +721,8 @@ impl PageScriptHost {
             .auxiliary_window
             .clone();
         self.request_auxiliary_window_close(window_handle);
+        self.popup_nested_histories
+            .remove(&OwnerDispatchScope::LightweightPopup(popup_id));
         let window = self.lightweight_popup_window(scope, popup_id);
         self.unregister_service_worker_popup_client(popup_id);
         self.cancel_lightweight_popup_document_loads(popup_id);
@@ -3178,6 +3180,7 @@ impl PageScriptHost {
         popup_id: u64,
         document_handle: DomHandle,
     ) {
+        self.claimed_child_histories.remove(&document_handle);
         if self
             .lightweight_popup_document_handles
             .get(&document_handle)

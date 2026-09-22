@@ -770,10 +770,24 @@ impl ScriptVm {
         });
     }
 
+    #[cfg(test)]
     pub(crate) fn install_navigation_bootstrap_entry(
         &mut self,
         entry_seed: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     ) {
+        self.install_navigation_bootstrap_from_history(entry_seed, None);
+    }
+
+    pub(super) fn install_navigation_bootstrap_from_history(
+        &mut self,
+        entry_seed: Option<super::native_bridge::NavigationHistoryEntrySeed>,
+        source: Option<crate::runtime::RendererNavigationHistory>,
+    ) {
+        if let (Some(source), Some(seed)) = (&source, &entry_seed) {
+            self._context_host
+                .borrow_mut()
+                .restore_top_level_navigation_history(source, seed);
+        }
         if let Some(pending) = self.main_world.pending_mut() {
             pending.history_entry = entry_seed;
             return;
