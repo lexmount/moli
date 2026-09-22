@@ -51,6 +51,7 @@ mod navigation;
 mod navigation_event_init;
 mod notification_init;
 mod payload_event_init;
+mod navigation_recursion;
 mod performance;
 mod performance_memory;
 mod platform_identity;
