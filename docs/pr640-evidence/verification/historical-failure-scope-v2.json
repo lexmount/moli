@@ -1,0 +1,809 @@
+{
+  "schema": "pr640-historical-case-scope-v2",
+  "report_url": "https://artifact-site.lexmount.cn/v/coY1pMVPbD6Z8cVLaUi_ZbpSnalfKpxY",
+  "source_sha256": {
+    "report": "eb5eb623706b3f0e4a5859c9a3a27a872de2f6026083084193e73b3fa5b699c1",
+    "moli-1.1.8": "693e7455d313cf13ad494799cc58115b22c36307353e3f12e1b3416453fda38e",
+    "moli-1.1.9": "f9e6723fc0ee0b6df4aecb57ed726de7468aa95e9a04833a28ae9a5d3f001cdc"
+  },
+  "receipt_report_failure_sets_match": true,
+  "historical_failures": {
+    "moli-1.1.8": [
+      29,
+      66,
+      67,
+      108,
+      156,
+      163,
+      196,
+      274,
+      314,
+      339,
+      349,
+      374,
+      386,
+      389,
+      399,
+      404,
+      415,
+      418,
+      441,
+      448,
+      506,
+      547,
+      576,
+      585,
+      590,
+      595,
+      620,
+      640,
+      645,
+      658,
+      666,
+      676,
+      714,
+      731,
+      784
+    ],
+    "moli-1.1.9": [
+      29,
+      66,
+      108,
+      156,
+      163,
+      196,
+      274,
+      314,
+      339,
+      349,
+      374,
+      389,
+      399,
+      404,
+      415,
+      418,
+      441,
+      448,
+      465,
+      506,
+      547,
+      576,
+      585,
+      590,
+      595,
+      620,
+      640,
+      645,
+      658,
+      666,
+      676,
+      714,
+      731,
+      784
+    ]
+  },
+  "historical_union": {
+    "count": 36,
+    "case_ids": [
+      29,
+      66,
+      67,
+      108,
+      156,
+      163,
+      196,
+      274,
+      314,
+      339,
+      349,
+      374,
+      386,
+      389,
+      399,
+      404,
+      415,
+      418,
+      441,
+      448,
+      465,
+      506,
+      547,
+      576,
+      585,
+      590,
+      595,
+      620,
+      640,
+      645,
+      658,
+      666,
+      676,
+      714,
+      731,
+      784
+    ]
+  },
+  "only_1_1_8": [
+    67,
+    386
+  ],
+  "only_1_1_9": [
+    465
+  ],
+  "functional_35": {
+    "count": 35,
+    "case_ids": [
+      29,
+      66,
+      108,
+      156,
+      163,
+      196,
+      274,
+      314,
+      339,
+      349,
+      374,
+      386,
+      389,
+      399,
+      404,
+      415,
+      418,
+      441,
+      448,
+      465,
+      506,
+      547,
+      576,
+      585,
+      590,
+      595,
+      620,
+      640,
+      645,
+      658,
+      666,
+      676,
+      714,
+      731,
+      784
+    ],
+    "relation": "1.1.9 failures (34) plus #386, which also failed historically in 1.1.8; excludes #67 transport timeout. This is a functional scope, not the literal union of historical failures.",
+    "excluded_case_ids": [
+      67
+    ],
+    "excluded_reason": "Historical #67 was a real curl timeout; frozen old and PR subsequent parallel-read checks both succeeded. Report does not establish a browser regression or PR fix, so retain evidence without assigning to a repair PR.",
+    "tasks_argument": "29,66,108,156,163,196,274,314,339,349,374,386,389,399,404,415,418,441,448,465,506,547,576,585,590,595,620,640,645,658,666,676,714,731,784"
+  },
+  "categories": {
+    "zero_area_target_geometry": {
+      "label": "目标元素布局面积为零",
+      "moli-1.1.8": [
+        29,
+        108,
+        156,
+        163,
+        196,
+        374,
+        389,
+        399,
+        415,
+        418,
+        441,
+        448,
+        585,
+        590,
+        658,
+        666,
+        714
+      ],
+      "moli-1.1.9": [
+        29,
+        108,
+        156,
+        163,
+        196,
+        374,
+        389,
+        399,
+        415,
+        418,
+        441,
+        448,
+        506,
+        585,
+        590,
+        658,
+        666,
+        714
+      ]
+    },
+    "zero_width_forum_link": {
+      "label": "版块链接宽度为零",
+      "moli-1.1.8": [
+        66,
+        404,
+        595,
+        620,
+        640,
+        645
+      ],
+      "moli-1.1.9": [
+        66,
+        404,
+        595,
+        620,
+        640,
+        645
+      ]
+    },
+    "fetch_transport_timeout": {
+      "label": "正文请求传输超时",
+      "moli-1.1.8": [
+        67
+      ],
+      "moli-1.1.9": []
+    },
+    "input_navigation_lifecycle": {
+      "label": "按键与导航生命周期冲突",
+      "moli-1.1.8": [
+        274,
+        386
+      ],
+      "moli-1.1.9": [
+        274,
+        465
+      ]
+    },
+    "zero_width_candidate_changes_visible_ordinal": {
+      "label": "零宽链接改变可见元素序号",
+      "moli-1.1.8": [
+        314,
+        349
+      ],
+      "moli-1.1.9": [
+        314,
+        349
+      ]
+    },
+    "recorded_referer_mismatch": {
+      "label": "网络记录缺少验收所需 Referer",
+      "moli-1.1.8": [
+        339,
+        676
+      ],
+      "moli-1.1.9": [
+        339,
+        676
+      ]
+    },
+    "disabled_control_readiness_race": {
+      "label": "禁用控件的就绪竞态",
+      "moli-1.1.8": [
+        506
+      ],
+      "moli-1.1.9": []
+    },
+    "configuration_wizard_readiness_predicate": {
+      "label": "配置向导的几何状态未更新",
+      "moli-1.1.8": [
+        547
+      ],
+      "moli-1.1.9": [
+        547
+      ]
+    },
+    "suggestion_dom_selection": {
+      "label": "用户建议项的几何状态未更新",
+      "moli-1.1.8": [
+        576
+      ],
+      "moli-1.1.9": [
+        576
+      ]
+    },
+    "implicit_search_submission_absent": {
+      "label": "Enter 未产生搜索提交",
+      "moli-1.1.8": [
+        731
+      ],
+      "moli-1.1.9": [
+        731
+      ]
+    },
+    "json_document_dom_contract": {
+      "label": "JSON 页面缺少预期文本节点",
+      "moli-1.1.8": [
+        784
+      ],
+      "moli-1.1.9": [
+        784
+      ]
+    }
+  },
+  "cases": [
+    {
+      "case_id": 29,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 66,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_forum_link",
+        "moli-1.1.9": "zero_width_forum_link"
+      }
+    },
+    {
+      "case_id": 67,
+      "partition": null,
+      "scope": "historical_transport_timeout_noncausal",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "pass"
+      },
+      "historical_category": {
+        "moli-1.1.8": "fetch_transport_timeout",
+        "moli-1.1.9": null
+      }
+    },
+    {
+      "case_id": 108,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 156,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 163,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 196,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 274,
+      "partition": "PR-2",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "input_navigation_lifecycle",
+        "moli-1.1.9": "input_navigation_lifecycle"
+      }
+    },
+    {
+      "case_id": 314,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_candidate_changes_visible_ordinal",
+        "moli-1.1.9": "zero_width_candidate_changes_visible_ordinal"
+      }
+    },
+    {
+      "case_id": 339,
+      "partition": "PR-3",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "recorded_referer_mismatch",
+        "moli-1.1.9": "recorded_referer_mismatch"
+      }
+    },
+    {
+      "case_id": 349,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_candidate_changes_visible_ordinal",
+        "moli-1.1.9": "zero_width_candidate_changes_visible_ordinal"
+      }
+    },
+    {
+      "case_id": 374,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 386,
+      "partition": "PR-2",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "pass"
+      },
+      "historical_category": {
+        "moli-1.1.8": "input_navigation_lifecycle",
+        "moli-1.1.9": null
+      }
+    },
+    {
+      "case_id": 389,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 399,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 404,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_forum_link",
+        "moli-1.1.9": "zero_width_forum_link"
+      }
+    },
+    {
+      "case_id": 415,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 418,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 441,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 448,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 465,
+      "partition": "PR-2",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "pass",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": null,
+        "moli-1.1.9": "input_navigation_lifecycle"
+      }
+    },
+    {
+      "case_id": 506,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "disabled_control_readiness_race",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 547,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "configuration_wizard_readiness_predicate",
+        "moli-1.1.9": "configuration_wizard_readiness_predicate"
+      }
+    },
+    {
+      "case_id": 576,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "suggestion_dom_selection",
+        "moli-1.1.9": "suggestion_dom_selection"
+      }
+    },
+    {
+      "case_id": 585,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 590,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 595,
+      "partition": "PR-3",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_forum_link",
+        "moli-1.1.9": "zero_width_forum_link"
+      },
+      "previous_partition": "PR-1",
+      "required_dependency": "PR-1"
+    },
+    {
+      "case_id": 620,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_forum_link",
+        "moli-1.1.9": "zero_width_forum_link"
+      }
+    },
+    {
+      "case_id": 640,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_forum_link",
+        "moli-1.1.9": "zero_width_forum_link"
+      }
+    },
+    {
+      "case_id": 645,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_width_forum_link",
+        "moli-1.1.9": "zero_width_forum_link"
+      }
+    },
+    {
+      "case_id": 658,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 666,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 676,
+      "partition": "PR-3",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "recorded_referer_mismatch",
+        "moli-1.1.9": "recorded_referer_mismatch"
+      }
+    },
+    {
+      "case_id": 714,
+      "partition": "PR-1",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "zero_area_target_geometry",
+        "moli-1.1.9": "zero_area_target_geometry"
+      }
+    },
+    {
+      "case_id": 731,
+      "partition": "PR-2",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "implicit_search_submission_absent",
+        "moli-1.1.9": "implicit_search_submission_absent"
+      }
+    },
+    {
+      "case_id": 784,
+      "partition": "PR-4",
+      "scope": "functional_35",
+      "historical_status": {
+        "moli-1.1.8": "fail",
+        "moli-1.1.9": "fail"
+      },
+      "historical_category": {
+        "moli-1.1.8": "json_document_dom_contract",
+        "moli-1.1.9": "json_document_dom_contract"
+      }
+    }
+  ],
+  "execution": "No reset, browser launch, or additional test performed to construct this scope.",
+  "scope_revision": 2,
+  "supersedes": "35-case-scope.json",
+  "assignment_evidence": {
+    "case_id": 595,
+    "prior_layout_run": "layout-48d78ac6-targeted",
+    "prior_result": "fail",
+    "prior_run_total": 28,
+    "prior_run_pass": 27,
+    "reason": "Layout interaction succeeded, but frozen network evaluator rejected missing Referer on successful subscription POST. Acceptance belongs to network atop layout.",
+    "prior_evidence_is_immutable": true
+  }
+}
