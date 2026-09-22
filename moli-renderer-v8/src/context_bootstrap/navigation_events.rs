@@ -27,9 +27,9 @@ use super::navigation_lifecycle::{
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
-    replace_navigation_unload_event_active, runtime_window_dispatch_scope,
-    runtime_window_is_global, runtime_window_owner, should_dispatch_hash_change,
-    window_location_for_holder, window_task_target_for_runtime_owner,
+    navigation_has_disabled_entries, replace_navigation_unload_event_active,
+    runtime_window_dispatch_scope, runtime_window_is_global, runtime_window_owner,
+    should_dispatch_hash_change, window_location_for_holder, window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::document_runtime::EventTargetHandle;
@@ -774,6 +774,9 @@ pub(super) fn dispatch_navigation_currententrychange<'s>(
     from: Option<v8::Local<'s, v8::Object>>,
     navigation_type: Option<&str>,
 ) {
+    if navigation_has_disabled_entries(scope, navigation) {
+        return;
+    }
     let context = navigation
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
@@ -943,6 +946,9 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     form_data: Option<v8::Local<'s, v8::Value>>,
     source_element: Option<v8::Local<'s, v8::Object>>,
 ) -> NavigationDispatchOutcome<'s> {
+    if navigation_has_disabled_entries(scope, navigation) {
+        return NavigationDispatchOutcome::proceed();
+    }
     let context = navigation
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());

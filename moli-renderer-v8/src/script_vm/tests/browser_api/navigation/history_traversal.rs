@@ -319,10 +319,10 @@ async fn reset_navigation_history_updates_prebootstrapped_child_default_realm() 
     assert_eq!(
         vm.eval_in_child_default_context(
             child_context_id,
-            "JSON.stringify({ historyLength: history.length, navigationLength: navigation.entries().length, currentIndex: navigation.currentEntry.index })",
+            "JSON.stringify({ historyLength: history.length, navigationLength: navigation.entries().length, currentEntryNull: navigation.currentEntry === null })",
         )
         .expect("materialized child reset history state should evaluate"),
-        r#"{"historyLength":1,"navigationLength":1,"currentIndex":0}"#
+        r#"{"historyLength":1,"navigationLength":0,"currentEntryNull":true}"#
     );
 }
 

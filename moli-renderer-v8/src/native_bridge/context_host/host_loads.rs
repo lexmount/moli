@@ -553,7 +553,7 @@ impl JsContextHost {
         let document_open_replacement = matches!(
             self.frame_owner_store
                 .current_child_document_creation_kind(finish.child_handle),
-            Some(crate::frame_owner_model::DocumentCreationKind::DocumentOpen)
+            Some(crate::frame_owner_model::DocumentCreationKind::DocumentOpen { .. })
         );
         let parent_frame_id = self.protocol_child_frame_parent_id(
             finish

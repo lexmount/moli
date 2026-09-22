@@ -608,16 +608,24 @@ fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() 
 fn targeted_anchor_click_reports_same_document_hash_change_for_child_window() {
     let mut vm = new_storage_html_test_vm("https://targeted-child-hash.test/page.html");
 
-    let result = vm
-        .eval(
-            r#"
+    vm.eval(
+        r#"
 const frame = document.createElement('iframe');
+frame.srcdoc = '<p>committed child</p>';
 frame.name = 'target';
 const root = document.body || document.documentElement || document;
 root.appendChild(frame);
-frame.contentWindow.history.replaceState(null, '', 'about:blank#child');
+"#,
+    )
+    .expect("committed child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+frame.contentWindow.history.replaceState(null, '', 'about:srcdoc#child');
 const link = document.createElement('a');
-link.href = 'about:blank#next';
+link.href = 'about:srcdoc#next';
 link.target = 'target';
 root.appendChild(link);
 let seen = [];
@@ -635,7 +643,7 @@ seen.join('|')
         )
         .expect("targeted same-document anchor click should dispatch child navigate");
 
-    assert_eq!(result, "true,true,about:blank#next,-1");
+    assert_eq!(result, "true,true,about:srcdoc#next,-1");
 }
 #[test]
 fn window_load_uses_original_event_after_global_constructors_are_deleted() {

@@ -23,8 +23,7 @@ use super::navigation_events::{
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_mutation::{
-    apply_navigation_navigate_same_document, sync_local_document_front_from_window,
-    update_navigation_current_entry_for_same_document,
+    apply_navigation_navigate_same_document, update_navigation_current_entry_for_same_document,
 };
 use super::navigation_reload::{NavigationReloadAdmission, navigation_reload_admission};
 use super::navigation_result::{
@@ -35,11 +34,10 @@ use super::navigation_result::{
 use super::navigation_seed::history_entry_seed_for_reload;
 use super::navigation_serialize::serialize_history_entries;
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, navigation_document_can_update_current_entry,
-    navigation_document_has_opaque_origin, navigation_document_is_active,
-    navigation_unload_event_active, runtime_window_is_global, runtime_window_owner,
-    runtime_window_uses_top_level_history_model, url_is_about_blank_document,
-    window_history_for_holder, window_location_for_holder,
+    child_browsing_context_handle_for_runtime_owner, navigation_document_has_disabled_entries,
+    navigation_document_is_active, navigation_unload_event_active, runtime_window_is_global,
+    runtime_window_owner, runtime_window_uses_top_level_history_model, window_history_for_holder,
+    window_location_for_holder,
 };
 use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
@@ -372,31 +370,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 unsafe { &*host_ptr }.current_lightweight_popup_document_owner(popup_id)
             })
         });
-        let opaque_origin = navigation_document_has_opaque_origin(scope, owner);
-        if !opaque_origin
-            && !runtime_window_is_global(scope, owner)
-            && current_url
-                .as_ref()
-                .is_some_and(url_is_about_blank_document)
-            && !navigation_document_can_update_current_entry(scope, owner)
-        {
-            sync_location_object(scope, location, resolved.as_str());
-            sync_local_document_front_from_window(scope, owner);
-            if let Some(popup_id) = popup_id
-                && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-            {
-                unsafe { &mut *host_ptr }
-                    .dispatch_lightweight_popup_same_document_navigation_events(
-                        scope,
-                        popup_id,
-                        owner,
-                        &current_href,
-                        resolved.as_str(),
-                    );
-            }
-            return;
-        }
-        let navigation = if opaque_origin {
+        let entries_disabled = navigation_document_has_disabled_entries(scope, owner);
+        let navigation = if entries_disabled {
             None
         } else {
             super::navigation_window::window_navigation_for_holder(scope, owner)
@@ -461,8 +436,11 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             return;
         }
+        // Detect a close/removal from navigate handlers. Disabled entries have
+        // no such callback, and a popup's retained Document can still accept a
+        // fragment change before its queued close task retires the Document.
         if !location_has_relevant_document(scope, location)
-            || !navigation_document_is_active(scope, owner)
+            || (navigate_outcome.is_some() && !navigation_document_is_active(scope, owner))
         {
             return;
         }
@@ -535,7 +513,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             .is_some_and(|outcome| outcome.intercepted);
         let protocol_navigation_type = if intercepted { "other" } else { "fragment" };
         sync_location_object(scope, location, resolved.as_str());
-        if opaque_origin {
+        if entries_disabled {
             apply_navigation_navigate_same_document(
                 scope,
                 owner,

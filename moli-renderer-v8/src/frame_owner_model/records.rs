@@ -170,12 +170,18 @@ pub(crate) enum DocumentCreationKind {
     Navigation,
     Srcdoc,
     JavascriptUrl,
-    DocumentOpen,
+    DocumentOpen { is_initial_empty: bool },
 }
 
 impl DocumentCreationKind {
     pub(crate) fn is_initial_empty(self) -> bool {
-        matches!(self, Self::InitialEmpty)
+        matches!(
+            self,
+            Self::InitialEmpty
+                | Self::DocumentOpen {
+                    is_initial_empty: true
+                }
+        )
     }
 }
 
