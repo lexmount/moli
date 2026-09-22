@@ -9,6 +9,7 @@ fn popup_live_document_open_replaces_the_tree_and_close_finishes_the_parser() {
 (() => {
   const w = open(), d = w.document, root = d.documentElement, old = [...d.childNodes];
   try {
+    const initial = [d.compatMode, d.doctype, old.map(n => n.nodeName)];
     const observer = new MutationObserver(() => {});
     observer.observe(d, {childList:true});
     const same = d.open() === d;
@@ -18,7 +19,7 @@ fn popup_live_document_open_replaces_the_tree_and_close_finishes_the_parser() {
       removals.length, removals[0].removedNodes.length === old.length];
     d.close();
     const closed = [d.readyState, d.body.localName, d.body.textContent];
-    return JSON.stringify({opened, closed});
+    return JSON.stringify({initial, opened, closed});
   } finally { w.close(); }
 })()
 "#,
@@ -26,8 +27,38 @@ fn popup_live_document_open_replaces_the_tree_and_close_finishes_the_parser() {
         .unwrap();
     assert_eq!(
         result,
-        r#"{"opened":[true,true,0,null,null,null,false,"loading","CSS1Compat",1,true],"closed":["complete","body",""]}"#
+        r#"{"initial":["BackCompat",null,["HTML"]],"opened":[true,true,0,null,null,null,false,"loading","CSS1Compat",1,true],"closed":["complete","body",""]}"#
     );
+}
+
+#[test]
+fn popup_blank_navigation_restores_quirks_mode_without_a_doctype() {
+    let mut vm = new_storage_test_vm("https://popup-blank-mode.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+document.open();
+document.write('<!doctype html><body>standards opener');
+document.close();
+globalThis.modePopup = open('about:blank', 'mode-popup');
+globalThis.oldModeDocument = modePopup.document;
+oldModeDocument.open();
+oldModeDocument.write('<!doctype html><body>standards popup');
+oldModeDocument.close();
+oldModeDocument.compatMode;
+"#,
+        )
+        .unwrap(),
+        "CSS1Compat"
+    );
+    vm.eval("open('about:blank?replacement', 'mode-popup')")
+        .unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([modePopup.document !== oldModeDocument, modePopup.document.URL, modePopup.document.compatMode, modePopup.document.doctype, Array.from(modePopup.document.childNodes, n => n.nodeName), modePopup.document.body.textContent, document.compatMode])")
+            .unwrap(),
+        r#"[true,"about:blank?replacement","BackCompat",null,["HTML"],"","CSS1Compat"]"#
+    );
+    vm.eval("modePopup.close()").unwrap();
 }
 
 #[test]
