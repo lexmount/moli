@@ -400,15 +400,6 @@ fn apply_referrer_header(headers: &mut moli_fetch::RequestHeaders, referrer: Opt
     headers.push(("Referer".to_owned(), referrer.as_bytes().to_vec()));
 }
 
-fn apply_user_agent_header(headers: &mut moli_fetch::RequestHeaders, user_agent: &str) {
-    if !headers
-        .iter()
-        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-    {
-        headers.push(("User-Agent".to_owned(), user_agent.as_bytes().to_vec()));
-    }
-}
-
 fn renderer_runtime_inspector_session_id(session_key: &DevToolsSessionKey) -> Option<String> {
     session_key.wire_session_id().map(str::to_owned)
 }
@@ -768,19 +759,15 @@ impl<'a> TargetSessionOwnerMut<'a> {
             let target_session_id = target.session_id().map(str::to_owned);
             let target_has_network_event_listeners =
                 target.runtime_slot().has_network_event_listeners();
-            let effective_policy = self
+            let mut request_headers = self
                 .browser_context
-                .effective_policy_for_target(&self.target_id);
-            let mut request_headers = self.browser_context.merged_extra_headers_for_target_policy(
-                global_extra_headers,
-                effective_policy.extra_headers(),
-            );
-            let identity = effective_policy
-                .browser_identity_override()
-                .cloned()
-                .or_else(|| self.browser_context.default_browser_identity_override())
-                .unwrap_or_else(|| fallback_browser_identity.clone());
-            apply_user_agent_header(&mut request_headers, identity.user_agent());
+                .browser_context_handle()
+                .navigation_request_headers(
+                    web_contents,
+                    global_extra_headers.clone(),
+                    fallback_browser_identity.user_agent().to_owned(),
+                )
+                .ok()?;
             apply_referrer_header(&mut request_headers, referrer);
             let fetch_config = target.fetch_owner.config_snapshot();
             let fetch_snapshot = fetch_config.subresource_interception_snapshot();
@@ -1607,14 +1594,10 @@ impl CdpConnection {
         target_id: &str,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
         let browser_context = self.browser_context_by_id(browser_context_id)?;
-        let primary_session_id = if browser_context.is_active_target(target_id) {
-            browser_context.active_session_id_owned()
-        } else {
-            browser_context
-                .background_target(target_id)?
-                .session_id()
-                .map(str::to_owned)
-        };
+        let primary_session_id = browser_context
+            .page_target(target_id)?
+            .session_id()
+            .map(str::to_owned);
         let session_id = primary_session_id
             .or_else(|| {
                 browser_context
@@ -1624,11 +1607,11 @@ impl CdpConnection {
             })
             .map(Some)
             .or_else(|| {
-                (browser_context.is_active_target(target_id)
-                    && self
-                        .browser_context
-                        .as_ref()
-                        .is_some_and(|active| active.id == browser_context_id))
+                (self
+                    .browser_context
+                    .as_ref()
+                    .is_some_and(|active| active.id == browser_context_id)
+                    && browser_context.is_active_target(target_id))
                 .then_some(None)
             })?;
         let attachment =
@@ -1762,13 +1745,9 @@ impl CdpConnection {
         };
 
         let mut session_ids = Vec::new();
-        let primary_session_id = if browser_context.active_target_id() == Some(target_id.as_str()) {
-            browser_context.active_session_id_owned()
-        } else {
-            browser_context
-                .background_target(&target_id)
-                .and_then(|target| target.session_id().map(str::to_owned))
-        };
+        let primary_session_id = browser_context
+            .page_target(&target_id)
+            .and_then(|target| target.session_id().map(str::to_owned));
         session_ids.push(primary_session_id.clone());
         for attached_session_id in browser_context.attached_session_ids_for_target(&target_id) {
             if primary_session_id.as_deref() != Some(attached_session_id.as_str()) {

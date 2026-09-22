@@ -2979,7 +2979,7 @@ async fn assert_native_popup_download(context_override: bool) {
     };
     assert_eq!(reason, NavigationFailureReason::Download);
     assert_eq!(request.web_contents, popup);
-    let responses = context.navigation_responses(popup).unwrap();
+    let responses = context.navigation_observation(popup).unwrap().responses;
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0].request, request);
     assert_eq!(
@@ -2990,7 +2990,13 @@ async fn assert_native_popup_download(context_override: bool) {
         matches!(&responses[0].body, Some(Err(error)) if error.error_text == "net::ERR_ABORTED")
     );
     let replacement = context.start_document_navigation(popup).unwrap();
-    assert!(context.navigation_responses(popup).unwrap().is_empty());
+    assert!(
+        context
+            .navigation_observation(popup)
+            .unwrap()
+            .responses
+            .is_empty()
+    );
     release.send(true).unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {

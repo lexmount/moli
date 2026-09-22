@@ -150,18 +150,23 @@ impl BrowserHandle {
 }
 
 impl BrowserContextHandle {
-    pub fn navigation_responses(
+    pub fn navigation_observation(
         &self,
         contents: WebContentsHandle,
-    ) -> Result<Vec<crate::browser::NavigationResponseSnapshot>, String> {
-        let context = self.id;
-        self.browser.execute(move |browser| {
-            Ok(browser
-                .context(context)?
-                .web_contents(contents)?
-                .navigation()
-                .response_snapshots())
-        })?
+    ) -> Result<crate::browser::NavigationObservationSnapshot, String> {
+        self.try_read(move |context| {
+            let navigation = context.navigation_snapshot(contents)?;
+            let contents = context.web_contents(contents)?;
+            Ok(crate::browser::NavigationObservationSnapshot {
+                navigation,
+                responses: contents.navigation().response_snapshots(),
+                committed_document: contents
+                    .main_frame
+                    .current_document
+                    .as_ref()
+                    .and_then(|document| document.commit.clone()),
+            })
+        })
     }
 
     pub fn navigation_decision(

@@ -49,6 +49,37 @@ impl BrowserNavigationWaiter {
 }
 
 impl BrowserContextHandle {
+    /// Resolve header inheritance against one current Context/WebContents view.
+    pub fn navigation_request_headers(
+        &self,
+        contents: WebContentsHandle,
+        global_headers: moli_fetch::RequestHeaders,
+        fallback_user_agent: String,
+    ) -> Result<moli_fetch::RequestHeaders, String> {
+        self.try_read(move |context| {
+            let contents = context.web_contents(contents)?;
+            let mut headers = crate::browser::web_contents::merge_extra_header_layers(&[
+                &global_headers,
+                &context.network_policy().extra_headers,
+                &contents.network_request_policy.extra_headers,
+            ]);
+            if !headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+            {
+                let user_agent = contents
+                    .browser_identity_override
+                    .as_ref()
+                    .or_else(|| context.browser_identity_override())
+                    .map_or(fallback_user_agent.as_str(), |identity| {
+                        identity.user_agent()
+                    });
+                headers.push(("User-Agent".to_owned(), user_agent.as_bytes().to_vec()));
+            }
+            Ok(headers)
+        })
+    }
+
     pub fn navigate_document(
         &self,
         contents: WebContentsHandle,
@@ -1405,8 +1436,9 @@ mod native_capture_tests {
         let response = tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if let Some(response) = context
-                    .navigation_responses(contents)
+                    .navigation_observation(contents)
                     .unwrap()
+                    .responses
                     .into_iter()
                     .find(|response| response.request == request && response.body.is_some())
                 {

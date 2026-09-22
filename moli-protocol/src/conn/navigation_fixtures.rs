@@ -158,13 +158,13 @@ impl CdpConnection {
             if native.document_handle(contents)? != Some(document) {
                 return Err("fixture Document was replaced before body capture completed".into());
             }
-            if let Some(response) =
-                native
-                    .navigation_responses(contents)?
-                    .into_iter()
-                    .find(|response| {
-                        response.request.document == document.id() && response.body.is_some()
-                    })
+            if let Some(response) = native
+                .navigation_observation(contents)?
+                .responses
+                .into_iter()
+                .find(|response| {
+                    response.request.document == document.id() && response.body.is_some()
+                })
             {
                 return Ok(response);
             }

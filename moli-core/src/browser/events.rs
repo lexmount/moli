@@ -192,6 +192,15 @@ pub struct NavigationSnapshot {
     pub attempt: Option<NavigationAttempt>,
 }
 
+/// Navigation, response and commit facts read in the same owner turn. This
+/// observation carries no renderer endpoint or authority to operate a Document.
+#[derive(Clone, Debug)]
+pub struct NavigationObservationSnapshot {
+    pub navigation: NavigationSnapshot,
+    pub responses: Vec<NavigationResponseSnapshot>,
+    pub committed_document: Option<std::sync::Arc<super::web_contents::DocumentCommitMetadata>>,
+}
+
 /// Current physical Page identity and URL read in one Browser owner turn.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebContentsSnapshot {

@@ -117,21 +117,25 @@ impl CdpConnection {
         // Retirement was observed after the earlier response read. Browser may
         // have failed in between: consume its exact terminal response before
         // spending publication cursors on a synthetic supersession result.
-        let response = self
+        let observation = self
             .browser_context_by_browser_id(contents.context())
             .and_then(|context| {
                 context
                     .browser_context_handle()
-                    .navigation_responses(contents)
+                    .navigation_observation(contents)
                     .ok()
-            })
-            .and_then(|responses| {
-                responses
-                    .into_iter()
-                    .find(|response| response.request.navigation == navigation)
             });
-        let mut events = response
-            .map(|response| self.project_native_navigation_network(&response, true))
+        let mut events = observation
+            .as_ref()
+            .and_then(|observation| {
+                observation
+                    .responses
+                    .iter()
+                    .find(|response| response.request.navigation == navigation)
+                    .map(|response| {
+                        self.project_native_navigation_network(observation, response, true)
+                    })
+            })
             .unwrap_or_default();
         let Some((pending, emit_network)) = self
             .browser_context_by_browser_id_mut(contents.context())

@@ -7548,17 +7548,54 @@ async fn worker_fetch_rejects_preaborted_signal_with_dom_exception() {
     );
 }
 
+// Admit a real request before cancellation, then attempt the late response only
+// after the test has observed its terminal result. The server task is joined.
+async fn spawn_cancellable_worker_response() -> (
+    String,
+    oneshot::Receiver<()>,
+    oneshot::Sender<()>,
+    JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (requested, request_received) = oneshot::channel();
+    let (release_response, released) = oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let request = read_http_request_head(&mut stream).await.unwrap();
+        assert!(
+            request.starts_with("GET /assets/data.txt HTTP/1.1\r\n"),
+            "{request:?}"
+        );
+        requested.send(()).unwrap();
+        released.await.unwrap();
+        let mut byte = [0];
+        match tokio::io::AsyncReadExt::read(&mut stream, &mut byte).await {
+            Ok(0) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::ConnectionReset => {}
+            result => panic!("cancelled Worker request must close its transport: {result:?}"),
+        }
+        // The cancelled peer may reject this deliberately late response.
+        if let Err(error) = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4\r\nConnection: close\r\n\r\nlate",
+        ).await {
+            assert!(matches!(error.kind(), std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset | std::io::ErrorKind::ConnectionAborted), "{error}");
+        }
+    });
+    (
+        format!("http://{addr}"),
+        request_received,
+        release_response,
+        server,
+    )
+}
+
 #[tokio::test]
 async fn worker_fetch_rejects_inflight_abort_signal_and_ignores_late_completion() {
     ensure_v8();
-    let (base_url, server) = spawn_path_response_http_server(vec![(
-        "/assets/data.txt",
-        "HTTP/1.1 200 OK",
-        "text/plain; charset=utf-8",
-        "slow worker fetch".to_owned(),
-        Duration::from_millis(150),
-    )])
-    .await;
+    let (base_url, request_received, release_response, server) =
+        spawn_cancellable_worker_response().await;
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("worker fetch loader");
     let script_url = format!("{base_url}/assets/main.js");
     let mut handle = spawn_worker_with_request_client(
@@ -7567,14 +7604,17 @@ async fn worker_fetch_rejects_inflight_abort_signal_and_ignores_late_completion(
             const controller = new AbortController();
             const events = [];
             const pending = fetch("./data.txt", { signal: controller.signal });
-            setTimeout(() => controller.abort(), 0);
+            onmessage = () => controller.abort();
             try {
                 await pending;
                 events.push("unexpected");
             } catch (error) {
                 events.push(`error:${error && error.name}:${error instanceof DOMException}:${error && error.message}`);
             }
-            await new Promise((resolve) => setTimeout(resolve, 250));
+            await new Promise((resolve) => {
+                onmessage = resolve;
+                postMessage("aborted");
+            });
             postMessage(events);
             close();
         })();
@@ -7584,12 +7624,17 @@ async fn worker_fetch_rejects_inflight_abort_signal_and_ignores_late_completion(
         loader,
     );
 
+    timeout(TIMEOUT, request_received).await.unwrap().unwrap();
+    handle.post_message(serialize_test_string("abort"));
+    assert_eq!(recv_post_json(&mut handle).await, r#""aborted""#);
+    release_response.send(()).unwrap();
+    timeout(TIMEOUT, server).await.unwrap().unwrap();
+    handle.post_message(serialize_test_string("report"));
+
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"["error:AbortError:true:The operation was aborted."]"#
     );
-    server.abort();
-    let _ = server.await;
 }
 
 #[tokio::test]
@@ -7660,14 +7705,8 @@ async fn worker_fetch_body_consumption_after_stream_abort_preserves_abort_reason
 async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_completion() {
     let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
-    let (base_url, server) = spawn_path_response_http_server(vec![(
-        "/assets/data.txt",
-        "HTTP/1.1 200 OK",
-        "text/plain; charset=utf-8",
-        "slow worker xhr".to_owned(),
-        Duration::from_millis(150),
-    )])
-    .await;
+    let (base_url, request_received, release_response, server) =
+        spawn_cancellable_worker_response().await;
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader");
     let script_url = format!("{base_url}/assets/main.js");
     let mut handle = spawn_worker_with_request_client(
@@ -7679,20 +7718,18 @@ async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_c
             xhr.addEventListener('error', () => events.push(`error:${xhr.readyState}:${xhr.status}`));
             xhr.addEventListener('load', () => events.push('load'));
             xhr.addEventListener('loadend', () => events.push(`loadend:${xhr.readyState}:${xhr.status}`));
-            xhr.addEventListener('loadend', () => {
-                setTimeout(() => {
-                    postMessage({
-                        readyState: xhr.readyState,
-                        status: xhr.status,
-                        responseURL: xhr.responseURL,
-                        events,
-                    });
-                    close();
-                }, 250);
-            });
+            onmessage = ({data}) => {
+                if (data === "abort") { xhr.abort(); return; }
+                postMessage({
+                    readyState: xhr.readyState,
+                    status: xhr.status,
+                    responseURL: xhr.responseURL,
+                    events,
+                });
+                close();
+            };
             xhr.open('GET', './data.txt');
             xhr.send();
-            setTimeout(() => xhr.abort(), 0);
         })();
         "#
         .into(),
@@ -7700,32 +7737,29 @@ async fn worker_xmlhttprequest_abort_cancels_inflight_request_and_ignores_late_c
         loader,
     );
 
+    timeout(TIMEOUT, request_received).await.unwrap().unwrap();
+    handle.post_message(serialize_test_string("abort"));
     let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), format!("{base_url}/assets/data.txt"));
     assert!(record.request_handle().is_some());
     assert!(
         matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text } if error_text == "net::ERR_ABORTED")
     );
+    release_response.send(()).unwrap();
+    timeout(TIMEOUT, server).await.unwrap().unwrap();
+    handle.post_message(serialize_test_string("report"));
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"{"readyState":0,"status":0,"responseURL":"","events":["abort","loadend:4:0"]}"#
     );
-    server.abort();
-    let _ = server.await;
 }
 
 #[tokio::test]
 async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late_completion() {
     let mut network_records = WorkerNetworkRecords::default();
     ensure_v8();
-    let (base_url, server) = spawn_path_response_http_server(vec![(
-        "/assets/data.txt",
-        "HTTP/1.1 200 OK",
-        "text/plain; charset=utf-8",
-        "slow worker xhr".to_owned(),
-        Duration::from_millis(150),
-    )])
-    .await;
+    let (base_url, request_received, release_response, server) =
+        spawn_cancellable_worker_response().await;
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("worker xhr loader");
     let script_url = format!("{base_url}/assets/main.js");
     let mut handle = spawn_worker_with_request_client(
@@ -7737,26 +7771,23 @@ async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late
             xhr.addEventListener('timeout', () => events.push('timeout'));
             xhr.addEventListener('error', () => events.push(`error:${xhr.readyState}:${xhr.status}`));
             xhr.addEventListener('load', () => events.push('load'));
-            xhr.addEventListener('loadend', () => {
-                events.push(`loadend:${xhr.readyState}:${xhr.status}`);
-                setTimeout(() => {
-                    postMessage({
-                        readyState: xhr.readyState,
-                        status: xhr.status,
-                        statusText: xhr.statusText,
-                        responseText: xhr.responseText,
-                        responseURL: xhr.responseURL,
-                        contentType: xhr.getResponseHeader('Content-Type'),
-                        allHeaders: xhr.getAllResponseHeaders(),
-                        events,
-                    });
-                    close();
-                }, 250);
-            });
+            xhr.addEventListener('loadend', () => events.push(`loadend:${xhr.readyState}:${xhr.status}`));
+            onmessage = ({data}) => {
+                if (data === "timeout") { xhr.timeout = 1000; xhr.timeout = 20; return; }
+                postMessage({
+                    readyState: xhr.readyState,
+                    status: xhr.status,
+                    statusText: xhr.statusText,
+                    responseText: xhr.responseText,
+                    responseURL: xhr.responseURL,
+                    contentType: xhr.getResponseHeader('Content-Type'),
+                    allHeaders: xhr.getAllResponseHeaders(),
+                    events,
+                });
+                close();
+            };
             xhr.open('GET', './data.txt');
-            xhr.timeout = 1000;
             xhr.send();
-            xhr.timeout = 20;
         })();
         "#
         .into(),
@@ -7764,18 +7795,21 @@ async fn worker_xmlhttprequest_timeout_cancels_inflight_request_and_ignores_late
         loader,
     );
 
+    timeout(TIMEOUT, request_received).await.unwrap().unwrap();
+    handle.post_message(serialize_test_string("timeout"));
     let record = network_records.recv_record(&mut handle).await;
     assert_eq!(record.url().as_str(), format!("{base_url}/assets/data.txt"));
     assert!(record.request_handle().is_some());
     assert!(
         matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text } if error_text == "XMLHttpRequest timeout")
     );
+    release_response.send(()).unwrap();
+    timeout(TIMEOUT, server).await.unwrap().unwrap();
+    handle.post_message(serialize_test_string("report"));
     assert_eq!(
         recv_post_json(&mut handle).await,
         r#"{"readyState":4,"status":0,"statusText":"","responseText":"","responseURL":"","contentType":null,"allHeaders":"","events":["readystatechange:1","readystatechange:4","timeout","loadend:4:0"]}"#
     );
-    server.abort();
-    let _ = server.await;
 }
 
 #[tokio::test]

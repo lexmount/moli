@@ -1714,7 +1714,7 @@ impl CdpScheduler {
     pub(crate) async fn complete_ready_protocol_residences_after_command(
         &mut self,
     ) -> ProtocolOutputSequence {
-        if self.has_pending_javascript_dialog() {
+        if self.queues.protocol_residences.is_empty() || self.has_pending_javascript_dialog() {
             return ProtocolOutputSequence::empty();
         }
         let snapshot = self.queues.take_command_followup_snapshot();

@@ -96,21 +96,21 @@ impl CdpConnection {
                 projection.projected_renderer_document_lifecycle_binding_for_target(target)
             })
             .map(|binding| (binding.document_id, binding.navigation));
-        let Ok(responses) = context.navigation_responses(contents) else {
+        let Ok(observation) = context.navigation_observation(contents) else {
             return Vec::new();
         };
         let mut out = Vec::new();
-        for response in responses {
-            out.extend(self.project_native_navigation_network(&response, false));
+        for response in &observation.responses {
+            out.extend(self.project_native_navigation_network(&observation, response, false));
             let document =
                 moli_core::browser::DocumentHandle::new(contents, response.request.document);
             if projected != Some((document.id(), Some(response.request.navigation)))
-                && context.document_commit_snapshot(document).is_ok()
+                && observation.navigation.committed == Some(response.request)
             {
                 out.extend(self.project_browser_document_commit(document).await);
             }
-            out.extend(self.project_native_navigation_network(&response, true));
-            if let Some((owner, loader)) = self.native_navigation_projection_owner(&response) {
+            out.extend(self.project_native_navigation_network(&observation, response, true));
+            if let Some((owner, loader)) = self.native_navigation_projection_owner(response) {
                 self.settle_native_navigation_load(&owner, &loader, &mut out);
             }
         }
@@ -125,21 +125,24 @@ impl CdpConnection {
         document: moli_core::browser::DocumentHandle,
         complete: bool,
     ) -> Vec<BackgroundProtocolEvent> {
-        let response = self
+        let observation = self
             .browser_context_by_browser_id(document.web_contents().context())
             .and_then(|context| {
                 context
                     .browser_context_handle()
-                    .navigation_responses(document.web_contents())
+                    .navigation_observation(document.web_contents())
                     .ok()
-            })
-            .and_then(|responses| {
-                responses
-                    .into_iter()
-                    .find(|response| response.request.document == document.id())
             });
-        response
-            .map(|response| self.project_native_navigation_network(&response, complete))
+        let Some(observation) = observation else {
+            return Vec::new();
+        };
+        observation
+            .responses
+            .iter()
+            .find(|response| response.request.document == document.id())
+            .map(|response| {
+                self.project_native_navigation_network(&observation, response, complete)
+            })
             .unwrap_or_default()
     }
 
@@ -159,6 +162,7 @@ impl CdpConnection {
 
     pub(super) fn project_native_navigation_network(
         &mut self,
+        observation: &moli_core::browser::NavigationObservationSnapshot,
         response: &moli_core::browser::NavigationResponseSnapshot,
         complete: bool,
     ) -> Vec<BackgroundProtocolEvent> {
@@ -181,24 +185,24 @@ impl CdpConnection {
         {
             return Vec::new();
         }
-        let context = projection.browser_context_handle().clone();
         let head = response.response.as_ref().ok();
         let download = head.is_some_and(|head| {
             moli_web_mime::response_headers_indicate_attachment_download(&head.headers)
         });
-        let committed = context
-            .document_commit_snapshot(moli_core::browser::DocumentHandle::new(
-                contents,
-                response.request.document,
-            ))
-            .ok();
-        let info = committed
+        let committed = observation
+            .committed_document
             .as_ref()
-            .and_then(|snapshot| snapshot.metadata.info.as_ref());
-        let failed = context.navigation_snapshot(contents).ok().is_some_and(|snapshot| {
-            matches!(snapshot.attempt, Some(moli_core::browser::NavigationAttempt::Failed { request, .. })
-                if request == response.request)
-        });
+            .filter(|_| observation.navigation.committed == Some(response.request));
+        let info = committed.and_then(|metadata| metadata.info.as_ref());
+        let failure = match observation.navigation.attempt {
+            Some(moli_core::browser::NavigationAttempt::Failed { request, reason })
+                if request == response.request =>
+            {
+                Some(reason)
+            }
+            _ => None,
+        };
+        let failed = failure.is_some();
         let mut out = Vec::new();
         // An empty HTTP error response becomes an error Document. Publishing
         // its real head must not settle Page.navigate before that decision.
@@ -306,16 +310,7 @@ impl CdpConnection {
                 Some(body.clone()),
             );
         }
-        if completed
-            && context
-                .navigation_snapshot(contents)
-                .ok()
-                .is_some_and(|snapshot| {
-                    matches!(snapshot.attempt, Some(moli_core::browser::NavigationAttempt::Failed {
-                request, reason: moli_core::browser::NavigationFailureReason::Download
-            }) if request == response.request)
-                })
-        {
+        if completed && failure == Some(moli_core::browser::NavigationFailureReason::Download) {
             for session in self.page_event_session_ids_for_owner(&pending.navigation.owner) {
                 crate::domains::page::emit_navigation_frame_stop_after_download_background_events(
                     &mut out,
@@ -727,7 +722,11 @@ impl CdpConnection {
         String,
     > {
         let contents = state.web_contents;
-        let context = self.browser.context_handle(contents.context())?;
+        let context = self
+            .browser_context_by_browser_id(contents.context())
+            .ok_or("navigation Context projection unavailable")?
+            .browser_context_handle()
+            .clone();
         let previous = match context.navigation_snapshot(contents)?.attempt {
             Some(moli_core::browser::NavigationAttempt::Started(request)) => {
                 Some(request.navigation)
@@ -857,10 +856,13 @@ impl CdpConnection {
         permit: NavigationInterceptionPermit,
         decision: NavigationDecision,
     ) -> bool {
-        self.browser
-            .context_handle(contents.context())
-            .and_then(|context| context.resolve_navigation_decision(contents, permit, decision))
-            .unwrap_or(false)
+        self.browser_context_by_browser_id(contents.context())
+            .is_some_and(|context| {
+                context
+                    .browser_context_handle()
+                    .resolve_navigation_decision(contents, permit, decision)
+                    .unwrap_or(false)
+            })
     }
 
     pub(crate) fn navigation_interception_awaits_decision(
@@ -951,6 +953,13 @@ mod tests {
             .unwrap();
         assert_eq!(response.request.document, original.id());
         assert!(matches!(response.body, Some(Ok(_))));
+        let native = conn
+            .browser
+            .context_handle(original.web_contents().context())
+            .unwrap();
+        let observation = native
+            .navigation_observation(original.web_contents())
+            .unwrap();
 
         let replacement = conn
             .install_buffered_navigation_fixture_for_test(
@@ -973,10 +982,6 @@ mod tests {
                 .error_page
                 .is_some()
         );
-        let native = conn
-            .browser
-            .context_handle(original.web_contents().context())
-            .unwrap();
         assert!(native.document_commit_snapshot(original).is_err());
         let before = native.navigation_snapshot(original.web_contents()).unwrap();
         let loader = conn.target_session_owner_frame_tree_loader_id_for_owner(
@@ -987,11 +992,11 @@ mod tests {
         // Both header and body observation must reject it, even though the wire
         // Target, request origin and observer are still present.
         assert!(
-            conn.project_native_navigation_network(&response, false)
+            conn.project_native_navigation_network(&observation, &response, false)
                 .is_empty()
         );
         assert!(
-            conn.project_native_navigation_network(&response, true)
+            conn.project_native_navigation_network(&observation, &response, true)
                 .is_empty()
         );
         assert!(
@@ -1014,8 +1019,9 @@ mod tests {
         );
         assert!(
             !native
-                .navigation_responses(original.web_contents())
+                .navigation_observation(original.web_contents())
                 .unwrap()
+                .responses
                 .iter()
                 .any(|current| current.request == response.request)
         );

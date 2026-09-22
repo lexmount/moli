@@ -178,7 +178,7 @@ impl CdpConnection {
             &owner,
         );
         if !preconfigured {
-            events.extend(self.project_native_document_frame_commit(document));
+            events.extend(self.project_native_document_frame_commit(document, &metadata));
         }
         page::emit_bound_renderer_document_lifecycle_background_events(
             self,
@@ -258,12 +258,18 @@ impl CdpConnection {
         let Some(document) = self.browser.document_for_renderer(renderer) else {
             return Vec::new();
         };
-        self.project_native_document_frame_commit(document)
+        let Ok(snapshot) = self.browser.document_commit_snapshot(document) else {
+            return Vec::new();
+        };
+        let mut events = self.project_native_document_network(document, false);
+        events.extend(self.project_native_document_frame_commit(document, &snapshot.metadata));
+        events
     }
 
     fn project_native_document_frame_commit(
         &mut self,
         document: DocumentHandle,
+        metadata: &moli_core::browser::web_contents::DocumentCommitMetadata,
     ) -> Vec<BackgroundProtocolEvent> {
         let contents = document.web_contents();
         let Some(context) = self.browser_context_by_browser_id(contents.context()) else {
@@ -284,14 +290,10 @@ impl CdpConnection {
         else {
             return Vec::new();
         };
-        let Ok(snapshot) = self.browser.document_commit_snapshot(document) else {
-            return Vec::new();
-        };
-        let metadata = snapshot.metadata;
         let Some(info) = metadata.info.as_ref() else {
             return Vec::new();
         };
-        let mut events = self.project_native_document_network(document, false);
+        let mut events = Vec::new();
         for session_id in self.page_event_session_ids_for_owner(&owner) {
             let event_owner = owner.for_target_event_session(self, session_id.as_deref());
             let lifecycle_enabled = self

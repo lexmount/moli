@@ -46,9 +46,9 @@ pub use emulation::{
 pub use events::{
     BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot,
     DocumentLifecycleSnapshot, JavaScriptDialogOpened, NavigationAttempt, NavigationBodyFailure,
-    NavigationError, NavigationFailureReason, NavigationFetchFailure, NavigationRequest,
-    NavigationResponseSnapshot, NavigationSnapshot, WebContentsSelection, WebContentsSnapshot,
-    WorkerStateSnapshot,
+    NavigationError, NavigationFailureReason, NavigationFetchFailure,
+    NavigationObservationSnapshot, NavigationRequest, NavigationResponseSnapshot,
+    NavigationSnapshot, WebContentsSelection, WebContentsSnapshot, WorkerStateSnapshot,
 };
 pub use navigation_decision::{
     DocumentDecisionProvider, NavigationDecision, NavigationDecisionSnapshot,

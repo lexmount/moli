@@ -36,8 +36,9 @@ async fn response_at(
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             if let Some(response) = context
-                .navigation_responses(request.web_contents)
+                .navigation_observation(request.web_contents)
                 .unwrap()
+                .responses
                 .into_iter()
                 .find(|response| response.request == request && ready(response))
             {

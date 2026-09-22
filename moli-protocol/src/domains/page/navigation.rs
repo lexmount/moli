@@ -2317,18 +2317,21 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         request_load_policy: initiator_policy,
         timestamp: monotonic_timestamp_seconds(),
     };
-    // Subscribe before admission. The observer retains no load, response stream,
-    // renderer candidate or commit permission; Browser owns the entire operation.
-    let events = match conn.subscribe_browser_events() {
-        Ok((_, events)) => events,
-        Err(error) => {
-            return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error));
-        }
-    };
     let background = allow_background_navigation && conn.background_event_sender().is_some()
         || (state.result_projection.protocol() == DevToolsProtocol::Cdp
             && preflight.document_fetch_request_stage
                 == Some(crate::conn::FetchRequestStage::Request));
+    // A synchronous observer subscribes before admission. Background navigation
+    // is already observed by the shared protocol owner.
+    let events = match (!background)
+        .then(|| conn.subscribe_browser_events())
+        .transpose()
+    {
+        Ok(events) => events.map(|(_, events)| events),
+        Err(error) => {
+            return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error));
+        }
+    };
     let (waiter, prefix_events) =
         match conn.start_native_navigation_command(state.clone(), preflight, initiator) {
             Ok(started) => started,
@@ -2349,7 +2352,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         token,
         state,
         completion: Box::pin(waiter.wait()),
-        events,
+        events: events.expect("synchronous navigation subscribed before admission"),
     }))
 }
 

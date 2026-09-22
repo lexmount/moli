@@ -3,6 +3,76 @@
 The fresh frozen comparison below supersedes earlier measurements for the
 current branch. Historical results and failures remain unchanged afterward.
 
+## Navigation observation and admission reads, 2026-09-23
+
+This follow-up starts at `15b7fac30f` and consumes one coherent native
+navigation/response/commit observation per projection. Header inheritance is
+resolved in one Context owner turn. Page event fanout reads its exact AgentHost;
+background admission no longer creates and immediately discards a second Browser
+subscription. Existing Context capabilities are reused. Physical operations
+still validate their original handles; no selection cache, authority flag or
+output-budget change was introduced.
+
+The ordinary release is
+`c69cebc9242c93aa71a46ddafd05a1794dacf5b8bc216854b391b5a17948a502`,
+and the measurement-only release is
+`c7fd7e3540538b7e63103ac00eebd886ffd0bdfcea9dccf538806720137f4652`.
+Both use the compiler, dependency, V8 and profile pins below. Three balanced
+rounds repeat the original four-page navigation/history and Worker-burst probe,
+with **zero swap-in/out on all fifteen runs**. Only the 100 measured navigations
+contribute to these command medians; eight warmups are excluded:
+
+| Ordinary release | Round 1 (ms) | Round 2 (ms) | Round 3 (ms) |
+| --- | ---: | ---: | ---: |
+| Main `8e7be5c3fb` | 1.626 | 1.799 | 1.511 |
+| Before `30721b1a21` | 3.052 | 3.481 | 2.840 |
+| Follow-up | 2.129 | 2.577 | 2.425 |
+
+The follow-up improves this workload, but the remaining main-relative command
+latency difference is **not closed**. Frame medians are 10.139/9.094/10.245 ms
+versus main 9.699/9.566/9.506 ms. Instrumented command medians are
+2.132/2.326/2.298 ms; instrumentation timings are separate from ordinary results.
+
+External owner operations fall from the prior 18,717–18,884 to
+**12,486 / 11,917 / 12,218**. Instrumented queue-wait medians are
+6.190/6.417/5.910 microseconds. All 108 commits match their exact projections in
+each round; commit medians are 16.338/21.230/9.362 microseconds and projection-lag
+medians 0.613/1.237/0.496 ms. These counts include setup, warmup and history reads.
+The preliminary isolated operation trace preserves the original 21–23 owner
+calls per navigation dispatch; it is diagnostic, not a replacement timing run.
+
+All candidate ordinary/instrumented runs retain the exact 312-record tail and
+256 live records under the original bursts. Estimated retained Worker output
+is 10,484,448 bytes and drops to zero after owner closure. Ordinary PSS at the
+12,288-record snapshot is 132.67–150.41 MiB, after explicit GC 116.42–123.85 MiB,
+and after closure 70.08–70.51 MiB. Main ordinary and instrumented each fail one
+of three replay attempts; all failures are retained. Earlier measurements are
+preserved, including the first follow-up's smaller improvement.
+
+The same ordinary binary passes 48 CDP groups / 536 scenarios, 165 WebDriver
+cases and all three shared-page close origins. The full Rust run before the test
+fixture correction passes 19,530 cases but contains one additional background
+panic. Its existing cancellation fixture sometimes aborts before TCP headers
+arrive and ignores the server JoinHandle. The narrow original 20-run diagnostic
+does not reproduce it. The fetch, XHR abort and XHR timeout fixtures now wait for
+a real request, observe termination and join the server after its late response
+attempt; the original payload/error assertions remain. All three pass 20 zero-
+retry iterations. The rebuilt release is byte-identical after these test edits.
+Final fmt, strict workspace/all-targets/all-features Clippy and nextest pass:
+**19,530 passed / 13 configured skips**, run `8b4d3526-a9f8-4577-9556-d703d5cc9180`.
+All 91 expected panic test/message pairs match the audited baseline; no extra
+panic remains in the final run.
+
+Ten bounded single-site Slack full-CDP rounds on main, the old candidate and the
+first follow-up all pass. Since the old candidate also passes, these do not
+explain its earlier failure or reproduce the concurrent eight-address workload.
+The website-throughput gate remains open; these results do not certify the
+whole rewrite complete.
+
+Source patches, binary hashes, full logs, all failed attempts and raw results
+are preserved in `target/smoke/navigation-projection.u2rdftrb/`; the final source
+patch SHA-256 is `bd5fa70ce363c3793df36890e7e299a9183d4f9e4c580322d5b737f1396a9617`.
+
 ## Frozen comparison after rebase, 2026-09-23
 
 The measured candidate contains twenty cohesive commits on main
@@ -62,6 +132,14 @@ network-error and timeout outcomes; totals alone cannot attribute these to the
 refactor. Neither revision's captured failure stderr contains a Rust panic.
 Slack passes all four modes on both revisions in this complete run. The raw
 rows and exact differences are preserved in `webfetch-comparison.json`.
+
+Three subsequent balanced rounds retain all 8 addresses (those seven plus
+Slack) × four modes: main passes 45/96 attempts, candidate 42/96. Other status
+changes vary with challenges and forbidden responses, but Slack full CDP still
+passes **3/3 main versus 2/3 candidate**; the failed candidate connection closes
+with code 1005. All other Slack modes pass 3/3 on both pins. Captured failure
+stderr contains no Rust panic. `webfetch-diagnostic-comparison.json` preserves
+every attempt. These results keep the throughput gate open.
 
 Three balanced local rounds use the unchanged four-page workload: 8 warmup and
 100 measured navigations, 256 history reads, then Worker log bursts of
