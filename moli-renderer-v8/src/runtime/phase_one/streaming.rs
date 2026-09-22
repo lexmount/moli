@@ -491,6 +491,7 @@ pub struct ExternalRawDocumentBodyStream {
     body_chunks: mpsc::Receiver<Vec<u8>>,
     completion: Option<oneshot::Receiver<Result<()>>>,
     page_creation_progress: Option<crate::runtime::RendererPageCreationProgress>,
+    stop_loading_cancellation: Option<moli_fetch::FetchCancelHandle>,
 }
 
 impl ExternalRawDocumentBodyStream {
@@ -517,6 +518,7 @@ impl ExternalRawDocumentBodyStream {
                 body_chunks,
                 completion: Some(completion),
                 page_creation_progress: Some(page_creation_progress),
+                stop_loading_cancellation: None,
             },
         )
     }
@@ -529,7 +531,19 @@ impl ExternalRawDocumentBodyStream {
             body_chunks,
             completion: Some(completion),
             page_creation_progress: None,
+            stop_loading_cancellation: None,
         }
+    }
+
+    /// Shares this exact transfer's cancellation authority with an explicit
+    /// document stop. Ordinary parser retirement does not cancel the external
+    /// producer, which may still own browser-side response capture.
+    pub fn with_stop_loading_cancellation(
+        mut self,
+        cancellation: moli_fetch::FetchCancelHandle,
+    ) -> Self {
+        self.stop_loading_cancellation = Some(cancellation);
+        self
     }
 
     pub fn from_bytes(body: Vec<u8>) -> Self {
@@ -556,6 +570,13 @@ pub(super) enum RawDocumentBodySource {
 }
 
 impl RawDocumentBodySource {
+    pub(super) fn stop_loading_cancellation(&self) -> Option<moli_fetch::FetchCancelHandle> {
+        match self {
+            Self::FetchResponse(response) => Some(response.cancellation_handle()),
+            Self::External(source) => source.stop_loading_cancellation.clone(),
+        }
+    }
+
     fn fetch_response(response: Box<StreamingRawResponse>) -> Self {
         Self::FetchResponse(response)
     }
