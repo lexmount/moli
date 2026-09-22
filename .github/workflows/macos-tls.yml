@@ -1,0 +1,41 @@
+name: macOS TLS trust
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain
+      - moli-curl/**
+      - .github/workflows/macos-tls.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-tls-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sectrust:
+    name: SecTrust
+    runs-on: macos-latest
+    timeout-minutes: 25
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          toolchain=$(tr -d '[:space:]' < rust-toolchain)
+          rustup toolchain install "$toolchain" --profile minimal --component clippy --no-self-update
+      - name: Check macOS code
+        run: cargo clippy --locked -p moli-curl --all-targets -- -D warnings
+      - name: Test HTTP and WebSocket runtime
+        run: cargo test --locked -p moli-curl
+      - name: Test native trust and explicit CA overrides
+        run: cargo test --locked -p moli-curl --test apple_sectrust -- --ignored --nocapture

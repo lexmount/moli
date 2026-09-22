@@ -845,7 +845,7 @@ dependencies = [
 [[package]]
 name = "curl"
 version = "0.4.49"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#bcd4d9f9d7dcd4ec68cfa42f80e9e1f872d87229"
+source = "git+https://github.com/lexmount/curl-rust?rev=a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758#a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758"
 dependencies = [
  "curl-sys",
  "libc",
@@ -859,7 +859,7 @@ dependencies = [
 [[package]]
 name = "curl-sys"
 version = "0.4.87+curl-8.19.0"
-source = "git+https://github.com/lexmount/curl-rust?branch=moli#bcd4d9f9d7dcd4ec68cfa42f80e9e1f872d87229"
+source = "git+https://github.com/lexmount/curl-rust?rev=a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758#a0ea59f5ca1b1e4bc8627a28c29463ac96aeb758"
 dependencies = [
  "brotlic-sys",
  "cc",
@@ -2596,6 +2596,7 @@ dependencies = [
  "parking_lot",
  "rcgen",
  "rustls",
+ "tempfile",
  "tokio",
  "tokio-tungstenite",
  "tracing",

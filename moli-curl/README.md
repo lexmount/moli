@@ -29,6 +29,29 @@ The native owner keeps reads and writes independent and parks I/O after AGAIN
 until the corresponding socket is signalled. It shares one spare receive Vec;
 successful reads transfer that Vec to the event consumer.
 
+## TLS trust
+
+On macOS, HTTPS, WSS, and HTTPS proxy connections use libcurl's Apple SecTrust
+integration by default. AWS-LC still handles TLS; SecTrust evaluates certificate
+trust through the operating system. The pinned curl-rust build enables this
+integration and avoids automatically selecting a CA file or directory, which
+would disable libcurl's default SecTrust selection.
+
+An explicit `CurlTlsConfig::ca_cert` (`--ca-cert` in the CLI) takes precedence
+over certificate environment variables. Otherwise, `SSL_CERT_FILE` and
+`SSL_CERT_DIR` select file-based verification for both origins and HTTPS proxies.
+These explicit sources use the existing TLS backend's verifier, without adding
+the system trust store. Certificate-chain and hostname verification remain
+enabled by default. Other platforms retain their existing trust configuration.
+
+The `macOS TLS trust` workflow builds the AWS-LC/SecTrust combination on
+`macos-latest`. Its `apple_sectrust` integration test covers HTTPS, WSS,
+HTTPS proxy verification, rejected chains and hostnames, and CA file/directory
+overrides. It checks libcurl's verifier diagnostics during real local handshakes.
+The test is ignored in normal runs because it installs a temporary keychain and
+administrator trust setting; it is restricted to ephemeral macOS CI runners and
+cleans up the trust setting and keychain afterward.
+
 ## Enable counters
 
 Set `MOLI_CURL_WEBSOCKET_DIAGNOSTICS=1` before creating the runtime and enable

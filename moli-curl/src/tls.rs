@@ -64,6 +64,12 @@ impl CurlTlsConfig {
                 )
             })?;
         }
+        #[cfg(target_os = "macos")]
+        if self.ca_cert.is_some() {
+            // An explicit CA file overrides SSL_CERT_DIR as well as
+            // SSL_CERT_FILE, which curl-rust applies to a fresh handle.
+            clear_ca_directory(easy, curl_sys::CURLOPT_CAPATH)?;
+        }
         if include_client_identity {
             if let Some(client_cert) = &self.client_cert {
                 easy.ssl_cert(client_cert).with_context(|| {
@@ -127,8 +133,38 @@ impl CurlTlsConfig {
                 )
             })?;
         }
+        #[cfg(target_os = "macos")]
+        if self.ca_cert.is_some() {
+            clear_ca_directory(easy, curl_sys::CURLOPT_PROXY_CAPATH)?;
+        } else if self.verify {
+            // curl-rust applies explicit certificate environment variables to
+            // the origin. Moli shares these sources with HTTPS proxies too.
+            // Leave every CA option untouched when no override was supplied:
+            // libcurl then selects its built-in Apple SecTrust verifier.
+            if let Some(file) = std::env::var_os("SSL_CERT_FILE") {
+                easy.proxy_cainfo(file.to_str().context("SSL_CERT_FILE is not valid UTF-8")?)
+                    .context("failed to configure HTTPS proxy SSL_CERT_FILE")?;
+            }
+            if let Some(directory) = std::env::var_os("SSL_CERT_DIR") {
+                easy.proxy_capath(std::path::Path::new(&directory))
+                    .context("failed to configure HTTPS proxy SSL_CERT_DIR")?;
+            }
+        }
         Ok(())
     }
+}
+
+#[cfg(target_os = "macos")]
+fn clear_ca_directory<H: Handler>(easy: &mut Easy2<H>, option: curl_sys::CURLoption) -> Result<()> {
+    // SAFETY: the caller supplies a CA directory string option, `easy` is
+    // exclusively borrowed, and libcurl accepts NULL to clear this setting.
+    let result = unsafe {
+        curl_sys::curl_easy_setopt(easy.raw(), option, std::ptr::null::<std::ffi::c_char>())
+    };
+    if result != curl_sys::CURLE_OK {
+        return Err(curl::Error::new(result)).context("failed to clear curl CA directory override");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
