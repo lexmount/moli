@@ -141,7 +141,7 @@ async fn inspector_highlight_tracks_live_node_geometry_and_rejects_stale_ids() {
         json!({"nodeId":doc["root"]["nodeId"],"selector":"#target"}),
     )
     .await;
-    command(&mut ctx,"Overlay.highlightNode",json!({"nodeId":node["nodeId"],"highlightConfig":{"contentColor":{"r":0,"g":255,"b":0,"a":1}}})).await;
+    command(&mut ctx,"Overlay.highlightNode",json!({"nodeId":node["nodeId"],"highlightConfig":{"showInfo":false,"showStyles":false,"showRulers":false,"contentColor":{"r":0,"g":255,"b":0,"a":1}}})).await;
     assert_eq!(pixel(&screenshot(&mut ctx).await, 20, 20), [0, 255, 0, 255]);
     evaluate(&mut ctx, "target.style.left='60px';undefined").await;
     let moved = screenshot(&mut ctx).await;
@@ -154,6 +154,132 @@ async fn inspector_highlight_tracks_live_node_geometry_and_rejects_stale_ids() {
     );
     ctx.process_async(json!({"id":88802,"sessionId":"SID-1","method":"DOM.highlightNode","params":{"nodeId":2147483647,"highlightConfig":{}}})).await;
     assert!(ctx.take_response_by_id(88802)["error"].is_object());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inspector_highlight_rejects_unsupported_visual_options_explicitly() {
+    let mut ctx = page().await;
+    let doc = command(&mut ctx, "DOM.getDocument", json!({})).await;
+    ctx.process_async(json!({
+        "id": 88803, "sessionId": "SID-1", "method": "Overlay.highlightNode",
+        "params": {"nodeId":doc["root"]["nodeId"],"highlightConfig":{
+            "showInfo":true,"contentColor":{"r":255,"g":0,"b":0}
+        }}
+    }))
+    .await;
+    let response = ctx.take_response_by_id(88803);
+    assert_eq!(response["error"]["code"], json!(-32602));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("showInfo")
+    );
+
+    ctx.process_async(json!({
+        "id": 88804, "sessionId": "SID-1", "method": "Overlay.highlightNode",
+        "params": {"nodeId":doc["root"]["nodeId"],"selector":"div", "highlightConfig":{}}
+    }))
+    .await;
+    let response = ctx.take_response_by_id(88804);
+    assert_eq!(response["error"]["code"], json!(-32602));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("selector")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn inspector_domain_state_survives_navigation_and_cleanup_without_document() {
+    let mut ctx = TestContext::new();
+    let mut browser_context = BrowserContext::new("BID-1".into());
+    browser_context.set_active_target_id("TID-1");
+    browser_context.attach_active_session("SID-1");
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
+
+    command(&mut ctx, "Overlay.enable", json!({})).await;
+    command(&mut ctx, "Overlay.hideHighlight", json!({})).await;
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    assert!(
+        ctx.conn
+            .target_devtools_session_state_for_owner(&owner)
+            .unwrap()
+            .overlay_enabled
+    );
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<body style='margin:0;background:white'>first</body>",
+        Some("SID-1"),
+    )
+    .await;
+    assert!(
+        ctx.conn
+            .target_devtools_session_state_for_owner(&owner)
+            .unwrap()
+            .overlay_enabled
+    );
+    command(
+        &mut ctx,
+        "Overlay.highlightRect",
+        json!({
+            "x":10,"y":10,"width":30,"height":30,"color":{"r":255,"g":0,"b":0}
+        }),
+    )
+    .await;
+    assert_eq!(pixel(&screenshot(&mut ctx).await, 20, 20), [255, 0, 0, 255]);
+
+    command(
+        &mut ctx,
+        "Page.navigate",
+        json!({"url":"data:text/html,<body style='margin:0;background:white'>second</body>"}),
+    )
+    .await;
+    assert!(
+        ctx.conn
+            .target_devtools_session_state_for_owner(&owner)
+            .unwrap()
+            .overlay_enabled
+    );
+    assert_eq!(
+        pixel(&screenshot(&mut ctx).await, 20, 20),
+        [255, 255, 255, 255]
+    );
+    command(
+        &mut ctx,
+        "Overlay.highlightRect",
+        json!({"x":10,"y":10,"width":30,"height":30,"color":{"r":0,"g":0,"b":255}}),
+    )
+    .await;
+    assert_eq!(pixel(&screenshot(&mut ctx).await, 20, 20), [0, 0, 255, 255]);
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .start_document_navigation_for_active_target("PENDING-OVERLAY".to_owned())
+        .unwrap();
+    command(&mut ctx, "Overlay.hideHighlight", json!({})).await;
+    command(&mut ctx, "Overlay.disable", json!({})).await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .clear_pending_document_navigation_for_target_if_loader_matches(
+            Some("TID-1"),
+            "PENDING-OVERLAY",
+        );
+    assert_eq!(
+        pixel(&screenshot(&mut ctx).await, 20, 20),
+        [255, 255, 255, 255]
+    );
+    assert!(
+        !ctx.conn
+            .target_devtools_session_state_for_owner(&owner)
+            .unwrap()
+            .overlay_enabled
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
