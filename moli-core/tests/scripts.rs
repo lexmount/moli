@@ -6708,3 +6708,40 @@ async fn parse_time_lifecycle_queue_can_stop_cleanly_at_load_stage_after_load_mi
     server.shutdown().await;
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn main_document_close_can_resolve_an_awaited_lifecycle_promise() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+    let mut url = url::Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
+    url.query_pairs_mut()
+        .append_pair("markup", "<!doctype html><body>initial");
+    let mut page = browser.fetch(url.as_str()).await?;
+    let result = tokio::time::timeout(
+        Duration::from_secs(10),
+        page.evaluate_runtime_expression_with_await_async(
+            r#"new Promise(resolve => {
+              document.open();
+              document.addEventListener('DOMContentLoaded', () => resolve(JSON.stringify({
+                readyState: document.readyState,
+                text: document.getElementById('replacement').textContent
+              })), {once: true});
+              document.write('<!doctype html><body><p id=replacement>replacement</p>');
+              document.close();
+            })"#,
+            true,
+        ),
+    )
+    .await??;
+    let observed: serde_json::Value = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .expect("replacement lifecycle observation"),
+    )?;
+    assert_eq!(
+        observed,
+        serde_json::json!({"readyState": "interactive", "text": "replacement"})
+    );
+    server.shutdown().await;
+    Ok(())
+}
