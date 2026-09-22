@@ -6,6 +6,7 @@ mod initial_empty;
 mod lifecycle;
 mod live_parser;
 mod loads;
+mod navigation_admission;
 mod parser_store;
 mod snapshots;
 
