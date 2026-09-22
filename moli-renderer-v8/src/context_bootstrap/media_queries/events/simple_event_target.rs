@@ -14,6 +14,7 @@ pub(in crate::context_bootstrap::media_queries::events::simple_event_target) use
 pub(crate) use dispatch::{
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_checkpoint,
+    dispatch_simple_event_target_event_with_original_target,
     invoke_simple_event_target_listeners,
 };
 pub(crate) use handlers::{

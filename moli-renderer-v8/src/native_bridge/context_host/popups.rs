@@ -8,7 +8,7 @@ use crate::{
     context_bootstrap::{
         SIMPLE_EVENT_TARGET_LISTENERS_SLOT, SharedWebStorageStore, WINDOW_NAME_SLOT,
         apply_local_window_location_navigation, clear_simple_window_event_handler_values,
-        deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
+        deep_clone_shared_web_storage_store, construct_original_event, dispatch_simple_event_target_event_with_original_target,
         construct_original_page_transition_event, dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner, dispatch_unload_for_runtime_owner,
         finish_cross_document_navigation_for_window,
         history_entry_seed_for_cross_document_location,
@@ -3193,6 +3193,19 @@ impl JsContextHost {
         event_type: &str,
         event: v8::Local<'s, v8::Object>,
     ) -> bool {
+        self.dispatch_lightweight_popup_window_event_with_original_target(
+            scope, popup_id, event_type, event, None,
+        )
+    }
+
+    fn dispatch_lightweight_popup_window_event_with_original_target<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        event_type: &str,
+        event: v8::Local<'s, v8::Object>,
+        original_target: Option<v8::Local<'s, v8::Object>>,
+    ) -> bool {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return true;
         };
@@ -3200,11 +3213,13 @@ impl JsContextHost {
             return true;
         };
         let context = v8::Global::new(scope, context);
+        let original_target = v8::Global::new(scope, original_target.unwrap_or(window));
         let window = v8::Global::new(scope, window);
         let event = v8::Global::new(scope, event);
         let context = v8::Local::new(scope, &context);
         let popup_scope = &mut v8::ContextScope::new(scope, context);
         let window = v8::Local::new(popup_scope, &window);
+        let original_target = v8::Local::new(popup_scope, &original_target);
         let event = v8::Local::new(popup_scope, &event);
         if !self.register_lightweight_popup_execution_context(popup_scope, popup_id) {
             return true;
@@ -3213,8 +3228,13 @@ impl JsContextHost {
         let previous_message_source = self.enter_window_message_source_scope(
             super::PendingWindowMessageEndpoint::LightweightPopup(popup_id),
         );
-        let allows_default =
-            dispatch_simple_event_target_event(popup_scope, window, event_type, event);
+        let allows_default = dispatch_simple_event_target_event_with_original_target(
+            popup_scope,
+            window,
+            original_target,
+            event_type,
+            event,
+        );
         self.restore_window_message_source_scope(previous_message_source);
         restore_lightweight_popup_event_dispatch(popup_scope, previous);
         allows_default
@@ -3334,20 +3354,38 @@ impl JsContextHost {
             .lightweight_popup_window(scope, popup_id)
             .expect("authorized popup load event must retain its WindowProxy");
         let document_owner = self.current_lightweight_popup_document_owner(popup_id);
-        let event = lightweight_popup_event(scope, window, "load")
+        let Some(document) = self.lightweight_popup_document_wrapper(scope, popup_id) else {
+            // A failed initial network navigation can settle before this
+            // lightweight popup has materialized a Document. There is no
+            // Document to load; the inherited getter may expose the opener's.
+            return;
+        };
+        let context = window
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
+        let event = construct_original_event(scope, "load")
             .expect("authorized popup load event must materialize its Event");
-        self.dispatch_lightweight_popup_window_event(scope, popup_id, "load", event);
+        self.dispatch_lightweight_popup_window_event_with_original_target(
+            scope,
+            popup_id,
+            "load",
+            event,
+            Some(document),
+        );
         if !self.lightweight_popup_is_open(popup_id)
             || self.current_lightweight_popup_document_owner(popup_id) != document_owner
         {
             return;
         }
-        let context = window
-            .get_creation_context(scope)
-            .unwrap_or_else(|| scope.get_current_context());
-        let scope = &mut v8::ContextScope::new(scope, context);
         if let Some(event) = construct_original_page_transition_event(scope, "pageshow", false) {
-            self.dispatch_lightweight_popup_window_event(scope, popup_id, "pageshow", event);
+            self.dispatch_lightweight_popup_window_event_with_original_target(
+                scope,
+                popup_id,
+                "pageshow",
+                event,
+                Some(document),
+            );
         }
     }
 
