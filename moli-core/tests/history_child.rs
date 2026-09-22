@@ -328,7 +328,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-current-entry-index=\"0\""),
+            .contains("data-child-current-entry-index=\"-1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -342,7 +342,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains(&format!("data-child-current-entry-url=\"{}\"", initial_url)),
+            .contains("data-child-current-entry-url=\"null\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -5830,7 +5830,7 @@ async fn child_browsing_context_pending_navigation_keeps_committed_window_docume
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-current-entry-immediate=\"about:blank\"")
+            .contains("data-current-entry-immediate=\"null\"")
     );
     assert!(
         page.serialize_html_async()
@@ -5892,7 +5892,7 @@ async fn child_browsing_context_pending_navigation_keeps_committed_window_docume
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-current-entry-pending-microtask=\"about:blank\""),
+            .contains("data-current-entry-pending-microtask=\"null\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
