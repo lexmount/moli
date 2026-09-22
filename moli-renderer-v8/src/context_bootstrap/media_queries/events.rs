@@ -15,13 +15,17 @@ pub(in crate::context_bootstrap) use media_query_list::{
 pub(crate) use simple_event_target::SimpleObjectEventListenerInspectorSnapshot;
 #[cfg(feature = "devtools")]
 pub(crate) use simple_event_target::simple_event_target_inspector_listener_snapshots;
+#[cfg(test)]
+pub(crate) use simple_event_target::install_simple_event_target_handlers;
 pub(crate) use simple_event_target::{
     ResolvedSimpleEventTarget, dispatch_simple_event_target_event,
     dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
-    dispatch_simple_event_target_event_with_checkpoint, initialize_simple_event_target,
-    install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
-    simple_event_target_handler_setter_callback, simple_object_event_listeners_snapshot,
-    simple_object_event_remove_listener_value_for_type, simple_object_event_set_handler,
-    simple_object_event_target_register_webidl_listener, simple_object_has_event_listeners,
+    dispatch_simple_event_target_event_with_checkpoint,
+    dispatch_simple_event_target_event_with_original_target, initialize_simple_event_target,
+    invoke_simple_event_target_listeners, simple_event_target_handler_getter_callback,
+    simple_event_target_handler_setter_callback,
+    simple_object_event_listeners_snapshot, simple_object_event_remove_listener_value_for_type,
+    simple_object_event_set_handler, simple_object_event_target_register_webidl_listener,
+    simple_object_has_event_listeners,
 };

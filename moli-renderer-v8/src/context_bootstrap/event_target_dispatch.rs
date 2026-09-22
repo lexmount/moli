@@ -44,12 +44,27 @@ pub(crate) fn begin_dispatch<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
+    begin_dispatch_with_original_target(scope, target, target, event)
+}
+
+pub(crate) fn begin_dispatch_with_original_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    original_target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
     let backing = super::events::event_backing(scope, event);
     let target = backing
         .get_creation_context(scope)
         .map(|context| super::shared_event_targets::target_in_realm(scope, target, context))
         .unwrap_or(target);
-    begin_at_target_dispatch(scope, target, target, event)
+    let original_target = backing
+        .get_creation_context(scope)
+        .map(|context| {
+            super::shared_event_targets::target_in_realm(scope, original_target, context)
+        })
+        .unwrap_or(original_target);
+    begin_at_target_dispatch(scope, original_target, target, event)
 }
 
 pub(crate) fn begin_at_target_dispatch<'s>(
