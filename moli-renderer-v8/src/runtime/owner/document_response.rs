@@ -24,7 +24,11 @@ impl RendererCreateStreamingRawPageRequest {
         local_executor: JsLocalExecutor,
         runtime_hooks: PageVmRuntimeHooks,
     ) -> Result<StreamingNavigationPageCreationResult> {
-        self.bootstrap_with_navigation_seed(page_id, local_executor, runtime_hooks, None)
+        let navigation_bootstrap_entry = self.navigation_history
+            .as_ref()
+            .map(|history| history.resolve(&self.final_url))
+            .transpose()?;
+        self.bootstrap_with_navigation_seed(page_id, local_executor, runtime_hooks, navigation_bootstrap_entry)
             .await
     }
 

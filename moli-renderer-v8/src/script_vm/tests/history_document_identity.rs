@@ -298,3 +298,50 @@ async fn history_traversal_preserves_documents_and_contiguous_navigation_entries
         }
     }
 }
+
+#[test]
+fn restored_cross_origin_history_fragment_mutations_use_native_entry_indices() {
+    fn complete_load(vm: &mut StandaloneScriptVmHarness) {
+        let owner = vm.current_main_document_task_owner().unwrap();
+        let interactive = vm.finish_current_main_document_parsing(owner).unwrap();
+        vm.apply_main_document_interactive_lifecycle_action(interactive)
+            .unwrap();
+        vm.dispatch_main_document_domcontentloaded_lifecycle(owner);
+        assert!(
+            vm.dispatch_main_document_window_load_lifecycle(owner)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    let mut source = new_storage_test_vm("https://history-source.test/current");
+    complete_load(&mut source);
+    source
+        .eval("location.href = 'https://history-destination.test/current'; 'queued'")
+        .unwrap();
+    let seed = source
+        .take_pending_location_navigation_with_seed()
+        .unwrap()
+        .entry_seed
+        .unwrap();
+    assert!(seed.entries.iter().any(|entry| {
+        entry.history_index < seed.current_index
+            && entry.url == "https://history-source.test/current"
+    }));
+    drop(source);
+    let mut restored = new_storage_test_vm("https://history-destination.test/current");
+    restored.install_navigation_bootstrap_entry(Some(seed));
+    complete_load(&mut restored);
+    assert_eq!(restored.eval(r#"
+        const first = navigation.currentEntry;
+        location.hash = '#next';
+        const second = navigation.currentEntry;
+        const before = [navigation.entries().length, navigation.entries()[0] === first,
+                        first.index, second.index];
+        let indexReads = 0;
+        Object.defineProperty(second, 'index', {configurable: true, get() { indexReads++; return 999; }});
+        location.hash = '#last';
+        delete second.index;
+        JSON.stringify([...before, indexReads, navigation.entries().length, navigation.currentEntry.index]);
+    "#).unwrap(), "[2,true,0,1,0,3,2]");
+}

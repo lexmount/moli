@@ -41,6 +41,7 @@ pub struct RendererDocumentOptions {
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<crate::RendererMainDocumentCommit>,
+    pub navigation_history: Option<super::RendererNavigationHistoryRequest>,
 }
 
 pub(crate) struct PageVmStateCapture {
@@ -55,6 +56,7 @@ pub(crate) struct PageVmStateCapture {
     pub(crate) document_isolate_identity: usize,
     pub(crate) dedicated_worker_running_worker_isolate_count: usize,
     pub(crate) performance_metric_snapshot: RendererPerformanceMetricSnapshot,
+    pub(crate) navigation_history: super::RendererNavigationHistory,
 }
 
 #[derive(Debug, Clone)]

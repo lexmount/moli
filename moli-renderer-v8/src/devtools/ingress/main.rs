@@ -776,6 +776,7 @@ mod tests {
         let url = url::Url::parse("about:blank").expect("test URL");
         Arc::new(RendererPageState {
             snapshot_revision: Default::default(),
+            navigation_history: Default::default(),
             requested_url: url.clone(),
             navigation_initiator_url: None,
             navigation_redirected: false,
