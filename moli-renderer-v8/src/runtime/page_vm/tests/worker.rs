@@ -2941,7 +2941,7 @@ async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports
             crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
                 &[(
                     "Content-Security-Policy".to_owned(),
-                    "worker-src 'self'; script-src data:".to_owned(),
+                    b"worker-src 'self'; script-src data:".to_vec(),
                 )],
                 &document_url,
             ),

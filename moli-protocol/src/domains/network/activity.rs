@@ -626,7 +626,7 @@ mod tests {
                 request_cookie_report: None,
                 network_request_headers: None,
                 response_status: 200,
-                response_headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                response_headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                 response_body: SubresourceResponseBody::from_bytes(b"prepared".to_vec()),
                 from_cache: false,
             });

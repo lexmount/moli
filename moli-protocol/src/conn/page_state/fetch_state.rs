@@ -384,7 +384,7 @@ mod tests {
                 ResponseHead {
                     final_url: url.clone(),
                     status: 200,
-                    headers: vec![("content-type".to_owned(), "text/html".to_owned())],
+                    headers: vec![("content-type".to_owned(), b"text/html".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,

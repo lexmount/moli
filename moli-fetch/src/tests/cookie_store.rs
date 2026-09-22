@@ -15,7 +15,7 @@ fn host_only_cookie_uses_default_path_and_path_boundary_matching() {
     let response_url = Url::parse("http://example.com/scoped/index.html").unwrap();
     jar.store_response_headers(
         &response_url,
-        &[("set-cookie".to_owned(), "scope=1; HttpOnly".to_owned())],
+        &[("set-cookie".to_owned(), b"scope=1; HttpOnly".to_vec())],
     );
 
     assert_eq!(
@@ -41,14 +41,14 @@ fn cookie_replacement_uses_name_domain_and_path_key() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "theme=light; Path=/account".to_owned(),
+            b"theme=light; Path=/account".to_vec(),
         )],
     );
     jar.store_response_headers(
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "theme=dark; Path=/account".to_owned(),
+            b"theme=dark; Path=/account".to_vec(),
         )],
     );
 
@@ -67,7 +67,7 @@ fn invalid_domain_cookie_is_ignored() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "session=bad; Domain=other.com; Path=/".to_owned(),
+            b"session=bad; Domain=other.com; Path=/".to_vec(),
         )],
     );
 
@@ -86,7 +86,7 @@ fn secure_cookie_only_matches_https_requests() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "session=secure; Path=/; Secure".to_owned(),
+            b"session=secure; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -107,13 +107,13 @@ fn max_age_zero_removes_existing_cookie_immediately() {
 
     jar.store_response_headers(
         &response_url,
-        &[("set-cookie".to_owned(), "flash=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"flash=1; Path=/".to_vec())],
     );
     jar.store_response_headers(
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "flash=gone; Path=/; Max-Age=0".to_owned(),
+            b"flash=gone; Path=/; Max-Age=0".to_vec(),
         )],
     );
 
@@ -130,7 +130,7 @@ fn host_only_cookie_does_not_match_subdomains() {
 
     jar.store_response_headers(
         &response_url,
-        &[("set-cookie".to_owned(), "hostonly=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"hostonly=1; Path=/".to_vec())],
     );
 
     assert_eq!(
@@ -148,7 +148,7 @@ fn domain_cookie_matches_subdomains_and_normalizes_leading_dot() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "shared=1; Domain=.example.com; Path=/".to_owned(),
+            b"shared=1; Domain=.example.com; Path=/".to_vec(),
         )],
     );
 
@@ -167,7 +167,7 @@ fn invalid_cookie_path_falls_back_to_default_request_path() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "fallback=1; Path=relative".to_owned(),
+            b"fallback=1; Path=relative".to_vec(),
         )],
     );
 
@@ -188,13 +188,13 @@ fn expires_in_past_removes_cookie_immediately() {
 
     jar.store_response_headers(
         &response_url,
-        &[("set-cookie".to_owned(), "session=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/".to_vec())],
     );
     jar.store_response_headers(
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "session=gone; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT".to_owned(),
+            b"session=gone; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT".to_vec(),
         )],
     );
 
@@ -211,13 +211,13 @@ fn cookies_with_longer_paths_are_sent_first_and_can_coexist() {
 
     jar.store_response_headers(
         &response_url,
-        &[("set-cookie".to_owned(), "mode=base; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"mode=base; Path=/app".to_vec())],
     );
     jar.store_response_headers(
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "mode=deep; Path=/app/admin".to_owned(),
+            b"mode=deep; Path=/app/admin".to_vec(),
         )],
     );
 
@@ -239,7 +239,7 @@ fn request_cookie_header_reads_from_canonical_cookie_core() {
             &response_url,
             &[(
                 "set-cookie".to_owned(),
-                "sid=server; Path=/app; Secure".to_owned(),
+                b"sid=server; Path=/app; Secure".to_vec(),
             )],
         );
     }
@@ -1247,7 +1247,7 @@ fn request_cookie_header_includes_document_cookie_mutations() {
             &response_url,
             &[(
                 "set-cookie".to_owned(),
-                "sid=server; Path=/app; Secure".to_owned(),
+                b"sid=server; Path=/app; Secure".to_vec(),
             )],
         );
         jar.set_document_cookie(&response_url, "sid=client; Path=/app");

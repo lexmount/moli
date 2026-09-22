@@ -868,7 +868,7 @@ impl ScriptVm {
         target: WorkerOwnedFetchTarget,
         request: crate::worker::WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         match target {
             WorkerOwnedFetchTarget::Dedicated { worker_id, .. } => self
@@ -897,7 +897,7 @@ impl ScriptVm {
         target: WorkerOwnedXhrTarget,
         request: crate::worker::WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         match target {
             WorkerOwnedXhrTarget::Dedicated { worker_id, .. } => self
@@ -957,7 +957,7 @@ impl ScriptVm {
         target: WorkerOwnedFetchTarget,
         request: crate::worker::WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         match target {
@@ -987,7 +987,7 @@ impl ScriptVm {
         target: WorkerOwnedXhrTarget,
         request: crate::worker::WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         match target {
@@ -1017,7 +1017,7 @@ impl ScriptVm {
         target: WorkerOwnedCspReportTarget,
         request: crate::worker::WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         match target {
@@ -1048,7 +1048,7 @@ impl ScriptVm {
         target: WorkerOwnedFetchTarget,
         request: crate::worker::WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         match target {
@@ -1080,7 +1080,7 @@ impl ScriptVm {
         target: WorkerOwnedXhrTarget,
         request: crate::worker::WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         match target {
@@ -2167,7 +2167,7 @@ impl ScriptVm {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<AsyncSubresourceCommandExecution<()>> {
         let pending = self
@@ -2613,7 +2613,7 @@ impl ScriptVm {
         &mut self,
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<AsyncSubresourceCommandExecution<()>> {
         let pending_websocket_response = {
             self._context_host
@@ -2896,7 +2896,7 @@ impl ScriptVm {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<AsyncSubresourceCommandExecution<()>> {
         let pending_websocket_response = {
@@ -3121,7 +3121,7 @@ impl ScriptVm {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<()> {
         let execution = self.fulfill_pending_subresource_fetch_body(

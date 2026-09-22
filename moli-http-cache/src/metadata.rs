@@ -11,7 +11,7 @@ use typed_num::Num;
 use crate::{path_safety::safe_body_file_name, time::unique_suffix};
 
 pub(crate) const META_FILE: &str = "meta.json";
-pub(crate) type HttpCacheFormatVersion = Num<3>;
+pub(crate) type HttpCacheFormatVersion = Num<4>;
 
 /// Request header value captured for a `Vary` response header.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,7 +27,7 @@ pub struct HttpCacheEntryMetadata {
     pub request_url: String,
     pub final_url: String,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub stored_at_unix_ms: u64,
     pub last_used_at_unix_ms: u64,
     pub expires_at_unix_ms: Option<u64>,
@@ -41,7 +41,7 @@ impl HttpCacheEntryMetadata {
         request_url: String,
         final_url: String,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         stored_at_unix_ms: u64,
         expires_at_unix_ms: Option<u64>,
         vary_headers: Vec<HttpCacheVaryHeader>,

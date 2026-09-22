@@ -266,7 +266,7 @@ fn followed_navigation_returns_at_document_commit_before_parsing_buffered_body()
                         Instant::now(),
                         Url::parse("https://example.test/").expect("test URL"),
                         200,
-                        vec![("content-type".to_owned(), "text/html".to_owned())],
+                        vec![("content-type".to_owned(), b"text/html".to_vec())],
                         raw_body,
                     )
                     .await
@@ -403,7 +403,7 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                             Instant::now(),
                             Url::parse("https://example.test/").expect("test URL"),
                             200,
-                            vec![("content-type".to_owned(), "text/html".to_owned())],
+                            vec![("content-type".to_owned(), b"text/html".to_vec())],
                             raw_body,
                         )
                         .await
@@ -593,7 +593,7 @@ fn streaming_stylesheet_and_json_ld_reach_tail_and_post_parse_boundary() {
                             Instant::now(),
                             Url::parse("https://example.test/").expect("test URL"),
                             200,
-                            vec![("content-type".to_owned(), "text/html".to_owned())],
+                            vec![("content-type".to_owned(), b"text/html".to_vec())],
                             raw_body,
                         )
                         .await

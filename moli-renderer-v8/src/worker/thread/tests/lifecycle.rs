@@ -769,7 +769,7 @@ async fn service_worker_fetch_event_preload_response_resolves_network_response()
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
-                headers: vec![("x-preload".to_owned(), "yes".to_owned())],
+                headers: vec![("x-preload".to_owned(), b"yes".to_vec())],
             },
         },
     );
@@ -880,7 +880,7 @@ async fn service_worker_fetch_event_preload_response_opaqueredirect_exposes_requ
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 302,
-                headers: vec![("location".to_owned(), "/app/final.html".to_owned())],
+                headers: vec![("location".to_owned(), b"/app/final.html".to_vec())],
             },
         },
     );
@@ -1053,7 +1053,7 @@ async fn service_worker_fetch_event_preload_response_body_errors_after_response(
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
-                headers: vec![("x-preload".to_owned(), "yes".to_owned())],
+                headers: vec![("x-preload".to_owned(), b"yes".to_vec())],
             },
         },
     );
@@ -1166,7 +1166,7 @@ async fn service_worker_fetch_event_preload_response_body_completes_after_fetch_
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         },
     );
@@ -2152,7 +2152,7 @@ async fn service_worker_fetch_respond_with_materialized_response() {
         response
             .headers
             .iter()
-            .any(|(name, value)| name == "x-worker" && value == "yes")
+            .any(|(name, value)| name == "x-worker" && value == b"yes")
     );
     handle.terminate_and_join();
 }
@@ -2193,7 +2193,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_materializes() {
         response
             .headers
             .iter()
-            .any(|(name, value)| name == "x-stream" && value == "yes")
+            .any(|(name, value)| name == "x-stream" && value == b"yes")
     );
     handle.terminate_and_join();
 }
@@ -2253,7 +2253,7 @@ async fn service_worker_fetch_respond_with_readable_stream_body_posts_stream_chu
                         .response_head
                         .headers
                         .iter()
-                        .any(|(name, value)| name == "x-stream" && value == "yes")
+                        .any(|(name, value)| name == "x-stream" && value == b"yes")
                 );
                 body_source_id = Some(started.body_source_id);
             }
@@ -9128,7 +9128,7 @@ async fn worker_fetch_csp_report_to_posts_reporting_api_body() {
         crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
             &[(
                 "Reporting-Endpoints".to_owned(),
-                "csp=\"/report-to\"".to_owned(),
+                b"csp=\"/report-to\"".to_vec(),
             )],
             &url::Url::parse(&script_url).expect("script url"),
         );

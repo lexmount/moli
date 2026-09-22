@@ -186,7 +186,7 @@ impl BrowserCookieStore {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn store_response_headers(&mut self, response_url: &Url, headers: &[(String, String)]) {
+    pub fn store_response_headers(&mut self, response_url: &Url, headers: &[(String, Vec<u8>)]) {
         let reports = self.store_response_headers_with_reports(response_url, headers);
         for ((_, value), report) in headers
             .iter()
@@ -194,7 +194,7 @@ impl BrowserCookieStore {
             .zip(reports.iter())
         {
             if !report.is_accepted() || !report.warning_reasons.is_empty() {
-                tracing::debug!(?report, header = %value, "processed set-cookie header");
+                tracing::debug!(?report, header = %moli_header_field::decode_header_value(value), "processed set-cookie header");
             }
         }
     }
@@ -203,7 +203,7 @@ impl BrowserCookieStore {
     pub fn store_response_headers_with_reports(
         &mut self,
         response_url: &Url,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
     ) -> Vec<StoredCookieSetReport> {
         self.store_response_headers_with_context_reports(
             response_url,
@@ -217,7 +217,7 @@ impl BrowserCookieStore {
     pub fn store_response_headers_with_context_reports(
         &mut self,
         response_url: &Url,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         request_context: &NetworkCookieRequestContext,
     ) -> Vec<StoredCookieSetReport> {
         let mut reports = Vec::new();
@@ -226,7 +226,8 @@ impl BrowserCookieStore {
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("set-cookie"))
         {
-            let normalized = normalize_expires_utc_timezone(value);
+            let value = moli_header_field::decode_header_value(value);
+            let normalized = normalize_expires_utc_timezone(&value);
             reports.push(stored_set_report_from_core(
                 self.full_core.set_response_cookie_str_with_access_result(
                     normalized.as_ref(),

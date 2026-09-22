@@ -2,7 +2,7 @@ use url::Url;
 
 const SERVICE_WORKER_ALLOWED_HEADER: &str = "Service-Worker-Allowed";
 
-pub(super) fn service_worker_allowed_header_value(headers: &[(String, String)]) -> Option<String> {
+pub(super) fn service_worker_allowed_header_value(headers: &[(String, Vec<u8>)]) -> Option<String> {
     moli_web_mime::response_header_value(headers, SERVICE_WORKER_ALLOWED_HEADER)
         .map(|value| value.trim().to_owned())
 }
@@ -259,7 +259,8 @@ mod tests {
 
     #[test]
     fn allowed_header_value_is_case_insensitive_and_trimmed() {
-        let headers = vec![("service-worker-allowed".to_owned(), " /app/ ".to_owned())];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("service-worker-allowed".to_owned(), b" /app/ ".to_vec())];
         assert_eq!(
             service_worker_allowed_header_value(&headers).as_deref(),
             Some("/app/")

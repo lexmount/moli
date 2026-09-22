@@ -1517,7 +1517,7 @@ pub(crate) struct TargetSubresourceResponseStartedOutput {
     final_url: Url,
     status: u16,
     status_text: Option<String>,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
     from_cache: bool,
     network_request_headers: Option<Vec<(String, String)>>,
@@ -1585,7 +1585,7 @@ impl TargetSubresourceResponseStartedOutput {
         self.status_text.as_deref()
     }
 
-    pub(crate) fn response_headers(&self) -> &[(String, String)] {
+    pub(crate) fn response_headers(&self) -> &[(String, Vec<u8>)] {
         &self.response_headers
     }
 
@@ -2135,7 +2135,7 @@ pub(crate) enum TargetSubresourceMetadataOutcome {
         final_url: Url,
         status: u16,
         status_text: Option<String>,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body_len: usize,
     },
     Failure {
@@ -2176,7 +2176,7 @@ pub(crate) struct TargetSubresourceRedirectOutput {
     pub(crate) from_url: Url,
     pub(crate) to_url: Url,
     pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) request_cookie_report: Option<StoredCookieQueryReport>,
     pub(crate) cookie_set_reports: Vec<StoredCookieSetReport>,
     pub(crate) from_cache: bool,
@@ -2349,7 +2349,7 @@ impl TargetWebSocketHandshakeDeliveryOutput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetWebSocketHandshakeResponseOutput {
     status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
 }
 
 impl TargetWebSocketHandshakeResponseOutput {
@@ -2357,7 +2357,7 @@ impl TargetWebSocketHandshakeResponseOutput {
         self.status
     }
 
-    pub(crate) fn response_headers(&self) -> &[(String, String)] {
+    pub(crate) fn response_headers(&self) -> &[(String, Vec<u8>)] {
         &self.response_headers
     }
 }
@@ -3278,7 +3278,7 @@ mod tests {
             Vec::new(),
             url,
             101,
-            vec![("Upgrade".to_owned(), "websocket".to_owned())],
+            vec![("Upgrade".to_owned(), b"websocket".to_vec())],
             String::new(),
             Vec::new(),
         )
@@ -3405,7 +3405,7 @@ mod tests {
             Vec::new(),
             request_url,
             200,
-            vec![("content-type".to_owned(), "image/png".to_owned())],
+            vec![("content-type".to_owned(), b"image/png".to_vec())],
             Vec::new(),
         )
         .with_from_cache(true);
@@ -3720,7 +3720,10 @@ mod tests {
                 from_url: start_url.clone(),
                 to_url: final_url.clone(),
                 status: 307,
-                headers: vec![("location".to_owned(), final_url.to_string())],
+                headers: vec![(
+                    "location".to_owned(),
+                    final_url.as_str().as_bytes().to_vec(),
+                )],
                 network_extra_info_available: false,
                 request_extra_info: None,
                 response_extra_info: None,
@@ -3827,7 +3830,7 @@ mod tests {
         url: &str,
         request_headers: Vec<(String, String)>,
         status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) -> TargetSubresourceMetadataOutput {
         expected_subresource_metadata_with_delivery_order(
             index,
@@ -3847,7 +3850,7 @@ mod tests {
         url: &str,
         request_headers: Vec<(String, String)>,
         status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) -> TargetSubresourceMetadataOutput {
         let url = Url::parse(url).expect("test URL should parse");
         TargetSubresourceMetadataOutput {
@@ -3921,7 +3924,7 @@ mod tests {
                     "wss://example.com/socket",
                     vec![("Sec-WebSocket-Version".to_owned(), "13".to_owned())],
                     101,
-                    vec![("Upgrade".to_owned(), "websocket".to_owned())],
+                    vec![("Upgrade".to_owned(), b"websocket".to_vec())],
                 ),
                 expected_subresource_metadata_with_delivery_order(
                     2,
@@ -3990,7 +3993,7 @@ mod tests {
                     "wss://example.com/socket",
                     vec![("Sec-WebSocket-Version".to_owned(), "13".to_owned())],
                     101,
-                    vec![("Upgrade".to_owned(), "websocket".to_owned())],
+                    vec![("Upgrade".to_owned(), b"websocket".to_vec())],
                 ),
                 expected_subresource_metadata_with_delivery_order(
                     2,
@@ -4186,7 +4189,7 @@ mod tests {
                     "wss://example.com/socket",
                     vec![("Sec-WebSocket-Version".to_owned(), "13".to_owned())],
                     101,
-                    vec![("Upgrade".to_owned(), "websocket".to_owned())],
+                    vec![("Upgrade".to_owned(), b"websocket".to_vec())],
                 ),
             ]
         );
@@ -4233,7 +4236,7 @@ mod tests {
                     "wss://example.com/socket",
                     vec![("Sec-WebSocket-Version".to_owned(), "13".to_owned())],
                     101,
-                    vec![("Upgrade".to_owned(), "websocket".to_owned())],
+                    vec![("Upgrade".to_owned(), b"websocket".to_vec())],
                 ),
             ],
             "syncing only new websocket events should not rescan records or duplicate handshake state"
@@ -4433,7 +4436,7 @@ mod tests {
         assert_eq!(response.status(), 101);
         assert_eq!(
             response.response_headers(),
-            &[("Upgrade".to_owned(), "websocket".to_owned())]
+            &[("Upgrade".to_owned(), b"websocket".to_vec())]
         );
     }
 

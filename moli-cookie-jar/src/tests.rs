@@ -96,10 +96,10 @@ fn document_cookie_reads_network_cookie_but_hides_httponly() {
     store.store_response_headers(
         &url,
         &[
-            ("set-cookie".to_owned(), "theme=dark; Path=/app".to_owned()),
+            ("set-cookie".to_owned(), b"theme=dark; Path=/app".to_vec()),
             (
                 "set-cookie".to_owned(),
-                "secret=server; Path=/app; HttpOnly".to_owned(),
+                b"secret=server; Path=/app; HttpOnly".to_vec(),
             ),
         ],
     );
@@ -120,7 +120,7 @@ fn document_cookie_cannot_overwrite_existing_httponly_cookie() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=server; Path=/app; HttpOnly".to_owned(),
+            b"sid=server; Path=/app; HttpOnly".to_vec(),
         )],
     );
     store.set_document_cookie(&url, "sid=client; Path=/app");
@@ -141,7 +141,7 @@ fn document_cookie_httponly_guard_reads_canonical_core() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=server; Path=/app; HttpOnly".to_owned(),
+            b"sid=server; Path=/app; HttpOnly".to_vec(),
         )],
     );
 
@@ -183,7 +183,7 @@ fn unknown_scheme_uncanonicalizable_host_is_rejected_like_chromium_cookie_util()
 
     let report = store.store_response_headers_with_reports(
         &request_url,
-        &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
     );
 
     assert_eq!(report.len(), 1);
@@ -198,7 +198,7 @@ fn file_url_without_host_accepts_host_cookie_like_chromium_cookie_util() {
 
     let report = store.store_response_headers_with_reports(
         &request_url,
-        &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
     );
 
     assert_eq!(report.len(), 1);
@@ -214,7 +214,7 @@ fn blob_file_underlying_url_accepts_response_cookie_like_chromium_site_for_cooki
 
     let report = store.store_response_headers_with_reports(
         &nested_url,
-        &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
     );
 
     assert_eq!(report.len(), 1);
@@ -229,7 +229,7 @@ fn store_response_headers_accepts_mixed_case_set_cookie_name() {
 
     let reports = store.store_response_headers_with_reports(
         &url,
-        &[("Set-Cookie".to_owned(), "sid=1; Path=/app".to_owned())],
+        &[("Set-Cookie".to_owned(), b"sid=1; Path=/app".to_vec())],
     );
 
     assert_eq!(reports.len(), 1);
@@ -311,10 +311,10 @@ fn document_cookie_access_report_projects_httponly_exclusion() {
     store.store_response_headers(
         &url,
         &[
-            ("set-cookie".to_owned(), "theme=dark; Path=/app".to_owned()),
+            ("set-cookie".to_owned(), b"theme=dark; Path=/app".to_vec()),
             (
                 "set-cookie".to_owned(),
-                "secret=server; Path=/app; HttpOnly".to_owned(),
+                b"secret=server; Path=/app; HttpOnly".to_vec(),
             ),
         ],
     );
@@ -357,7 +357,7 @@ fn document_cookie_access_report_projects_schemeful_downgrade_like_chromium_scri
         &document_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -388,7 +388,7 @@ fn document_cookie_access_report_treats_wss_and_https_as_schemefully_same_site_l
         &parse("https://api.example.com/socket"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -419,7 +419,7 @@ fn document_cookie_access_report_projects_cross_site_when_site_for_cookies_is_cr
         &document_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -449,7 +449,7 @@ fn document_cookie_access_report_treats_ws_and_http_as_schemefully_same_site_lik
         &parse("http://api.example.com/socket"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -478,7 +478,7 @@ fn document_cookie_access_report_treats_local_file_urls_as_same_site_like_chromi
 
     store.store_response_headers(
         &document_url,
-        &[("set-cookie".to_owned(), "lax=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"lax=1; Path=/".to_vec())],
     );
 
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
@@ -506,7 +506,7 @@ fn document_cookie_access_report_treats_nonlocal_file_urls_as_cross_site_like_ch
 
     store.store_response_headers(
         &document_url,
-        &[("set-cookie".to_owned(), "lax=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"lax=1; Path=/".to_vec())],
     );
 
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
@@ -535,7 +535,7 @@ fn document_cookie_access_report_treats_secure_blob_urls_as_same_site_like_chrom
         &parse("https://example.org/resource"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -566,7 +566,7 @@ fn document_cookie_access_report_treats_insecure_blob_urls_as_schemeful_cross_si
         &parse("http://example.org/resource"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -597,7 +597,7 @@ fn document_cookie_access_report_treats_secure_blob_urls_with_insecure_site_for_
         &parse("https://example.org/resource"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -622,7 +622,7 @@ fn document_cookie_reads_for_blob_file_urls_like_chromium_site_for_cookies() {
 
     store.store_response_headers(
         &parse("file:///C:/app/index.html"),
-        &[("set-cookie".to_owned(), "lax=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"lax=1; Path=/".to_vec())],
     );
 
     assert_eq!(store.document_cookie(&document_url), "lax=1");
@@ -637,7 +637,7 @@ fn document_cookie_reads_for_secure_blob_urls_like_underlying_origin() {
         &parse("https://example.org/resource"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -653,7 +653,7 @@ fn document_cookie_reads_for_insecure_blob_urls_like_underlying_origin() {
         &parse("http://example.org/resource"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -671,7 +671,7 @@ fn document_cookie_access_report_treats_blob_file_urls_as_same_site_like_chromiu
 
     store.store_response_headers(
         &parse("file:///C:/app/index.html"),
-        &[("set-cookie".to_owned(), "lax=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"lax=1; Path=/".to_vec())],
     );
 
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
@@ -699,7 +699,7 @@ fn document_cookie_access_report_treats_blob_file_urls_with_nonlocal_site_for_co
 
     store.store_response_headers(
         &parse("file:///C:/app/index.html"),
-        &[("set-cookie".to_owned(), "lax=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"lax=1; Path=/".to_vec())],
     );
 
     let report = store.document_cookie_access_report_with_context(&document_url, &browser_context);
@@ -722,7 +722,7 @@ fn observation_request_access_report_does_not_touch_access_time() {
 
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "theme=dark; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"theme=dark; Path=/app".to_vec())],
     );
 
     let before = store
@@ -755,7 +755,7 @@ fn network_cookie_header_reflects_http_writes() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "theme=dark; Path=/app; Secure".to_owned(),
+            b"theme=dark; Path=/app; Secure".to_vec(),
         )],
     );
 
@@ -772,7 +772,7 @@ fn rejected_http_cookie_is_not_stored() {
 
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "__Secure-sid=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"__Secure-sid=1; Path=/".to_vec())],
     );
 
     assert_eq!(store.cookie_header(&url), None);
@@ -850,7 +850,7 @@ fn network_cookie_header_reflects_http_removals() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=server; Path=/app; Secure".to_owned(),
+            b"sid=server; Path=/app; Secure".to_vec(),
         )],
     );
     assert_eq!(
@@ -862,7 +862,7 @@ fn network_cookie_header_reflects_http_removals() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=gone; Path=/app; Secure; Max-Age=0".to_owned(),
+            b"sid=gone; Path=/app; Secure; Max-Age=0".to_vec(),
         )],
     );
 
@@ -931,7 +931,7 @@ fn clear_removes_all_network_visible_cookies() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=server; Path=/app; Secure".to_owned(),
+            b"sid=server; Path=/app; Secure".to_vec(),
         )],
     );
     store.set_document_cookie(&url, "theme=dark; Path=/app");
@@ -948,19 +948,19 @@ fn sites_with_cookies_uses_registrable_site_keys() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
-        &[("set-cookie".to_owned(), "b=1; Path=/assets".to_owned())],
+        &[("set-cookie".to_owned(), b"b=1; Path=/assets".to_vec())],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
-        &[("set-cookie".to_owned(), "c=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"c=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://127.0.0.1/app/index.html"),
-        &[("set-cookie".to_owned(), "d=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"d=1; Path=/app".to_vec())],
     );
 
     assert_eq!(
@@ -979,22 +979,22 @@ fn cookie_site_data_counts_cookies_per_registrable_site() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
-        &[("set-cookie".to_owned(), "b=1; Path=/assets".to_owned())],
+        &[("set-cookie".to_owned(), b"b=1; Path=/assets".to_vec())],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[
-            ("set-cookie".to_owned(), "c=1; Path=/app".to_owned()),
-            ("set-cookie".to_owned(), "d=1; Path=/app".to_owned()),
+            ("set-cookie".to_owned(), b"c=1; Path=/app".to_vec()),
+            ("set-cookie".to_owned(), b"d=1; Path=/app".to_vec()),
         ],
     );
     store.store_response_headers(
         &parse("https://127.0.0.1/app/index.html"),
-        &[("set-cookie".to_owned(), "e=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"e=1; Path=/app".to_vec())],
     );
 
     let site_data = store.cookie_site_data();
@@ -1015,13 +1015,13 @@ fn cookie_site_data_persistent_scope_excludes_session_cookies() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persistent=1; Path=/app; Max-Age=3600".to_owned(),
+            b"persistent=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1041,15 +1041,15 @@ fn clear_cookies_for_sites_removes_all_matching_registrable_sites() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
-        &[("set-cookie".to_owned(), "b=1; Path=/assets".to_owned())],
+        &[("set-cookie".to_owned(), b"b=1; Path=/assets".to_vec())],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
-        &[("set-cookie".to_owned(), "c=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"c=1; Path=/app".to_vec())],
     );
 
     let removed = store.clear_cookies_for_sites(&["sub.example.com"]);
@@ -1072,20 +1072,20 @@ fn clear_cookies_for_sites_report_projects_replaced_and_remaining_state() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persistent=1; Path=/assets; Max-Age=3600".to_owned(),
+            b"persistent=1; Path=/assets; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1118,20 +1118,20 @@ fn preview_clear_cookies_for_sites_reports_targeted_removal_without_mutation() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persistent=1; Path=/assets; Max-Age=3600".to_owned(),
+            b"persistent=1; Path=/assets; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1176,20 +1176,20 @@ fn preview_clear_cookies_for_sites_with_persistent_scope_keeps_session_slice() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persist=1; Path=/app; Max-Age=3600".to_owned(),
+            b"persist=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1223,13 +1223,13 @@ fn clear_cookies_for_sites_with_session_scope_preserves_persistent_cookie() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persist=1; Path=/app; Max-Age=3600".to_owned(),
+            b"persist=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1261,20 +1261,20 @@ fn preview_clear_cookie_store_with_persistent_scope_keeps_session_sites() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persist=1; Path=/app; Max-Age=3600".to_owned(),
+            b"persist=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1302,18 +1302,18 @@ fn clear_cookie_store_with_session_scope_preserves_persistent_store_state() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persist=1; Path=/app; Max-Age=3600".to_owned(),
+            b"persist=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
-        &[("set-cookie".to_owned(), "other=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"other=1; Path=/app".to_vec())],
     );
 
     let report = store.clear_with_scope_and_report(super::CookieSiteDataClearScope::Session);
@@ -1337,13 +1337,13 @@ fn preview_clear_with_registrable_site_target_projects_targeted_clear_shape() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1374,18 +1374,18 @@ fn clear_with_registrable_site_target_projects_targeted_clear_report() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persist=1; Path=/assets; Max-Age=3600".to_owned(),
+            b"persist=1; Path=/assets; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
-        &[("set-cookie".to_owned(), "other=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"other=1; Path=/app".to_vec())],
     );
 
     let report = store.clear_with_scope_and_target_report(
@@ -1418,13 +1418,13 @@ fn preview_site_data_operation_clear_uses_generic_targeted_clear_seam() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1455,13 +1455,13 @@ fn cookie_storage_state_snapshot_distinguishes_live_and_persistent_views() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persistent=1; Path=/app; Max-Age=3600".to_owned(),
+            b"persistent=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1492,20 +1492,20 @@ fn cookie_storage_state_snapshot_for_sites_filters_live_and_persistent_views() {
 
     store.store_response_headers(
         &parse("https://app.example.com/app/index.html"),
-        &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
     );
     store.store_response_headers(
         &parse("https://cdn.example.com/assets/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "persistent=1; Path=/assets; Max-Age=3600".to_owned(),
+            b"persistent=1; Path=/assets; Max-Age=3600".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://foo.co.uk/app/index.html"),
         &[(
             "set-cookie".to_owned(),
-            "other=1; Path=/app; Max-Age=3600".to_owned(),
+            b"other=1; Path=/app; Max-Age=3600".to_vec(),
         )],
     );
 
@@ -1532,7 +1532,7 @@ fn cookies_enumeration_reads_priority_and_source_metadata_from_full_core() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=server; Path=/app; Secure; HttpOnly; Priority=High".to_owned(),
+            b"sid=server; Path=/app; Secure; HttpOnly; Priority=High".to_vec(),
         )],
     );
 
@@ -1557,7 +1557,7 @@ fn cookies_enumeration_drops_metadata_entries_missing_from_full_core() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=server; Path=/app; Secure".to_owned(),
+            b"sid=server; Path=/app; Secure".to_vec(),
         )],
     );
     assert_eq!(store.cookies().len(), 1);
@@ -1642,14 +1642,14 @@ fn delete_cookies_updates_network_visible_cookie_header() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "shared=1; Domain=example.com; Path=/app; Secure".to_owned(),
+            b"shared=1; Domain=example.com; Path=/app; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "host=1; Path=/app; Secure".to_owned(),
+            b"host=1; Path=/app; Secure".to_vec(),
         )],
     );
     assert_eq!(
@@ -1672,14 +1672,14 @@ fn delete_cookies_url_host_filter_uses_full_core_host_only_state() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "host=1; Path=/app; Secure".to_owned(),
+            b"host=1; Path=/app; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "shared=1; Domain=example.com; Path=/app; Secure".to_owned(),
+            b"shared=1; Domain=example.com; Path=/app; Secure".to_vec(),
         )],
     );
 
@@ -1701,7 +1701,7 @@ fn dot_prefixed_ip_domain_cookie_is_accepted_as_host_cookie_like_chromium() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=.192.0.2.3; Path=/".to_owned(),
+            b"sid=1; Domain=.192.0.2.3; Path=/".to_vec(),
         )],
     );
 
@@ -1721,7 +1721,7 @@ fn trailing_dot_cookie_domain_is_rejected_like_chromium_cookie_util() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=.foo.com..; Path=/".to_owned(),
+            b"sid=1; Domain=.foo.com..; Path=/".to_vec(),
         )],
     );
 
@@ -1738,7 +1738,7 @@ fn percent_encoded_cookie_domain_is_rejected_like_chromium_cookie_util() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=a%2Etest; Path=/".to_owned(),
+            b"sid=1; Domain=a%2Etest; Path=/".to_vec(),
         )],
     );
 
@@ -1755,7 +1755,7 @@ fn uncanonicalizable_cookie_domain_is_rejected_like_chromium_cookie_util() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=a^test; Path=/".to_owned(),
+            b"sid=1; Domain=a^test; Path=/".to_vec(),
         )],
     );
 
@@ -1772,7 +1772,7 @@ fn dot_prefixed_public_suffix_identical_host_becomes_host_only_like_chromium() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "hostonly=1; Domain=.github.io; Path=/; Secure".to_owned(),
+            b"hostonly=1; Domain=.github.io; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -1793,7 +1793,7 @@ fn dot_prefixed_public_suffix_identical_host_becomes_host_only_for_gov_uk_like_c
         &url,
         &[(
             "set-cookie".to_owned(),
-            "hostonly=1; Domain=.gov.uk; Path=/; Secure".to_owned(),
+            b"hostonly=1; Domain=.gov.uk; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -1814,7 +1814,7 @@ fn noncanonical_public_suffix_identical_host_becomes_host_only_for_gov_uk_like_c
         &url,
         &[(
             "set-cookie".to_owned(),
-            "hostonly=1; Domain=GoV.Uk; Path=/; Secure".to_owned(),
+            b"hostonly=1; Domain=GoV.Uk; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -1835,7 +1835,7 @@ fn parent_domain_attribute_is_accepted_for_subdomain_request_host_like_chromium(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=globex.com; Path=/".to_owned(),
+            b"sid=1; Domain=globex.com; Path=/".to_vec(),
         )],
     );
 
@@ -1853,7 +1853,7 @@ fn subdomain_attribute_is_rejected_for_parent_request_host_like_chromium() {
         &parse("http://globex.com/"),
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=mail.globex.com; Path=/".to_owned(),
+            b"sid=1; Domain=mail.globex.com; Path=/".to_vec(),
         )],
     );
 
@@ -1869,7 +1869,7 @@ fn substring_but_not_subdomain_domain_attribute_is_rejected_like_chromium() {
         &parse("http://myglobex.com/"),
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=globex.com; Path=/".to_owned(),
+            b"sid=1; Domain=globex.com; Path=/".to_vec(),
         )],
     );
 
@@ -1886,14 +1886,14 @@ fn trailing_dot_domain_attribute_mismatch_is_rejected_like_chromium_cookie_util(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=.foo.com..; Path=/".to_owned(),
+            b"sid=1; Domain=.foo.com..; Path=/".to_vec(),
         )],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=.foo.com.; Path=/".to_owned(),
+            b"sid=1; Domain=.foo.com.; Path=/".to_vec(),
         )],
     );
 
@@ -1909,14 +1909,14 @@ fn invalid_ip_subdomain_domain_attribute_is_rejected_like_chromium_cookie_util()
         &parse("http://192.0.2.3/"),
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=192; Path=/".to_owned(),
+            b"sid=1; Domain=192; Path=/".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("http://0.0.16.0/0000000"),
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=00000000; Path=/".to_owned(),
+            b"sid=1; Domain=00000000; Path=/".to_vec(),
         )],
     );
 
@@ -1932,7 +1932,7 @@ fn unknown_registry_identical_domain_attribute_is_accepted_like_chromium_cookie_
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Domain=qjz9; Path=/".to_owned(),
+            b"sid=1; Domain=qjz9; Path=/".to_vec(),
         )],
     );
 
@@ -1951,7 +1951,7 @@ fn secure_cookie_from_insecure_origin_is_ignored() {
         &parse("http://example.com/login"),
         &[(
             "set-cookie".to_owned(),
-            "sid=secure; Path=/; Secure".to_owned(),
+            b"sid=secure; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -1964,7 +1964,7 @@ fn secure_prefix_requires_secure_attribute() {
 
     store.store_response_headers(
         &parse("https://example.com/"),
-        &[("set-cookie".to_owned(), "__Secure-sid=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"__Secure-sid=1; Path=/".to_vec())],
     );
 
     assert_eq!(store.cookie_header(&parse("https://example.com/")), None);
@@ -1977,20 +1977,20 @@ fn host_prefix_requires_host_only_secure_and_explicit_root_path() {
 
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "__Host-a=1; Secure".to_owned())],
+        &[("set-cookie".to_owned(), b"__Host-a=1; Secure".to_vec())],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "__Host-b=1; Secure; Path=/".to_owned(),
+            b"__Host-b=1; Secure; Path=/".to_vec(),
         )],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "__Host-c=1; Secure; Path=/; Domain=example.com".to_owned(),
+            b"__Host-c=1; Secure; Path=/; Domain=example.com".to_vec(),
         )],
     );
 
@@ -2008,14 +2008,14 @@ fn http_prefix_requires_secure_and_http_only() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "__Http-token=1; Path=/; Secure".to_owned(),
+            b"__Http-token=1; Path=/; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "__Http-token=2; Path=/; Secure; HttpOnly".to_owned(),
+            b"__Http-token=2; Path=/; Secure; HttpOnly".to_vec(),
         )],
     );
 
@@ -2034,21 +2034,21 @@ fn host_http_prefix_requires_host_only_secure_http_only_and_explicit_root_path()
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "__Host-Http-token=1; Path=/; Secure".to_owned(),
+            b"__Host-Http-token=1; Path=/; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "__Host-Http-token=2; Path=/; Secure; HttpOnly; Domain=example.com".to_owned(),
+            b"__Host-Http-token=2; Path=/; Secure; HttpOnly; Domain=example.com".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "__Host-Http-token=3; Path=/; Secure; HttpOnly".to_owned(),
+            b"__Host-Http-token=3; Path=/; Secure; HttpOnly".to_vec(),
         )],
     );
 
@@ -2066,7 +2066,7 @@ fn empty_name_cookie_cannot_smuggle_protected_prefixes_in_value() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "=__Secure-token; Path=/; Secure".to_owned(),
+            b"=__Secure-token; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -2081,14 +2081,14 @@ fn same_site_none_requires_secure() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "cross=1; Path=/; SameSite=None".to_owned(),
+            b"cross=1; Path=/; SameSite=None".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "cross=1; Path=/; SameSite=None; Secure".to_owned(),
+            b"cross=1; Path=/; SameSite=None; Secure".to_vec(),
         )],
     );
 
@@ -2106,14 +2106,14 @@ fn insecure_cookie_cannot_overlay_existing_secure_cookie() {
         &parse("https://example.com/login"),
         &[(
             "set-cookie".to_owned(),
-            "sid=secure; Domain=example.com; Path=/login; Secure".to_owned(),
+            b"sid=secure; Domain=example.com; Path=/login; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("http://sub.example.com/login"),
         &[(
             "set-cookie".to_owned(),
-            "sid=insecure; Domain=example.com; Path=/login".to_owned(),
+            b"sid=insecure; Domain=example.com; Path=/login".to_vec(),
         )],
     );
 
@@ -2135,7 +2135,7 @@ fn secure_overlay_guard_reads_canonical_core() {
         &parse("https://example.com/login"),
         &[(
             "set-cookie".to_owned(),
-            "sid=secure; Domain=example.com; Path=/login; Secure".to_owned(),
+            b"sid=secure; Domain=example.com; Path=/login; Secure".to_vec(),
         )],
     );
 
@@ -2145,7 +2145,7 @@ fn secure_overlay_guard_reads_canonical_core() {
         &parse("http://sub.example.com/login"),
         &[(
             "set-cookie".to_owned(),
-            "sid=insecure; Domain=example.com; Path=/login".to_owned(),
+            b"sid=insecure; Domain=example.com; Path=/login".to_vec(),
         )],
     );
 
@@ -2160,8 +2160,8 @@ fn cookie_header_keeps_original_creation_order_for_same_path_length() {
     let mut store = BrowserCookieStore::default();
     let url = parse("https://example.com/");
 
-    store.store_response_headers(&url, &[("set-cookie".to_owned(), "b=2; Path=/".to_owned())]);
-    store.store_response_headers(&url, &[("set-cookie".to_owned(), "a=1; Path=/".to_owned())]);
+    store.store_response_headers(&url, &[("set-cookie".to_owned(), b"b=2; Path=/".to_vec())]);
+    store.store_response_headers(&url, &[("set-cookie".to_owned(), b"a=1; Path=/".to_vec())]);
 
     assert_eq!(store.cookie_header(&url), Some("b=2; a=1".to_owned()));
 }
@@ -2177,7 +2177,7 @@ fn response_header_reports_project_sanitized_attribute_warnings() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            format!("sid=1; Domain={oversized_domain}; Path={invalid_path}; Secure"),
+            format!("sid=1; Domain={oversized_domain}; Path={invalid_path}; Secure").into_bytes(),
         )],
     );
 
@@ -2205,7 +2205,7 @@ fn response_header_reports_project_secure_access_warning_for_localhost_http() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/app; Secure".to_owned(),
+            b"sid=1; Path=/app; Secure".to_vec(),
         )],
     );
 
@@ -2227,11 +2227,11 @@ fn request_access_report_projects_schemeful_same_site_warning() {
         &[
             (
                 "set-cookie".to_owned(),
-                "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
             ),
             (
                 "set-cookie".to_owned(),
-                "none=1; Path=/foo; Secure; SameSite=None".to_owned(),
+                b"none=1; Path=/foo; Secure; SameSite=None".to_vec(),
             ),
         ],
     );
@@ -2300,7 +2300,7 @@ fn request_access_report_projects_lax_schemeful_same_site_warning() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/foo; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/foo; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -2338,7 +2338,7 @@ fn request_access_report_projects_secure_access_warning_for_localhost_http() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/app; Secure".to_owned(),
+            b"sid=1; Path=/app; Secure".to_vec(),
         )],
     );
 
@@ -2362,7 +2362,7 @@ fn request_access_report_projects_schemeful_only_redirect_metadata() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2408,7 +2408,7 @@ fn request_access_report_projects_http_method_and_redirect_type() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2450,7 +2450,7 @@ fn redirected_top_level_get_with_cross_site_initiator_and_same_site_frame_projec
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2499,7 +2499,7 @@ fn redirected_top_level_post_with_cross_site_initiator_and_same_site_frame_proje
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -2556,7 +2556,7 @@ fn redirected_top_level_get_with_same_site_initiator_and_frame_projects_partial_
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2608,7 +2608,7 @@ fn redirected_top_level_post_with_same_site_initiator_and_frame_projects_partial
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -2668,7 +2668,7 @@ fn redirected_subresource_get_with_same_site_initiator_and_frame_projects_partia
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2721,7 +2721,7 @@ fn redirected_subresource_post_with_same_site_initiator_and_frame_projects_parti
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2782,7 +2782,7 @@ fn redirected_top_level_get_with_same_site_initiator_and_frame_projects_all_same
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2828,7 +2828,7 @@ fn redirected_top_level_post_with_same_site_initiator_and_frame_projects_all_sam
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2882,7 +2882,7 @@ fn redirected_subresource_get_with_same_site_initiator_and_frame_projects_all_sa
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2931,7 +2931,7 @@ fn redirected_subresource_post_with_same_site_initiator_and_frame_projects_all_s
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -2988,7 +2988,7 @@ fn redirected_subresource_get_with_cross_site_initiator_and_same_site_frame_proj
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3041,7 +3041,7 @@ fn redirected_subresource_post_with_cross_site_initiator_and_same_site_frame_pro
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3102,7 +3102,7 @@ fn redirected_top_level_get_with_same_site_chain_but_cross_site_final_stays_cros
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3155,7 +3155,7 @@ fn redirected_subresource_get_with_same_site_chain_but_cross_site_final_stays_cr
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3208,7 +3208,7 @@ fn redirected_top_level_post_with_same_site_chain_but_cross_site_final_stays_cro
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -3268,7 +3268,7 @@ fn redirected_subresource_post_with_same_site_chain_but_cross_site_final_stays_c
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -3325,7 +3325,7 @@ fn lowercase_safe_http_method_still_allows_top_level_lax_cookie() {
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/foo; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/foo; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -3362,7 +3362,7 @@ fn websocket_secure_scheme_is_schemefully_same_site_with_https_initiator_like_ch
         &parse("https://api.example.com/socket"),
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3413,7 +3413,7 @@ fn websocket_insecure_scheme_is_schemefully_same_site_with_http_initiator_like_c
         &parse("http://api.example.com/socket"),
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3444,7 +3444,7 @@ fn websocket_insecure_scheme_is_cross_site_with_cross_site_initiator_like_chromi
         &parse("http://api.example.com/socket"),
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3480,7 +3480,7 @@ fn top_level_get_request_reports_schemeful_lax_for_cross_scheme_same_site_initia
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3515,7 +3515,7 @@ fn top_level_get_request_reports_schemeful_lax_for_cross_scheme_same_site_initia
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3550,7 +3550,7 @@ fn top_level_post_request_reports_schemeful_lax_unsafe_for_cross_scheme_same_sit
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/foo; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/foo; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -3586,7 +3586,7 @@ fn top_level_post_request_reports_schemeful_lax_unsafe_for_cross_scheme_same_sit
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/foo; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/foo; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -3621,7 +3621,7 @@ fn subresource_request_reports_schemeful_cross_site_for_cross_scheme_same_site_i
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3657,7 +3657,7 @@ fn subresource_request_reports_schemeful_cross_site_for_cross_scheme_site_for_co
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3702,7 +3702,7 @@ fn subresource_post_reports_schemeful_cross_site_for_cross_scheme_site_for_cooki
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3749,7 +3749,7 @@ fn subresource_get_with_cross_site_initiator_stays_cross_site_even_if_site_for_c
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3789,7 +3789,7 @@ fn subresource_post_with_cross_site_initiator_stays_cross_site_even_if_site_for_
         &request_url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/foo; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/foo; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -3837,7 +3837,7 @@ fn request_access_report_projects_browser_site_context_snapshot() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3878,7 +3878,7 @@ fn request_access_report_is_agnostic_to_source_port() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/app; Secure".to_owned(),
+            b"sid=1; Path=/app; Secure".to_vec(),
         )],
     );
 
@@ -3906,7 +3906,7 @@ fn host_only_cookie_is_shared_across_ports_of_the_same_host() {
 
     store.store_response_headers(
         &set_url,
-        &[("set-cookie".to_owned(), "a=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"a=1; Path=/".to_vec())],
     );
 
     assert_eq!(store.document_cookie(&other_port_url), "a=1");
@@ -3921,7 +3921,7 @@ fn request_access_report_projects_source_scheme_mismatch_exclusion() {
 
     store.store_response_headers(
         &response_url,
-        &[("set-cookie".to_owned(), "sid=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"sid=1; Path=/app".to_vec())],
     );
 
     let report = store.cookie_access_report_for_request(
@@ -3945,7 +3945,7 @@ fn request_access_report_accumulates_multiple_exclusion_reasons() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -3977,11 +3977,11 @@ fn request_access_report_projects_access_semantics_and_secure_access_capability(
         &[
             (
                 "set-cookie".to_owned(),
-                "strict=1; Path=/foo; Secure; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/foo; Secure; SameSite=Strict".to_vec(),
             ),
             (
                 "set-cookie".to_owned(),
-                "sid=1; Path=/foo; Secure".to_owned(),
+                b"sid=1; Path=/foo; Secure".to_vec(),
             ),
         ],
     );
@@ -4033,15 +4033,15 @@ fn cookie_replacement_preserves_creation_order() {
 
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "first=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"first=1; Path=/".to_vec())],
     );
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "second=2; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"second=2; Path=/".to_vec())],
     );
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "first=3; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"first=3; Path=/".to_vec())],
     );
 
     assert_eq!(
@@ -4130,7 +4130,7 @@ fn partitioned_cookie_is_stored_from_http_and_document_sources() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "__Host-chip=1; Secure; Path=/; Partitioned".to_owned(),
+            b"__Host-chip=1; Secure; Path=/; Partitioned".to_vec(),
         )],
     );
     store.set_document_cookie(&url, "__Host-domchip=1; Secure; Path=/; Partitioned");
@@ -4187,7 +4187,7 @@ fn third_party_response_cookie_is_scoped_to_top_level_site() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "cf_clearance=token; Secure; SameSite=None; Partitioned; Path=/".to_owned(),
+            b"cf_clearance=token; Secure; SameSite=None; Partitioned; Path=/".to_vec(),
         )],
         &context_a,
     );
@@ -4234,7 +4234,7 @@ fn delete_cookies_with_partition_key_keeps_other_top_level_sites() {
             &response_url,
             &[(
                 "set-cookie".to_owned(),
-                format!("chip={value}; Secure; SameSite=None; Partitioned; Path=/"),
+                format!("chip={value}; Secure; SameSite=None; Partitioned; Path=/").into_bytes(),
             )],
             context,
         );
@@ -4270,7 +4270,7 @@ fn response_cookie_records_priority_and_source_metadata() {
         &parse("https://example.com:8443/"),
         &[(
             "set-cookie".to_owned(),
-            "prio=1; Path=/; Secure; Priority=High".to_owned(),
+            b"prio=1; Path=/; Secure; Priority=High".to_vec(),
         )],
     );
 
@@ -4291,13 +4291,13 @@ fn max_age_takes_precedence_over_expires_for_immediate_removal() {
 
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=2; Path=/; Max-Age=0; Expires=Wed, 21 Oct 2099 07:28:00 GMT".to_owned(),
+            b"sid=2; Path=/; Max-Age=0; Expires=Wed, 21 Oct 2099 07:28:00 GMT".to_vec(),
         )],
     );
 
@@ -4313,7 +4313,7 @@ fn max_age_takes_precedence_over_past_expires_when_positive() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/; Max-Age=3600; Expires=Wed, 21 Oct 2015 07:28:00 GMT".to_owned(),
+            b"sid=1; Path=/; Max-Age=3600; Expires=Wed, 21 Oct 2015 07:28:00 GMT".to_vec(),
         )],
     );
 
@@ -4330,7 +4330,7 @@ fn oversized_path_attribute_is_ignored_and_defaults_request_path() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            format!("fallback=1; Path={oversized_path}"),
+            format!("fallback=1; Path={oversized_path}").into_bytes(),
         )],
     );
 
@@ -4351,7 +4351,7 @@ fn oversized_domain_attribute_is_ignored_and_cookie_becomes_host_only() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            format!("hostonly=1; Domain={oversized_domain}; Path=/"),
+            format!("hostonly=1; Domain={oversized_domain}; Path=/").into_bytes(),
         )],
     );
 
@@ -4374,7 +4374,7 @@ fn oversized_cookie_name_plus_value_is_rejected() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            format!("huge={oversized_value}; Path=/; Secure"),
+            format!("huge={oversized_value}; Path=/; Secure").into_bytes(),
         )],
     );
 
@@ -4391,19 +4391,19 @@ fn per_domain_eviction_prefers_removing_non_secure_cookie() {
             &url,
             &[(
                 "set-cookie".to_owned(),
-                format!("secure{index}=1; Path=/; Secure"),
+                format!("secure{index}=1; Path=/; Secure").into_bytes(),
             )],
         );
     }
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "plain=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"plain=1; Path=/".to_vec())],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "newsecure=1; Path=/; Secure".to_owned(),
+            b"newsecure=1; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -4423,13 +4423,13 @@ fn per_domain_eviction_rejects_new_non_secure_cookie_when_all_existing_are_secur
             &url,
             &[(
                 "set-cookie".to_owned(),
-                format!("secure{index}=1; Path=/; Secure"),
+                format!("secure{index}=1; Path=/; Secure").into_bytes(),
             )],
         );
     }
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "plain=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"plain=1; Path=/".to_vec())],
     );
 
     assert_eq!(
@@ -4446,14 +4446,17 @@ fn per_domain_eviction_removes_oldest_non_secure_cookie_first() {
     for index in 1..=5 {
         store.store_response_headers(
             &url,
-            &[("set-cookie".to_owned(), format!("plain{index}=1; Path=/"))],
+            &[(
+                "set-cookie".to_owned(),
+                format!("plain{index}=1; Path=/").into_bytes(),
+            )],
         );
     }
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "secure=1; Path=/; Secure".to_owned(),
+            b"secure=1; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -4473,13 +4476,14 @@ fn expired_cookies_are_removed_before_domain_eviction() {
             &url,
             &[(
                 "set-cookie".to_owned(),
-                format!("stale{index}=1; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT"),
+                format!("stale{index}=1; Path=/; Expires=Wed, 21 Oct 2015 07:28:00 GMT")
+                    .into_bytes(),
             )],
         );
     }
     store.store_response_headers(
         &url,
-        &[("set-cookie".to_owned(), "fresh=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"fresh=1; Path=/".to_vec())],
     );
 
     assert_eq!(
@@ -4494,19 +4498,19 @@ fn global_eviction_applies_when_total_cookie_limit_is_hit() {
 
     store.store_response_headers(
         &parse("https://one.example/"),
-        &[("set-cookie".to_owned(), "a=1; Path=/; Secure".to_owned())],
+        &[("set-cookie".to_owned(), b"a=1; Path=/; Secure".to_vec())],
     );
     store.store_response_headers(
         &parse("https://two.example/"),
-        &[("set-cookie".to_owned(), "b=1; Path=/; Secure".to_owned())],
+        &[("set-cookie".to_owned(), b"b=1; Path=/; Secure".to_vec())],
     );
     store.store_response_headers(
         &parse("https://three.example/"),
-        &[("set-cookie".to_owned(), "c=1; Path=/".to_owned())],
+        &[("set-cookie".to_owned(), b"c=1; Path=/".to_vec())],
     );
     store.store_response_headers(
         &parse("https://four.example/"),
-        &[("set-cookie".to_owned(), "d=1; Path=/; Secure".to_owned())],
+        &[("set-cookie".to_owned(), b"d=1; Path=/; Secure".to_vec())],
     );
 
     assert_eq!(store.cookies().len(), 3);
@@ -4526,28 +4530,28 @@ fn eviction_prefers_lower_priority_before_higher_priority() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "low=1; Path=/; Priority=Low".to_owned(),
+            b"low=1; Path=/; Priority=Low".to_vec(),
         )],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "high=1; Path=/; Priority=High".to_owned(),
+            b"high=1; Path=/; Priority=High".to_vec(),
         )],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "medium=1; Path=/; Priority=Medium".to_owned(),
+            b"medium=1; Path=/; Priority=Medium".to_vec(),
         )],
     );
     store.store_response_headers(
         &url,
         &[(
             "set-cookie".to_owned(),
-            "high2=1; Path=/; Priority=High".to_owned(),
+            b"high2=1; Path=/; Priority=High".to_vec(),
         )],
     );
 
@@ -4565,7 +4569,7 @@ fn invalid_priority_falls_back_to_medium() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "prio=1; Path=/; Priority=NotReal".to_owned(),
+            b"prio=1; Path=/; Priority=NotReal".to_vec(),
         )],
     );
 
@@ -4585,21 +4589,21 @@ fn upstream_samesite_request_context_matrix() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; SameSite=Strict; Secure".to_owned(),
+            b"strict=1; Path=/; SameSite=Strict; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/; SameSite=Lax; Secure".to_owned(),
+            b"lax=1; Path=/; SameSite=Lax; Secure".to_vec(),
         )],
     );
     store.store_response_headers(
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "none=1; Path=/; SameSite=None; Secure".to_owned(),
+            b"none=1; Path=/; SameSite=None; Secure".to_vec(),
         )],
     );
 
@@ -4616,7 +4620,7 @@ fn upstream_partitioned_cookie_cases() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "chip=1; Path=/; Secure; SameSite=None; Partitioned".to_owned(),
+            b"chip=1; Path=/; Secure; SameSite=None; Partitioned".to_vec(),
         )],
     );
 
@@ -4635,7 +4639,7 @@ fn upstream_cookie_quota_and_eviction_cases() {
             &parse("https://example.com/"),
             &[(
                 "set-cookie".to_owned(),
-                format!("c{index}=1; Path=/; Secure"),
+                format!("c{index}=1; Path=/; Secure").into_bytes(),
             )],
         );
     }
@@ -4650,7 +4654,7 @@ fn upstream_schemeful_samesite_treats_http_to_https_as_cross_site() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/; SameSite=Strict; Secure".to_owned(),
+            b"strict=1; Path=/; SameSite=Strict; Secure".to_vec(),
         )],
     );
 
@@ -4668,7 +4672,7 @@ fn upstream_partitioned_cookie_isolated_by_top_level_site() {
         &widget_url,
         &[(
             "set-cookie".to_owned(),
-            "chip=1; Path=/; Secure; SameSite=None; Partitioned".to_owned(),
+            b"chip=1; Path=/; Secure; SameSite=None; Partitioned".to_vec(),
         )],
         &matching_context,
     );
@@ -4697,7 +4701,7 @@ fn upstream_public_suffix_domain_rejection() {
         &parse("https://foo.co.uk/"),
         &[(
             "set-cookie".to_owned(),
-            "wide=1; Domain=co.uk; Path=/; Secure".to_owned(),
+            b"wide=1; Domain=co.uk; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -4711,7 +4715,7 @@ fn deeper_rule_does_not_shadow_parent_wildcard_during_domain_rejection() {
         &parse("https://foo.oci.customer-oci.com/"),
         &[(
             "set-cookie".to_owned(),
-            "wide=1; Domain=oci.customer-oci.com; Path=/; Secure".to_owned(),
+            b"wide=1; Domain=oci.customer-oci.com; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -4725,7 +4729,7 @@ fn public_suffix_identical_host_domain_downgrades_to_host_only() {
         &parse("https://github.io/"),
         &[(
             "set-cookie".to_owned(),
-            "hostonly=1; Domain=github.io; Path=/; Secure".to_owned(),
+            b"hostonly=1; Domain=github.io; Path=/; Secure".to_vec(),
         )],
     );
 
@@ -4745,7 +4749,7 @@ fn upstream_priority_influences_eviction_order() {
             &parse("https://example.com/"),
             &[(
                 "set-cookie".to_owned(),
-                format!("low{index}=1; Path=/; Secure; Priority=Low"),
+                format!("low{index}=1; Path=/; Secure; Priority=Low").into_bytes(),
             )],
         );
     }
@@ -4753,7 +4757,7 @@ fn upstream_priority_influences_eviction_order() {
         &parse("https://example.com/"),
         &[(
             "set-cookie".to_owned(),
-            "high=1; Path=/; Secure; Priority=High".to_owned(),
+            b"high=1; Path=/; Secure; Priority=High".to_vec(),
         )],
     );
 
@@ -4769,7 +4773,7 @@ fn upstream_cookie_source_metadata_is_preserved() {
     let mut store = BrowserCookieStore::default();
     store.store_response_headers(
         &parse("https://example.com:8443/"),
-        &[("set-cookie".to_owned(), "sid=1; Path=/; Secure".to_owned())],
+        &[("set-cookie".to_owned(), b"sid=1; Path=/; Secure".to_vec())],
     );
 
     let cookie = store

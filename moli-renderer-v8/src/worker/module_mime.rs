@@ -64,7 +64,7 @@ pub(crate) fn ensure_worker_text_module_mime(
     ))
 }
 
-fn worker_module_response_content_type(headers: &[(String, String)]) -> Option<String> {
+fn worker_module_response_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
     response_header_values(headers, "content-type")
         .into_iter()
         .next_back()

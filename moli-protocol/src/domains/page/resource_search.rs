@@ -372,7 +372,7 @@ fn subresource_url_matches(record: &SubresourceNetworkRecord, requested_url: &st
 
 fn decode_resource_content(
     bytes: &[u8],
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     kind: ResourceContentKind,
 ) -> String {
     let mime = effective_response_mime_essence(headers, None).unwrap_or_default();
@@ -436,9 +436,9 @@ mod tests {
 
     #[test]
     fn html_resource_decoding_observes_declared_charset() {
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "content-type".to_owned(),
-            "text/html; charset=windows-1252".to_owned(),
+            b"text/html; charset=windows-1252".to_vec(),
         )];
         assert_eq!(
             decode_resource_content(b"<p>\x80</p>", &headers, ResourceContentKind::MainDocument,),
@@ -448,9 +448,9 @@ mod tests {
 
     #[test]
     fn stylesheet_resource_rejects_invalid_response_charset_whitespace() {
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "content-type".to_owned(),
-            "text/css; charset=\nshift_jis".to_owned(),
+            b"text/css; charset=\nshift_jis".to_vec(),
         )];
 
         assert_eq!(
@@ -470,7 +470,7 @@ mod tests {
                 &[0, 255],
                 &[(
                     "content-type".to_owned(),
-                    "application/octet-stream".to_owned(),
+                    b"application/octet-stream".to_vec(),
                 )],
                 ResourceContentKind::Subresource(SubresourceResourceType::Image),
             ),

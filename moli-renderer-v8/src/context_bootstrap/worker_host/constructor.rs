@@ -1010,7 +1010,11 @@ fn local_worker_main_script_network_response(
     crate::protocol_types::NavigationResponse::from_text_body(
         resource_url,
         200,
-        vec![("content-type".to_owned(), mime_type)],
+        vec![(
+            "content-type".to_owned(),
+            moli_fetch::header_value_from_byte_string(&mime_type)
+                .expect("serialized MIME types contain ByteStrings"),
+        )],
         source.to_owned(),
     )
 }

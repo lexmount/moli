@@ -848,7 +848,7 @@ impl Request {
     pub fn validate_cors_response_for_url(
         &self,
         response_url: &Url,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
     ) -> Result<(), String> {
         if self.request_mode != RequestMode::Cors
             || !matches!(response_url.scheme(), "http" | "https")

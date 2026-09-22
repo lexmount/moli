@@ -26,7 +26,7 @@ fn service_worker_redirect_target(
         .headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| moli_fetch::decode_header_value(value))
     else {
         return Ok(None);
     };
@@ -36,7 +36,7 @@ fn service_worker_redirect_target(
             response.final_url.as_ref().unwrap_or(&job.request.url)
         ));
     }
-    if let Ok(url) = Url::parse(location) {
+    if let Ok(url) = Url::parse(&location) {
         return Ok(Some(url));
     }
     let Some(base_url) = response.final_url.as_ref() else {
@@ -44,7 +44,7 @@ fn service_worker_redirect_target(
             "failed to resolve redirect location `{location}` for a generated response without a response URL"
         ));
     };
-    base_url.join(location).map(Some).map_err(|error| {
+    base_url.join(&location).map(Some).map_err(|error| {
         format!("failed to resolve redirect location `{location}` from {base_url}: {error}")
     })
 }
@@ -802,7 +802,7 @@ fn validate_service_worker_fetch_response_body_security_policy(
 fn validate_service_worker_fetch_response_head_security_policy(
     job: &ServiceWorkerFetchJob,
     final_url: &Url,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Result<(), String> {
     if job.request.request_mode != moli_fetch::RequestMode::NoCors
         || matches!(
@@ -1260,7 +1260,7 @@ mod tests {
                 redirected: false,
                 status: 202,
                 status_text: "Accepted".to_owned(),
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                 body: b"service-worker-body".to_vec(),
             }),
         });
@@ -1280,7 +1280,7 @@ mod tests {
         assert!(!response.redirected);
         assert_eq!(
             response.headers,
-            vec![("content-type".to_owned(), "text/plain".to_owned())]
+            vec![("content-type".to_owned(), b"text/plain".to_vec())]
         );
         assert_eq!(response.body_text(), "service-worker-body");
     }
@@ -1316,7 +1316,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 202,
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
 
@@ -1354,7 +1354,7 @@ mod tests {
                 redirected: false,
                 status: 202,
                 status_text: "Accepted".to_owned(),
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                 body: b"AB".to_vec(),
             }),
         });
@@ -1400,7 +1400,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
         match pop_async_subresource_event(&mut completion_queue) {
@@ -1655,7 +1655,7 @@ mod tests {
                 status_text: "Found".to_owned(),
                 headers: vec![(
                     "location".to_owned(),
-                    "https://example.test/redirected.txt".to_owned(),
+                    b"https://example.test/redirected.txt".to_vec(),
                 )],
                 body: Vec::new(),
             }),
@@ -1776,7 +1776,7 @@ mod tests {
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
-                headers: vec![("location".to_owned(), "/manual-target.txt".to_owned())],
+                headers: vec![("location".to_owned(), b"/manual-target.txt".to_vec())],
                 body: Vec::new(),
             }),
         });
@@ -1797,7 +1797,7 @@ mod tests {
         assert!(response.redirect_chain.is_empty());
         assert_eq!(
             response.headers,
-            vec![("location".to_owned(), "/manual-target.txt".to_owned())]
+            vec![("location".to_owned(), b"/manual-target.txt".to_vec())]
         );
     }
 
@@ -1839,7 +1839,7 @@ mod tests {
                 status_text: "Found".to_owned(),
                 headers: vec![(
                     "Location".to_owned(),
-                    "https://example.test/app/next.txt".to_owned(),
+                    b"https://example.test/app/next.txt".to_vec(),
                 )],
                 body: Vec::new(),
             }),
@@ -1944,7 +1944,7 @@ mod tests {
             redirected: false,
             status: 303,
             status_text: "See Other".to_owned(),
-            headers: vec![("Location".to_owned(), "next".to_owned())],
+            headers: vec![("Location".to_owned(), b"next".to_vec())],
             body: Vec::new(),
         };
         let next_url = service_worker_redirect_target(&job, &response)
@@ -2018,7 +2018,7 @@ mod tests {
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
-                headers: vec![("Location".to_owned(), "relative-target.txt".to_owned())],
+                headers: vec![("Location".to_owned(), b"relative-target.txt".to_vec())],
                 body: Vec::new(),
             }),
         });
@@ -2065,7 +2065,7 @@ mod tests {
                 redirected: false,
                 status: 302,
                 status_text: "Found".to_owned(),
-                headers: vec![("Location".to_owned(), "blank.html".to_owned())],
+                headers: vec![("Location".to_owned(), b"blank.html".to_vec())],
                 body: Vec::new(),
             }),
         });
@@ -2335,10 +2335,10 @@ mod tests {
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![
-                    ("content-type".to_owned(), "image/png".to_owned()),
+                    ("content-type".to_owned(), b"image/png".to_vec()),
                     (
                         "cross-origin-resource-policy".to_owned(),
-                        "same-origin".to_owned(),
+                        b"same-origin".to_vec(),
                     ),
                 ],
                 body: b"blocked".to_vec(),
@@ -2388,10 +2388,10 @@ mod tests {
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![
-                    ("content-type".to_owned(), "image/png".to_owned()),
+                    ("content-type".to_owned(), b"image/png".to_vec()),
                     (
                         "cross-origin-resource-policy".to_owned(),
-                        "same-origin".to_owned(),
+                        b"same-origin".to_vec(),
                     ),
                 ],
                 body: b"blocked".to_vec(),
@@ -2450,7 +2450,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2509,7 +2509,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2568,10 +2568,10 @@ mod tests {
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![
-                    ("content-type".to_owned(), "image/png".to_owned()),
+                    ("content-type".to_owned(), b"image/png".to_vec()),
                     (
                         "cross-origin-resource-policy".to_owned(),
-                        "cross-origin".to_owned(),
+                        b"cross-origin".to_vec(),
                     ),
                 ],
                 body: b"png".to_vec(),
@@ -2626,10 +2626,10 @@ mod tests {
                 status: 200,
                 status_text: "OK".to_owned(),
                 headers: vec![
-                    ("content-type".to_owned(), "image/png".to_owned()),
+                    ("content-type".to_owned(), b"image/png".to_vec()),
                     (
                         "cross-origin-resource-policy".to_owned(),
-                        "cross-origin".to_owned(),
+                        b"cross-origin".to_vec(),
                     ),
                 ],
                 body: b"png".to_vec(),
@@ -2684,7 +2684,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2737,7 +2737,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2795,7 +2795,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2852,7 +2852,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2903,7 +2903,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
                 body: b"png".to_vec(),
             }),
         });
@@ -2961,7 +2961,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
 
@@ -3028,7 +3028,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
 
@@ -3092,7 +3092,7 @@ mod tests {
                 response_type: "default".to_owned(),
                 redirected: false,
                 status: 200,
-                headers: vec![("content-type".to_owned(), "image/png".to_owned())],
+                headers: vec![("content-type".to_owned(), b"image/png".to_vec())],
             },
         });
 
@@ -3143,7 +3143,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+                headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                 body: br#"{"secret":true}"#.to_vec(),
             }),
         });
@@ -3189,7 +3189,7 @@ mod tests {
                 redirected: false,
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+                headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                 body: br#"{"visible":true}"#.to_vec(),
             }),
         });

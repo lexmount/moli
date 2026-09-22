@@ -1,7 +1,7 @@
 /// Builds conditional request headers from cached response validators.
 pub fn validation_headers_from_headers(
-    record_headers: &[(String, String)],
-) -> Vec<(String, String)> {
+    record_headers: &[(String, Vec<u8>)],
+) -> Vec<(String, Vec<u8>)> {
     let mut headers = Vec::new();
     if let Some((_, etag)) = record_headers.iter().find(|(name, _)| name == "etag") {
         headers.push(("If-None-Match".to_owned(), etag.clone()));
@@ -18,9 +18,9 @@ pub fn validation_headers_from_headers(
 /// Merges 304 response metadata into cached headers while preserving the
 /// cached representation body.
 pub fn merge_not_modified_headers(
-    cached_headers: &[(String, String)],
-    not_modified_headers: &[(String, String)],
-) -> Vec<(String, String)> {
+    cached_headers: &[(String, Vec<u8>)],
+    not_modified_headers: &[(String, Vec<u8>)],
+) -> Vec<(String, Vec<u8>)> {
     let mut headers = cached_headers.to_vec();
     let connection_nominated_headers = connection_nominated_header_names(not_modified_headers);
     for (name, value) in not_modified_headers {
@@ -58,7 +58,8 @@ fn should_skip_not_modified_header(name: &str, connection_nominated_headers: &[S
         )
 }
 
-fn connection_nominated_header_names(headers: &[(String, String)]) -> Vec<String> {
+fn connection_nominated_header_names(headers: &[(String, Vec<u8>)]) -> Vec<String> {
+    let headers = moli_header_field::headers_to_byte_strings(headers);
     // Connection can name extra hop-by-hop fields; a 304 must not promote
     // those transient fields into cached representation metadata.
     headers

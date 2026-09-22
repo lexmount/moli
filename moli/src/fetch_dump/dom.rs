@@ -54,7 +54,7 @@ pub(super) fn render_json_payload(
     final_url: &str,
     status: u16,
     title: Option<&str>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_chain: &[moli_core::page::NavigationRedirect],
     html: &str,
     network: Option<Value>,
@@ -71,7 +71,7 @@ pub(super) fn render_json_payload(
 pub(super) fn render_raw_json_payload(
     final_url: &str,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_chain: &[moli_core::page::NavigationRedirect],
     body: &[u8],
 ) -> Result<String> {
@@ -90,7 +90,7 @@ fn response_metadata(
     final_url: &str,
     status: u16,
     title: Option<&str>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_chain: &[moli_core::page::NavigationRedirect],
 ) -> Map<String, Value> {
     let mut payload = Map::new();
@@ -110,11 +110,11 @@ fn response_metadata(
     payload
 }
 
-fn render_headers(headers: &[(String, String)]) -> Value {
+fn render_headers(headers: &[(String, Vec<u8>)]) -> Value {
     Value::Array(
         headers
             .iter()
-            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .map(|(name, value)| json!({ "name": name, "value": moli_fetch::decode_header_value(value) }))
             .collect(),
     )
 }

@@ -8,7 +8,7 @@ use crate::conn::CapturedBody;
 pub(crate) struct MainDocumentResourceSnapshot {
     pub(crate) frame_id: String,
     pub(crate) url: Url,
-    pub(crate) response_headers: Vec<(String, String)>,
+    pub(crate) response_headers: Vec<(String, Vec<u8>)>,
     pub(crate) from_cache: bool,
     pub(crate) body: Option<CapturedBody>,
 }
@@ -17,7 +17,7 @@ pub(crate) struct MainDocumentResourceSnapshot {
 struct MainDocumentResourceEntry {
     frame_id: String,
     url: Url,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     from_cache: bool,
     body: Option<CapturedBody>,
 }
@@ -46,7 +46,7 @@ impl TargetPageResourceStore {
         frame_id: String,
         loader_id: String,
         url: Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         from_cache: bool,
         body: CapturedBody,
     ) {
@@ -76,7 +76,7 @@ impl TargetPageResourceStore {
         frame_id: String,
         loader_id: String,
         url: Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         from_cache: bool,
         body: Option<CapturedBody>,
     ) {
@@ -143,7 +143,7 @@ mod tests {
             "FRAME".to_owned(),
             "LOADER-2".to_owned(),
             Url::parse("https://example.test/final").unwrap(),
-            vec![("content-type".to_owned(), "text/html".to_owned())],
+            vec![("content-type".to_owned(), b"text/html".to_vec())],
             true,
             body("source"),
         );
@@ -152,7 +152,7 @@ mod tests {
             "FRAME".to_owned(),
             "LOADER-2".to_owned(),
             Url::parse("https://example.test/final").unwrap(),
-            vec![("content-type".to_owned(), "text/html".to_owned())],
+            vec![("content-type".to_owned(), b"text/html".to_vec())],
             true,
             None,
         );
@@ -211,7 +211,8 @@ mod tests {
     fn body_that_finishes_after_commit_fills_the_committed_loader() {
         let mut store = TargetPageResourceStore::default();
         let url = Url::parse("https://example.test/streamed").unwrap();
-        let headers = vec![("content-type".to_owned(), "text/html".to_owned())];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("content-type".to_owned(), b"text/html".to_vec())];
         store.commit_main_document(
             "FRAME".to_owned(),
             "LOADER".to_owned(),

@@ -663,7 +663,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
             status: 200,
             headers: vec![(
                 "Content-Type".to_owned(),
-                "Application/JavaScript; charset=utf-8".to_owned(),
+                b"Application/JavaScript; charset=utf-8".to_vec(),
             )],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),

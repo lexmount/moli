@@ -541,7 +541,7 @@ impl CdpConnection {
         frame_id: String,
         loader_id: String,
         url: url::Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         from_cache: bool,
         body: crate::conn::CapturedBody,
     ) -> bool {
@@ -564,7 +564,7 @@ impl CdpConnection {
         frame_id: String,
         loader_id: String,
         url: url::Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         from_cache: bool,
         body: Option<crate::conn::CapturedBody>,
     ) -> bool {

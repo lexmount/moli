@@ -765,7 +765,7 @@ fn raw_subresource_retained_bytes(key: &RawSubresourceCacheKey, response: &RawRe
         .saturating_add(response.body_bytes().len())
 }
 
-fn response_head_retained_bytes(final_url: &str, headers: &[(String, String)]) -> usize {
+fn response_head_retained_bytes(final_url: &str, headers: &[(String, Vec<u8>)]) -> usize {
     headers
         .iter()
         .fold(final_url.len(), |bytes, (name, value)| {
@@ -824,7 +824,7 @@ mod tests {
             ResponseHead {
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
-                headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+                headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
@@ -841,7 +841,7 @@ mod tests {
             ResponseHead {
                 final_url: Url::parse(url).expect("response URL"),
                 status: 200,
-                headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+                headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
@@ -1003,7 +1003,7 @@ mod tests {
             ResponseHead {
                 final_url: request.url.clone(),
                 status: 200,
-                headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+                headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,

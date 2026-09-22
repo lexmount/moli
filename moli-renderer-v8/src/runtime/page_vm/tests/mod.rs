@@ -1221,7 +1221,7 @@ async fn stale_child_unusable_stylesheet_preserves_physical_output_without_docum
         let physical_response = crate::protocol_types::NavigationResponse::from_text_body(
             request_url.clone(),
             200,
-            vec![("Content-Type".to_owned(), "text/html".to_owned())],
+            vec![("Content-Type".to_owned(), b"text/html".to_vec())],
             "<html>not a stylesheet</html>".to_owned(),
         );
         let mut queue = RendererPageNetworkingSource::new_for_test();
@@ -14110,7 +14110,7 @@ fn module_graph_network_result_records_staged_response_started_with_cache_state(
         moli_fetch::ResponseHead {
             final_url: request_url.clone(),
             status: 200,
-            headers: vec![("content-type".to_owned(), "text/javascript".to_owned())],
+            headers: vec![("content-type".to_owned(), b"text/javascript".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,

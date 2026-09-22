@@ -9,6 +9,7 @@ default = []
 test-support = []
 
 [dependencies]
+moli-header-field = { path = "../moli-header-field" }
 cookie_store = { package = "moli-cookie-store", path = "../moli-cookie-store", default-features = false, features = ["public_suffix"] }
 moli-site = { path = "../moli-site" }
 moli-storage-key = { path = "../moli-storage-key" }

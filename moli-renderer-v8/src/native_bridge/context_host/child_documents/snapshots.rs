@@ -184,7 +184,7 @@ impl JsContextHost {
 }
 
 pub(in crate::native_bridge::context_host) fn child_document_content_type_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Option<String> {
     response_document_content_type(headers)
 }
@@ -205,11 +205,11 @@ mod tests {
 
     #[test]
     fn child_document_content_type_routes_through_web_mime_helpers() {
-        let headers = vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("content-type".to_owned(), b"text/plain".to_vec()),
             (
                 "Content-Type".to_owned(),
-                " Image/SVG+XML ; charset=utf-8 ".to_owned(),
+                b" Image/SVG+XML ; charset=utf-8 ".to_vec(),
             ),
         ];
         assert_eq!(
@@ -217,10 +217,7 @@ mod tests {
             Some("image/svg+xml")
         );
         assert_eq!(
-            child_document_content_type_from_headers(&[(
-                "Content-Type".to_owned(),
-                " ".to_owned()
-            )]),
+            child_document_content_type_from_headers(&[("Content-Type".to_owned(), b" ".to_vec())]),
             None
         );
         assert_eq!(

@@ -345,7 +345,7 @@ impl RendererPreparedAppManifestLoad {
     }
 }
 
-fn decode_manifest_source(body: &[u8], headers: &[(String, String)]) -> String {
+fn decode_manifest_source(body: &[u8], headers: &[(String, Vec<u8>)]) -> String {
     let content_type = moli_web_mime::response_content_type(headers);
     let charset = content_type
         .as_deref()
@@ -965,7 +965,7 @@ mod tests {
             b"{\"name\":\"caf\xe9\"}",
             &[(
                 "content-type".to_owned(),
-                "application/manifest+json; charset=windows-1252".to_owned(),
+                b"application/manifest+json; charset=windows-1252".to_vec(),
             )],
         );
         assert_eq!(source, "{\"name\":\"caf\u{e9}\"}");

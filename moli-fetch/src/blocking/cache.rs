@@ -86,7 +86,7 @@ pub(crate) struct CachedStreamingResponseLookup {
     pub(crate) metadata: HttpCacheEntryMetadata,
     pub(crate) final_url: String,
     pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) body: std::io::BufReader<std::fs::File>,
     pub(crate) expires_at_unix_ms: Option<u64>,
     pub(crate) force_validate: bool,
@@ -109,7 +109,7 @@ pub(super) fn request_cache_control_requires_validation(
 pub(crate) fn next_redirect_url_from_parts(
     final_url: &Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_count: usize,
 ) -> Result<Option<Url>> {
     if !matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -119,7 +119,7 @@ pub(crate) fn next_redirect_url_from_parts(
     let Some(location) = headers
         .iter()
         .find(|(name, _)| name == "location")
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| crate::decode_header_value(value))
     else {
         return Ok(None);
     };
@@ -129,8 +129,8 @@ pub(crate) fn next_redirect_url_from_parts(
     }
 
     final_url
-        .join(location)
-        .or_else(|_| Url::parse(location))
+        .join(&location)
+        .or_else(|_| Url::parse(&location))
         .map(Some)
         .with_context(|| {
             anyhow!(
@@ -144,7 +144,7 @@ pub(crate) fn next_followed_redirect_url_from_parts(
     request: &Request,
     final_url: &Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_count: usize,
 ) -> Result<Option<Url>> {
     // HTTP fetch checks the network response before HTTP-redirect fetch. This
@@ -188,9 +188,9 @@ mod tests {
     #[test]
     fn followed_redirect_rejects_non_http_target_before_request_state_changes() -> Result<()> {
         let current = Url::parse("https://example.test/start")?;
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "location".to_owned(),
-            "file:///moli-policy-must-not-open".to_owned(),
+            b"file:///moli-policy-must-not-open".to_vec(),
         )];
 
         let request = Request::get_with_url(current.clone());

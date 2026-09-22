@@ -11,7 +11,7 @@ pub fn decode_utf8(bytes: &[u8]) -> String {
 
 pub fn decode_classic_script_source(
     bytes: &[u8],
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     script_charset: Option<&str>,
     document_character_set: Option<&str>,
 ) -> String {

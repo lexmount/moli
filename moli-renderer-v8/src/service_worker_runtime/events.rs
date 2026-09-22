@@ -631,7 +631,7 @@ pub(crate) struct ServiceWorkerFetchResponse {
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -695,7 +695,7 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
     pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Debug)]

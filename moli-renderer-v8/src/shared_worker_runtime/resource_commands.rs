@@ -22,7 +22,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.send_worker_message(WorkerMessage::ContinuePendingFetchResponse {
             request,
@@ -35,7 +35,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.send_worker_message(WorkerMessage::ContinuePendingXhrResponse {
             request,
@@ -125,7 +125,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.send_worker_message(WorkerMessage::FulfillPendingFetch {
@@ -140,7 +140,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.send_worker_message(WorkerMessage::FulfillPendingXhr {
@@ -155,7 +155,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.send_worker_message(WorkerMessage::FulfillPendingCspReport {
@@ -170,7 +170,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.send_worker_message(WorkerMessage::FulfillPendingFetchResponse {
@@ -185,7 +185,7 @@ impl RendererSharedWorkerHost {
         &self,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.send_worker_message(WorkerMessage::FulfillPendingXhrResponse {

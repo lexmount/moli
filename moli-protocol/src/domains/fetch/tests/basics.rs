@@ -1477,7 +1477,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
 fn extract_auth_challenge_normalizes_scheme_and_allows_missing_realm() {
     let challenge = extract_auth_challenge(&[(
         "www-authenticate".to_owned(),
-        "BASIC charset=\"UTF-8\"".to_owned(),
+        b"BASIC charset=\"UTF-8\"".to_vec(),
     )])
     .expect("auth challenge");
     assert_eq!(challenge.source, "Server");
@@ -1488,7 +1488,7 @@ fn extract_auth_challenge_normalizes_scheme_and_allows_missing_realm() {
 #[test]
 fn extract_auth_challenge_returns_none_without_www_authenticate_header() {
     assert!(
-        extract_auth_challenge(&[("content-type".to_owned(), "text/plain".to_owned(),)]).is_none()
+        extract_auth_challenge(&[("content-type".to_owned(), b"text/plain".to_vec(),)]).is_none()
     );
 }
 
@@ -1496,7 +1496,7 @@ fn extract_auth_challenge_returns_none_without_www_authenticate_header() {
 fn extract_auth_challenge_recognizes_proxy_authenticate_header() {
     let challenge = extract_auth_challenge(&[(
         "proxy-authenticate".to_owned(),
-        "Basic realm=\"proxy-area\"".to_owned(),
+        b"Basic realm=\"proxy-area\"".to_vec(),
     )])
     .expect("proxy auth challenge");
     assert_eq!(challenge.source, "Proxy");
@@ -1509,11 +1509,11 @@ fn extract_auth_challenge_prefers_supported_scheme_from_later_header() {
     let challenge = extract_auth_challenge(&[
         (
             "www-authenticate".to_owned(),
-            "Bearer realm=\"token-area\"".to_owned(),
+            b"Bearer realm=\"token-area\"".to_vec(),
         ),
         (
             "www-authenticate".to_owned(),
-            "Basic realm=\"basic-area\"".to_owned(),
+            b"Basic realm=\"basic-area\"".to_vec(),
         ),
     ])
     .expect("auth challenge");
@@ -1556,7 +1556,7 @@ fn request_auth_for_challenge_accepts_negotiate_and_ntlm_credentials() {
 fn extract_auth_challenge_prefers_supported_scheme_from_combined_header_value() {
     let challenge = extract_auth_challenge(&[(
         "www-authenticate".to_owned(),
-        "Bearer realm=\"token-area\", Basic realm=\"basic-area\"".to_owned(),
+        b"Bearer realm=\"token-area\", Basic realm=\"basic-area\"".to_vec(),
     )])
     .expect("auth challenge");
     assert_eq!(challenge.source, "Server");
@@ -1568,7 +1568,7 @@ fn extract_auth_challenge_prefers_supported_scheme_from_combined_header_value() 
 fn extract_auth_challenge_preserves_quoted_commas_in_realm() {
     let challenge = extract_auth_challenge(&[(
         "www-authenticate".to_owned(),
-        r#"Bearer realm="token-area", Basic realm="basic, area""#.to_owned(),
+        br#"Bearer realm="token-area", Basic realm="basic, area""#.to_vec(),
     )])
     .expect("auth challenge");
     assert_eq!(challenge.source, "Server");

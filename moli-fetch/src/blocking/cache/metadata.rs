@@ -13,7 +13,7 @@ pub(super) fn cache_metadata_for_response_parts(
     request_url: &Url,
     final_url: &Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirected: bool,
 ) -> Option<HttpCacheEntryMetadata> {
     let cache_request_url = normalized_cache_url(request_url);
@@ -37,6 +37,6 @@ pub(super) fn cache_metadata_for_response_parts(
     ))
 }
 
-pub(crate) fn response_headers_forbid_cache_storage(headers: &[(String, String)]) -> bool {
+pub(crate) fn response_headers_forbid_cache_storage(headers: &[(String, Vec<u8>)]) -> bool {
     !response_cache_policy(headers).store
 }

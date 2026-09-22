@@ -220,16 +220,16 @@ fn browser_context_preview_cookie_boundary_operation_with_site_target_projects_t
     bc.store_response_cookie_headers_for_test(
         &Url::parse("https://app.example.com/app/index.html").unwrap(),
         &[
-            ("set-cookie".to_owned(), "session=1; Path=/app".to_owned()),
+            ("set-cookie".to_owned(), b"session=1; Path=/app".to_vec()),
             (
                 "set-cookie".to_owned(),
-                "persist=1; Path=/app; Max-Age=3600".to_owned(),
+                b"persist=1; Path=/app; Max-Age=3600".to_vec(),
             ),
         ],
     );
     bc.store_response_cookie_headers_for_test(
         &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
-        &[("set-cookie".to_owned(), "other=1; Path=/app".to_owned())],
+        &[("set-cookie".to_owned(), b"other=1; Path=/app".to_vec())],
     );
 
     let preview = bc

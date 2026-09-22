@@ -94,7 +94,7 @@ pub(crate) fn create_streaming_cache_body_writer_for_response_parts(
     request_url: &Url,
     cookie_header: Option<&str>,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Result<Option<HttpCacheBodyWriter>> {
     let Some((store, key)) =
         cache_store_and_key_for_request(config, request, request_url, cookie_header)
@@ -122,7 +122,7 @@ pub(crate) fn finish_streaming_cached_response(
     cookie_header: Option<&str>,
     final_url: &Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirected: bool,
     writer: HttpCacheBodyWriter,
 ) -> Result<()> {

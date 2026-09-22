@@ -1905,7 +1905,7 @@ struct StorageBucketCachePutPendingData<'scope> {
     response_redirected: bool,
     response_status: u16,
     response_status_text: String,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
 }
 
 fn storage_bucket_cache_put_pending_data<'s>(
@@ -1961,7 +1961,7 @@ fn storage_bucket_cache_put_pending_data<'s>(
     let response_headers_json =
         data_private_string(scope, data, STORAGE_BUCKET_CACHE_PUT_RESPONSE_HEADERS_SLOT)?;
     let response_headers =
-        serde_json::from_str::<Vec<(String, String)>>(&response_headers_json).unwrap_or_default();
+        serde_json::from_str::<Vec<(String, Vec<u8>)>>(&response_headers_json).unwrap_or_default();
     let bucket = StorageBucketHandle {
         identity: StorageBucketIdentity::new(&bucket_origin, &bucket_name, bucket_id),
         indexed_db_storage_key: bucket_storage_key,
@@ -2949,7 +2949,10 @@ fn build_storage_bucket_cached_response_object<'s>(
     );
     let status_text = v8_string(scope, &response.status_text)?;
     init.set_string_property(scope, "statusText", status_text.into());
-    let headers = headers_entries_to_init_array(scope, &response.headers);
+    let headers = headers_entries_to_init_array(
+        scope,
+        &moli_fetch::headers_to_byte_strings(&response.headers),
+    );
     init.set_string_property(scope, "headers", headers.into());
     let global = scope.get_current_context().global(scope);
     let constructor = global

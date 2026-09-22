@@ -845,7 +845,8 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
         let headers = headers
             .iter()
             .map(|value| ("Content-Type".to_owned(), (*value).to_owned()))
-            .collect();
+            .collect::<Vec<_>>();
+        let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
 
         let context_ptr: *const v8::Global<v8::Context> = &vm.page_default_context as *const _;
         vm.renderer_document_isolate
@@ -905,6 +906,25 @@ fn xml_http_request_blob_response_uses_final_mime_type() {
             .expect("xhr override MIME response probe should run");
 
         assert_eq!(result, format!("4|{expected}|throw:InvalidStateError"));
+
+        let roundtrip = vm
+            .eval(
+                r#"
+(() => {
+  const url = URL.createObjectURL(__xhrMime.response);
+  try {
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url, false);
+    xhr.send();
+    return xhr.getResponseHeader('Content-Type');
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+})()
+"#,
+            )
+            .expect("Blob URL response should preserve MIME header bytes");
+        assert_eq!(roundtrip, *expected);
     }
 }
 
@@ -948,7 +968,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     final_url: Url::parse("https://xhr-response-xml.test/xml-doc")
                         .expect("XML response URL should parse"),
                     status: 200,
-                    headers: vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+                    headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
@@ -974,7 +994,7 @@ fn xml_http_request_default_response_type_parses_response_xml_for_document_mime(
                     final_url: Url::parse("https://xhr-response-xml.test/plain")
                         .expect("plain response URL should parse"),
                     status: 200,
-                    headers: vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+                    headers: vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
@@ -1955,9 +1975,9 @@ __streamingXhr.send();
         headers: vec![
             (
                 "Content-Type".to_owned(),
-                "text/plain; charset=utf-8".to_owned(),
+                b"text/plain; charset=utf-8".to_vec(),
             ),
-            ("Content-Length".to_owned(), "7".to_owned()),
+            ("Content-Length".to_owned(), b"7".to_vec()),
         ],
         request_cookie_report: None,
         cookie_set_reports: Vec::new(),
@@ -2113,7 +2133,7 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
                             status: 200,
-                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
                             redirected: true,
@@ -2122,7 +2142,10 @@ async fn streaming_subresource_finish_preserves_response_head_cache_state() {
                                 from_url: request_url.clone(),
                                 to_url: final_url.clone(),
                                 status: 301,
-                                headers: vec![("location".to_owned(), final_url.to_string())],
+                                headers: vec![(
+                                    "location".to_owned(),
+                                    final_url.as_str().as_bytes().to_vec(),
+                                )],
                                 network_extra_info_available: false,
                                 request_extra_info: None,
                                 response_extra_info: None,
@@ -2403,7 +2426,7 @@ async fn streaming_fetch_body_error_records_response_started_then_body_failed() 
                         head: moli_fetch::ResponseHead {
                             final_url: final_url.clone(),
                             status: 206,
-                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
                             redirected: false,
@@ -2499,7 +2522,7 @@ fn install_streaming_fetch_response_fixture(
                     moli_fetch::ResponseHead {
                         final_url: request_url.clone(),
                         status: 200,
-                        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -2558,7 +2581,7 @@ fn install_streaming_fetch_response_fixture(
                     head: moli_fetch::ResponseHead {
                         final_url: request_url,
                         status: 200,
-                        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -2667,7 +2690,7 @@ async fn streaming_fetch_body_cancel_aborts_streaming_subresource() {
                         head: moli_fetch::ResponseHead {
                             final_url: request_url,
                             status: 200,
-                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
                             redirected: false,

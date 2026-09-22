@@ -66,7 +66,7 @@ pub(crate) enum RequestHttpVersion {
 pub struct StreamingHtmlResponseStart {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
@@ -529,7 +529,7 @@ fn referrer_header_value_for_request(request: &Request, request_url: &Url) -> Op
 pub(crate) fn store_response_cookies(
     cookie_store: &SharedBrowserCookieStore,
     response_url: &Url,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     request_context: &NetworkCookieRequestContext,
 ) -> Result<Vec<StoredCookieSetReport>> {
     let mut cookie_store = cookie_store.lock();
@@ -548,7 +548,7 @@ pub(crate) fn configure_easy(
     request_url: &Url,
     cookie_header: Option<&str>,
     http_version: RequestHttpVersion,
-    validation_headers: Option<Vec<(String, String)>>,
+    validation_headers: Option<Vec<(String, Vec<u8>)>>,
 ) -> Result<Vec<(String, String)>> {
     ensure_http_network_transport_url(request_url)?;
     if crate::should_request_be_blocked_due_to_bad_port(request_url) {
@@ -703,8 +703,8 @@ pub(crate) fn configure_easy(
             .context("failed to build request header")?;
     }
     if let Some(validation_headers) = validation_headers {
-        // Validators were read from response headers and are ByteStrings.
-        let validation_headers = crate::RequestHeaders::from_byte_strings(&validation_headers)?;
+        // Preserve cached response validator bytes in the conditional request.
+        let validation_headers = crate::RequestHeaders::from_bytes(validation_headers);
         for (name, value) in validation_headers.iter() {
             has_content_type_header |= name.eq_ignore_ascii_case("content-type");
             append_curl_request_header(&mut headers, name, value)

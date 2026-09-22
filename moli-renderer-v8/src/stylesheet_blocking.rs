@@ -389,7 +389,7 @@ mod tests {
         body: &str,
     ) -> crate::protocol_types::NavigationResponse {
         let headers = content_type
-            .map(|value| vec![("Content-Type".to_owned(), value.to_owned())])
+            .map(|value| vec![("Content-Type".to_owned(), value.as_bytes().to_vec())])
             .unwrap_or_default();
         crate::protocol_types::NavigationResponse::from_text_body(
             url.clone(),
@@ -511,10 +511,10 @@ mod tests {
             stylesheet_url.clone(),
             200,
             vec![
-                ("Content-Type".to_owned(), "text/css".to_owned()),
+                ("Content-Type".to_owned(), b"text/css".to_vec()),
                 (
                     "Access-Control-Allow-Origin".to_owned(),
-                    "https://page.example.test".to_owned(),
+                    b"https://page.example.test".to_vec(),
                 ),
             ],
             "body { color: green; }".to_owned(),
@@ -548,7 +548,7 @@ mod tests {
         let response = crate::protocol_types::NavigationResponse::from_text_body(
             stylesheet_url.clone(),
             200,
-            vec![("Content-Type".to_owned(), "text/css".to_owned())],
+            vec![("Content-Type".to_owned(), b"text/css".to_vec())],
             "body { color: red; }".to_owned(),
         );
 
@@ -577,7 +577,7 @@ mod tests {
         let response = crate::protocol_types::NavigationResponse::from_text_body(
             stylesheet_url.clone(),
             404,
-            vec![("Content-Type".to_owned(), "text/css".to_owned())],
+            vec![("Content-Type".to_owned(), b"text/css".to_vec())],
             "body { color: red; }".to_owned(),
         );
 

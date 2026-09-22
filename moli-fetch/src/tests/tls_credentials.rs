@@ -500,7 +500,10 @@ async fn tls_client_certificate_preserves_service_worker_redirect_taint() -> Res
                 from_url: cross_origin.clone(),
                 to_url: server.url.clone(),
                 status: 302,
-                headers: vec![("Location".to_owned(), server.url.to_string())],
+                headers: vec![(
+                    "Location".to_owned(),
+                    server.url.as_str().as_bytes().to_vec(),
+                )],
                 network_extra_info_available: false,
                 request_extra_info: None,
                 response_extra_info: None,

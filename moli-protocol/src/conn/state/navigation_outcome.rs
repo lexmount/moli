@@ -158,13 +158,13 @@ pub(crate) enum CompletedDownloadBody {
 #[derive(Debug)]
 pub(crate) struct CompletedDownloadBodyArtifact {
     body: CompletedDownloadBody,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
 }
 
 impl CompletedDownloadBodyArtifact {
     pub(crate) fn from_body(
         body: CompletedDownloadBody,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) -> Self {
         Self {
             body,
@@ -172,7 +172,7 @@ impl CompletedDownloadBodyArtifact {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (CompletedDownloadBody, Vec<(String, String)>) {
+    pub(crate) fn into_parts(self) -> (CompletedDownloadBody, Vec<(String, Vec<u8>)>) {
         (self.body, self.response_headers)
     }
 }
@@ -187,7 +187,7 @@ pub struct LoadedNavigation {
     pub request_method: String,
     pub request_headers: moli_fetch::RequestHeaders,
     pub response_status: u16,
-    pub response_headers: Vec<(String, String)>,
+    pub response_headers: Vec<(String, Vec<u8>)>,
     pub response_from_cache: bool,
     pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,

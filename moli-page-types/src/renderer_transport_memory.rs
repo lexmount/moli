@@ -251,15 +251,15 @@ fn request_headers_charge(headers: &moli_fetch::RequestHeaders) -> usize {
     )
 }
 
-fn headers_charge(headers: &[(String, String)]) -> usize {
+fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
     headers.iter().fold(
         headers
             .len()
-            .saturating_mul(std::mem::size_of::<(String, String)>()),
+            .saturating_mul(std::mem::size_of::<(String, V)>()),
         |total, (name, value)| {
             total
                 .saturating_add(string_charge(name))
-                .saturating_add(string_charge(value))
+                .saturating_add(value.as_ref().len().saturating_mul(2))
         },
     )
 }

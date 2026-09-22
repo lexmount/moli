@@ -15,7 +15,7 @@ impl JsContextHost {
         response_status: u16,
         response_headers: moli_fetch::ResponseHeaders,
     ) {
-        let response_headers = response_headers.to_byte_strings();
+        let response_headers = response_headers.into_iter().collect::<Vec<_>>();
         let cookie_set_reports =
             self.store_websocket_response_cookies(socket_id, &response_headers);
         let Some(state) = self.websockets.get_mut(&socket_id) else {
@@ -154,7 +154,7 @@ impl JsContextHost {
     fn store_websocket_response_cookies(
         &self,
         socket_id: u64,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
     ) -> Vec<StoredCookieSetReport> {
         if !response_headers
             .iter()

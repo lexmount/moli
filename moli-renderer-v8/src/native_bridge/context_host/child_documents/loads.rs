@@ -786,13 +786,13 @@ fn child_document_load_outcome_from_response(
 }
 
 #[cfg(test)]
-fn response_referrer_policy(headers: &[(String, String)]) -> Option<String> {
+fn response_referrer_policy(headers: &[(String, Vec<u8>)]) -> Option<String> {
     response_referrer_policy_from_headers(headers)
 }
 
 fn child_document_response_should_ignore_navigation(
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> bool {
     matches!(status, 204 | 205)
         || moli_web_mime::response_headers_indicate_attachment_download(headers)
@@ -841,7 +841,7 @@ mod tests {
             moli_fetch::ResponseHead {
                 final_url: url::Url::parse("https://example.test/child").unwrap(),
                 status: 200,
-                headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
@@ -897,9 +897,9 @@ mod tests {
 
     #[test]
     fn child_document_response_referrer_policy_uses_last_valid_token() {
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Referrer-Policy".to_owned(),
-            "not-yet-standardized, no-referrer".to_owned(),
+            b"not-yet-standardized, no-referrer".to_vec(),
         )];
 
         assert_eq!(
@@ -910,9 +910,9 @@ mod tests {
 
     #[test]
     fn child_document_response_referrer_policy_combines_header_instances() {
-        let headers = vec![
-            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
-            ("referrer-policy".to_owned(), "future-policy".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("Referrer-Policy".to_owned(), b"no-referrer".to_vec()),
+            ("referrer-policy".to_owned(), b"future-policy".to_vec()),
         ];
 
         assert_eq!(
@@ -923,11 +923,11 @@ mod tests {
 
     #[test]
     fn child_document_response_referrer_policy_ignores_invalid_later_header() {
-        let headers = vec![
-            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("Referrer-Policy".to_owned(), b"no-referrer".to_vec()),
             (
                 "Referrer-Policy".to_owned(),
-                "not-yet-standardized".to_owned(),
+                b"not-yet-standardized".to_vec(),
             ),
         ];
 
@@ -947,7 +947,7 @@ mod tests {
         ] {
             assert!(child_document_response_should_ignore_navigation(
                 200,
-                &[("Content-Type".to_owned(), content_type.to_owned())],
+                &[("Content-Type".to_owned(), content_type.as_bytes().to_vec())],
             ));
         }
     }
@@ -964,7 +964,7 @@ mod tests {
         ] {
             assert!(!child_document_response_should_ignore_navigation(
                 200,
-                &[("Content-Type".to_owned(), content_type.to_owned())],
+                &[("Content-Type".to_owned(), content_type.as_bytes().to_vec())],
             ));
         }
         assert!(!child_document_response_should_ignore_navigation(200, &[]));

@@ -531,7 +531,8 @@ fn xhr_response_progress(head: &moli_fetch::ResponseHead, loaded: f64) -> XhrRes
     }
 }
 
-fn identity_encoded_content_length(headers: &[(String, String)]) -> Option<u64> {
+fn identity_encoded_content_length(headers: &[(String, Vec<u8>)]) -> Option<u64> {
+    let headers = moli_fetch::headers_to_byte_strings(headers);
     let cannot_compare_delivered_body_length = headers.iter().any(|(name, value)| {
         (name.eq_ignore_ascii_case("content-encoding")
             && !value.trim().eq_ignore_ascii_case("identity"))
@@ -575,7 +576,7 @@ fn buffer_value_byte_length(value: v8::Local<'_, v8::Value>) -> Option<usize> {
 fn xhr_response_mime_essence(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Option<String> {
     let override_mime = xhr_state_string_property(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT);
     effective_response_mime_essence(headers, override_mime.as_deref())
@@ -584,7 +585,7 @@ fn xhr_response_mime_essence(
 fn parse_default_xhr_response_xml<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body_text: &str,
 ) -> v8::Local<'s, v8::Value> {
     let mime = xhr_response_mime_essence(scope, xhr, headers);
@@ -609,7 +610,7 @@ fn parse_xhr_response_document<'s>(
 fn xhr_response_blob_mime_type(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> String {
     // overrideMimeType already stores a parsed and serialized MIME record.
     // Native response Blobs use that record, not Blob constructor normalization.
@@ -625,9 +626,9 @@ mod tests {
 
     #[test]
     fn xhr_document_response_mime_uses_shared_effective_essence() {
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Content-Type".to_owned(),
-            "Text/HTML; Charset=UTF-8".to_owned(),
+            b"Text/HTML; Charset=UTF-8".to_vec(),
         )];
 
         assert_eq!(

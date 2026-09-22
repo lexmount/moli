@@ -177,14 +177,17 @@ fn body_headers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     receiver: BodyReceiver,
-) -> Option<Vec<(String, String)>> {
+) -> Option<Vec<(String, Vec<u8>)>> {
     match receiver {
         BodyReceiver::Response => response_slot_object(scope, object, RESPONSE_HEADERS_SLOT)
             .map(|headers| headers_entries(scope, headers)),
         BodyReceiver::Request => request_slot_object(scope, object, REQUEST_HEADERS_SLOT)
             .map(|headers| headers_entries(scope, headers)),
     }
-    .map(|headers| normalized_headers_entries(&headers))
+    .map(|headers| {
+        moli_fetch::headers_from_byte_strings(&normalized_headers_entries(&headers))
+            .expect("Headers contain ByteStrings")
+    })
 }
 
 fn is_urlencoded_content_type(content_type: &str) -> bool {

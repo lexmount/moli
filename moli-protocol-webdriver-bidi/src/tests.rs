@@ -9093,14 +9093,10 @@ fn bidi_cookie_overrides_preserve_opaque_and_utf8_bytes() {
         let headers = match shared {
             DevToolsCommand::ContinueInterceptedRequest(command) => command.headers.unwrap(),
             DevToolsCommand::ContinueInterceptedResponse(command) => {
-                moli_header_field::HeaderFields::from_byte_strings(
-                    &command.response_headers.unwrap(),
-                )
-                .unwrap()
+                moli_header_field::HeaderFields::from_bytes(command.response_headers.unwrap())
             }
             DevToolsCommand::FulfillInterceptedRequest(command) => {
-                moli_header_field::HeaderFields::from_byte_strings(&command.response_headers)
-                    .unwrap()
+                moli_header_field::HeaderFields::from_bytes(command.response_headers)
             }
             _ => panic!("unexpected cookie dispatch"),
         };
@@ -9215,11 +9211,8 @@ fn maps_network_response_controls_to_shared_fetch_commands() {
     assert_eq!(
         command.response_headers,
         Some(vec![
-            ("X-Response".to_owned(), "ok".to_owned()),
-            (
-                "Set-Cookie".to_owned(),
-                "rid=1; Path=/; HttpOnly".to_owned()
-            ),
+            ("X-Response".to_owned(), b"ok".to_vec()),
+            ("Set-Cookie".to_owned(), b"rid=1; Path=/; HttpOnly".to_vec()),
         ])
     );
 

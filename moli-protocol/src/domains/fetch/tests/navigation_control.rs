@@ -9,8 +9,8 @@ fn parse_binary_response_headers_decodes_nul_separated_header_block() {
     assert_eq!(
         headers,
         vec![
-            ("x-bin".to_owned(), "yes".to_owned()),
-            ("x-two".to_owned(), "2".to_owned())
+            ("x-bin".to_owned(), b"yes".to_vec()),
+            ("x-two".to_owned(), b"2".to_vec())
         ]
     );
 }
@@ -550,7 +550,7 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
-            &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);

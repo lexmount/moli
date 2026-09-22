@@ -1093,7 +1093,7 @@ mod tests {
                 200,
                 vec![(
                     "Content-Type".to_owned(),
-                    "application/octet-stream".to_owned(),
+                    b"application/octet-stream".to_vec(),
                 )],
                 Vec::new(),
                 Vec::new(),

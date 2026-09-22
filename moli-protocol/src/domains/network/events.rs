@@ -272,7 +272,7 @@ pub(crate) fn emit_request_will_be_sent(
     redirect_response: Option<(
         &Url,
         u16,
-        &[(String, String)],
+        &[(String, Vec<u8>)],
         bool,
         Option<moli_fetch::NegotiatedHttpVersion>,
     )>,
@@ -413,7 +413,7 @@ pub(crate) fn emit_response_received_extra_info(
     out: &mut impl CdpNetworkAutomationEventSink,
     session_id: Option<&str>,
     request_id: &str,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     status: u16,
     cookie_set_reports: &[StoredCookieSetReport],
 ) {
@@ -434,7 +434,7 @@ pub(crate) fn emit_redirect_response_received_extra_info(
     out: &mut impl CdpNetworkAutomationEventSink,
     session_id: Option<&str>,
     request_id: &str,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     status: u16,
     cookie_set_reports: &[StoredCookieSetReport],
 ) {
@@ -461,7 +461,7 @@ pub(crate) fn emit_response_received(
     final_url: &Url,
     status: u16,
     status_text: Option<&str>,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     cookie_set_reports: &[StoredCookieSetReport],
     encoded_data_length: usize,
     from_cache: bool,
@@ -505,7 +505,7 @@ pub(crate) fn emit_response_received_without_extra_info_event(
     final_url: &Url,
     status: u16,
     status_text: Option<&str>,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     encoded_data_length: usize,
     from_cache: bool,
     negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
@@ -546,7 +546,7 @@ fn emit_response_received_with_extra_info_delivery(
     final_url: &Url,
     status: u16,
     status_text: Option<&str>,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     cookie_set_reports: &[StoredCookieSetReport],
     encoded_data_length: usize,
     from_cache: bool,
@@ -1009,7 +1009,7 @@ pub fn fetch_request_paused_params(network_event: &NetworkRequestEvent) -> Value
             network_event
                 .response_headers
                 .iter()
-                .map(|(name, value)| json!({ "name": name, "value": value }))
+                .map(|(name, value)| json!({ "name": name, "value": moli_fetch::decode_header_value(value) }))
                 .collect(),
         );
         if let Some(status_text) = network_event.status_text.as_ref() {
@@ -1081,7 +1081,7 @@ pub(crate) fn emit_websocket_will_send_handshake_request(
         session_id,
         request_id,
         timestamp,
-        headers_as_json_object(request_headers),
+        request_headers_as_json_object(request_headers, None),
     );
 }
 
@@ -1091,7 +1091,7 @@ pub(crate) fn emit_websocket_handshake_response_received(
     request_id: &str,
     timestamp: f64,
     status: u16,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
 ) {
     out.push_websocket_handshake_response_received(
         session_id,
@@ -1157,11 +1157,11 @@ pub(crate) fn emit_websocket_closed(
 }
 
 pub(crate) fn headers_as_json_object(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> serde_json::Map<String, Value> {
     headers
         .iter()
-        .map(|(name, value)| (name.clone(), json!(value)))
+        .map(|(name, value)| (name.clone(), json!(moli_fetch::decode_header_value(value))))
         .collect()
 }
 
@@ -1204,7 +1204,7 @@ pub(crate) fn request_headers_as_json_object(
 pub(crate) fn build_response_payload(
     url: &Url,
     status: u16,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     encoded_data_length: usize,
 ) -> Value {
     build_response_payload_with_status_text(
@@ -1221,7 +1221,7 @@ pub(crate) fn build_response_payload_with_status_text(
     url: &Url,
     status: u16,
     status_text: Option<&str>,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     encoded_data_length: usize,
     from_cache: bool,
 ) -> Value {
@@ -1320,8 +1320,8 @@ mod tests {
             &Url::parse("https://example.test/").unwrap(),
             200,
             &[
-                ("Content-Type".to_owned(), "text/html".to_owned()),
-                ("Bad Header".to_owned(), "ignored".to_owned()),
+                ("Content-Type".to_owned(), b"text/html".to_vec()),
+                ("Bad Header".to_owned(), b"ignored".to_vec()),
             ],
             0,
         );
@@ -1417,8 +1417,8 @@ mod tests {
             201,
             None,
             &[
-                ("content-type".to_owned(), "application/json".to_owned()),
-                ("x-test".to_owned(), "1".to_owned()),
+                ("content-type".to_owned(), b"application/json".to_vec()),
+                ("x-test".to_owned(), b"1".to_vec()),
             ],
             &[],
             128,

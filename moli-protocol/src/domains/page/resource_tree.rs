@@ -152,7 +152,7 @@ mod tests {
             Vec::new(),
             Url::parse(final_url).unwrap(),
             200,
-            vec![("Content-Type".to_owned(), content_type.to_owned())],
+            vec![("Content-Type".to_owned(), content_type.as_bytes().to_vec())],
             body.to_owned(),
             Vec::new(),
         )

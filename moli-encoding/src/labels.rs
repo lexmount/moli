@@ -38,15 +38,17 @@ pub fn charset_from_content_type(value: &str) -> Option<String> {
     (!charset.is_empty()).then(|| charset.to_owned())
 }
 
-pub fn charset_from_headers(headers: &[(String, String)]) -> Option<String> {
+pub fn charset_from_headers(headers: &[(String, Vec<u8>)]) -> Option<String> {
     headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-        .and_then(|(_, value)| charset_from_content_type(value))
+        .and_then(|(_, value)| {
+            charset_from_content_type(&moli_header_field::decode_header_value(value))
+        })
 }
 
 /// Selects Chromium's transport encoding from HTTP response headers.
-pub fn encoding_from_response_headers(headers: &[(String, String)]) -> Option<&'static Encoding> {
+pub fn encoding_from_response_headers(headers: &[(String, Vec<u8>)]) -> Option<&'static Encoding> {
     charset_from_headers(headers)
         .as_deref()
         .and_then(encoding_for_response_charset)

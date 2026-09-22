@@ -511,7 +511,7 @@ async fn main_document_navigation_events_include_synthesized_cookie_header() {
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&page_url).unwrap(),
-            &[("set-cookie".to_owned(), "sid=1; Path=/page".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=1; Path=/page".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -607,7 +607,7 @@ async fn main_document_navigation_deduplicates_manual_cookie_header_when_store_s
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&page_url).unwrap(),
-            &[("set-cookie".to_owned(), "sid=store; Path=/page".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=store; Path=/page".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -707,7 +707,7 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
             &Url::parse(&final_url).unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "strict=1; Path=/; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/; SameSite=Strict".to_vec(),
             )],
         );
     }
@@ -1155,7 +1155,7 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
             &Url::parse(&final_url).unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "strict=1; Path=/; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/; SameSite=Strict".to_vec(),
             )],
         );
     }

@@ -291,7 +291,7 @@ impl ResourcePerformanceEntry {
         initiator_type: &'static str,
         start_unix_millis: Option<f64>,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         body_size: f64,
     ) -> Self {
         let header_size = response_headers

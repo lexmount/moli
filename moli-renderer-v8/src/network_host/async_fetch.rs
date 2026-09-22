@@ -321,7 +321,7 @@ fn validate_actual_cors_response_head(
 fn next_redirect_url(
     final_url: &url::Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_count: usize,
 ) -> Result<Option<url::Url>, String> {
     if !matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -330,7 +330,7 @@ fn next_redirect_url(
     let Some(location) = headers
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| moli_fetch::decode_header_value(value))
     else {
         return Ok(None);
     };
@@ -338,8 +338,8 @@ fn next_redirect_url(
         return Err(format!("redirect limit exceeded for {final_url}"));
     }
     final_url
-        .join(location)
-        .or_else(|_| url::Url::parse(location))
+        .join(&location)
+        .or_else(|_| url::Url::parse(&location))
         .map(Some)
         .map_err(|error| {
             format!("failed to resolve redirect location `{location}` from {final_url}: {error}")
@@ -849,7 +849,7 @@ fn validate_redirect_mode_response_head(
 fn validate_redirect_mode_parts(
     final_url: &url::Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirect_mode: RequestRedirectMode,
 ) -> Result<(), String> {
     if redirect_mode != RequestRedirectMode::Error {
@@ -921,10 +921,7 @@ mod tests {
                 ResponseHead {
                     final_url: Url::parse("https://origin.test/start")?,
                     status: 303,
-                    headers: vec![(
-                        "Location".to_owned(),
-                        "https://target.test/final".to_owned(),
-                    )],
+                    headers: vec![("Location".to_owned(), b"https://target.test/final".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,
@@ -1423,7 +1420,10 @@ mod tests {
             from_url: source_url.clone(),
             to_url: target_url.clone(),
             status: 302,
-            headers: vec![("Location".to_owned(), target_url.to_string())],
+            headers: vec![(
+                "Location".to_owned(),
+                target_url.as_str().as_bytes().to_vec(),
+            )],
             network_extra_info_available: false,
             request_extra_info: None,
             response_extra_info: None,

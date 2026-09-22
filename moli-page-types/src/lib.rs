@@ -253,7 +253,7 @@ pub struct NavigationRedirect {
     pub from_url: Url,
     pub to_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub network_extra_info_available: bool,
     pub request_extra_info: Option<NetworkRequestExtraInfo>,
     pub response_extra_info: Option<NetworkResponseExtraInfo>,
@@ -308,7 +308,7 @@ impl From<NavigationRedirect> for RedirectInfo {
 pub struct NavigationResponse {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -446,7 +446,7 @@ impl NavigationResponse {
     pub fn from_text_body(
         final_url: Url,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body: String,
     ) -> Self {
         Self::from_head_and_text_body(
@@ -468,7 +468,7 @@ impl NavigationResponse {
     pub fn with_status_headers_from(
         source: &Self,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
     ) -> Self {
         let mut head = source.head();
         head.status = status;
@@ -1121,7 +1121,7 @@ pub struct SubresourceResponseStarted {
     final_url: Url,
     status: u16,
     status_text: Option<String>,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
     from_cache: bool,
     network_request_headers: Option<Vec<(String, String)>>,
@@ -1282,7 +1282,7 @@ impl SubresourceResponseStarted {
         redirect_chain: Vec<NavigationRedirect>,
         final_url: Url,
         status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         cookie_set_reports: Vec<StoredCookieSetReport>,
     ) -> Self {
         Self {
@@ -1345,7 +1345,7 @@ impl SubresourceResponseStarted {
         self.status_text.as_deref()
     }
 
-    pub fn response_headers(&self) -> &[(String, String)] {
+    pub fn response_headers(&self) -> &[(String, Vec<u8>)] {
         &self.response_headers
     }
 
@@ -1966,7 +1966,7 @@ pub struct SubresourceJsonPathRegex {
 }
 
 fn json_path_equals(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &str,
     expectation: &SubresourceJsonPathEquals,
 ) -> bool {
@@ -1976,7 +1976,7 @@ fn json_path_equals(
 }
 
 fn json_path_matches_regex(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &str,
     expectation: &SubresourceJsonPathRegex,
 ) -> bool {
@@ -1986,7 +1986,7 @@ fn json_path_matches_regex(
 }
 
 fn json_path_satisfies(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &str,
     path: &[String],
     predicate: impl FnOnce(&Value) -> bool,
@@ -1994,7 +1994,7 @@ fn json_path_satisfies(
     let Some(content_type) = header_value(headers, "content-type") else {
         return false;
     };
-    if !is_json_module_mime(content_type) {
+    if !is_json_module_mime(&content_type) {
         return false;
     }
 
@@ -2038,11 +2038,14 @@ fn json_value_matches_regex(value: &Value, regex: &Regex) -> bool {
     }
 }
 
-fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+fn header_value<'a>(
+    headers: &'a [(String, Vec<u8>)],
+    name: &str,
+) -> Option<std::borrow::Cow<'a, str>> {
     headers
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| moli_fetch::decode_header_value(value))
 }
 
 impl SubresourceNetworkRecord {
@@ -2132,7 +2135,7 @@ impl SubresourceNetworkRecord {
         redirect_chain: Vec<NavigationRedirect>,
         final_url: Url,
         status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
         cookie_set_reports: Vec<StoredCookieSetReport>,
     ) -> Self {
@@ -2166,7 +2169,7 @@ impl SubresourceNetworkRecord {
         redirect_chain: Vec<NavigationRedirect>,
         final_url: Url,
         status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: SubresourceResponseBody,
         cookie_set_reports: Vec<StoredCookieSetReport>,
     ) -> Self {
@@ -2413,7 +2416,7 @@ pub struct PendingSubresourceResponseInfo {
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub network_request_headers: Option<Vec<(String, String)>>,
     pub response_status: u16,
-    pub response_headers: Vec<(String, String)>,
+    pub response_headers: Vec<(String, Vec<u8>)>,
     /// Exact response bytes plus the lossy compatibility text view needed while
     /// a response-stage Fetch pause is held.
     pub response_body: SubresourceResponseBody,
@@ -2434,7 +2437,7 @@ pub struct PendingSubresourceAuthInfo {
     pub intercept_response: bool,
     pub response_final_url: Url,
     pub response_status: u16,
-    pub response_headers: Vec<(String, String)>,
+    pub response_headers: Vec<(String, Vec<u8>)>,
     pub response_body: SubresourceResponseBody,
     pub response_from_cache: bool,
 }
@@ -2470,19 +2473,19 @@ pub struct SubresourceAuthCredentials {
 }
 
 pub fn extract_subresource_auth_challenge(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Option<SubresourceAuthChallenge> {
     let mut first_challenge = None;
     for (source, value) in headers.iter().filter_map(|(name, value)| {
         if name.eq_ignore_ascii_case("www-authenticate") {
-            Some(("Server", value.as_str()))
+            Some(("Server", moli_fetch::decode_header_value(value)))
         } else if name.eq_ignore_ascii_case("proxy-authenticate") {
-            Some(("Proxy", value.as_str()))
+            Some(("Proxy", moli_fetch::decode_header_value(value)))
         } else {
             None
         }
     }) {
-        for candidate in parse_auth_challenge_candidates(value) {
+        for candidate in parse_auth_challenge_candidates(&value) {
             let challenge = SubresourceAuthChallenge {
                 source: source.to_owned(),
                 scheme: candidate.scheme,
@@ -2733,7 +2736,7 @@ pub enum SubresourceNetworkOutcome {
         final_url: Url,
         status: u16,
         status_text: Option<String>,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: SubresourceResponseBody,
     },
     Failure {
@@ -3285,7 +3288,7 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     pub final_url: String,
     pub status: u16,
     #[serde(default)]
-    pub response_headers: Vec<(String, String)>,
+    pub response_headers: Vec<(String, Vec<u8>)>,
     #[serde(default)]
     pub encoded_data_length: usize,
     /// Exact in-process response body source for protocol consumers.
@@ -3869,7 +3872,7 @@ mod tests {
             Vec::new(),
             test_url("/image.png"),
             200,
-            vec![("content-type".to_owned(), "image/png".to_owned())],
+            vec![("content-type".to_owned(), b"image/png".to_vec())],
             Vec::new(),
         );
         let body = SubresourceBodyFinished::ready(
@@ -4046,7 +4049,7 @@ mod tests {
             ResponseHead {
                 final_url: test_url("/image.png"),
                 status: 200,
-                headers: vec![("Content-Type".to_owned(), "image/png".to_owned())],
+                headers: vec![("Content-Type".to_owned(), b"image/png".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
@@ -4208,7 +4211,7 @@ mod tests {
             Vec::new(),
             Url::parse("https://example.test/api").unwrap(),
             200,
-            vec![("content-type".to_owned(), "text/plain".to_owned())],
+            vec![("content-type".to_owned(), b"text/plain".to_vec())],
             body,
             Vec::new(),
         );
@@ -4278,7 +4281,7 @@ mod tests {
             Vec::new(),
             Url::parse("https://example.test/api").unwrap(),
             200,
-            vec![("content-type".to_owned(), "text/plain".to_owned())],
+            vec![("content-type".to_owned(), b"text/plain".to_vec())],
             SubresourceResponseBody::from_bytes(b"order #42 ready".to_vec()),
             Vec::new(),
         );
@@ -4325,7 +4328,7 @@ mod tests {
         assert!(json_path_equals(
             &[(
                 "content-type".to_owned(),
-                "application/manifest+json;charset=utf-8".to_owned(),
+                b"application/manifest+json;charset=utf-8".to_vec(),
             )],
             r#"{"ok":true}"#,
             &expectation,
@@ -4333,13 +4336,13 @@ mod tests {
         assert!(json_path_equals(
             &[(
                 "content-type".to_owned(),
-                "application/json; charset = utf-8".to_owned(),
+                b"application/json; charset = utf-8".to_vec(),
             )],
             r#"{"ok":true}"#,
             &expectation,
         ));
         assert!(!json_path_equals(
-            &[("content-type".to_owned(), "text/json".to_owned())],
+            &[("content-type".to_owned(), b"text/json".to_vec())],
             r#"{"ok":true}"#,
             &expectation,
         ));
@@ -4351,13 +4354,13 @@ mod tests {
         assert!(json_path_matches_regex(
             &[(
                 "content-type".to_owned(),
-                "application/json; charset=utf-8".to_owned(),
+                b"application/json; charset=utf-8".to_vec(),
             )],
             r#"{"data":{"url":"/item/42"}}"#,
             &regex_expectation,
         ));
         assert!(!json_path_matches_regex(
-            &[("content-type".to_owned(), "application/json".to_owned())],
+            &[("content-type".to_owned(), b"application/json".to_vec())],
             r#"{"data":{"url":"/orders/42"}}"#,
             &regex_expectation,
         ));
@@ -4476,11 +4479,11 @@ mod tests {
         let challenge = extract_subresource_auth_challenge(&[
             (
                 "www-authenticate".to_owned(),
-                "Bearer realm=\"token-area\"".to_owned(),
+                b"Bearer realm=\"token-area\"".to_vec(),
             ),
             (
                 "www-authenticate".to_owned(),
-                "Basic realm=\"basic-area\"".to_owned(),
+                b"Basic realm=\"basic-area\"".to_vec(),
             ),
         ])
         .expect("auth challenge");
@@ -4494,7 +4497,7 @@ mod tests {
     fn auth_challenge_parser_prefers_supported_scheme_from_combined_header() {
         let challenge = extract_subresource_auth_challenge(&[(
             "www-authenticate".to_owned(),
-            "Bearer realm=\"token-area\", Basic realm=\"basic-area\"".to_owned(),
+            b"Bearer realm=\"token-area\", Basic realm=\"basic-area\"".to_vec(),
         )])
         .expect("auth challenge");
 
@@ -4507,7 +4510,7 @@ mod tests {
     fn auth_challenge_parser_preserves_quoted_commas_and_escaped_quotes() {
         let challenge = extract_subresource_auth_challenge(&[(
             "www-authenticate".to_owned(),
-            r#"Digest realm="area, with \"quote\"", nonce="deadbeef", qop="auth""#.to_owned(),
+            br#"Digest realm="area, with \"quote\"", nonce="deadbeef", qop="auth""#.to_vec(),
         )])
         .expect("auth challenge");
 
@@ -4520,7 +4523,7 @@ mod tests {
     fn auth_challenge_parser_recognizes_proxy_and_falls_back_to_unsupported() {
         let challenge = extract_subresource_auth_challenge(&[(
             "proxy-authenticate".to_owned(),
-            "Bearer realm=\"proxy-token\"".to_owned(),
+            b"Bearer realm=\"proxy-token\"".to_vec(),
         )])
         .expect("proxy auth challenge");
 

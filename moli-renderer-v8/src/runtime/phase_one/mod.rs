@@ -4111,7 +4111,7 @@ document.body.setAttribute('data-error-state', [
             let response = crate::protocol_types::NavigationResponse::from_text_body(
                 script.url.clone(),
                 200,
-                vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
+                vec![("Content-Type".to_owned(), b"text/javascript".to_vec())],
                 String::new(),
             );
             let response = crate::protocol_types::NavigationResponse::from_head_and_body(
@@ -4170,7 +4170,7 @@ document.body.setAttribute('data-error-state', [
             let response = crate::protocol_types::NavigationResponse::from_text_body(
                 script.url.clone(),
                 200,
-                vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
+                vec![("Content-Type".to_owned(), b"text/javascript".to_vec())],
                 String::new(),
             );
             let response = crate::protocol_types::NavigationResponse::from_head_and_body(

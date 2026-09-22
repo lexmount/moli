@@ -5,20 +5,20 @@ use url::Url;
 
 pub(crate) fn ensure_worker_script_mime_acceptable(
     script_url: &Url,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &[u8],
 ) -> Result<(), String> {
     check_script_response_mime(headers, body, FetchDestination::Worker, true)
         .map_err(|error| worker_script_mime_error_message(script_url, error))
 }
 
-pub(crate) fn worker_response_content_type(headers: &[(String, String)]) -> Option<String> {
+pub(crate) fn worker_response_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
     response_header_values(headers, "content-type")
         .into_iter()
         .next_back()
 }
 
-pub(crate) fn worker_response_has_webassembly_mime(headers: &[(String, String)]) -> bool {
+pub(crate) fn worker_response_has_webassembly_mime(headers: &[(String, Vec<u8>)]) -> bool {
     worker_response_content_type(headers)
         .as_deref()
         .is_some_and(moli_web_mime::is_webassembly_mime)
@@ -42,9 +42,9 @@ mod tests {
     #[test]
     fn worker_script_mime_accepts_javascript_content_types() {
         let url = Url::parse("https://example.test/worker.js").expect("valid url");
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Content-Type".to_owned(),
-            "Text/JavaScript; charset=utf-8".to_owned(),
+            b"Text/JavaScript; charset=utf-8".to_vec(),
         )];
 
         assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_ok());
@@ -53,7 +53,8 @@ mod tests {
     #[test]
     fn worker_script_mime_rejects_http_non_javascript_content_types() {
         let url = Url::parse("https://example.test/worker.py").expect("valid url");
-        let headers = vec![("content-type".to_owned(), "text/html".to_owned())];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("content-type".to_owned(), b"text/html".to_vec())];
 
         assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_err());
     }
@@ -70,7 +71,8 @@ mod tests {
     #[test]
     fn worker_script_mime_allows_invalid_content_type_through_script_context_default() {
         let url = Url::parse("https://example.test/worker").expect("valid url");
-        let headers = vec![("content-type".to_owned(), "not a mime type".to_owned())];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("content-type".to_owned(), b"not a mime type".to_vec())];
 
         assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_ok());
     }
@@ -78,7 +80,8 @@ mod tests {
     #[test]
     fn worker_script_mime_rejects_nosniff_missing_content_type() {
         let url = Url::parse("https://example.test/worker").expect("valid url");
-        let headers = vec![("x-content-type-options".to_owned(), "nosniff".to_owned())];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("x-content-type-options".to_owned(), b"nosniff".to_vec())];
 
         assert!(ensure_worker_script_mime_acceptable(&url, &headers, b"").is_err());
     }

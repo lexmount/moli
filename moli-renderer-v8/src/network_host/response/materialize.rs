@@ -363,7 +363,10 @@ fn build_fetch_response_object_head<'s>(
             RESPONSE_INTERNAL_STATUS_TEXT_SLOT,
             http_status_text(head.status),
         );
-        let internal_headers = filter_headers_for_guard(&head.headers, HeadersGuard::Response);
+        let internal_headers = filter_headers_for_guard(
+            &moli_fetch::headers_to_byte_strings(&head.headers),
+            HeadersGuard::Response,
+        );
         let internal_headers_obj =
             build_headers_object_with_state(scope, &internal_headers, HeadersGuard::Response, true);
         set_response_slot_value(
@@ -395,7 +398,10 @@ fn finish_fetch_response_object_with_body_stream<'s>(
     } else {
         &[][..]
     };
-    let headers = filter_headers_for_guard(header_entries, HeadersGuard::Response);
+    let headers = filter_headers_for_guard(
+        &moli_fetch::headers_to_byte_strings(header_entries),
+        HeadersGuard::Response,
+    );
     let headers_obj =
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
@@ -455,7 +461,7 @@ pub(crate) struct MaterializedResponseObject {
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) body: Vec<u8>,
 }
 
@@ -466,7 +472,7 @@ pub(crate) struct MaterializedResponseHead {
     pub(crate) redirected: bool,
     pub(crate) status: u16,
     pub(crate) status_text: String,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
 }
 
 impl MaterializedResponseHead {
@@ -565,7 +571,10 @@ pub(crate) fn materialize_response_object_head<'s>(
     let status_text =
         response_slot_string(scope, response, RESPONSE_STATUS_TEXT_SLOT).unwrap_or_default();
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)
-        .map(|headers| headers_entries(scope, headers))
+        .map(|headers| {
+            moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+                .expect("Headers contain ByteStrings")
+        })
         .unwrap_or_default();
 
     Ok((
@@ -596,7 +605,10 @@ pub(crate) fn materialize_response_object_head_for_service_worker_respond_with<'
             response_slot_string(scope, response, RESPONSE_INTERNAL_STATUS_TEXT_SLOT)
                 .unwrap_or_default();
         head.headers = response_slot_object(scope, response, RESPONSE_INTERNAL_HEADERS_SLOT)
-            .map(|headers| headers_entries(scope, headers))
+            .map(|headers| {
+                moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
+                    .expect("Headers contain ByteStrings")
+            })
             .unwrap_or_default();
     }
     Ok((head, response))

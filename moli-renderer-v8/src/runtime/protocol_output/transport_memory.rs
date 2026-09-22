@@ -228,15 +228,15 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
     }
 }
 
-fn headers_charge(headers: &[(String, String)]) -> usize {
+fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
     headers.iter().fold(
         headers
             .len()
-            .saturating_mul(std::mem::size_of::<(String, String)>()),
+            .saturating_mul(std::mem::size_of::<(String, V)>()),
         |total, (name, value)| {
             total
                 .saturating_add(string_charge(name))
-                .saturating_add(string_charge(value))
+                .saturating_add(value.as_ref().len().saturating_mul(2))
         },
     )
 }
@@ -392,7 +392,7 @@ fn service_worker_event_transport_charge_bytes(
                     |total, (name, value)| {
                         total
                             .saturating_add(string_charge(name))
-                            .saturating_add(string_charge(value))
+                            .saturating_add(value.len().saturating_mul(2))
                     },
                 ),
                 crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Failure { message } => {

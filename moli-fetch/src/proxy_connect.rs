@@ -1,11 +1,11 @@
-use crate::headers::{decode_http_header_bytes, parse_http_header_line};
+use crate::headers::{decode_http_header_bytes, parse_http_response_header_line};
 
 const MAX_PROXY_CONNECT_HEADER_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ProxyConnectResponse {
     pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
 }
 
 #[derive(Debug, Default)]
@@ -13,7 +13,7 @@ pub(crate) struct ProxyConnectResponseRecorder {
     enabled: bool,
     collecting: bool,
     pending_status: Option<u16>,
-    pending_headers: Vec<(String, String)>,
+    pending_headers: Vec<(String, Vec<u8>)>,
     observed_bytes: usize,
     completed: Option<ProxyConnectResponse>,
 }
@@ -72,7 +72,7 @@ impl ProxyConnectResponseRecorder {
                 });
             return;
         }
-        if let Some(header) = parse_http_header_line(line) {
+        if let Some(header) = parse_http_response_header_line(data) {
             self.pending_headers.push(header);
         }
     }
@@ -134,7 +134,7 @@ mod tests {
                 status: 407,
                 headers: vec![(
                     "Proxy-Authenticate".to_owned(),
-                    "Basic realm=\"\u{ff}\"".to_owned(),
+                    b"Basic realm=\"\xff\"".to_vec(),
                 )],
             })
         );

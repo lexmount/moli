@@ -24,7 +24,7 @@ fn completed_events() -> CompletedMainDocumentNetworkEvents {
         vec![("Accept".to_owned(), "text/html".to_owned())],
         None,
         200,
-        vec![("Content-Type".to_owned(), "text/html".to_owned())],
+        vec![("Content-Type".to_owned(), b"text/html".to_vec())],
         Vec::new(),
         Vec::new(),
         false,
@@ -41,7 +41,10 @@ fn observation_journal(
             .map(|(request_headers, status, response_headers)| {
                 NetworkExchangeObservation::new(
                     NetworkRequestObservation::new(request_headers),
-                    Some(NetworkResponseObservation::new(status, response_headers)),
+                    Some(NetworkResponseObservation::new(
+                        status,
+                        moli_fetch::headers_from_byte_strings(&response_headers).unwrap(),
+                    )),
                 )
             })
             .collect(),
@@ -126,7 +129,10 @@ fn failed_redirect_transport_emits_completed_hop_and_final_request_extra_info() 
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
-        headers: vec![("Location".to_owned(), final_url.to_string())],
+        headers: vec![(
+            "Location".to_owned(),
+            final_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: true,
         request_extra_info: None,
         response_extra_info: None,
@@ -144,7 +150,7 @@ fn failed_redirect_transport_emits_completed_hop_and_final_request_extra_info() 
             )]),
             Some(NetworkResponseObservation::new(
                 302,
-                vec![("X-Response-Hop".to_owned(), "redirect".to_owned())],
+                vec![("X-Response-Hop".to_owned(), b"redirect".to_vec())],
             )),
         ),
         NetworkExchangeObservation::new(
@@ -255,10 +261,10 @@ fn response_progress_batch_for_output_target() -> MainDocumentProgressEventBatch
             },
             final_url: Url::parse("http://example.test/target").unwrap(),
             status: 200,
-            headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+            headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
             cookie_set_reports: Vec::new(),
             extra_info_status: 200,
-            extra_info_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+            extra_info_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
             network_extra_info_available: false,
             emit_extra_info: false,
             encoded_data_length: 29,
@@ -409,7 +415,10 @@ fn live_progress_source_serializes_through_progress_emissions() {
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
-        headers: vec![("Location".to_owned(), final_url.to_string())],
+        headers: vec![(
+            "Location".to_owned(),
+            final_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: true,
         request_extra_info: None,
         response_extra_info: None,
@@ -444,7 +453,7 @@ fn live_progress_source_serializes_through_progress_emissions() {
     source.emit_response_received(
         &final_url,
         200,
-        &[("Content-Type".to_owned(), "text/html".to_owned())],
+        &[("Content-Type".to_owned(), b"text/html".to_vec())],
         &[],
         &journal,
         1,
@@ -696,7 +705,7 @@ fn completed_body_revalidation_keeps_raw_304_extra_info() {
     let mut events = completed_events();
     events.network_extra_info_available = true;
     events.response_status = 200;
-    events.response_headers = vec![("X-Merged-Response".to_owned(), "cached".to_owned())];
+    events.response_headers = vec![("X-Merged-Response".to_owned(), b"cached".to_vec())];
     events = events.with_network_observation_journal(observation_journal(vec![(
         vec![("If-None-Match".to_owned(), "\"v1\"".to_owned())],
         304,
@@ -763,7 +772,10 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
-        headers: vec![("location".to_owned(), final_url.to_string())],
+        headers: vec![(
+            "location".to_owned(),
+            final_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: true,
         request_extra_info: None,
         response_extra_info: None,
@@ -859,7 +871,10 @@ fn completed_body_redirect_without_transport_extra_info_keeps_flag_false() {
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
-        headers: vec![("location".to_owned(), final_url.to_string())],
+        headers: vec![(
+            "location".to_owned(),
+            final_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: false,
         request_extra_info: None,
         response_extra_info: None,
@@ -928,7 +943,10 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro
         from_url: navigation_url.clone(),
         to_url: navigation_url.clone(),
         status: 307,
-        headers: vec![("Location".to_owned(), navigation_url.to_string())],
+        headers: vec![(
+            "Location".to_owned(),
+            navigation_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: false,
         request_extra_info: None,
         response_extra_info: None,
@@ -1005,7 +1023,10 @@ fn completed_body_uses_negotiated_protocol_for_redirect_and_final_response() {
         from_url: Url::parse("https://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
-        headers: vec![("location".to_owned(), final_url.to_string())],
+        headers: vec![(
+            "location".to_owned(),
+            final_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: false,
         request_extra_info: None,
         response_extra_info: None,
@@ -1083,7 +1104,10 @@ fn cached_completed_body_redirect_emits_cache_event_before_next_request() {
         from_url: Url::parse("http://example.test/start").unwrap(),
         to_url: final_url.clone(),
         status: 302,
-        headers: vec![("location".to_owned(), final_url.to_string())],
+        headers: vec![(
+            "location".to_owned(),
+            final_url.as_str().as_bytes().to_vec(),
+        )],
         network_extra_info_available: false,
         request_extra_info: None,
         response_extra_info: None,

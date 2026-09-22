@@ -139,7 +139,11 @@ fn ensure_worker_import_script_mime_acceptable(
     mime_type: &str,
     body: &[u8],
 ) -> Result<(), WorkerImportScriptError> {
-    let headers = [("Content-Type".to_owned(), mime_type.to_owned())];
+    let headers = [(
+        "Content-Type".to_owned(),
+        moli_fetch::header_value_from_byte_string(mime_type)
+            .expect("serialized MIME types contain ByteStrings"),
+    )];
     crate::worker::ensure_worker_script_mime_acceptable(script_url, &headers, body)
         .map_err(WorkerImportScriptError::network)
 }

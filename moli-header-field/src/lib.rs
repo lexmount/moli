@@ -14,7 +14,10 @@ mod fields;
 mod parameters;
 mod tokenizer;
 
-pub use fields::HeaderFields;
+pub use fields::{
+    HeaderFields, decode_header_value, deserialize_headers, header_value_from_byte_string,
+    headers_from_byte_strings, headers_to_byte_strings,
+};
 pub use parameters::{split_outside_quoted_strings, unquote_parameter_value};
 pub use tokenizer::{HeaderFieldTokenMode, HeaderFieldTokenizer};
 

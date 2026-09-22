@@ -990,11 +990,16 @@ pub(super) struct XhrStreamingResponseState {
 }
 
 impl XhrStreamingResponseState {
-    pub(super) fn new(headers: &[(String, String)]) -> Self {
+    pub(super) fn new(headers: &[(String, Vec<u8>)]) -> Self {
         let total = headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .and_then(|(_, value)| value.trim().parse::<usize>().ok());
+            .and_then(|(_, value)| {
+                moli_fetch::decode_header_value(value)
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+            });
         Self {
             pending_utf8_bytes: Vec::new(),
             loaded: 0,

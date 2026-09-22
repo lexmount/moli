@@ -1321,7 +1321,7 @@ mod tests {
             final_url: script_url.clone(),
             kind: crate::worker::WorkerScriptResourceKind::JavaScript,
             status: 200,
-            headers: vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
+            headers: vec![("Content-Type".to_owned(), b"text/javascript".to_vec())],
             body_len: 3,
             body_sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
                 .to_owned(),
@@ -1336,7 +1336,7 @@ mod tests {
             final_url: script_url.clone(),
             kind: crate::worker::WorkerScriptResourceKind::JavaScript,
             status: 200,
-            headers: vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
+            headers: vec![("Content-Type".to_owned(), b"text/javascript".to_vec())],
             body_len: 3,
             body_sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
                 .to_owned(),
@@ -8715,7 +8715,7 @@ self.addEventListener("message", event => {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                 body: b"handled".to_vec(),
                 final_url: None,
                 response_type: "basic".to_owned(),
@@ -9016,7 +9016,7 @@ self.addEventListener("message", event => {
             result: ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
                 status: 200,
                 status_text: "OK".to_owned(),
-                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                 body: b"late".to_vec(),
                 final_url: None,
                 response_type: "basic".to_owned(),
@@ -9508,8 +9508,8 @@ self.addEventListener("message", event => {
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("x-service-worker"))
-                .map(|(_, value)| value.as_str()),
-            Some("worker-client")
+                .map(|(_, value)| value.as_slice()),
+            Some(b"worker-client".as_slice())
         );
         assert_eq!(
             response.response.body_text(),

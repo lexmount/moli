@@ -2081,7 +2081,7 @@ mod tests {
             Vec::new(),
             url,
             101,
-            vec![("Upgrade".to_owned(), "websocket".to_owned())],
+            vec![("Upgrade".to_owned(), b"websocket".to_vec())],
             String::new(),
             Vec::new(),
         )

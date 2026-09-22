@@ -631,7 +631,11 @@ fn pause_data_url_response_stage_navigation_into_buffer(
         ResponseHead {
             final_url: pending.navigation.requested_url.clone(),
             status: 200,
-            headers: vec![("Content-Type".to_owned(), content_type)],
+            headers: vec![(
+                "Content-Type".to_owned(),
+                moli_fetch::header_value_from_byte_string(&content_type)
+                    .expect("serialized MIME types contain ByteStrings"),
+            )],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,
@@ -999,12 +1003,12 @@ mod tests {
     fn response_stage_navigation_download_detection_uses_web_mime_attachment_helper() {
         assert!(response_headers_indicate_attachment_download(&[(
             "Content-Disposition".to_owned(),
-            "attachment; filename=report.html".to_owned(),
+            b"attachment; filename=report.html".to_vec(),
         )]));
 
         assert!(!response_headers_indicate_attachment_download(&[(
             "Content-Disposition".to_owned(),
-            "inline; filename=attachment.html".to_owned(),
+            b"inline; filename=attachment.html".to_vec(),
         )]));
     }
 }

@@ -27,12 +27,11 @@ pub(crate) fn decode_base64_to_string(body: &str) -> Result<String, ()> {
     String::from_utf8(decoded).map_err(|_| ())
 }
 
-// The existing response consumers use WebIDL ByteString projections. Encode CDP
-// Unicode as UTF-8 and decode binary input losslessly at this adapter boundary.
+// CDP Unicode input uses UTF-8; binary input remains raw HTTP bytes.
 pub(super) fn response_headers_from_params(
     response_headers: Option<Vec<HeaderEntry>>,
     binary_response_headers: Option<&str>,
-) -> Result<Vec<(String, String)>, ()> {
+) -> Result<Vec<(String, Vec<u8>)>, ()> {
     Ok(
         response_headers_with_presence_from_params(response_headers, binary_response_headers)?
             .unwrap_or_default(),
@@ -42,9 +41,9 @@ pub(super) fn response_headers_from_params(
 pub(super) fn response_headers_with_presence_from_params(
     response_headers: Option<Vec<HeaderEntry>>,
     binary_response_headers: Option<&str>,
-) -> Result<Option<Vec<(String, String)>>, ()> {
+) -> Result<Option<Vec<(String, Vec<u8>)>>, ()> {
     if let Some(encoded) = binary_response_headers {
-        parse_binary_response_headers(encoded).map(|headers| Some(headers.to_byte_strings()))
+        parse_binary_response_headers(encoded).map(|headers| Some(headers.into_iter().collect()))
     } else {
         Ok(response_headers.map(|headers| {
             moli_fetch::ResponseHeaders::from_utf8(
@@ -53,7 +52,8 @@ pub(super) fn response_headers_with_presence_from_params(
                     .map(|header| (header.name, header.value))
                     .collect(),
             )
-            .to_byte_strings()
+            .into_iter()
+            .collect()
         }))
     }
 }
@@ -305,7 +305,7 @@ pub(crate) fn navigation_response_stage_request_paused_event(
     final_url: &url::Url,
     request_cookie_report: Option<&StoredCookieQueryReport>,
     response_status: u16,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
 ) -> BackgroundProtocolEvent {
     let (payload, event) = navigation_response_stage_request_paused_parts(
         fetch_request_id,
@@ -327,7 +327,7 @@ fn navigation_response_stage_request_paused_parts(
     final_url: &url::Url,
     request_cookie_report: Option<&StoredCookieQueryReport>,
     response_status: u16,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
 ) -> (Value, AutomationEvent) {
     let network_event = NetworkRequestEvent {
         target_id: DevToolsTargetId::from(navigation.frame_id.as_str()),
@@ -430,7 +430,7 @@ fn pending_subresource_response_stage_request_paused_parts(
     (payload, AutomationEvent::RequestPaused(network_event))
 }
 
-pub(crate) fn extract_auth_challenge(headers: &[(String, String)]) -> Option<FetchAuthChallenge> {
+pub(crate) fn extract_auth_challenge(headers: &[(String, Vec<u8>)]) -> Option<FetchAuthChallenge> {
     extract_subresource_auth_challenge(headers).map(|challenge| FetchAuthChallenge {
         origin: String::new(),
         source: challenge.source,

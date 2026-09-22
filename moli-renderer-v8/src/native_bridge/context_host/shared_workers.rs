@@ -155,7 +155,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.browser_context_runtime
             .continue_shared_worker_fetch_response(
@@ -171,7 +171,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.browser_context_runtime
             .continue_shared_worker_xhr_response(
@@ -257,7 +257,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.browser_context_runtime.fulfill_shared_worker_fetch(
@@ -274,7 +274,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.browser_context_runtime.fulfill_shared_worker_xhr(
@@ -291,7 +291,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.browser_context_runtime
@@ -309,7 +309,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.browser_context_runtime
@@ -327,7 +327,7 @@ impl JsContextHost {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.browser_context_runtime

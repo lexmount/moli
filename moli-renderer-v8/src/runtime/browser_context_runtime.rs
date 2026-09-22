@@ -261,7 +261,7 @@ impl DetachedParserScriptFetchContinuation {
     pub fn fulfill(
         &self,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: Vec<u8>,
     ) -> bool {
         let Some(inner) = self.take() else {

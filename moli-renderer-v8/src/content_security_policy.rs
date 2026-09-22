@@ -279,20 +279,21 @@ fn security_policy_violation_event_declaration<'s>(
     })
 }
 
-pub(crate) fn content_security_policy_headers(headers: &[(String, String)]) -> Vec<String> {
+pub(crate) fn content_security_policy_headers(headers: &[(String, Vec<u8>)]) -> Vec<String> {
     content_security_policy_header_values(headers, "content-security-policy")
 }
 
 pub(crate) fn content_security_policy_report_only_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Vec<String> {
     content_security_policy_header_values(headers, "content-security-policy-report-only")
 }
 
 fn content_security_policy_header_values(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     header_name: &str,
 ) -> Vec<String> {
+    let headers = moli_fetch::headers_to_byte_strings(headers);
     // Each HTTP field can contain several independently enforced policies.
     // Commas are CSP list delimiters even inside quotes in directive values;
     // the quoted-string rules used by Reporting-Endpoints do not apply here.
@@ -394,7 +395,7 @@ pub(crate) fn content_security_policy_report_uri_endpoints(
 }
 
 pub(crate) fn content_security_policy_reporting_endpoints_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     protected_url: &Url,
 ) -> ContentSecurityPolicyReportingEndpoints {
     let mut endpoints = ContentSecurityPolicyReportingEndpoints::default();
@@ -402,7 +403,11 @@ pub(crate) fn content_security_policy_reporting_endpoints_from_headers(
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("reporting-endpoints"))
     {
-        parse_reporting_endpoints_header(value, protected_url, &mut endpoints);
+        parse_reporting_endpoints_header(
+            &moli_fetch::decode_header_value(value),
+            protected_url,
+            &mut endpoints,
+        );
     }
     endpoints
 }
@@ -2120,16 +2125,16 @@ mod tests {
 
     #[test]
     fn content_security_policy_headers_collect_enforce_headers_only() {
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Content-Security-Policy-Report-Only".to_owned(),
-                "worker-src 'none'".to_owned(),
+                b"worker-src 'none'".to_vec(),
             ),
             (
                 "content-security-policy".to_owned(),
-                " worker-src 'self' ".to_owned(),
+                b" worker-src 'self' ".to_vec(),
             ),
-            ("Content-Security-Policy".to_owned(), String::new()),
+            ("Content-Security-Policy".to_owned(), Vec::new()),
         ];
 
         assert_eq!(
@@ -2144,18 +2149,18 @@ mod tests {
 
     #[test]
     fn csp_headers_preserve_policy_order_and_disposition() {
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "CONTENT-SECURITY-POLICY".to_owned(),
-                " , img-src *; report-uri /first, img-src 'none'; report-uri /second, ".to_owned(),
+                b" , img-src *; report-uri /first, img-src 'none'; report-uri /second, ".to_vec(),
             ),
             (
                 "Content-Security-Policy-Report-Only".to_owned(),
-                "script-src * , script-src 'none'".to_owned(),
+                b"script-src * , script-src 'none'".to_vec(),
             ),
             (
                 "content-security-policy".to_owned(),
-                "worker-src 'self'".to_owned(),
+                b"worker-src 'self'".to_vec(),
             ),
         ];
         assert_eq!(
@@ -2229,7 +2234,7 @@ mod tests {
         ] {
             let policies = content_security_policy_headers(&[(
                 "Content-Security-Policy".to_owned(),
-                value.to_owned(),
+                value.as_bytes().to_vec(),
             )]);
             assert_eq!(
                 content_security_policy_allows_url(
@@ -2246,11 +2251,11 @@ mod tests {
 
     #[test]
     fn csp_header_lists_keep_report_only_violations_with_their_policy() {
-        let headers = vec![
-            ("Content-Security-Policy".to_owned(), "img-src *".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("Content-Security-Policy".to_owned(), b"img-src *".to_vec()),
             (
                 "Content-Security-Policy-Report-Only".to_owned(),
-                "img-src *; report-uri /allowed, img-src 'none'; report-uri /blocked".to_owned(),
+                b"img-src *; report-uri /allowed, img-src 'none'; report-uri /blocked".to_vec(),
             ),
         ];
         let protected = protected_url();
@@ -2287,19 +2292,19 @@ mod tests {
             "content-security-policy",
             "content-security-policy-report-only",
         ] {
-            let collect = |value: &str| {
-                content_security_policy_header_values(&[(name.to_owned(), value.to_owned())], name)
+            let collect = |value: &[u8]| {
+                content_security_policy_header_values(&[(name.to_owned(), value.to_vec())], name)
             };
-            assert!(collect(", ; ; , \t , img-src 'none'\u{00a0},").is_empty());
+            assert!(collect(b", ; ; , \t , img-src 'none'\xa0,").is_empty());
             assert_eq!(
-                collect("\t\n\r\u{000c} img-src 'none' , \t"),
+                collect(b"\t\n\r\x0c img-src 'none' , \t"),
                 ["img-src 'none'"]
             );
             assert_eq!(
-                collect("img-src *\u{000b}, img-src 'none'"),
+                collect(b"img-src *\x0b, img-src 'none'"),
                 ["img-src *\u{000b}", "img-src 'none'"]
             );
-            let policies = collect("img-src *\u{000b}");
+            let policies = collect(b"img-src *\x0b");
             assert!(!content_security_policy_allows_url(
                 &policies,
                 &protected_url(),
@@ -3583,11 +3588,11 @@ mod tests {
             &[
                 (
                     "Reporting-Endpoints".to_owned(),
-                    "default=\"/reports\", csp=\"https://reports.test/csp\"".to_owned(),
+                    b"default=\"/reports\", csp=\"https://reports.test/csp\"".to_vec(),
                 ),
                 (
                     "reporting-endpoints".to_owned(),
-                    "default=\"/override\", ignored=ftp://reports.test/nope".to_owned(),
+                    b"default=\"/override\", ignored=ftp://reports.test/nope".to_vec(),
                 ),
             ],
             &protected_url(),
@@ -3609,7 +3614,7 @@ mod tests {
         let reporting_endpoints = content_security_policy_reporting_endpoints_from_headers(
             &[(
                 "Reporting-Endpoints".to_owned(),
-                "primary=\"/reports/primary\", secondary=\"/reports/secondary\"".to_owned(),
+                b"primary=\"/reports/primary\", secondary=\"/reports/secondary\"".to_vec(),
             )],
             &protected_url(),
         );

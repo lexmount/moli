@@ -54,7 +54,7 @@ pub(super) struct ServiceWorkerScriptResource {
     pub(super) final_url: Url,
     pub(super) kind: WorkerScriptResourceKind,
     pub(super) status: u16,
-    pub(super) headers: Vec<(String, String)>,
+    pub(super) headers: Vec<(String, Vec<u8>)>,
     pub(super) body_len: usize,
     pub(super) body_sha256: String,
     pub(super) response_time_ms: u64,
@@ -428,7 +428,7 @@ mod tests {
         let head = ResponseHead {
             final_url: Url::parse("https://example.test/app/sw.js?final").unwrap(),
             status: 200,
-            headers: vec![("Content-Type".to_owned(), "text/javascript".to_owned())],
+            headers: vec![("Content-Type".to_owned(), b"text/javascript".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,
@@ -816,7 +816,7 @@ mod tests {
         let head = ResponseHead {
             final_url: script_url.clone(),
             status: 200,
-            headers: vec![("Content-Type".to_owned(), mime_type.to_owned())],
+            headers: vec![("Content-Type".to_owned(), mime_type.as_bytes().to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,

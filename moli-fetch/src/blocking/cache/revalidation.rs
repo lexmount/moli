@@ -11,7 +11,7 @@ use super::{
 
 pub(crate) fn validation_headers_for_cached_streaming_response_lookup(
     lookup: &CachedStreamingResponseLookup,
-) -> Vec<(String, String)> {
+) -> Vec<(String, Vec<u8>)> {
     validation_headers_from_headers(&lookup.metadata.headers)
 }
 
@@ -21,7 +21,7 @@ pub(crate) fn merge_cached_not_modified_streaming_response_lookup(
     request_url: &Url,
     cookie_header: Option<&str>,
     mut cached: CachedStreamingResponseLookup,
-    not_modified_headers: &[(String, String)],
+    not_modified_headers: &[(String, Vec<u8>)],
 ) -> Result<CachedStreamingResponseLookup> {
     let headers = merge_not_modified_headers(&cached.headers, not_modified_headers);
     cached.headers = headers.clone();

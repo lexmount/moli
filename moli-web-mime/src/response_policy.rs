@@ -7,18 +7,20 @@ use crate::headers::response_header_value;
 use crate::parse::{mime_charset, mime_essence};
 use crate::sniffing::{MimeSniffingContext, computed_mime_type, sniff_image_mime_type};
 
-pub fn determine_nosniff(headers: &[(String, String)]) -> bool {
+pub fn determine_nosniff(headers: &[(String, Vec<u8>)]) -> bool {
     headers
         .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case("x-content-type-options"))
-        .flat_map(|(_, value)| value.split(','))
-        .map(str::trim)
-        .next()
-        .is_some_and(|value| value.eq_ignore_ascii_case("nosniff"))
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-content-type-options"))
+        .is_some_and(|(_, value)| {
+            moli_header_field::decode_header_value(value)
+                .split(',')
+                .next()
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("nosniff"))
+        })
 }
 
 pub fn should_response_be_blocked_due_to_nosniff(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     destination: FetchDestination,
 ) -> bool {
     if !determine_nosniff(headers) {
@@ -39,7 +41,7 @@ pub fn should_response_be_blocked_due_to_nosniff(
     false
 }
 
-pub fn should_opaque_response_be_blocked_by_orb(headers: &[(String, String)]) -> bool {
+pub fn should_opaque_response_be_blocked_by_orb(headers: &[(String, Vec<u8>)]) -> bool {
     let content_type = response_header_value(headers, "content-type");
     if determine_nosniff(headers)
         && content_type
@@ -114,7 +116,7 @@ pub fn should_opaque_response_be_blocked_by_orb(headers: &[(String, String)]) ->
 }
 
 pub fn should_opaque_response_be_blocked_by_orb_with_body(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &[u8],
 ) -> bool {
     if !should_opaque_response_be_blocked_by_orb(headers) {
@@ -141,7 +143,7 @@ pub fn should_opaque_response_be_blocked_by_orb_with_body(
 }
 
 pub fn computed_response_mime_type(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     context: MimeSniffingContext,
     body: &[u8],
 ) -> String {
@@ -161,7 +163,7 @@ pub enum ScriptResponseMimeError {
 }
 
 pub fn check_script_response_mime(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &[u8],
     destination: FetchDestination,
     require_javascript_mime: bool,
@@ -185,7 +187,7 @@ pub fn check_script_response_mime(
 }
 
 pub fn should_script_like_response_be_blocked_due_to_mime_type(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> bool {
     let Some(content_type) = response_header_value(headers, "content-type") else {
         return false;

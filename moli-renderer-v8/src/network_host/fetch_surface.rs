@@ -462,7 +462,10 @@ fn response_content_type<'s>(
 ) -> Option<String> {
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)?;
     moli_web_mime::response_header_value(
-        &normalized_headers_entries(&headers_entries(scope, headers)),
+        &moli_fetch::headers_from_byte_strings(&normalized_headers_entries(&headers_entries(
+            scope, headers,
+        )))
+        .expect("Headers contain ByteStrings"),
         "content-type",
     )
 }

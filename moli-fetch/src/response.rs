@@ -41,7 +41,7 @@ impl NegotiatedHttpVersion {
 pub struct ResponseHead {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
@@ -255,7 +255,7 @@ impl ResponseBody {
 pub struct Response {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -457,7 +457,7 @@ impl Response {
 pub struct RawResponse {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     body: ResponseBody,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
@@ -613,7 +613,7 @@ pub struct NetworkRequestExtraInfo {
 pub struct NetworkResponseExtraInfo {
     pub request_extra_info: NetworkRequestExtraInfo,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
 }
 
@@ -635,7 +635,7 @@ pub struct RedirectInfo {
     pub from_url: Url,
     pub to_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     /// Whether this redirect came from an observable HTTP response header block.
     ///
     /// Cached and browser-internal redirects do not have Network ExtraInfo even

@@ -567,7 +567,7 @@ mod tests {
         let response = crate::protocol_types::NavigationResponse::from_text_body(
             url,
             200,
-            vec![("Content-Type".to_owned(), "image/png".to_owned())],
+            vec![("Content-Type".to_owned(), b"image/png".to_vec())],
             String::new(),
         );
         let encoded =
@@ -638,7 +638,7 @@ mod tests {
         let response = crate::protocol_types::NavigationResponse::from_text_body(
             url,
             200,
-            vec![("Content-Type".to_owned(), "image/png".to_owned())],
+            vec![("Content-Type".to_owned(), b"image/png".to_vec())],
             String::new(),
         );
         let encoded =

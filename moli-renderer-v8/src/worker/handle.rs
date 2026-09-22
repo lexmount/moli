@@ -176,13 +176,13 @@ pub(crate) enum WorkerMessage {
     ContinuePendingFetchResponse {
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     /// Continue a worker-owned XHR response that was paused for Fetch domain interception.
     ContinuePendingXhrResponse {
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     /// Fail a worker-owned fetch() that was paused for Fetch domain interception.
     FailPendingFetch {
@@ -223,35 +223,35 @@ pub(crate) enum WorkerMessage {
     FulfillPendingFetch {
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     /// Fulfill a worker-owned XHR that was paused for Fetch domain interception.
     FulfillPendingXhr {
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     /// Fulfill a worker-owned CSP report that was paused for Fetch domain interception.
     FulfillPendingCspReport {
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     /// Fulfill a worker-owned fetch() response that was paused for Fetch domain interception.
     FulfillPendingFetchResponse {
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     /// Fulfill a worker-owned XHR response that was paused for Fetch domain interception.
     FulfillPendingXhrResponse {
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     /// Request the worker to terminate.
@@ -392,7 +392,7 @@ pub(crate) struct WorkerScriptResource {
     pub(crate) final_url: Url,
     pub(crate) kind: WorkerScriptResourceKind,
     pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) body_len: usize,
     pub(crate) body_sha256: String,
     pub(crate) response_time_ms: u64,
@@ -1188,7 +1188,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) {
         let _ = self.tx.send(WorkerMessage::ContinuePendingFetchResponse {
             request,
@@ -1201,7 +1201,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) {
         let _ = self.tx.send(WorkerMessage::ContinuePendingXhrResponse {
             request,
@@ -1287,7 +1287,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) {
         let _ = self.tx.send(WorkerMessage::FulfillPendingFetch {
@@ -1302,7 +1302,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) {
         let _ = self.tx.send(WorkerMessage::FulfillPendingXhr {
@@ -1317,7 +1317,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) {
         let _ = self.tx.send(WorkerMessage::FulfillPendingCspReport {
@@ -1332,7 +1332,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) {
         let _ = self.tx.send(WorkerMessage::FulfillPendingFetchResponse {
@@ -1347,7 +1347,7 @@ impl WorkerHandle {
         &self,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) {
         let _ = self.tx.send(WorkerMessage::FulfillPendingXhrResponse {

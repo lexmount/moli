@@ -1248,7 +1248,7 @@ async fn worker_module_same_origin_dependency_fetch_sends_cookies() {
             &url::Url::parse(&format!("{base_url}/worker/main.js")).unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "wpt_worker_module_credentials=fixture; Path=/worker; SameSite=Lax".to_owned(),
+                b"wpt_worker_module_credentials=fixture; Path=/worker; SameSite=Lax".to_vec(),
             )],
         );
     }

@@ -138,7 +138,7 @@ impl ClientHintResponsePolicy {
     pub(crate) fn observe_response(
         &self,
         response_url: &Url,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
     ) -> ClientHintResponseAction {
         // Chromium only persists Accept-CH from a main-frame navigation.
         // Subresource and child-frame responses must not mutate browser-context
@@ -262,27 +262,28 @@ fn configured_client_hint_names(config: &FetchConfig, request: &Request) -> BTre
 }
 
 fn parse_client_hint_header(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     header_name: &str,
 ) -> Option<BTreeSet<ClientHint>> {
     let values = headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case(header_name))
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| crate::decode_header_value(value))
         .collect::<Vec<_>>();
     if values.is_empty() {
         return None;
     }
     Some(
         values
-            .into_iter()
+            .iter()
             .flat_map(|value| value.split(','))
             .filter_map(ClientHint::from_header_name)
             .collect(),
     )
 }
 
-fn clear_site_data_clears_client_hints(headers: &[(String, String)]) -> bool {
+fn clear_site_data_clears_client_hints(headers: &[(String, Vec<u8>)]) -> bool {
+    let headers = crate::headers_to_byte_strings(headers);
     headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("clear-site-data"))
@@ -316,14 +317,14 @@ mod tests {
         let restarts = shared_restarts();
         let first =
             prepare_client_hint_request(&preferences, &restarts, &config, &request, &request.url);
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Accept-CH".to_owned(),
-                "Sec-CH-UA-Arch, Sec-CH-UA-Full-Version-List".to_owned(),
+                b"Sec-CH-UA-Arch, Sec-CH-UA-Full-Version-List".to_vec(),
             ),
             (
                 "Critical-CH".to_owned(),
-                "Sec-CH-UA-Arch, Sec-CH-UA-Full-Version-List".to_owned(),
+                b"Sec-CH-UA-Arch, Sec-CH-UA-Full-Version-List".to_vec(),
             ),
         ];
 
@@ -363,7 +364,7 @@ mod tests {
         assert_eq!(
             first.response_policy.observe_response(
                 &request.url,
-                &[("Accept-CH".to_owned(), "Sec-CH-UA-Arch".to_owned())],
+                &[("Accept-CH".to_owned(), b"Sec-CH-UA-Arch".to_vec())],
             ),
             ClientHintResponseAction::Continue
         );
@@ -387,7 +388,7 @@ mod tests {
         );
         clear.response_policy.observe_response(
             &request.url,
-            &[("Clear-Site-Data".to_owned(), "\"clientHints\"".to_owned())],
+            &[("Clear-Site-Data".to_owned(), b"\"clientHints\"".to_vec())],
         );
         let after_clear = prepare_client_hint_request(
             &preferences,
@@ -413,7 +414,7 @@ mod tests {
         assert_eq!(
             prepared.response_policy.observe_response(
                 &request.url,
-                &[("Accept-CH".to_owned(), "Sec-CH-UA-Arch".to_owned())],
+                &[("Accept-CH".to_owned(), b"Sec-CH-UA-Arch".to_vec())],
             ),
             ClientHintResponseAction::Continue
         );

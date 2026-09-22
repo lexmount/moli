@@ -28,7 +28,7 @@ impl DocumentPermissionsPolicy {
     }
 
     pub(crate) fn from_navigation_response_headers(
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         document_url: &Url,
     ) -> Self {
         let mut policy = Self::default();
@@ -36,7 +36,7 @@ impl DocumentPermissionsPolicy {
             .iter()
             .filter(|(name, _)| name.eq_ignore_ascii_case("permissions-policy"))
         {
-            for directive in value.split(',') {
+            for directive in moli_fetch::decode_header_value(value).split(',') {
                 let Some((feature, allowlist)) = directive.split_once('=') else {
                     continue;
                 };
@@ -141,8 +141,8 @@ mod tests {
     fn permissions_policy_header_takes_precedence_over_legacy_feature_policy() {
         let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
             &[
-                ("Permissions-Policy".to_owned(), "gamepad=*".to_owned()),
-                ("Feature-Policy".to_owned(), "gamepad 'none'".to_owned()),
+                ("Permissions-Policy".to_owned(), b"gamepad=*".to_vec()),
+                ("Feature-Policy".to_owned(), b"gamepad 'none'".to_vec()),
             ],
             &url("https://example.test/document"),
         );
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn permissions_policy_response_none_disables_recognized_features() {
         let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
-            &[("permissions-policy".to_owned(), "gamepad=()".to_owned())],
+            &[("permissions-policy".to_owned(), b"gamepad=()".to_vec())],
             &url("https://example.test/document"),
         );
         assert!(!policy.gamepad_enabled());

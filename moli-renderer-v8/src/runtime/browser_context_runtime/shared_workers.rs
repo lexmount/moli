@@ -239,7 +239,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()
             .is_some_and(|runtime| {
@@ -257,7 +257,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()
             .is_some_and(|runtime| {
@@ -353,7 +353,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()
@@ -373,7 +373,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()
@@ -393,7 +393,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()
@@ -413,7 +413,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()
@@ -433,7 +433,7 @@ impl RendererBrowserContextRuntime {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.shared_worker_runtime_if_initialized()

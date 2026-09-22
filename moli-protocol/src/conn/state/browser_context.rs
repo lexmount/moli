@@ -1401,7 +1401,7 @@ impl BrowserContext {
     pub(crate) fn store_response_cookie_headers_for_test(
         &self,
         response_url: &url::Url,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
     ) {
         self.with_cookie_store_mut(|store| {
             store.store_response_headers(response_url, response_headers);

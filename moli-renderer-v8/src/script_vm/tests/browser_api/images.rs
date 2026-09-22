@@ -404,7 +404,7 @@ async fn image_fetch_enabled_rejects_http_success_with_corrupt_image_bytes() {
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/jpeg".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/jpeg".to_vec())],
         crate::runtime::RendererSyntheticResponseBody::from_bytes(
             b"<html>not an image</html>".to_vec(),
         ),
@@ -454,7 +454,7 @@ async fn inserting_completed_detached_image_does_not_restart_request() {
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("detached image response should complete");
@@ -525,7 +525,7 @@ async fn removed_lazy_image_suppresses_in_flight_terminal_event() {
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("removed lazy image response should complete");
@@ -719,7 +719,7 @@ async fn replacing_image_source_discards_queued_stale_decode_pixels() {
     vm.fulfill_pending_subresource_fetch(
         old_request[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/png".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/png".to_vec())],
         crate::runtime::RendererSyntheticResponseBody::from_bytes(old_png.bytes),
     )
     .expect("old image response should fulfill");
@@ -763,7 +763,7 @@ async fn replacing_image_source_discards_queued_stale_decode_pixels() {
     vm.fulfill_pending_subresource_fetch(
         new_request[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/png".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/png".to_vec())],
         crate::runtime::RendererSyntheticResponseBody::from_bytes(new_png.bytes),
     )
     .expect("replacement image response should fulfill");
@@ -831,7 +831,7 @@ async fn image_request_interception_fulfills_through_image_continuation() {
     vm.fulfill_pending_subresource_fetch(
         pending.internal_id,
         404,
-        vec![("Content-Type".to_owned(), "text/plain".to_owned())],
+        vec![("Content-Type".to_owned(), b"text/plain".to_vec())],
         crate::runtime::RendererSyntheticResponseBody::empty(),
     )
     .expect("intercepted image request should fulfill");
@@ -889,7 +889,7 @@ async fn image_decode_waits_for_in_flight_pixels_and_reuses_the_ready_resource()
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("in-flight image response should fulfill");
@@ -996,7 +996,7 @@ async fn changing_image_cross_origin_restarts_intercepted_request() {
         vm.fulfill_pending_subresource_fetch(
             first[0].internal_id,
             200,
-            vec![("Content-Type".to_owned(), "image/png".to_owned())],
+            vec![("Content-Type".to_owned(), b"image/png".to_vec())],
             crate::runtime::RendererSyntheticResponseBody::empty(),
         )
         .is_err(),
@@ -1013,7 +1013,7 @@ async fn changing_image_cross_origin_restarts_intercepted_request() {
     vm.fulfill_pending_subresource_fetch(
         second[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("replacement image request should fulfill");
@@ -1078,7 +1078,7 @@ async fn changing_picture_source_restarts_intercepted_image_request() {
     vm.fulfill_pending_subresource_fetch(
         second[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("replacement picture image request should fulfill");

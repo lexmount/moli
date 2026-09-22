@@ -806,7 +806,7 @@ mod tests {
                     moli_page_types::NavigationResponse::from_text_body(
                         url,
                         200,
-                        vec![("content-type".to_owned(), "text/css".to_owned())],
+                        vec![("content-type".to_owned(), b"text/css".to_vec())],
                         "body { color: black; }".to_owned(),
                     ),
                     true,
@@ -862,7 +862,7 @@ mod tests {
                     moli_page_types::NavigationResponse::from_text_body(
                         url,
                         200,
-                        vec![("content-type".to_owned(), "text/css".to_owned())],
+                        vec![("content-type".to_owned(), b"text/css".to_vec())],
                         "body { color: black; }".to_owned(),
                     ),
                     true,
@@ -894,7 +894,7 @@ mod tests {
                     moli_page_types::NavigationResponse::from_text_body(
                         url,
                         200,
-                        vec![("content-type".to_owned(), "text/css".to_owned())],
+                        vec![("content-type".to_owned(), b"text/css".to_vec())],
                         "body { color: black; }".to_owned(),
                     ),
                     true,
@@ -1137,7 +1137,7 @@ mod tests {
                     moli_page_types::NavigationResponse::from_text_body(
                         first_url,
                         200,
-                        vec![("content-type".to_owned(), "text/css".to_owned())],
+                        vec![("content-type".to_owned(), b"text/css".to_vec())],
                         "body { color: red; }".to_owned(),
                     ),
                     true,

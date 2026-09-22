@@ -5,11 +5,35 @@ use moli_web_mime::request_header_content_type_essence;
 // Header strings represent HTTP bytes one-for-one, including obs-text. UTF-8
 // decoding would either replace bytes or combine a valid multibyte sequence.
 pub(crate) fn decode_http_header_bytes(data: &[u8]) -> Cow<'_, str> {
-    if data.is_ascii() {
-        Cow::Borrowed(std::str::from_utf8(data).expect("ASCII is valid UTF-8"))
-    } else {
-        Cow::Owned(data.iter().copied().map(char::from).collect())
+    moli_header_field::decode_header_value(data)
+}
+
+pub(crate) fn parse_http_response_header_line(data: &[u8]) -> Option<(String, Vec<u8>)> {
+    let end = data
+        .iter()
+        .rposition(|byte| !matches!(byte, b'\r' | b'\n'))
+        .map_or(0, |index| index + 1);
+    let line = &data[..end];
+    let separator = line.iter().position(|byte| *byte == b':')?;
+    let name = trim_http_ows(&line[..separator]);
+    if name.is_empty() {
+        return None;
     }
+    let value = trim_http_ows(&line[separator + 1..]);
+    Some((decode_http_header_bytes(name).into_owned(), value.to_vec()))
+}
+
+fn trim_http_ows(bytes: &[u8]) -> &[u8] {
+    let start = bytes
+        .iter()
+        .position(|byte| !matches!(byte, b' ' | b'\t'))
+        .unwrap_or(bytes.len());
+    let bytes = &bytes[start..];
+    let end = bytes
+        .iter()
+        .rposition(|byte| !matches!(byte, b' ' | b'\t'))
+        .map_or(0, |index| index + 1);
+    &bytes[..end]
 }
 
 pub(crate) fn parse_http_header_line(line: &str) -> Option<(String, String)> {

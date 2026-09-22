@@ -36,7 +36,7 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
                     from_url: from_url.clone(),
                     to_url: to_url.clone(),
                     status: 302,
-                    headers: vec![("location".to_owned(), location.to_owned())],
+                    headers: vec![("location".to_owned(), location.as_bytes().to_vec())],
                     network_extra_info_available: false,
                     request_extra_info: None,
                     response_extra_info: None,
@@ -51,7 +51,8 @@ async fn assert_streaming_redirect_chain(reply_boundary: RendererReplyBoundary) 
             })
             .collect();
         let final_url = from_url;
-        let headers = vec![("content-type".to_owned(), content_type.to_owned())];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("content-type".to_owned(), content_type.as_bytes().to_vec())];
         // DocumentCommit forces a pending phase-one installation, even when
         // the body is already buffered. No network timing or sleep is needed.
         let (mut page, initial, _, artifacts, download) = runtime

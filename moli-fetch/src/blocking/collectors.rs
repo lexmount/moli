@@ -14,7 +14,7 @@ use url::Url;
 use crate::{
     FetchCancelHandle, FetchConfig, NegotiatedHttpVersion, NetworkRequestExtraInfo, Request,
     client_hints::{ClientHintResponseAction, ClientHintResponsePolicy},
-    headers::{decode_http_header_bytes, parse_http_header_line},
+    headers::{decode_http_header_bytes, parse_http_response_header_line},
 };
 
 use crate::RedirectInfo;
@@ -50,9 +50,10 @@ pub(crate) struct RequestTransferMetrics {
 
 pub(crate) fn transfer_metrics_from_easy<H: Handler>(
     easy: &Easy2<H>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> RequestTransferMetrics {
-    let content_encoding = response_header_value(headers, "content-encoding").map(str::to_owned);
+    let content_encoding =
+        response_header_value(headers, "content-encoding").map(std::borrow::Cow::into_owned);
     let content_length = response_header_value(headers, "content-length")
         .and_then(|value| value.parse::<u64>().ok())
         .filter(|value| *value > 0);
@@ -86,11 +87,14 @@ fn duration_to_ms(duration: Duration) -> u64 {
     duration.as_millis().try_into().unwrap_or(u64::MAX)
 }
 
-fn response_header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+fn response_header_value<'a>(
+    headers: &'a [(String, Vec<u8>)],
+    name: &str,
+) -> Option<std::borrow::Cow<'a, str>> {
     headers
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| crate::decode_header_value(value))
 }
 
 pub(crate) fn log_request_completion(
@@ -121,7 +125,7 @@ pub(crate) fn log_request_completion(
 #[derive(Debug, Default)]
 pub(crate) struct ResponseCollector {
     body: Vec<u8>,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     max_response_size: Option<usize>,
     response_too_large: bool,
     cancel_handle: Option<FetchCancelHandle>,
@@ -142,7 +146,7 @@ impl ResponseCollector {
         self.response_too_large = false;
     }
 
-    pub(crate) fn headers(&self) -> &[(String, String)] {
+    pub(crate) fn headers(&self) -> &[(String, Vec<u8>)] {
         &self.headers
     }
 
@@ -154,7 +158,7 @@ impl ResponseCollector {
 #[derive(Debug)]
 pub struct StreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     current_url: Option<Url>,
     current_cookie_context: Option<NetworkCookieRequestContext>,
     status: u16,
@@ -206,7 +210,7 @@ impl StreamingCachePlan {
     fn create_body_writer(
         &self,
         status: u16,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
     ) -> Result<Option<HttpCacheBodyWriter>> {
         create_streaming_cache_body_writer_for_response_parts(
             &self.config,
@@ -222,7 +226,7 @@ impl StreamingCachePlan {
 #[derive(Debug)]
 pub struct RawStreamingResponseCollector {
     cookie_store: SharedBrowserCookieStore,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     current_url: Option<Url>,
     current_cookie_context: Option<NetworkCookieRequestContext>,
     status: u16,
@@ -342,7 +346,7 @@ impl StreamingResponseCollector {
         self.cache_plan = cache_plan;
     }
 
-    pub fn headers(&self) -> &[(String, String)] {
+    pub fn headers(&self) -> &[(String, Vec<u8>)] {
         &self.headers
     }
 
@@ -700,7 +704,7 @@ impl RawStreamingResponseCollector {
         self.defer_not_modified_start = defer_not_modified_start;
     }
 
-    pub fn headers(&self) -> &[(String, String)] {
+    pub fn headers(&self) -> &[(String, Vec<u8>)] {
         &self.headers
     }
 
@@ -959,7 +963,7 @@ impl Handler for ResponseCollector {
             return true;
         }
 
-        let Some((mut name, value)) = parse_http_header_line(line) else {
+        let Some((mut name, value)) = parse_http_response_header_line(data) else {
             return true;
         };
         name.make_ascii_lowercase();
@@ -967,7 +971,11 @@ impl Handler for ResponseCollector {
         if name == "content-length"
             && self
                 .max_response_size
-                .zip(value.parse::<usize>().ok())
+                .zip(
+                    std::str::from_utf8(&value)
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok()),
+                )
                 .is_some_and(|(limit, content_length)| content_length > limit)
         {
             self.response_too_large = true;
@@ -1023,7 +1031,7 @@ impl Handler for StreamingResponseCollector {
             return true;
         }
 
-        let Some((mut name, value)) = parse_http_header_line(line) else {
+        let Some((mut name, value)) = parse_http_response_header_line(data) else {
             return true;
         };
         name.make_ascii_lowercase();
@@ -1031,7 +1039,11 @@ impl Handler for StreamingResponseCollector {
         if name == "content-length"
             && self
                 .max_response_size
-                .zip(value.parse::<usize>().ok())
+                .zip(
+                    std::str::from_utf8(&value)
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok()),
+                )
                 .is_some_and(|(limit, content_length)| content_length > limit)
         {
             self.response_too_large = true;
@@ -1094,7 +1106,7 @@ impl Handler for RawStreamingResponseCollector {
             return true;
         }
 
-        let Some((mut name, value)) = parse_http_header_line(line) else {
+        let Some((mut name, value)) = parse_http_response_header_line(data) else {
             return true;
         };
         name.make_ascii_lowercase();
@@ -1102,7 +1114,11 @@ impl Handler for RawStreamingResponseCollector {
         if name == "content-length"
             && self
                 .max_response_size
-                .zip(value.parse::<usize>().ok())
+                .zip(
+                    std::str::from_utf8(&value)
+                        .ok()
+                        .and_then(|value| value.parse::<usize>().ok()),
+                )
                 .is_some_and(|(limit, content_length)| content_length > limit)
         {
             self.response_too_large = true;
@@ -1118,7 +1134,8 @@ impl Handler for RawStreamingResponseCollector {
     }
 }
 
-fn identity_encoded_content_length(headers: &[(String, String)]) -> Option<usize> {
+fn identity_encoded_content_length(headers: &[(String, Vec<u8>)]) -> Option<usize> {
+    let headers = crate::headers_to_byte_strings(headers);
     let cannot_compare_delivered_body_length = headers.iter().any(|(name, value)| {
         (name.eq_ignore_ascii_case("content-encoding")
             && !value.trim().eq_ignore_ascii_case("identity"))

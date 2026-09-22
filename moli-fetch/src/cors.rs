@@ -4,7 +4,7 @@ use crate::RequestCredentialsMode;
 
 pub fn validate_cors_response_for_origin(
     origin: &str,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     credentials_mode: RequestCredentialsMode,
 ) -> Result<(), String> {
     let Some(allow_origin) = response_header_value(response_headers, "access-control-allow-origin")

@@ -137,7 +137,7 @@ pub struct StorageBucketCachedResponse {
     pub redirected: bool,
     pub status: u16,
     pub status_text: String,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub body: Vec<u8>,
 }
 
@@ -409,7 +409,8 @@ struct StorageBucketCacheJsonEntry {
     redirected: bool,
     status: u16,
     status_text: String,
-    headers: Vec<(String, String)>,
+    #[serde(deserialize_with = "moli_header_field::deserialize_headers")]
+    headers: Vec<(String, Vec<u8>)>,
     body_base64: String,
 }
 
@@ -1779,10 +1780,11 @@ fn cache_entry_matches_query(
 }
 
 fn cached_response_vary_matches_request(
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     stored_request_headers: &[(String, String)],
     query_request_headers: &[(String, String)],
 ) -> bool {
+    let response_headers = moli_header_field::headers_to_byte_strings(response_headers);
     let vary_names = response_headers
         .iter()
         .filter(|(name, _)| name.eq_ignore_ascii_case("vary"))
@@ -3161,7 +3163,7 @@ mod tests {
             redirected: false,
             status: 201,
             status_text: "Created".to_owned(),
-            headers: vec![("x-cache".to_owned(), "hit".to_owned())],
+            headers: vec![("x-cache".to_owned(), b"hit".to_vec())],
             body: b"cached body".to_vec(),
         };
 
@@ -3310,7 +3312,7 @@ mod tests {
         let mut store = StorageBucketRegistry::default();
         let identity = store.open_bucket("https://a.test", "bucket")?;
         assert!(store.open_cache_for_identity(&identity, "cache")?);
-        let response = |body: &str, headers: Vec<(String, String)>| StorageBucketCachedResponse {
+        let response = |body: &str, headers: Vec<(String, Vec<u8>)>| StorageBucketCachedResponse {
             response_type: "default".to_owned(),
             url: String::new(),
             redirected: false,
@@ -3336,7 +3338,7 @@ mod tests {
                     method: "GET".to_owned(),
                     headers: vec![("x-mode".to_owned(), "alpha".to_owned())],
                 },
-                response("vary-alpha", vec![("vary".to_owned(), "X-Mode".to_owned())]),
+                response("vary-alpha", vec![("vary".to_owned(), b"X-Mode".to_vec())]),
             ),
         ] {
             assert_eq!(
@@ -3920,7 +3922,12 @@ mod tests {
             redirected: false,
             status: 202,
             status_text: "Accepted".to_owned(),
-            headers: vec![("x-cache".to_owned(), "persisted".to_owned())],
+            headers: vec![
+                ("x-cache".to_owned(), b"persisted".to_vec()),
+                ("x-bytes".to_owned(), b"\xff\x80\xa0".to_vec()),
+                ("x-bytes".to_owned(), b"\xc3\xbf".to_vec()),
+                ("x-empty".to_owned(), Vec::new()),
+            ],
             body: b"profile cache body".to_vec(),
         };
         {
@@ -3992,7 +3999,7 @@ mod tests {
             redirected: false,
             status: 200,
             status_text: "OK".to_owned(),
-            headers: vec![("x-cache".to_owned(), "old".to_owned())],
+            headers: vec![("x-cache".to_owned(), b"old".to_vec())],
             body: b"old committed cache body".to_vec(),
         };
         let new_response = StorageBucketCachedResponse {
@@ -4001,7 +4008,7 @@ mod tests {
             redirected: false,
             status: 201,
             status_text: "Created".to_owned(),
-            headers: vec![("x-cache".to_owned(), "new".to_owned())],
+            headers: vec![("x-cache".to_owned(), b"new".to_vec())],
             body: b"new committed cache body".to_vec(),
         };
 
@@ -4085,7 +4092,7 @@ mod tests {
             redirected: false,
             status: 206,
             status_text: "Partial Content".to_owned(),
-            headers: vec![("x-cache".to_owned(), "next".to_owned())],
+            headers: vec![("x-cache".to_owned(), b"next".to_vec())],
             body: b"replacement cache body".to_vec(),
         };
         {
@@ -4137,7 +4144,7 @@ mod tests {
             redirected: false,
             status: 200,
             status_text: "OK".to_owned(),
-            headers: vec![("x-cache".to_owned(), "previous".to_owned())],
+            headers: vec![("x-cache".to_owned(), b"previous".to_vec())],
             body: b"previous cache body".to_vec(),
         };
         {
@@ -4554,7 +4561,7 @@ mod tests {
             redirected: false,
             status: 200,
             status_text: "OK".to_owned(),
-            headers: vec![("x-cache".to_owned(), "legacy-path".to_owned())],
+            headers: vec![("x-cache".to_owned(), b"legacy-path".to_vec())],
             body: b"legacy cache path".to_vec(),
         };
         let entries = BTreeMap::from([(

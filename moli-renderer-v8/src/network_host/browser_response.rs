@@ -10,10 +10,11 @@ pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
 
 pub(crate) fn blob_url_response(url: &url::Url) -> Option<Response> {
     let (body_bytes, mime_type) = blob::object_url_bytes_and_type(url.as_str())?;
-    let headers = vec![
+    let headers = moli_fetch::headers_from_byte_strings(&[
         ("Content-Length".to_owned(), body_bytes.len().to_string()),
         ("Content-Type".to_owned(), mime_type),
-    ];
+    ])
+    .expect("Blob response headers contain ByteStrings");
     Some(Response::from_head_and_lossy_body_bytes(
         moli_fetch::ResponseHead {
             final_url: url.clone(),
@@ -36,7 +37,11 @@ pub(crate) fn data_url_response(url: &url::Url) -> Option<Response> {
         moli_fetch::ResponseHead {
             final_url: url.clone(),
             status: 200,
-            headers: vec![("Content-Type".to_owned(), mime_type)],
+            headers: vec![(
+                "Content-Type".to_owned(),
+                moli_fetch::header_value_from_byte_string(&mime_type)
+                    .expect("serialized MIME types contain ByteStrings"),
+            )],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,
@@ -106,8 +111,8 @@ mod tests {
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.as_str()),
-            Some("text/html;charset=iso-2022-jp")
+                .map(|(_, value)| value.as_slice()),
+            Some(b"text/html;charset=iso-2022-jp".as_slice())
         );
     }
 

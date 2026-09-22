@@ -1293,7 +1293,7 @@ fn cookie_query_report_json_projects_specific_same_site_warning_taxonomy() {
         &url,
         &[(
             "set-cookie".to_owned(),
-            "lax=1; Path=/foo; Secure; SameSite=Lax".to_owned(),
+            b"lax=1; Path=/foo; Secure; SameSite=Lax".to_vec(),
         )],
     );
 
@@ -1352,7 +1352,7 @@ fn associated_cookies_json_projects_path_mismatch_to_cdp_not_on_path() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/private; Secure".to_owned(),
+            b"sid=1; Path=/private; Secure".to_vec(),
         )],
     );
 

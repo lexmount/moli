@@ -24,7 +24,7 @@ impl fmt::Debug for StreamingResponseLifetimeLease {
 pub struct StreamingHtmlResponse {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
@@ -41,7 +41,7 @@ impl StreamingHtmlResponse {
     pub fn new(
         final_url: Url,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body_chunks: mpsc::UnboundedReceiver<String>,
         cancel_handle: FetchCancelHandle,
         completion: oneshot::Receiver<Result<()>>,
@@ -163,7 +163,7 @@ impl Drop for StreamingHtmlResponse {
 pub struct StreamingRawResponse {
     pub final_url: Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirected: bool,
@@ -181,7 +181,7 @@ impl StreamingRawResponse {
     pub fn new(
         final_url: Url,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         request_cookie_report: Option<StoredCookieQueryReport>,
         cookie_set_reports: Vec<StoredCookieSetReport>,
         redirected: bool,
@@ -372,7 +372,7 @@ mod tests {
         ResponseHead {
             final_url: Url::parse("http://example.test/final").expect("test URL"),
             status: 203,
-            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,

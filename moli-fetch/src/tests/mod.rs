@@ -65,7 +65,7 @@ fn sample_response_head() -> ResponseHead {
     ResponseHead {
         final_url: Url::parse("http://example.test/final").unwrap(),
         status: 203,
-        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
         request_cookie_report: None,
         cookie_set_reports: Vec::new(),
         redirected: false,
@@ -595,7 +595,7 @@ async fn streaming_response_collector_ignores_interim_headers_before_final_start
         started.headers,
         vec![(
             "content-type".to_owned(),
-            "text/html; charset=utf-8".to_owned()
+            b"text/html; charset=utf-8".to_vec()
         )]
     );
     Ok(())
@@ -1024,10 +1024,9 @@ async fn fetch_raw_preserves_binary_body_bytes() -> Result<()> {
 
     assert_eq!(response.status, 200);
     assert!(
-        response
-            .headers
-            .iter()
-            .any(|(name, value)| { name == "content-type" && value == "application/octet-stream" })
+        response.headers.iter().any(|(name, value)| {
+            name == "content-type" && value == b"application/octet-stream"
+        })
     );
     assert_eq!(response.body_bytes(), BODY);
 
@@ -1079,7 +1078,7 @@ async fn fetch_raw_stream_yields_headers_before_delayed_body_and_preserves_bytes
     assert!(response.redirect_chain.is_empty());
     assert!(response.cookie_set_reports.is_empty());
     assert!(response.headers.iter().any(|(name, value)| {
-        name == "content-disposition" && value == "attachment; filename=\"streamed.bin\""
+        name == "content-disposition" && value == b"attachment; filename=\"streamed.bin\""
     }));
 
     let mut body = Vec::new();
@@ -1172,7 +1171,7 @@ async fn manual_http_redirect_to_file_remains_observable_without_being_followed(
 
     assert_eq!(response.status, 302);
     assert!(response.headers.iter().any(|(name, value)| {
-        name.eq_ignore_ascii_case("location") && value == "file:///moli-policy-must-not-open"
+        name.eq_ignore_ascii_case("location") && value == b"file:///moli-policy-must-not-open"
     }));
     assert_eq!(server.hits(), 1);
     server.shutdown();
@@ -1205,7 +1204,7 @@ async fn fetch_raw_stream_manual_redirect_returns_redirect_response() -> Result<
     assert!(response.redirect_chain.is_empty());
     assert!(
         response.headers.iter().any(|(name, value)| {
-            name.eq_ignore_ascii_case("location") && value == "/final.bin"
+            name.eq_ignore_ascii_case("location") && value == b"/final.bin"
         })
     );
 
@@ -2965,8 +2964,8 @@ fn critical_client_hints_restart_navigation_before_exposing_the_first_response()
             .headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("location"))
-            .map(|(_, value)| value.as_str()),
-        Some(restart.to_url.as_str())
+            .map(|(_, value)| value.as_slice()),
+        Some(restart.to_url.as_str().as_bytes())
     );
     assert!(!restart.redirect_has_extra_info);
     assert!(restart.cookie_set_reports.is_empty());
@@ -3997,7 +3996,7 @@ fn network_metadata_captures_transport_generated_request_headers() {
         .expect("raw response observation");
     assert_eq!(response.status(), 200);
     assert_eq!(
-        header_value(response.headers(), "Cache-Control"),
+        moli_web_mime::response_header_value(response.headers(), "Cache-Control").as_deref(),
         Some("no-store")
     );
 
@@ -4860,8 +4859,8 @@ fn fetch_client_cache_preserves_content_length_when_merging_304() {
             .headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .map(|(_, value)| value.as_str()),
-        Some("5"),
+            .map(|(_, value)| value.as_slice()),
+        Some(b"5".as_slice()),
         "304 Content-Length must not replace the cached 200 Content-Length"
     );
 
@@ -4901,8 +4900,8 @@ fn fetch_client_cache_skips_connection_nominated_headers_when_merging_304() {
             .headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("x-transient"))
-            .map(|(_, value)| value.as_str()),
-        Some("cached-value"),
+            .map(|(_, value)| value.as_slice()),
+        Some(b"cached-value".as_slice()),
         "304 Connection-nominated fields must not replace cached metadata"
     );
 
@@ -5710,7 +5709,7 @@ fn assert_https_upgrade_redirect(redirect_chain: &[crate::RedirectInfo]) {
     assert_eq!(redirect.to_url.scheme(), "https");
     assert!(
         redirect.headers.iter().any(|(name, value)| {
-            name == "non-authoritative-reason" && value == "HttpsUpgrades"
+            name == "non-authoritative-reason" && value == b"HttpsUpgrades"
         })
     );
 }

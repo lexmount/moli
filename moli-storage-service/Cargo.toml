@@ -6,6 +6,7 @@ edition = "2024"
 description = "Renderer-neutral Moli storage service and bucket identity"
 
 [dependencies]
+moli-header-field = { path = "../moli-header-field" }
 anyhow = "1.0.100"
 base64 = "0.22.1"
 moli-browser-profile = { path = "../moli-browser-profile" }

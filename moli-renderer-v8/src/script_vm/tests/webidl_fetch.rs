@@ -9496,7 +9496,7 @@ fn response_clone_tees_pending_network_body_after_parent_consumption() {
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
-                        headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+                        headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -9597,7 +9597,7 @@ fn pending_fetch_body_pipe_through_text_decoder_stream_pulls_future_chunks() {
                     moli_fetch::ResponseHead {
                         final_url: response_url,
                         status: 200,
-                        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,
@@ -9715,7 +9715,7 @@ fn materialize_response_object_preserves_redirected_slot() {
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 200,
-                        headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                        headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: true,
@@ -9763,7 +9763,7 @@ fn filtered_response_materialization_preserves_internal_url_without_exposing_url
                     moli_fetch::ResponseHead {
                         final_url: final_url.clone(),
                         status: 302,
-                        headers: vec![("location".to_owned(), "target.html".to_owned())],
+                        headers: vec![("location".to_owned(), b"target.html".to_vec())],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
                         redirected: false,

@@ -502,7 +502,7 @@ fn redirected_fetch_response(source_url: &Url, final_url: Url) -> crate::types::
     let mut response = crate::types::NavigationResponse::from_text_body(
         final_url.clone(),
         200,
-        vec![("content-type".to_owned(), "text/plain".to_owned())],
+        vec![("content-type".to_owned(), b"text/plain".to_vec())],
         "redirected Fetch completed".to_owned(),
     );
     response.redirected = true;
@@ -3000,7 +3000,7 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
         result: Ok(crate::types::NavigationResponse::from_text_body(
             final_url,
             200,
-            vec![("content-type".to_owned(), "text/plain".to_owned())],
+            vec![("content-type".to_owned(), b"text/plain".to_vec())],
             "keepalive completed".to_owned(),
         ))
         .into(),
@@ -3803,7 +3803,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         head: moli_fetch::ResponseHead {
             final_url: request_url,
             status: 200,
-            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,

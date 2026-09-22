@@ -164,7 +164,7 @@ impl Page {
         self.page_state.status()
     }
 
-    pub fn headers(&self) -> &[(String, String)] {
+    pub fn headers(&self) -> &[(String, Vec<u8>)] {
         self.page_state.headers()
     }
 

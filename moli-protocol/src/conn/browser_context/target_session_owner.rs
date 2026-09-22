@@ -212,7 +212,7 @@ impl TargetNavigationLoadInputs {
     pub(crate) fn store_response_cookie_reports(
         &self,
         response_url: &Url,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
     ) -> Vec<StoredCookieSetReport> {
         let mut cookie_store = self.storage_handles.page_handles.cookie_store.lock();
         cookie_store.store_response_headers_with_reports(response_url, response_headers)

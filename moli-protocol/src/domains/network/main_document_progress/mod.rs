@@ -35,7 +35,7 @@ pub(crate) struct MaterializedLoadedDocumentProgress {
     pub(crate) pending_download: Option<RendererPendingDownloadActivation>,
     pub(crate) page_creation_artifacts: RendererPageCreationArtifacts,
     pub(crate) final_url: Url,
-    pub(crate) response_headers: Vec<(String, String)>,
+    pub(crate) response_headers: Vec<(String, Vec<u8>)>,
     pub(crate) response_from_cache: bool,
     pub(crate) main_document_body: Option<CapturedBody>,
     pub(crate) initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
@@ -224,14 +224,14 @@ impl CompletedDownloadProgressTransfer {
 
 fn completed_download_body_len_hint(
     body: &CompletedDownloadProgressBody,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
 ) -> usize {
     match body {
         CompletedDownloadProgressBody::Buffered(body) => body.len(),
         CompletedDownloadProgressBody::Streaming(_) => response_headers
             .iter()
             .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .and_then(|(_, value)| value.trim().parse().ok())
+            .and_then(|(_, value)| moli_fetch::decode_header_value(value).trim().parse().ok())
             .unwrap_or_default(),
     }
 }
@@ -584,7 +584,7 @@ impl MainDocumentBodyProgressSource {
         redirect_chain: &[RedirectInfo],
         final_url: &Url,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         response_cookie_reports: &[StoredCookieSetReport],
         network_observation_journal: &NetworkObservationJournal,
         network_extra_info_available: bool,
@@ -635,7 +635,7 @@ impl MainDocumentBodyProgressSource {
         out: &mut Vec<BackgroundProtocolEvent>,
         final_url: &Url,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         response_from_cache: bool,
     ) {
         let Some(live_source) = self.live_source.as_ref() else {
@@ -733,7 +733,7 @@ impl MainDocumentBodyProgressSource {
         final_request_cookie_report: Option<&StoredCookieQueryReport>,
         redirect_chain: &[RedirectInfo],
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         response_cookie_reports: &[StoredCookieSetReport],
         network_observation_journal: &NetworkObservationJournal,
         network_extra_info_available: bool,
@@ -804,7 +804,7 @@ pub(crate) struct CompletedMainDocumentNetworkEvents {
     pub(crate) request_headers: Vec<(String, String)>,
     pub(crate) final_request_cookie_report: Option<StoredCookieQueryReport>,
     pub(crate) response_status: u16,
-    pub(crate) response_headers: Vec<(String, String)>,
+    pub(crate) response_headers: Vec<(String, Vec<u8>)>,
     pub(crate) response_cookie_reports: Vec<StoredCookieSetReport>,
     pub(crate) redirect_chain: Vec<NavigationRedirect>,
     pub(crate) network_extra_info_available: bool,
@@ -820,7 +820,7 @@ impl CompletedMainDocumentNetworkEvents {
         request_headers: Vec<(String, String)>,
         final_request_cookie_report: Option<StoredCookieQueryReport>,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_cookie_reports: Vec<StoredCookieSetReport>,
         redirect_chain: Vec<NavigationRedirect>,
         network_extra_info_available: bool,
@@ -1108,7 +1108,7 @@ impl MainDocumentLiveNetworkProgressSource {
         &self,
         final_url: &Url,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         response_cookie_reports: &[StoredCookieSetReport],
         network_observation_journal: &NetworkObservationJournal,
         redirect_count: usize,
@@ -1142,7 +1142,7 @@ impl MainDocumentLiveNetworkProgressSource {
         &self,
         final_url: &Url,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         network_extra_info_available: bool,
         response_from_cache: bool,
         negotiated_http_version: Option<NegotiatedHttpVersion>,
@@ -1166,10 +1166,10 @@ impl MainDocumentLiveNetworkProgressSource {
         &self,
         final_url: &Url,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         response_cookie_reports: &[StoredCookieSetReport],
         extra_info_status: u16,
-        extra_info_headers: Vec<(String, String)>,
+        extra_info_headers: Vec<(String, Vec<u8>)>,
         network_extra_info_available: bool,
         emit_extra_info: bool,
         response_from_cache: bool,
@@ -1200,7 +1200,7 @@ impl MainDocumentLiveNetworkProgressSource {
         &self,
         output: &mut MainDocumentProgressOutputTarget<'_>,
         response_status: u16,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
         response_cookie_reports: &[StoredCookieSetReport],
     ) {
         self.send_progress_events_into_output(
@@ -1843,7 +1843,7 @@ enum MainDocumentNavigationProgressEvent {
     },
     ResponseReceivedExtraInfo {
         target: MainDocumentProgressEventTarget,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         status: u16,
         cookie_set_reports: Vec<StoredCookieSetReport>,
     },
@@ -1851,10 +1851,10 @@ enum MainDocumentNavigationProgressEvent {
         target: MainDocumentProgressEventTarget,
         final_url: Url,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         cookie_set_reports: Vec<StoredCookieSetReport>,
         extra_info_status: u16,
-        extra_info_headers: Vec<(String, String)>,
+        extra_info_headers: Vec<(String, Vec<u8>)>,
         network_extra_info_available: bool,
         emit_extra_info: bool,
         encoded_data_length: usize,
@@ -1876,7 +1876,7 @@ pub(crate) struct MainDocumentRedirectResponse {
     pub(crate) url: Url,
     pub(crate) status: u16,
     pub(crate) status_text: Option<String>,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) from_cache: bool,
     pub(crate) negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
@@ -1928,7 +1928,7 @@ fn navigation_exchange_group(
         let ends_redirect_hop = exchange.response().is_some_and(|response| {
             matches!(response.status(), 301 | 302 | 303 | 307 | 308)
                 || response.headers().iter().any(|(name, value)| {
-                    name.eq_ignore_ascii_case("critical-ch") && !value.trim().is_empty()
+                    name.eq_ignore_ascii_case("critical-ch") && !value.trim_ascii().is_empty()
                 })
         });
         if !ends_redirect_hop || current_hop >= redirect_count {
@@ -1960,8 +1960,8 @@ fn observed_response_metadata(
     redirect_count: usize,
     hop_index: usize,
     fallback_status: u16,
-    fallback_headers: &[(String, String)],
-) -> (u16, Vec<(String, String)>) {
+    fallback_headers: &[(String, Vec<u8>)],
+) -> (u16, Vec<(String, Vec<u8>)>) {
     navigation_exchange_group(journal, redirect_count, hop_index)
         .and_then(|group| group.last())
         .and_then(NetworkExchangeObservation::response)

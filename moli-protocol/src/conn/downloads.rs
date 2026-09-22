@@ -180,7 +180,7 @@ struct PreparedDownloadActivation {
 struct PreparedNavigationDownload {
     frame_id: String,
     response_url: Url,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_body: CompletedDownloadBody,
     download_root: String,
     guid: String,
@@ -1347,23 +1347,30 @@ fn partial_artifact_path(artifact_path: &Path) -> PathBuf {
     artifact_path.with_file_name(format!("{file_name}.crdownload"))
 }
 
-fn content_length_from_headers(headers: &[(String, String)]) -> Option<u64> {
+fn content_length_from_headers(headers: &[(String, Vec<u8>)]) -> Option<u64> {
     headers
         .iter()
         .find(|(name, _)| header_name_is(name, &HeaderName::from_static("content-length")))
-        .and_then(|(_, value)| value.trim().parse::<u64>().ok())
+        .and_then(|(_, value)| {
+            moli_fetch::decode_header_value(value)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
 }
 
-pub(crate) fn response_headers_indicate_download(headers: &[(String, String)]) -> bool {
+pub(crate) fn response_headers_indicate_download(headers: &[(String, Vec<u8>)]) -> bool {
     response_headers_indicate_attachment_download(headers)
 }
 
-fn filename_from_headers(headers: &[(String, String)]) -> Option<String> {
+fn filename_from_headers(headers: &[(String, Vec<u8>)]) -> Option<String> {
     for (name, value) in headers {
         if !header_name_is(name, &HeaderName::from_static("content-disposition")) {
             continue;
         }
-        if let Some(filename) = filename_from_content_disposition(value) {
+        if let Some(filename) =
+            filename_from_content_disposition(&moli_fetch::decode_header_value(value))
+        {
             return Some(filename);
         }
     }
@@ -1915,11 +1922,11 @@ mod tests {
     #[test]
     fn content_length_from_headers_parses_case_insensitive_header_name() {
         assert_eq!(
-            content_length_from_headers(&[("Content-Length".to_owned(), "42".to_owned())]),
+            content_length_from_headers(&[("Content-Length".to_owned(), b"42".to_vec())]),
             Some(42)
         );
         assert_eq!(
-            content_length_from_headers(&[("content-length".to_owned(), "bad".to_owned())]),
+            content_length_from_headers(&[("content-length".to_owned(), b"bad".to_vec())]),
             None
         );
     }
@@ -1978,11 +1985,11 @@ mod tests {
     fn response_headers_indicate_download_uses_web_mime_attachment_helper() {
         assert!(response_headers_indicate_download(&[(
             "Content-Disposition".to_owned(),
-            "attachment; filename=\"report.txt\"".to_owned(),
+            b"attachment; filename=\"report.txt\"".to_vec(),
         )]));
         assert!(!response_headers_indicate_download(&[(
             "Content-Disposition".to_owned(),
-            "inline; filename=\"report.txt\"".to_owned(),
+            b"inline; filename=\"report.txt\"".to_vec(),
         )]));
     }
 

@@ -79,10 +79,7 @@ async fn request_stage_navigation_request_paused_includes_synthesized_cookie_hea
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
-            &[(
-                "set-cookie".to_owned(),
-                "sid=req-nav; Path=/page".to_owned(),
-            )],
+            &[("set-cookie".to_owned(), b"sid=req-nav; Path=/page".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);

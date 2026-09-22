@@ -488,7 +488,7 @@ impl PendingFetchAuthNavigation {
                     status: 401,
                     headers: vec![(
                         "WWW-Authenticate".to_owned(),
-                        "Basic realm=\"test\"".to_owned(),
+                        b"Basic realm=\"test\"".to_vec(),
                     )],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -1157,7 +1157,7 @@ impl PausedDocumentTransfer {
         self,
         conn: &mut CdpConnection,
         response_code: Option<u16>,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) -> Result<
         (
             Option<DocumentNavigationToken>,
@@ -1189,7 +1189,7 @@ impl PausedDocumentTransfer {
         self,
         conn: &mut CdpConnection,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         synthetic_body: CapturedBody,
     ) -> (
         Option<DocumentNavigationToken>,
@@ -1327,7 +1327,7 @@ impl ActiveDocumentBodyStreamState {
         self,
         conn: &mut CdpConnection,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         synthetic_body: CapturedBody,
     ) -> (
         Option<DocumentNavigationToken>,
@@ -1515,7 +1515,7 @@ impl DocumentBodySource {
         conn: &mut CdpConnection,
         navigation: &NavigationDispatchState,
         response_code: Option<u16>,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         let has_response_override = response_code.is_some() || !response_headers.is_empty();
         match self {
@@ -1973,7 +1973,7 @@ pub struct PendingSubresourceFetchResponseRequest {
     pub request_body: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub response_status: u16,
-    pub response_headers: Vec<(String, String)>,
+    pub response_headers: Vec<(String, Vec<u8>)>,
     pub response_head_overridden: bool,
     pub response_body_taken_as_stream: bool,
     /// Exact paused response body for `Fetch.getResponseBody` and IO streams.
@@ -1998,7 +1998,7 @@ impl PendingSubresourceFetchResponseRequest {
     pub fn apply_response_head_override(
         &mut self,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) {
         self.response_status = response_status;
         self.response_headers = response_headers;
@@ -2213,7 +2213,7 @@ impl CdpConnection {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: moli_core::page::RendererSyntheticResponseBody,
     ) -> Result<(), String> {
         self.fulfill_pending_subresource_fetch_for_session_owner_async(
@@ -2231,7 +2231,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: moli_core::page::RendererSyntheticResponseBody,
     ) -> Result<(), String> {
         let page = self
@@ -2252,7 +2252,7 @@ impl CdpConnection {
         &mut self,
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<(), String> {
         self.continue_pending_subresource_response_for_session_owner_async(
             None,
@@ -2268,7 +2268,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.continue_pending_subresource_response_for_owner_async(
@@ -2285,7 +2285,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<(), String> {
         let page = self
             .runtime_session_owner_slot_mut_for_owner(owner)?
@@ -2343,7 +2343,7 @@ impl CdpConnection {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: moli_core::page::RendererSyntheticResponseBody,
     ) -> Result<(), String> {
         self.fulfill_pending_subresource_response_for_session_owner_async(
@@ -2361,7 +2361,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: moli_core::page::RendererSyntheticResponseBody,
     ) -> Result<(), String> {
         let page = self

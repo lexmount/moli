@@ -83,7 +83,7 @@ pub enum RendererNetworkResourceLoadOutcome {
 pub struct RendererNetworkResourceLoadResponse {
     pub final_url: url::Url,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub body: Vec<u8>,
     pub completion_error: Option<String>,
     pub request_cookie_report: Option<StoredCookieQueryReport>,

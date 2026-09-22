@@ -602,13 +602,13 @@ pub(super) fn load_shared_worker_blob_script_source(
         })
 }
 
-fn response_referrer_policy(headers: &[(String, String)]) -> Option<String> {
+fn response_referrer_policy(headers: &[(String, Vec<u8>)]) -> Option<String> {
     response_referrer_policy_from_headers(headers)
 }
 
 fn worker_policy_context_from_response(
     final_url: &Url,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
         cross_origin_embedder_policy:
@@ -742,14 +742,14 @@ mod tests {
 
     #[test]
     fn shared_worker_response_policy_context_uses_response_headers() {
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Cross-Origin-Embedder-Policy".to_owned(),
-                "require-corp".to_owned(),
+                b"require-corp".to_vec(),
             ),
             (
                 "Document-Isolation-Policy".to_owned(),
-                "isolate-and-credentialless".to_owned(),
+                b"isolate-and-credentialless".to_vec(),
             ),
         ];
 
@@ -820,9 +820,9 @@ mod tests {
 
     #[test]
     fn shared_worker_response_referrer_policy_combines_header_instances() {
-        let headers = vec![
-            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
-            ("referrer-policy".to_owned(), "future-policy".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("Referrer-Policy".to_owned(), b"no-referrer".to_vec()),
+            ("referrer-policy".to_owned(), b"future-policy".to_vec()),
         ];
 
         assert_eq!(
@@ -833,9 +833,9 @@ mod tests {
 
     #[test]
     fn shared_worker_response_referrer_policy_uses_last_valid_token() {
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Referrer-Policy".to_owned(),
-            "not-yet-standardized, no-referrer".to_owned(),
+            b"not-yet-standardized, no-referrer".to_vec(),
         )];
 
         assert_eq!(
@@ -846,11 +846,11 @@ mod tests {
 
     #[test]
     fn shared_worker_response_referrer_policy_ignores_invalid_later_header() {
-        let headers = vec![
-            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("Referrer-Policy".to_owned(), b"no-referrer".to_vec()),
             (
                 "Referrer-Policy".to_owned(),
-                "not-yet-standardized".to_owned(),
+                b"not-yet-standardized".to_vec(),
             ),
         ];
 

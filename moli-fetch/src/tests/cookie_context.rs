@@ -147,11 +147,11 @@ fn request_cookie_header_respects_explicit_top_level_lax_navigation_context() {
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
             ],
         );
@@ -181,15 +181,15 @@ fn request_cookie_header_respects_explicit_cross_site_context_without_lax_upgrad
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "none=1; Path=/app; Secure; SameSite=None".to_owned(),
+                    b"none=1; Path=/app; Secure; SameSite=None".to_vec(),
                 ),
             ],
         );
@@ -219,15 +219,15 @@ fn request_with_initiator_url_marks_cross_site_subresource_requests() {
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "none=1; Path=/app; Secure; SameSite=None".to_owned(),
+                    b"none=1; Path=/app; Secure; SameSite=None".to_vec(),
                 ),
             ],
         );
@@ -256,7 +256,7 @@ fn request_with_initiator_url_treats_same_scheme_subdomains_as_same_site() {
             &response_url,
             &[(
                 "set-cookie".to_owned(),
-                "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
             )],
         );
     }
@@ -284,7 +284,7 @@ fn request_with_initiator_url_treats_same_scheme_sibling_subdomains_as_same_site
             &response_url,
             &[(
                 "set-cookie".to_owned(),
-                "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
             )],
         );
     }
@@ -321,11 +321,11 @@ fn request_with_initiator_url_respects_public_suffix_boundaries() {
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
             ],
         );
@@ -362,7 +362,7 @@ fn request_with_initiator_url_treats_multi_label_registrable_domains_as_same_sit
             &response_url,
             &[(
                 "set-cookie".to_owned(),
-                "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
             )],
         );
     }
@@ -411,15 +411,15 @@ fn request_with_site_for_cookies_url_uses_explicit_browser_context_for_same_site
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "none=1; Path=/app; Secure; SameSite=None".to_owned(),
+                    b"none=1; Path=/app; Secure; SameSite=None".to_vec(),
                 ),
             ],
         );
@@ -460,11 +460,11 @@ fn request_with_top_frame_origin_url_falls_back_when_site_for_cookies_is_absent(
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
             ],
         );
@@ -520,15 +520,15 @@ fn request_with_cross_scheme_initiator_uses_schemeful_cross_site_semantics() {
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "none=1; Path=/app; Secure; SameSite=None".to_owned(),
+                    b"none=1; Path=/app; Secure; SameSite=None".to_vec(),
                 ),
             ],
         );
@@ -564,15 +564,15 @@ fn request_effective_cookie_context_recomputes_same_site_for_redirect_targets() 
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "none=1; Path=/app; Secure; SameSite=None".to_owned(),
+                    b"none=1; Path=/app; Secure; SameSite=None".to_vec(),
                 ),
             ],
         );
@@ -605,7 +605,7 @@ fn request_effective_cookie_context_marks_cross_site_redirect_downgrade_in_repor
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+            b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
         )],
     );
 
@@ -764,15 +764,15 @@ fn redirect_chain_cookie_context_preserves_cross_site_downgrade_across_later_sam
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/; Secure; SameSite=Lax".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "none=1; Path=/; Secure; SameSite=None".to_owned(),
+                    b"none=1; Path=/; Secure; SameSite=None".to_vec(),
                 ),
             ],
         );
@@ -810,11 +810,11 @@ fn top_level_request_with_initiator_url_uses_cross_site_lax_navigation_semantics
             &[
                 (
                     "set-cookie".to_owned(),
-                    "strict=1; Path=/app; Secure; SameSite=Strict".to_owned(),
+                    b"strict=1; Path=/app; Secure; SameSite=Strict".to_vec(),
                 ),
                 (
                     "set-cookie".to_owned(),
-                    "lax=1; Path=/app; Secure; SameSite=Lax".to_owned(),
+                    b"lax=1; Path=/app; Secure; SameSite=Lax".to_vec(),
                 ),
             ],
         );

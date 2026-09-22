@@ -1049,7 +1049,7 @@ fn bidi_network_continue_response_command(
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(request),
         response_code: optional_network_status_code(&command.params)?,
-        response_headers: response_headers.map(|headers| headers.to_byte_strings()),
+        response_headers: response_headers.map(|headers| headers.into_iter().collect()),
         response_phrase: optional_string(&command.params, "reasonPhrase")?.map(str::to_owned),
         auth_credentials: optional_network_auth_credentials(&command.params)?,
     })
@@ -1142,7 +1142,7 @@ fn bidi_network_provide_response_command(
         context: context.command_context(None),
         request_id: DevToolsRequestId::from(request),
         response_code: optional_network_status_code(&command.params)?.unwrap_or(200),
-        response_headers: headers.to_byte_strings(),
+        response_headers: headers.into_iter().collect(),
         body: optional_network_bytes(&command.params, "body")?,
         response_phrase: optional_string(&command.params, "reasonPhrase")?.map(str::to_owned),
     })

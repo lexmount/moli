@@ -54,6 +54,10 @@ pub use moli_curl::websocket::CurlWebSocketConnector;
 pub use moli_curl::{CurlTlsConfig, validate_http_host_resolve_entries};
 pub use moli_header_field::HeaderFields as RequestHeaders;
 pub use moli_header_field::HeaderFields as ResponseHeaders;
+pub use moli_header_field::{
+    decode_header_value, deserialize_headers, header_value_from_byte_string,
+    headers_from_byte_strings, headers_to_byte_strings,
+};
 pub use moli_web_bot_auth::{WebBotAuthProfile, WebBotAuthSigner};
 pub use network_fetch_result::{
     NetworkExchangeObservation, NetworkFetchFailureContext, NetworkFetchFailureRequestContext,

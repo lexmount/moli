@@ -2487,7 +2487,7 @@ async fn page_navigate_network_failure_commits_error_document() {
         false,
         crate::domains::network::MainDocumentBodyProgressSource::default(),
         url::Url::parse("https://stale.example.test/old-body").unwrap(),
-        vec![("content-type".to_owned(), "text/plain".to_owned())],
+        vec![("content-type".to_owned(), b"text/plain".to_vec())],
         false,
     );
     let (stale_completion_messages, stale_completion_scheduler_events) = ctx

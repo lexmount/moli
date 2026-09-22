@@ -8,6 +8,7 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
     .unwrap();
     let headers: Vec<(String, String)> =
         serde_json::from_value(fixture["headers"].clone()).unwrap();
+    let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
     for streaming in [false, true] {
         let mut vm = new_storage_test_vm("https://xhr-response-headers.test/");
         vm.set_fetch_subresource_interception(

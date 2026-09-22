@@ -607,7 +607,7 @@ async fn successful_script_loaded_worker_event_transitions_through_selected_disp
                         200,
                         vec![(
                             "Content-Type".to_owned(),
-                            "application/javascript".to_owned(),
+                            b"application/javascript".to_vec(),
                         )],
                         "self.onmessage = () => {};".to_owned(),
                     ),

@@ -359,7 +359,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
         Vec::new(),
         request_url.clone(),
         200,
-        vec![("content-type".to_owned(), "text/plain".to_owned())],
+        vec![("content-type".to_owned(), b"text/plain".to_vec())],
         Vec::new(),
     );
     let body = SubresourceBodyFinished::failed_with_partial_body(

@@ -2514,6 +2514,7 @@ name = "moli-cookie-jar"
 version = "0.1.0"
 dependencies = [
  "moli-cookie-store",
+ "moli-header-field",
  "moli-site",
  "moli-storage-key",
  "parking_lot",
@@ -2644,6 +2645,7 @@ dependencies = [
  "encoding_rs",
  "moli-charset-parser",
  "moli-content-type",
+ "moli-header-field",
 ]
 
 [[package]]
@@ -2712,6 +2714,8 @@ name = "moli-header-field"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3225,6 +3229,7 @@ dependencies = [
  "base64 0.22.1",
  "moli-browser-profile",
  "moli-crypto",
+ "moli-header-field",
  "moli-indexeddb",
  "moli-opfs",
  "moli-storage-key",
@@ -3374,6 +3379,7 @@ dependencies = [
  "http",
  "mime",
  "moli-content-type",
+ "moli-header-field",
 ]
 
 [[package]]

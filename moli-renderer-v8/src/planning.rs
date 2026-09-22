@@ -837,7 +837,7 @@ mod tests {
             200,
             headers
                 .into_iter()
-                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .map(|(name, value)| (name.to_owned(), value.as_bytes().to_vec()))
                 .collect(),
             "console.log('ok')".to_owned(),
         )

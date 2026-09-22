@@ -1,6 +1,7 @@
 use std::time::UNIX_EPOCH;
 
-pub(crate) fn document_last_modified_from_headers(headers: &[(String, String)]) -> Option<f64> {
+pub(crate) fn document_last_modified_from_headers(headers: &[(String, Vec<u8>)]) -> Option<f64> {
+    let headers = moli_fetch::headers_to_byte_strings(headers);
     let value = headers
         .iter()
         .rev()
@@ -23,14 +24,14 @@ mod tests {
         assert_eq!(
             document_last_modified_from_headers(&[(
                 "LAST-MODIFIED".to_owned(),
-                "Thu, 01 Jan 1970 01:23:45 GMT".to_owned(),
+                b"Thu, 01 Jan 1970 01:23:45 GMT".to_vec(),
             )]),
             Some(5_025_000.0)
         );
         assert_eq!(
             document_last_modified_from_headers(&[(
                 "Last-Modified".to_owned(),
-                "not a date".to_owned(),
+                b"not a date".to_vec(),
             )]),
             None
         );

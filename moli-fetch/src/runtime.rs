@@ -3337,10 +3337,10 @@ fn https_upgrade_redirect_info(
         source: crate::RedirectSource::Internal,
         from_url,
         headers: vec![
-            ("location".to_owned(), to_url.to_string()),
+            ("location".to_owned(), to_url.to_string().into_bytes()),
             (
                 "non-authoritative-reason".to_owned(),
-                "HttpsUpgrades".to_owned(),
+                b"HttpsUpgrades".to_vec(),
             ),
         ],
         to_url,
@@ -3372,7 +3372,7 @@ fn attach_next_request_extra_info(
 fn network_response_extra_info(
     request_extra_info: NetworkRequestExtraInfo,
     status: u16,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     cookie_set_reports: Vec<moli_cookie_jar::StoredCookieSetReport>,
 ) -> NetworkResponseExtraInfo {
     NetworkResponseExtraInfo {
@@ -3392,7 +3392,7 @@ fn critical_client_hint_restart_redirect_info(
         from_url: url.clone(),
         to_url: url.clone(),
         status: 307,
-        headers: vec![("Location".to_owned(), url.to_string())],
+        headers: vec![("Location".to_owned(), url.to_string().into_bytes())],
         network_extra_info_available: false,
         request_extra_info: None,
         response_extra_info: Some(response_extra_info),
@@ -4239,7 +4239,7 @@ mod tests {
                 ResponseHead {
                     final_url: final_url.clone(),
                     status: 200,
-                    headers: vec![("content-type".to_owned(), "text/html".to_owned())],
+                    headers: vec![("content-type".to_owned(), b"text/html".to_vec())],
                     request_cookie_report: Some(request_cookie_report.clone()),
                     cookie_set_reports: Vec::new(),
                     redirected: false,

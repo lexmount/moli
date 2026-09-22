@@ -3862,7 +3862,7 @@ mod tests {
         let mut response = moli_core::page::NavigationResponse::from_text_body(
             Url::parse(url).unwrap(),
             status,
-            vec![("content-type".to_owned(), "text/javascript".to_owned())],
+            vec![("content-type".to_owned(), b"text/javascript".to_vec())],
             "postMessage('ready')".to_owned(),
         );
         if transport {
@@ -6433,7 +6433,7 @@ mod tests {
                 final_url: "https://example.test/api".to_owned(),
                 status: 201,
                 status_text: "Created".to_owned(),
-                response_headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                response_headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                 body_len: 2,
             },
         };
@@ -6479,7 +6479,7 @@ mod tests {
                     final_url: "https://example.test/api".to_owned(),
                     status: 201,
                     status_text: "Created".to_owned(),
-                    response_headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                    response_headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                     body_len: 2,
                 },
             },

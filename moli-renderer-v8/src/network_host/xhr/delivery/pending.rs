@@ -125,7 +125,7 @@ fn xhr_complete_callback(
                 apply_xhr_failure(scope, xhr);
                 return;
             };
-            let headers = serde_json::from_str::<Vec<(String, String)>>(&pending_headers_json)
+            let headers = serde_json::from_str::<Vec<(String, Vec<u8>)>>(&pending_headers_json)
                 .unwrap_or_default();
             apply_xhr_response_pending_body(
                 scope,

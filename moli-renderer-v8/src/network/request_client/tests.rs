@@ -273,7 +273,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
         ResponseHead {
             final_url: request.url.clone(),
             status: 200,
-            headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+            headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,
@@ -1091,7 +1091,7 @@ async fn text_stream_fetch_handles_local_data_stylesheet_urls() -> Result<()> {
         response
             .headers
             .iter()
-            .any(|(name, value)| name.eq_ignore_ascii_case("content-type") && value == "text/css")
+            .any(|(name, value)| name.eq_ignore_ascii_case("content-type") && value == b"text/css")
     );
     assert_eq!(response.body_text(), ":root{background:green}");
     assert!(!response.from_cache);
@@ -1572,7 +1572,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
         ResponseHead {
             final_url: final_url.clone(),
             status: 200,
-            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: true,
@@ -1581,7 +1581,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
                 from_url: start_url,
                 to_url: final_url,
                 status: 301,
-                headers: vec![("location".to_owned(), "/final.txt".to_owned())],
+                headers: vec![("location".to_owned(), b"/final.txt".to_vec())],
                 network_extra_info_available: true,
                 request_extra_info: None,
                 response_extra_info: None,

@@ -4900,7 +4900,7 @@ fn lightweight_popup_javascript_url_callback<'s>(
 
 fn popup_document_response_should_ignore_navigation(
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> bool {
     matches!(status, 204 | 205)
         || moli_web_mime::response_headers_indicate_attachment_download(headers)

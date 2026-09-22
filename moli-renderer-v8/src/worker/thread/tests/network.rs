@@ -2928,10 +2928,10 @@ async fn worker_xhr_request_stage_interception_can_fulfill_synthetic_response() 
         request,
         204,
         vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
+            ("content-type".to_owned(), b"text/plain".to_vec()),
             (
                 "x-worker-xhr-intercept".to_owned(),
-                "request-stage".to_owned(),
+                b"request-stage".to_vec(),
             ),
         ],
         RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-xhr".to_vec()),
@@ -3090,10 +3090,10 @@ async fn worker_xhr_response_stage_interception_pauses_before_done() {
         request,
         Some(206),
         Some(vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
+            ("content-type".to_owned(), b"text/plain".to_vec()),
             (
                 "x-worker-xhr-response-stage".to_owned(),
-                "continued".to_owned(),
+                b"continued".to_vec(),
             ),
         ]),
     );
@@ -3950,8 +3950,8 @@ async fn worker_fetch_request_stage_interception_can_fulfill_synthetic_response(
         request,
         202,
         vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
-            ("x-worker-intercept".to_owned(), "request-stage".to_owned()),
+            ("content-type".to_owned(), b"text/plain".to_vec()),
+            ("x-worker-intercept".to_owned(), b"request-stage".to_vec()),
         ],
         RendererSyntheticResponseBody::from_bytes(b"fulfilled-worker-fetch".to_vec()),
     );
@@ -4038,13 +4038,13 @@ async fn worker_subresource_request_handles_are_owner_unique() {
     first.fulfill_pending_fetch(
         first_request,
         200,
-        vec![("content-type".to_owned(), "text/plain".to_owned())],
+        vec![("content-type".to_owned(), b"text/plain".to_vec())],
         RendererSyntheticResponseBody::from_bytes(b"first-worker-body".to_vec()),
     );
     second.fulfill_pending_fetch(
         second_request,
         200,
-        vec![("content-type".to_owned(), "text/plain".to_owned())],
+        vec![("content-type".to_owned(), b"text/plain".to_vec())],
         RendererSyntheticResponseBody::from_bytes(b"second-worker-body".to_vec()),
     );
 
@@ -4219,8 +4219,8 @@ async fn worker_fetch_response_stage_interception_pauses_before_resolving_respon
         request,
         Some(203),
         Some(vec![
-            ("content-type".to_owned(), "text/plain".to_owned()),
-            ("x-worker-response-stage".to_owned(), "continued".to_owned()),
+            ("content-type".to_owned(), b"text/plain".to_vec()),
+            ("x-worker-response-stage".to_owned(), b"continued".to_vec()),
         ]),
     );
 

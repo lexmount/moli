@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+moli-header-field = { path = "../moli-header-field" }
 content_disposition = "0.4.0"
 data-url = "0.3.2"
 http = "1"

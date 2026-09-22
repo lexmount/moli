@@ -522,7 +522,7 @@ fn borrowed_fetch_uses_receiver_realm_and_keeps_reaction_realm_independent() {
         result: Ok(crate::types::NavigationResponse::from_text_body(
             completion_url,
             200,
-            vec![("content-type".to_owned(), "text/plain".to_owned())],
+            vec![("content-type".to_owned(), b"text/plain".to_vec())],
             "borrowed completion".to_owned(),
         ))
         .into(),

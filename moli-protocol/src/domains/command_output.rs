@@ -1091,10 +1091,13 @@ fn network_request_event_from_cdp_params(params: &Value, request_id: &str) -> Ne
             .or_else(|| params.get("responseStatusText"))
             .and_then(Value::as_str)
             .map(str::to_owned),
-        response_headers: cdp_header_pairs_from_object(params.pointer("/response/headers"))
-            .into_iter()
-            .chain(fetch_header_pairs_from_array(params.get("responseHeaders")))
-            .collect(),
+        response_headers: moli_fetch::headers_from_byte_strings(
+            &cdp_header_pairs_from_object(params.pointer("/response/headers"))
+                .into_iter()
+                .chain(fetch_header_pairs_from_array(params.get("responseHeaders")))
+                .collect::<Vec<_>>(),
+        )
+        .expect("response event headers contain ByteStrings"),
         response_mime_type: params
             .pointer("/response/mimeType")
             .and_then(Value::as_str)
@@ -1147,7 +1150,10 @@ fn redirect_response_event_from_cdp_params(params: &Value) -> Option<NetworkRedi
             .get("statusText")
             .and_then(Value::as_str)
             .map(str::to_owned),
-        response_headers: cdp_header_pairs_from_object(response.get("headers")),
+        response_headers: moli_fetch::headers_from_byte_strings(&cdp_header_pairs_from_object(
+            response.get("headers"),
+        ))
+        .expect("response event headers contain ByteStrings"),
         encoded_data_length: response
             .get("encodedDataLength")
             .and_then(Value::as_u64)
@@ -3195,7 +3201,7 @@ mod tests {
                             && redirect.from_cache
                             && redirect.response_headers == vec![(
                                 "Location".to_owned(),
-                                "/api".to_owned()
+                                b"/api".to_vec()
                             )]
                     })
         ));
@@ -3238,7 +3244,7 @@ mod tests {
                     && event.has_extra_info
                     && event.response_headers == vec![(
                         "Content-Type".to_owned(),
-                        "application/json".to_owned()
+                        b"application/json".to_vec()
                     )]
         ));
     }
@@ -3303,7 +3309,7 @@ mod tests {
                 if event.status == Some(401)
                     && event.response_headers == vec![(
                         "WWW-Authenticate".to_owned(),
-                        "Basic realm=\"private\"".to_owned()
+                        b"Basic realm=\"private\"".to_vec()
                     )]
         ));
     }

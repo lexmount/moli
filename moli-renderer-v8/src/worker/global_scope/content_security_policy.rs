@@ -663,7 +663,7 @@ pub(in crate::worker) fn fulfill_pending_worker_csp_report(
     state: &Rc<RefCell<WorkerGlobalState>>,
     continuation: WorkerPendingFetchContinue,
     _response_code: u16,
-    _response_headers: Vec<(String, String)>,
+    _response_headers: Vec<(String, Vec<u8>)>,
     _response_body: RendererSyntheticResponseBody,
 ) {
     state

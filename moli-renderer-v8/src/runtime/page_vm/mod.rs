@@ -1105,7 +1105,7 @@ impl PageVmEnvConfig {
     pub(crate) fn apply_navigation_response_headers(
         &mut self,
         final_url: &Url,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
     ) {
         self.document_policy_container =
             crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(

@@ -4627,7 +4627,7 @@ async fn window_fetch_manual_redirect_returns_opaqueredirect_filtered_response()
             };
             assert_eq!(*status, 302);
             assert!(response_headers.iter().any(|header| {
-                header.0.eq_ignore_ascii_case("location") && header.1 == "/target"
+                header.0.eq_ignore_ascii_case("location") && header.1 == b"/target"
             }));
         })
         .await;

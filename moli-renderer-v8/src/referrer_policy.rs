@@ -21,7 +21,7 @@ pub(crate) fn normalize_referrer_policy(raw: &str) -> Option<String> {
 }
 
 pub(crate) fn response_referrer_policy_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Option<String> {
     let mut combined = String::new();
     for (_, value) in headers
@@ -31,7 +31,7 @@ pub(crate) fn response_referrer_policy_from_headers(
         if !combined.is_empty() {
             combined.push_str(", ");
         }
-        combined.push_str(value);
+        combined.push_str(&moli_fetch::decode_header_value(value));
     }
     (!combined.is_empty())
         .then(|| normalize_referrer_policy(&combined))
@@ -64,9 +64,9 @@ mod tests {
 
     #[test]
     fn response_referrer_policy_combines_header_instances_before_normalizing() {
-        let headers = vec![
-            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
-            ("referrer-policy".to_owned(), "future-policy".to_owned()),
+        let headers: Vec<(String, Vec<u8>)> = vec![
+            ("Referrer-Policy".to_owned(), b"no-referrer".to_vec()),
+            ("referrer-policy".to_owned(), b"future-policy".to_vec()),
         ];
 
         assert_eq!(

@@ -609,7 +609,7 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
             &Url::parse(&url).unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "sid=nav-auth; Path=/auth".to_owned(),
+                b"sid=nav-auth; Path=/auth".to_vec(),
             )],
         );
     }

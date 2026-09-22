@@ -1309,7 +1309,7 @@ fetch('/api')
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&api_url).unwrap(),
-            &[("set-cookie".to_owned(), "sid=1; Path=/api".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=1; Path=/api".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3101,7 +3101,7 @@ fetch('{start_url}', {{ credentials: 'include' }})
             &Url::parse(&final_url).unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "strict=1; Path=/; SameSite=Strict".to_owned(),
+                b"strict=1; Path=/; SameSite=Strict".to_vec(),
             )],
         );
     }
@@ -3338,7 +3338,7 @@ fetch('{target_url}', {{ credentials: 'include' }})
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse("http://127.0.0.1:8443/").unwrap(),
-            &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3431,7 +3431,7 @@ fetch('{target_url}')
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&format!("http://localhost:{}/", addr.port())).unwrap(),
-            &[("set-cookie".to_owned(), "sid=1; Path=/; Secure".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=1; Path=/; Secure".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);

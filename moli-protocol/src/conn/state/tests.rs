@@ -1419,13 +1419,13 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
 
     context.store_response_cookie_headers_for_test(
         &origin,
-        &[("set-cookie".to_owned(), "host=1; Path=/; Secure".to_owned())],
+        &[("set-cookie".to_owned(), b"host=1; Path=/; Secure".to_vec())],
     );
     context.store_response_cookie_headers_for_test(
         &Url::parse("https://cdn.example.com/page").unwrap(),
         &[(
             "set-cookie".to_owned(),
-            "sibling=1; Path=/; Secure".to_owned(),
+            b"sibling=1; Path=/; Secure".to_vec(),
         )],
     );
     assert_eq!(context.snapshot_cookies().len(), 2);

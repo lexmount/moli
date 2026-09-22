@@ -238,7 +238,7 @@ fetch({:?})
                         head: moli_fetch::ResponseHead {
                             final_url: request_url,
                             status: 200,
-                            headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                            headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                             request_cookie_report: None,
                             cookie_set_reports: Vec::new(),
                             redirected: false,
@@ -452,7 +452,7 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
                 head: moli_fetch::ResponseHead {
                     final_url: request_url,
                     status: 200,
-                    headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                    headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,

@@ -1384,7 +1384,7 @@ async fn continue_response_can_override_status_and_headers() {
     assert!(
         page.headers()
             .iter()
-            .any(|(name, value)| name == "x-override" && value == "yes")
+            .any(|(name, value)| name == "x-override" && value == b"yes")
     );
 
     server.abort();
@@ -1538,7 +1538,7 @@ async fn continue_response_header_override_keeps_streaming_parser_body() {
     assert!(
         page.headers()
             .iter()
-            .any(|(name, value)| name == "x-override" && value == "streaming")
+            .any(|(name, value)| name == "x-override" && value == b"streaming")
     );
     assert!(
         script_requested.load(Ordering::SeqCst),
@@ -1577,7 +1577,7 @@ async fn response_stage_navigation_request_paused_includes_synthesized_cookie_he
         let mut jar = bc.cookie_store_for_test().lock();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
-            &[("set-cookie".to_owned(), "sid=nav; Path=/page".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=nav; Path=/page".to_vec())],
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1727,12 +1727,12 @@ async fn continue_response_with_binary_response_headers_overrides_headers() {
     assert!(
         page.headers()
             .iter()
-            .any(|(name, value)| name == "x-bin" && value == "yes")
+            .any(|(name, value)| name == "x-bin" && value == b"yes")
     );
     assert!(
         page.headers()
             .iter()
-            .any(|(name, value)| name == "x-two" && value == "2")
+            .any(|(name, value)| name == "x-two" && value == b"2")
     );
 
     server.abort();

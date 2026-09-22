@@ -964,7 +964,7 @@ fn spawn_service_worker(
 
 fn service_worker_script_policy_context(
     final_url: &url::Url,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
         cross_origin_embedder_policy:
@@ -1001,18 +1001,18 @@ mod tests {
     fn service_worker_script_policy_context_uses_response_headers() {
         let final_url = url::Url::parse("https://worker.test/service-worker.js")
             .expect("valid service worker url");
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Cross-Origin-Embedder-Policy".to_owned(),
-                "require-corp".to_owned(),
+                b"require-corp".to_vec(),
             ),
             (
                 "Cross-Origin-Opener-Policy".to_owned(),
-                "same-origin".to_owned(),
+                b"same-origin".to_vec(),
             ),
             (
                 "Document-Isolation-Policy".to_owned(),
-                "isolate-and-credentialless".to_owned(),
+                b"isolate-and-credentialless".to_vec(),
             ),
         ];
 
@@ -1033,18 +1033,18 @@ mod tests {
     fn service_worker_script_policy_context_requires_trustworthy_url_for_capability() {
         let final_url = url::Url::parse("http://worker.test/service-worker.js")
             .expect("valid service worker url");
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Cross-Origin-Embedder-Policy".to_owned(),
-                "require-corp".to_owned(),
+                b"require-corp".to_vec(),
             ),
             (
                 "Cross-Origin-Opener-Policy".to_owned(),
-                "same-origin".to_owned(),
+                b"same-origin".to_vec(),
             ),
             (
                 "Document-Isolation-Policy".to_owned(),
-                "isolate-and-require-corp".to_owned(),
+                b"isolate-and-require-corp".to_vec(),
             ),
         ];
 

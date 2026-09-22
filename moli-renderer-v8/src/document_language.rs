@@ -1,13 +1,15 @@
 use crate::dom::native::DomHost;
 
 pub(crate) fn document_default_language_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Option<String> {
     headers
         .iter()
         .rev()
         .find(|(name, _)| name.eq_ignore_ascii_case("content-language"))
-        .and_then(|(_, value)| single_content_language_value(value))
+        .and_then(|(_, value)| {
+            single_content_language_value(&moli_fetch::decode_header_value(value))
+        })
 }
 
 pub(crate) fn document_default_language_from_meta(dom_host: &DomHost) -> Option<String> {

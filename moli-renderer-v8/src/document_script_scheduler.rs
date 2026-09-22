@@ -1096,7 +1096,7 @@ mod tests {
             moli_fetch::ResponseHead {
                 final_url: module_script.url.clone(),
                 status: 200,
-                headers: vec![("content-type".to_owned(), "text/javascript".to_owned())],
+                headers: vec![("content-type".to_owned(), b"text/javascript".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,

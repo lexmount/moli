@@ -35,7 +35,7 @@ pub(super) enum LoadedFollowedLocationNavigation {
         requested_url: Url,
         final_url: Url,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
     },
 }
@@ -59,7 +59,7 @@ impl LoadedFollowedLocationNavigation {
         };
         headers
             .iter()
-            .any(|(name, value)| name.eq_ignore_ascii_case(expected_name) && value == "1")
+            .any(|(name, value)| name.eq_ignore_ascii_case(expected_name) && value == b"1")
     }
 }
 
@@ -201,7 +201,7 @@ pub(super) async fn bootstrap_committed_followed_location_navigation(
                     Output = Result<(
                         PageVmFollowedNavigationBuildOutcome,
                         u16,
-                        Vec<(String, String)>,
+                        Vec<(String, Vec<u8>)>,
                     )>,
                 >,
             >,
@@ -370,7 +370,7 @@ async fn streaming_navigation_result_to_turn_outcome(
 ) -> Result<(
     PageVmFollowedNavigationBuildOutcome,
     u16,
-    Vec<(String, String)>,
+    Vec<(String, Vec<u8>)>,
 )> {
     match result {
         StreamingNavigationPageCreationResult::Download(download) => Ok((
@@ -443,7 +443,7 @@ fn external_raw_document_body_from_materialized_response(
 ) -> Result<(
     Url,
     u16,
-    Vec<(String, String)>,
+    Vec<(String, Vec<u8>)>,
     ExternalRawDocumentBodyStream,
 )> {
     let (head, body) = response.into_body();
@@ -485,7 +485,7 @@ fn about_blank_navigation_response(url: &Url) -> Option<moli_fetch::Response> {
             status: 200,
             headers: vec![(
                 "Content-Type".to_owned(),
-                "text/html; charset=utf-8".to_owned(),
+                b"text/html; charset=utf-8".to_vec(),
             )],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
@@ -1425,8 +1425,8 @@ mod tests {
                 .headers
                 .iter()
                 .find(|(name, _)| name.eq_ignore_ascii_case("content-type"))
-                .map(|(_, value)| value.as_str()),
-            Some("text/html; charset=utf-8")
+                .map(|(_, value)| value.as_slice()),
+            Some(b"text/html; charset=utf-8".as_slice())
         );
     }
 }

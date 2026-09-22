@@ -20,12 +20,12 @@ enum SharedWorkerResourceCommand {
     ContinueFetchResponse {
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     ContinueXhrResponse {
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     FailFetch {
         request: WorkerPendingFetchContinue,
@@ -58,31 +58,31 @@ enum SharedWorkerResourceCommand {
     FulfillFetch {
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     FulfillXhr {
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     FulfillCspReport {
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     FulfillFetchResponse {
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     FulfillXhrResponse {
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
 }
@@ -229,7 +229,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.dispatch_resource_command(
             instance_id,
@@ -246,7 +246,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.dispatch_resource_command(
             instance_id,
@@ -368,7 +368,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.dispatch_resource_command(
@@ -387,7 +387,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.dispatch_resource_command(
@@ -406,7 +406,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.dispatch_resource_command(
@@ -425,7 +425,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.dispatch_resource_command(
@@ -444,7 +444,7 @@ impl SharedWorkerRuntimeService {
         instance_id: SharedWorkerInstanceId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.dispatch_resource_command(

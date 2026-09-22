@@ -54,7 +54,7 @@ impl PageStateCache {
         &self.state().navigation_redirect_chain
     }
 
-    pub(super) fn headers(&self) -> &[(String, String)] {
+    pub(super) fn headers(&self) -> &[(String, Vec<u8>)] {
         &self.state().headers
     }
 

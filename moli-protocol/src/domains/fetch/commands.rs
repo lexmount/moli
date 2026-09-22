@@ -818,13 +818,13 @@ pub(super) enum PendingFulfillRequestState {
     Navigation {
         pending: Box<crate::conn::PendingFetchNavigation>,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         decoded_body: Option<RendererSyntheticResponseBody>,
     },
     ResponseTransfer {
         transfer: Box<crate::conn::PausedDocumentTransfer>,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         decoded_body: Option<RendererSyntheticResponseBody>,
     },
 }
@@ -895,7 +895,7 @@ fn build_cdp_fulfill_intercepted_request_command(
     cmd: &Cmd<'_>,
     request_id: String,
     response_code: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     body: Option<Vec<u8>>,
     response_phrase: Option<String>,
 ) -> DevToolsFulfillInterceptedRequestCommand {
@@ -1438,7 +1438,7 @@ pub(super) enum PendingContinueResponseState {
         request_id: String,
         transfer: Box<crate::conn::PausedDocumentTransfer>,
         response_code: Option<u16>,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     },
     SubresourceResponse {
         pending: Box<crate::conn::PendingSubresourceFetchResponseRequest>,
@@ -1503,7 +1503,7 @@ fn build_cdp_continue_intercepted_response_command(
     cmd: &Cmd<'_>,
     request_id: &str,
     response_code: Option<u16>,
-    response_headers: Option<Vec<(String, String)>>,
+    response_headers: Option<Vec<(String, Vec<u8>)>>,
     response_phrase: Option<String>,
 ) -> DevToolsContinueInterceptedResponseCommand {
     let (browser_context_id, target_id) =
@@ -1760,7 +1760,7 @@ async fn continue_response_transfer_inline(
     request_id: String,
     transfer: crate::conn::PausedDocumentTransfer,
     response_code: Option<u16>,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
 ) {
     match transfer
         .continue_response_async(conn, response_code, response_headers)
@@ -1864,7 +1864,7 @@ fn continue_streaming_document_response_in_background(
     sender: tokio::sync::mpsc::UnboundedSender<page::BackgroundNavigationCompletion>,
     pending: PendingStreamingDocumentResponseNavigation,
     response_code: Option<u16>,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
 ) {
     let PendingStreamingDocumentResponseNavigation {
         document_navigation_token,
@@ -2008,7 +2008,7 @@ mod protocol_neutral_tests {
             &cmd,
             "interception-job-1",
             Some(204),
-            Some(vec![("x-test".to_owned(), "1".to_owned())]),
+            Some(vec![("x-test".to_owned(), b"1".to_vec())]),
             Some("No Content".to_owned()),
         );
 
@@ -2023,7 +2023,7 @@ mod protocol_neutral_tests {
         assert_eq!(command.response_code, Some(204));
         assert_eq!(
             command.response_headers,
-            Some(vec![("x-test".to_owned(), "1".to_owned())])
+            Some(vec![("x-test".to_owned(), b"1".to_vec())])
         );
         assert_eq!(command.response_phrase.as_deref(), Some("No Content"));
     }
@@ -2247,7 +2247,7 @@ mod protocol_neutral_tests {
             request_body: None,
             request_cookie_report: None,
             response_status: 200,
-            response_headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+            response_headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
             response_head_overridden: false,
             response_body_taken_as_stream: false,
             response_body: CapturedBody::from_bytes(br#"{"ok":true}"#.to_vec()),
@@ -2514,7 +2514,7 @@ mod protocol_neutral_tests {
             &cmd,
             "interception-job-3".to_owned(),
             204,
-            vec![("x-test".to_owned(), "yes".to_owned())],
+            vec![("x-test".to_owned(), b"yes".to_vec())],
             Some(vec![1, 2, 3]),
             Some("No Content".to_owned()),
         );
@@ -2530,7 +2530,7 @@ mod protocol_neutral_tests {
         assert_eq!(command.response_code, 204);
         assert_eq!(
             command.response_headers,
-            vec![("x-test".to_owned(), "yes".to_owned())]
+            vec![("x-test".to_owned(), b"yes".to_vec())]
         );
         assert_eq!(command.body, Some(vec![1, 2, 3]));
         assert_eq!(command.response_phrase.as_deref(), Some("No Content"));

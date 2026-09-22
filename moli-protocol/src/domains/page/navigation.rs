@@ -440,7 +440,7 @@ pub struct BackgroundMainDocumentBodyCompletion {
     synthetic: bool,
     body_progress_source: network::MainDocumentBodyProgressSource,
     final_url: Url,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_from_cache: bool,
 }
 
@@ -452,7 +452,7 @@ impl BackgroundMainDocumentBodyCompletion {
         synthetic: bool,
         body_progress_source: network::MainDocumentBodyProgressSource,
         final_url: Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_from_cache: bool,
     ) -> Self {
         Self {
@@ -595,7 +595,7 @@ impl BackgroundNavigationCompletion {
         synthetic: bool,
         body_progress_source: network::MainDocumentBodyProgressSource,
         final_url: Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_from_cache: bool,
     ) -> Self {
         Self::MainDocumentBody(Box::new(BackgroundMainDocumentBodyCompletion::new(

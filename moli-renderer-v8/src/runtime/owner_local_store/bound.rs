@@ -50,7 +50,7 @@ pub(in crate::runtime) fn install_page_vm_on_bound_owner_local_store(
     navigation_redirected: bool,
     navigation_redirect_count: usize,
     response_status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     vm: PageVm,
     pending_download: Option<RendererPendingDownloadActivation>,
     lifecycle_gate: Option<PageVmInitStage>,
@@ -78,7 +78,7 @@ pub(in crate::runtime) fn install_phase_one_blocked_page_on_bound_owner_local_st
     navigation_redirected: bool,
     navigation_redirect_count: usize,
     response_status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     pending_navigation: PageVmPendingPhaseOneNavigation,
     lifecycle_gate: Option<PageVmInitStage>,
 ) -> Result<RendererPendingPageCreation> {

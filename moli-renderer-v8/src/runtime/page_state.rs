@@ -17,7 +17,7 @@ pub struct RendererPageState {
     pub final_url: Url,
     pub document_title: String,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub script_execution: Arc<ScriptExecutionReport>,
     pub idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     pub service_worker_client_id: u64,
@@ -32,7 +32,7 @@ impl RendererPageState {
         mut navigation_redirected: bool,
         mut navigation_redirect_count: usize,
         mut status: u16,
-        mut headers: Vec<(String, String)>,
+        mut headers: Vec<(String, Vec<u8>)>,
         state_capture: PageVmStateCapture,
     ) -> Arc<Self> {
         let mut navigation_redirect_chain = Vec::new();

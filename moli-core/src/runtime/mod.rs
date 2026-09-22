@@ -210,7 +210,7 @@ impl RawDocument {
         self.response.status
     }
 
-    pub fn headers(&self) -> &[(String, String)] {
+    pub fn headers(&self) -> &[(String, Vec<u8>)] {
         &self.response.headers
     }
 

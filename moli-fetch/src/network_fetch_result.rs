@@ -1,4 +1,6 @@
-use crate::headers::{decode_http_header_bytes, parse_http_header_line};
+use crate::headers::{
+    decode_http_header_bytes, parse_http_header_line, parse_http_response_header_line,
+};
 
 use std::{fmt, sync::Arc};
 
@@ -58,12 +60,12 @@ impl NetworkRequestObservation {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkResponseObservation {
     status: u16,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     truncated: bool,
 }
 
 impl NetworkResponseObservation {
-    pub fn new(status: u16, headers: Vec<(String, String)>) -> Self {
+    pub fn new(status: u16, headers: Vec<(String, Vec<u8>)>) -> Self {
         Self {
             status,
             headers,
@@ -75,7 +77,7 @@ impl NetworkResponseObservation {
         self.status
     }
 
-    pub fn headers(&self) -> &[(String, String)] {
+    pub fn headers(&self) -> &[(String, Vec<u8>)] {
         &self.headers
     }
 
@@ -275,7 +277,7 @@ impl NetworkObservationRecorder {
             response.truncated = true;
             return;
         }
-        if let Some(header) = parse_http_header_line(line) {
+        if let Some(header) = parse_http_response_header_line(data) {
             response.headers.push(header);
         }
     }
@@ -301,7 +303,7 @@ struct NetworkObservationRecorderState {
 
 struct PendingResponseObservation {
     status: u16,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     observed_bytes: usize,
     truncated: bool,
 }

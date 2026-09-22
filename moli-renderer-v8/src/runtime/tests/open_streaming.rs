@@ -185,7 +185,7 @@ impl OpenStreamingPage {
                 0,
                 Vec::new(),
                 200,
-                vec![("content-type".to_owned(), "text/html".to_owned())],
+                vec![("content-type".to_owned(), b"text/html".to_vec())],
                 &loader,
                 crate::RendererWebStorageHandles::ephemeral(),
                 raw_body,

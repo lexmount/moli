@@ -212,7 +212,7 @@ impl Page {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<()> {
         let pending = self.start_fulfill_pending_subresource_fetch(
@@ -228,7 +228,7 @@ impl Page {
         &self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::FulfillPendingSubresourceFetch {
@@ -256,7 +256,7 @@ impl Page {
         &mut self,
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<()> {
         let pending = self.start_continue_pending_subresource_response(
             internal_id,
@@ -270,7 +270,7 @@ impl Page {
         &self,
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::ContinuePendingSubresourceResponse {
             internal_id,
@@ -332,7 +332,7 @@ impl Page {
         &mut self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<()> {
         let pending = self.start_fulfill_pending_subresource_response(
@@ -348,7 +348,7 @@ impl Page {
         &self,
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::FulfillPendingSubresourceResponse {

@@ -26,9 +26,9 @@ fn unexpected_legacy_encoding_detector(
 
 #[test]
 fn content_type_charset_is_selected() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=gbk".to_owned(),
+        b"text/html; charset=gbk".to_vec(),
     )];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -38,7 +38,7 @@ fn content_type_charset_is_selected() {
 
 #[test]
 fn meta_charset_is_selected_without_header_charset() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut input = b"<!doctype html><meta charset=\"gbk\"><p>".to_vec();
     input.extend_from_slice(&gbk_bytes("家居"));
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
@@ -52,7 +52,7 @@ fn meta_charset_is_selected_without_header_charset() {
 
 #[test]
 fn meta_charset_can_be_split_across_chunks() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
     assert_eq!(
@@ -68,7 +68,7 @@ fn meta_charset_can_be_split_across_chunks() {
 
 #[test]
 fn ascii_prefix_streams_while_charset_sniffing_continues() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
     assert_eq!(
@@ -82,7 +82,7 @@ fn ascii_prefix_streams_while_charset_sniffing_continues() {
 
 #[test]
 fn later_meta_charset_decodes_unemitted_non_ascii_after_ascii_prefix() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
     let mut tail = b"<meta charset=\"gbk\"><p>".to_vec();
     tail.extend_from_slice(&gbk_bytes("家居"));
@@ -94,7 +94,7 @@ fn later_meta_charset_decodes_unemitted_non_ascii_after_ascii_prefix() {
 
 #[test]
 fn meta_charset_after_1024_bytes_still_in_head_is_selected() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut input = vec![b' '; HTML_META_CHARSET_PRESCAN_LIMIT];
     input.extend_from_slice(b"<meta charset=\"gbk\"><p>");
     input.extend_from_slice(&gbk_bytes("家居"));
@@ -108,7 +108,7 @@ fn meta_charset_after_1024_bytes_still_in_head_is_selected() {
 
 #[test]
 fn meta_charset_crossing_1024_byte_boundary_is_selected_while_in_head() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let partial_meta = b"<meta char";
     let mut input = vec![b' '; HTML_META_CHARSET_PRESCAN_LIMIT - partial_meta.len()];
     input.extend_from_slice(partial_meta);
@@ -124,7 +124,7 @@ fn meta_charset_crossing_1024_byte_boundary_is_selected_while_in_head() {
 
 #[test]
 fn meta_charset_after_1024_bytes_after_head_is_ignored() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut input = b"<body>".to_vec();
     input.extend(vec![b' '; HTML_META_CHARSET_PRESCAN_LIMIT - input.len()]);
     input.extend_from_slice(b"<meta charset=\"gbk\"><p>");
@@ -139,7 +139,7 @@ fn meta_charset_after_1024_bytes_after_head_is_ignored() {
 
 #[test]
 fn meta_charset_starting_before_1024_bytes_after_head_is_selected() {
-    let headers = vec![("Content-Type".to_owned(), "text/html".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Content-Type".to_owned(), b"text/html".to_vec())];
     let mut input = b"</head>".to_vec();
     input.extend(vec![
         b' ';
@@ -196,9 +196,9 @@ fn meta_charset_prescan_ignores_script_text_and_requires_pragma_for_content() {
 
 #[test]
 fn gbk_multibyte_can_be_split_across_chunks() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=gbk".to_owned(),
+        b"text/html; charset=gbk".to_vec(),
     )];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -208,9 +208,9 @@ fn gbk_multibyte_can_be_split_across_chunks() {
 
 #[test]
 fn bom_wins_over_header_charset() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=gbk".to_owned(),
+        b"text/html; charset=gbk".to_vec(),
     )];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -222,9 +222,9 @@ fn bom_wins_over_header_charset() {
 
 #[test]
 fn unknown_charset_falls_back_to_html_default_on_finish() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=x-unknown".to_owned(),
+        b"text/html; charset=x-unknown".to_vec(),
     )];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -243,9 +243,9 @@ fn unlabelled_html_document_without_detector_uses_html_default() {
 
 #[test]
 fn injected_legacy_content_detector_receives_url_hint() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=x-unknown".to_owned(),
+        b"text/html; charset=x-unknown".to_vec(),
     )];
     let mut decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
         &headers,
@@ -266,9 +266,9 @@ fn injected_legacy_content_detector_receives_url_hint() {
 
 #[test]
 fn declared_encodings_precede_injected_legacy_detector() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=gbk".to_owned(),
+        b"text/html; charset=gbk".to_vec(),
     )];
     let mut header_decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
         &headers,
@@ -412,7 +412,7 @@ fn classic_script_decoding_inherits_document_character_set() {
             &bytes,
             &[(
                 "Content-Type".to_owned(),
-                "application/javascript".to_owned()
+                b"application/javascript".to_vec()
             )],
             None,
             Some("shift_jis"),
@@ -431,7 +431,7 @@ fn classic_script_header_charset_wins_over_document_character_set() {
             &bytes,
             &[(
                 "Content-Type".to_owned(),
-                "application/javascript; charset=windows-1251".to_owned(),
+                b"application/javascript; charset=windows-1251".to_vec(),
             )],
             None,
             Some("shift_jis"),
@@ -473,7 +473,7 @@ fn classic_script_bom_wins_over_labels() {
             &bytes,
             &[(
                 "Content-Type".to_owned(),
-                "application/javascript; charset=gbk".to_owned(),
+                b"application/javascript; charset=gbk".to_vec(),
             )],
             Some("shift_jis"),
             Some("gbk"),
@@ -590,9 +590,9 @@ fn meta_declared_utf16_does_not_override_a_bom() {
 
 #[test]
 fn transport_utf16_still_wins_over_the_meta_rewrite() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=utf-16le".to_owned(),
+        b"text/html; charset=utf-16le".to_vec(),
     )];
     let input = utf16le_bytes("<meta charset=\"utf-16\">hi");
 
@@ -616,9 +616,9 @@ fn bom_less_utf16le_xml_declaration_is_detected() {
 
 #[test]
 fn transport_charset_wins_over_utf16_xml_signature() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=windows-1252".to_owned(),
+        b"text/html; charset=windows-1252".to_vec(),
     )];
     let input = utf16le_bytes(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<html><head></head><body>hi</body></html>",
@@ -697,9 +697,9 @@ fn diverged_utf16_xml_signature_prefix_resumes_ascii_streaming() {
 
 #[test]
 fn transport_charset_does_not_wait_for_a_utf16_xml_signature_prefix() {
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=windows-1252".to_owned(),
+        b"text/html; charset=windows-1252".to_vec(),
     )];
     let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -770,9 +770,9 @@ fn meta_and_transport_encodings_precede_ascii_xml_declarations() {
     let input = br#"<?xml encoding="windows-1251"?><meta charset="windows-1253">"#;
     assert_eq!(decode_html_document(input, &[]).1, "windows-1253");
 
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=UTF-8".to_owned(),
+        b"text/html; charset=UTF-8".to_vec(),
     )];
     assert_eq!(decode_html_document(input, &headers).1, "UTF-8");
 }
@@ -864,9 +864,9 @@ fn header_charset_stays_inside_another_parameters_quoted_string() {
         charset_from_content_type("text/html; boundary=\"; charset=gbk\""),
         None
     );
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; boundary=\"; charset=gbk\"".to_owned(),
+        b"text/html; boundary=\"; charset=gbk\"".to_vec(),
     )];
     assert_eq!(
         decode_html_document(b"<p>hi</p>", &headers).1,
@@ -889,9 +889,9 @@ fn header_charset_removes_quoting_backslashes() {
         charset_from_content_type("text/html; charset=\"utf\\-8\"").as_deref(),
         Some("utf-8")
     );
-    let headers = vec![(
+    let headers: Vec<(String, Vec<u8>)> = vec![(
         "Content-Type".to_owned(),
-        "text/html; charset=\"utf\\-8\"".to_owned(),
+        b"text/html; charset=\"utf\\-8\"".to_vec(),
     )];
     assert_eq!(decode_html_document(b"<p>hi</p>", &headers).1, "UTF-8");
 }
@@ -942,9 +942,9 @@ fn header_charset_matches_chromium_network_tolerances() {
 fn header_charset_exact_lookup_rejects_non_http_whitespace() {
     for whitespace in ['\u{000b}', '\u{000c}', '\r', '\n'] {
         let expected_label = format!("{whitespace}gbk");
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Content-Type".to_owned(),
-            format!("text/html; charset={whitespace}gbk"),
+            format!("text/html; charset={whitespace}gbk").into_bytes(),
         )];
 
         assert_eq!(

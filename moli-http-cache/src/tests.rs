@@ -23,7 +23,7 @@ fn temp_root(name: &str) -> PathBuf {
 fn test_metadata(
     url: &str,
     status: u16,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     stored_at_unix_ms: u64,
     expires_at_unix_ms: Option<u64>,
 ) -> HttpCacheEntryMetadata {
@@ -87,11 +87,11 @@ fn request_pragma_validation_only_honors_no_cache() {
 
 #[test]
 fn response_vary_header_names_merges_all_header_fields() {
-    let headers = vec![
-        ("Vary".to_owned(), "Accept-Encoding, User-Agent".to_owned()),
+    let headers: Vec<(String, Vec<u8>)> = vec![
+        ("Vary".to_owned(), b"Accept-Encoding, User-Agent".to_vec()),
         (
             "vary".to_owned(),
-            "accept-encoding, Accept-Language".to_owned(),
+            b"accept-encoding, Accept-Language".to_vec(),
         ),
     ];
 
@@ -107,7 +107,7 @@ fn response_vary_header_names_merges_all_header_fields() {
 
 #[test]
 fn response_vary_header_names_rejects_wildcard() {
-    let headers = vec![("Vary".to_owned(), "Accept-Encoding, *".to_owned())];
+    let headers: Vec<(String, Vec<u8>)> = vec![("Vary".to_owned(), b"Accept-Encoding, *".to_vec())];
 
     assert_eq!(response_vary_header_names(&headers), None);
 }
@@ -128,7 +128,7 @@ fn cacheable_response_parts_policy_rejects_unsafe_response_parts() -> Result<()>
             &request_url,
             &request_url,
             200,
-            &[("set-cookie".to_owned(), "sid=1".to_owned())],
+            &[("set-cookie".to_owned(), b"sid=1".to_vec())],
             false
         )
         .is_none()
@@ -138,7 +138,7 @@ fn cacheable_response_parts_policy_rejects_unsafe_response_parts() -> Result<()>
             &request_url,
             &request_url,
             200,
-            &[("cache-control".to_owned(), "no-store".to_owned())],
+            &[("cache-control".to_owned(), b"no-store".to_vec())],
             false
         )
         .is_none()
@@ -149,21 +149,21 @@ fn cacheable_response_parts_policy_rejects_unsafe_response_parts() -> Result<()>
 
 #[test]
 fn validation_headers_use_cached_validators() {
-    let headers = vec![
-        ("etag".to_owned(), "\"v1\"".to_owned()),
+    let headers: Vec<(String, Vec<u8>)> = vec![
+        ("etag".to_owned(), b"\"v1\"".to_vec()),
         (
             "last-modified".to_owned(),
-            "Wed, 21 Oct 2015 07:28:00 GMT".to_owned(),
+            b"Wed, 21 Oct 2015 07:28:00 GMT".to_vec(),
         ),
     ];
 
     assert_eq!(
         validation_headers_from_headers(&headers),
         vec![
-            ("If-None-Match".to_owned(), "\"v1\"".to_owned()),
+            ("If-None-Match".to_owned(), b"\"v1\"".to_vec()),
             (
                 "If-Modified-Since".to_owned(),
-                "Wed, 21 Oct 2015 07:28:00 GMT".to_owned()
+                b"Wed, 21 Oct 2015 07:28:00 GMT".to_vec()
             )
         ]
     );
@@ -172,23 +172,23 @@ fn validation_headers_use_cached_validators() {
 #[test]
 fn not_modified_merge_skips_hop_by_hop_and_connection_nominated_headers() {
     let cached = vec![
-        ("cache-control".to_owned(), "max-age=60".to_owned()),
-        ("x-old".to_owned(), "old".to_owned()),
+        ("cache-control".to_owned(), b"max-age=60".to_vec()),
+        ("x-old".to_owned(), b"old".to_vec()),
     ];
     let not_modified = vec![
-        ("cache-control".to_owned(), "max-age=120".to_owned()),
-        ("connection".to_owned(), "x-transient".to_owned()),
-        ("x-transient".to_owned(), "drop".to_owned()),
-        ("content-length".to_owned(), "0".to_owned()),
-        ("etag".to_owned(), "\"v2\"".to_owned()),
+        ("cache-control".to_owned(), b"max-age=120".to_vec()),
+        ("connection".to_owned(), b"x-transient".to_vec()),
+        ("x-transient".to_owned(), b"drop".to_vec()),
+        ("content-length".to_owned(), b"0".to_vec()),
+        ("etag".to_owned(), b"\"v2\"".to_vec()),
     ];
 
     assert_eq!(
         merge_not_modified_headers(&cached, &not_modified),
         vec![
-            ("cache-control".to_owned(), "max-age=120".to_owned()),
-            ("x-old".to_owned(), "old".to_owned()),
-            ("etag".to_owned(), "\"v2\"".to_owned())
+            ("cache-control".to_owned(), b"max-age=120".to_vec()),
+            ("x-old".to_owned(), b"old".to_vec()),
+            ("etag".to_owned(), b"\"v2\"".to_vec())
         ]
     );
 }
@@ -198,6 +198,12 @@ fn streaming_writer_publishes_metadata_after_body() -> Result<()> {
     let root = temp_root("publish");
     let store = HttpCacheStore::new(&root);
     let key = HttpCacheStore::key_for_url("http://example.test/cache");
+    let headers = vec![
+        ("cache-control".to_owned(), b"max-age=60".to_vec()),
+        ("x-bytes".to_owned(), b"\xff\x80\xa0".to_vec()),
+        ("x-bytes".to_owned(), b"\xc3\xbf".to_vec()),
+        ("x-empty".to_owned(), Vec::new()),
+    ];
 
     let mut writer = store.create_body_writer(&key)?;
     writer.write_all(b"hello ")?;
@@ -205,13 +211,14 @@ fn streaming_writer_publishes_metadata_after_body() -> Result<()> {
     writer.finish(test_metadata(
         "http://example.test/cache",
         200,
-        vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+        headers.clone(),
         1,
         Some(2),
     ))?;
 
     let cached = load_test_entry(&store, &key)?.expect("entry should be readable");
     assert_eq!(cached.metadata.status, 200);
+    assert_eq!(cached.metadata.headers, headers);
     assert_eq!(cached.body, b"hello cache");
 
     let _ = fs::remove_dir_all(root);
@@ -389,8 +396,8 @@ fn refresh_loaded_entry_metadata_preserves_cached_body() -> Result<()> {
             "http://example.test/cache",
             200,
             vec![
-                ("cache-control".to_owned(), "max-age=0".to_owned()),
-                ("etag".to_owned(), "\"v1\"".to_owned()),
+                ("cache-control".to_owned(), b"max-age=0".to_vec()),
+                ("etag".to_owned(), b"\"v1\"".to_vec()),
             ],
             1,
             Some(2),
@@ -400,8 +407,8 @@ fn refresh_loaded_entry_metadata_preserves_cached_body() -> Result<()> {
 
     let mut loaded = store.load_reader(&key)?.expect("entry should be readable");
     loaded.metadata.headers = vec![
-        ("cache-control".to_owned(), "max-age=60".to_owned()),
-        ("etag".to_owned(), "\"v1\"".to_owned()),
+        ("cache-control".to_owned(), b"max-age=60".to_vec()),
+        ("etag".to_owned(), b"\"v1\"".to_vec()),
     ];
     loaded.metadata.stored_at_unix_ms = 3;
     loaded.metadata.last_used_at_unix_ms = 3;
@@ -413,8 +420,8 @@ fn refresh_loaded_entry_metadata_preserves_cached_body() -> Result<()> {
     assert_eq!(
         cached.metadata.headers,
         vec![
-            ("cache-control".to_owned(), "max-age=60".to_owned()),
-            ("etag".to_owned(), "\"v1\"".to_owned()),
+            ("cache-control".to_owned(), b"max-age=60".to_vec()),
+            ("etag".to_owned(), b"\"v1\"".to_vec()),
         ]
     );
     assert_eq!(cached.metadata.expires_at_unix_ms, Some(63));

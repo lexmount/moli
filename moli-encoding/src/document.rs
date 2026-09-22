@@ -13,13 +13,13 @@ const UTF16BE_XML_PREFIX: &[u8; 6] = b"\0<\0?\0x";
 pub type LegacyEncodingDetector =
     fn(bytes: &[u8], url_hint: Option<&str>) -> Option<&'static Encoding>;
 
-pub fn decode_html_document(bytes: &[u8], headers: &[(String, String)]) -> (String, &'static str) {
+pub fn decode_html_document(bytes: &[u8], headers: &[(String, Vec<u8>)]) -> (String, &'static str) {
     decode_html_document_with_fallback(bytes, headers, None)
 }
 
 pub fn decode_html_document_with_fallback(
     bytes: &[u8],
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     fallback_encoding: Option<&str>,
 ) -> (String, &'static str) {
     let mut decoder = HtmlDocumentStreamingDecoder::new_with_fallback(headers, fallback_encoding);
@@ -50,12 +50,12 @@ pub struct HtmlDocumentStreamingDecoder {
 }
 
 impl HtmlDocumentStreamingDecoder {
-    pub fn new(headers: &[(String, String)]) -> Self {
+    pub fn new(headers: &[(String, Vec<u8>)]) -> Self {
         Self::new_with_options(headers, None, None, None)
     }
 
     pub fn new_with_legacy_encoding_detector(
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         url_hint: &str,
         detector: LegacyEncodingDetector,
     ) -> Self {
@@ -63,14 +63,14 @@ impl HtmlDocumentStreamingDecoder {
     }
 
     pub fn new_with_fallback(
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         fallback_encoding: Option<&str>,
     ) -> Self {
         Self::new_with_options(headers, fallback_encoding, None, None)
     }
 
     fn new_with_options(
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         fallback_encoding: Option<&str>,
         url_hint: Option<&str>,
         legacy_encoding_detector: Option<LegacyEncodingDetector>,

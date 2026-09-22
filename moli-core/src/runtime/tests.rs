@@ -83,7 +83,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
         ResponseHead {
             final_url: Url::parse("https://bridge.test/document")?,
             status: 200,
-            headers: vec![("content-type".to_owned(), "text/html".to_owned())],
+            headers: vec![("content-type".to_owned(), b"text/html".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,
@@ -2607,7 +2607,7 @@ async fn standalone_selector_observes_replacement_document_before_load() -> Resu
             .headers
             .iter()
             .any(|(name, value)| {
-                name.eq_ignore_ascii_case("X-Fixture-Document") && value == "replacement"
+                name.eq_ignore_ascii_case("X-Fixture-Document") && value == b"replacement"
             })
     );
 

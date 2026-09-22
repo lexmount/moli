@@ -102,7 +102,7 @@ async fn prepare_browser_owned_error_page_navigation_with_engine_async(
         status: 200,
         headers: vec![(
             "content-type".to_owned(),
-            "text/html; charset=utf-8".to_owned(),
+            b"text/html; charset=utf-8".to_vec(),
         )],
         request_cookie_report: None,
         cookie_set_reports: Vec::new(),
@@ -156,7 +156,7 @@ async fn prepare_network_error_page_navigation_with_engine_async(
     .map(NavigationLoadOutcome::response_commit_ready)
 }
 
-fn response_headers_indicate_xml_document(headers: &[(String, String)]) -> bool {
+fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
     moli_web_mime::response_document_content_type(headers)
         .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime))
 }
@@ -299,7 +299,7 @@ pub struct ResponseCommitReady {
     request_method: String,
     request_headers: moli_fetch::RequestHeaders,
     response_status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_from_cache: bool,
     timing_started: Option<std::time::Instant>,
     main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
@@ -506,7 +506,7 @@ pub struct PausedResponsePreparedDocument {
     request_method: String,
     request_headers: moli_fetch::RequestHeaders,
     response_status: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_from_cache: bool,
     negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
     network_observation_journal: NetworkObservationJournal,
@@ -732,7 +732,7 @@ pub(crate) struct BackgroundStreamingResponseNavigationLoadJob {
     response: StreamingRawResponse,
     network_observation_journal: NetworkObservationJournal,
     response_code: Option<u16>,
-    response_headers_override: Vec<(String, String)>,
+    response_headers_override: Vec<(String, Vec<u8>)>,
     body_progress_source: MainDocumentBodyProgressSource,
     shared_resource_runtime: Option<moli_core::network::BrowserResourceRuntime>,
 }
@@ -771,7 +771,7 @@ impl BackgroundNavigationBodyCompletionSink {
         body: anyhow::Result<CapturedBody>,
         body_progress_source: MainDocumentBodyProgressSource,
         final_url: Url,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_from_cache: bool,
     ) {
         let _ = self.sender.send(
@@ -1074,7 +1074,7 @@ struct DecodedDataUrlNavigationResponse {
 struct InlineHtmlNavigationSource {
     document_url: Url,
     html: String,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
 }
 
 pub(crate) fn decode_data_url_response(
@@ -1100,7 +1100,11 @@ fn decoded_data_url_navigation_response(
             ResponseHead {
                 final_url: requested_url.clone(),
                 status: 200,
-                headers: vec![("Content-Type".to_owned(), decoded.content_type)],
+                headers: vec![(
+                    "Content-Type".to_owned(),
+                    moli_fetch::header_value_from_byte_string(&decoded.content_type)
+                        .expect("serialized MIME types contain ByteStrings"),
+                )],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,
@@ -1165,7 +1169,11 @@ fn inline_html_navigation_source(
             .map(|document_url| InlineHtmlNavigationSource {
                 document_url,
                 html,
-                response_headers: vec![("Content-Type".into(), content_type)],
+                response_headers: vec![(
+                    "Content-Type".into(),
+                    moli_fetch::header_value_from_byte_string(&content_type)
+                        .expect("serialized MIME types contain ByteStrings"),
+                )],
             })
             .context("failed to parse data url")
     }))
@@ -1271,7 +1279,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     mut response: StreamingRawResponse,
     network_observation_journal: NetworkObservationJournal,
     response_code: Option<u16>,
-    response_headers_override: Vec<(String, String)>,
+    response_headers_override: Vec<(String, Vec<u8>)>,
     body_progress_source: MainDocumentBodyProgressSource,
     body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
     reserved_service_worker_client: Option<moli_core::runtime::RendererReservedServiceWorkerClient>,
@@ -2511,7 +2519,7 @@ impl CdpConnection {
         response: StreamingRawResponse,
         network_observation_journal: NetworkObservationJournal,
         response_code: Option<u16>,
-        response_headers_override: Vec<(String, String)>,
+        response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> BackgroundStreamingResponseNavigationLoadJob {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
@@ -2749,7 +2757,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
     ) -> anyhow::Result<LoadedNavigation> {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
@@ -2777,7 +2785,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
     ) -> anyhow::Result<LoadedNavigation> {
         let owner = CommandOwnerScope::capture(self, session_id);
@@ -2837,7 +2845,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
     ) -> anyhow::Result<LoadedNavigation> {
@@ -2861,7 +2869,7 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         final_url: Url,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: CapturedBody,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
         network_observation_journal: NetworkObservationJournal,
@@ -2895,7 +2903,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: CapturedBody,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
         network_observation_journal: NetworkObservationJournal,
@@ -2935,7 +2943,7 @@ impl CdpConnection {
         request_method: String,
         request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: String,
         captured_response_body: Option<CapturedBody>,
         initial_request_cookie_report: Option<StoredCookieQueryReport>,
@@ -3586,7 +3594,7 @@ impl CdpConnection {
         navigation: &NavigationDispatchState,
         response: NetworkFetchResult<StreamingRawResponse>,
         response_code: Option<u16>,
-        response_headers_override: Vec<(String, String)>,
+        response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
@@ -3614,7 +3622,7 @@ impl CdpConnection {
         request_headers: moli_fetch::RequestHeaders,
         response: NetworkFetchResult<StreamingRawResponse>,
         response_code: Option<u16>,
-        response_headers_override: Vec<(String, String)>,
+        response_headers_override: Vec<(String, Vec<u8>)>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> anyhow::Result<NavigationLoadOutcome> {
         let (response, network_observation_journal) =
@@ -4123,7 +4131,7 @@ mod tests {
         assert_eq!(source.html, "<main>hello</main>");
         assert_eq!(
             source.response_headers,
-            vec![("Content-Type".to_owned(), "text/html".to_owned())]
+            vec![("Content-Type".to_owned(), b"text/html".to_vec())]
         );
     }
 
@@ -4172,7 +4180,7 @@ mod tests {
         assert_eq!(navigation_response.response.status, 200);
         assert_eq!(
             navigation_response.response.headers,
-            vec![("Content-Type".to_owned(), "image/png".to_owned())]
+            vec![("Content-Type".to_owned(), b"image/png".to_vec())]
         );
         assert_eq!(navigation_response.response.body_bytes(), &[0, 255, b'a']);
         assert!(navigation_response.response.request_cookie_report.is_none());

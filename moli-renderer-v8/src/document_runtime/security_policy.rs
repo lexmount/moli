@@ -135,7 +135,7 @@ impl DocumentConnectPolicySnapshot {
 
 impl DocumentPolicyContainer {
     pub(crate) fn from_navigation_response_headers(
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         final_url: &Url,
     ) -> Self {
         let response_content_security_policies =
@@ -2141,13 +2141,13 @@ pub(crate) fn create_content_security_policy_violation_event<'s>(
 }
 
 pub(crate) fn response_content_security_policies_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Vec<String> {
     content_security_policy_headers(headers)
 }
 
 pub(crate) fn response_content_security_report_only_policies_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Vec<String> {
     content_security_policy_report_only_headers(headers)
 }
@@ -2292,7 +2292,7 @@ mod tests {
         crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
             &[(
                 "Reporting-Endpoints".to_owned(),
-                "csp=\"/reports/csp\"".to_owned(),
+                b"csp=\"/reports/csp\"".to_vec(),
             )],
             &Url::parse("https://example.test/page").unwrap(),
         )
@@ -2995,13 +2995,13 @@ mod tests {
             response_content_security_policies_from_headers(&[
                 (
                     "Content-Security-Policy".to_owned(),
-                    " default-src 'self' ".to_owned()
+                    b" default-src 'self' ".to_vec()
                 ),
                 (
                     "content-security-policy-report-only".to_owned(),
-                    "default-src 'none'".to_owned()
+                    b"default-src 'none'".to_vec()
                 ),
-                ("X-Other".to_owned(), "ignored".to_owned()),
+                ("X-Other".to_owned(), b"ignored".to_vec()),
             ]),
             vec!["default-src 'self'"]
         );
@@ -3009,13 +3009,13 @@ mod tests {
             response_content_security_report_only_policies_from_headers(&[
                 (
                     "Content-Security-Policy".to_owned(),
-                    "default-src 'self'".to_owned()
+                    b"default-src 'self'".to_vec()
                 ),
                 (
                     "content-security-policy-report-only".to_owned(),
-                    " default-src 'none' ".to_owned()
+                    b" default-src 'none' ".to_vec()
                 ),
-                ("X-Other".to_owned(), "ignored".to_owned()),
+                ("X-Other".to_owned(), b"ignored".to_vec()),
             ]),
             vec!["default-src 'none'"]
         );
@@ -3024,27 +3024,27 @@ mod tests {
     #[test]
     fn navigation_response_headers_build_one_complete_document_policy_container() {
         let final_url = Url::parse("https://example.test/page").unwrap();
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Content-Security-Policy".to_owned(),
-                "sandbox allow-scripts; frame-ancestors 'self'".to_owned(),
+                b"sandbox allow-scripts; frame-ancestors 'self'".to_vec(),
             ),
             (
                 "Content-Security-Policy-Report-Only".to_owned(),
-                "frame-ancestors https://embedder.test; report-to csp".to_owned(),
+                b"frame-ancestors https://embedder.test; report-to csp".to_vec(),
             ),
-            ("Referrer-Policy".to_owned(), "no-referrer".to_owned()),
+            ("Referrer-Policy".to_owned(), b"no-referrer".to_vec()),
             (
                 "Reporting-Endpoints".to_owned(),
-                "csp=\"/reports/csp\"".to_owned(),
+                b"csp=\"/reports/csp\"".to_vec(),
             ),
             (
                 "Cross-Origin-Embedder-Policy".to_owned(),
-                "require-corp".to_owned(),
+                b"require-corp".to_vec(),
             ),
             (
                 "Cross-Origin-Opener-Policy".to_owned(),
-                "same-origin".to_owned(),
+                b"same-origin".to_vec(),
             ),
         ];
 

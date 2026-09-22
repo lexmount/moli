@@ -802,7 +802,7 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingFetchContinue,
     response_code: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_body: RendererSyntheticResponseBody,
 ) {
     let fetch_id = request.fetch_id;
@@ -843,7 +843,7 @@ pub(in crate::worker) fn continue_pending_worker_fetch_response(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingFetchContinue,
     response_code: Option<u16>,
-    response_headers: Option<Vec<(String, String)>>,
+    response_headers: Option<Vec<(String, Vec<u8>)>>,
 ) {
     let fetch_id = request.fetch_id;
     let completion = {
@@ -913,7 +913,7 @@ pub(in crate::worker) fn fulfill_pending_worker_fetch_response(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingFetchContinue,
     response_code: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_body: RendererSyntheticResponseBody,
 ) {
     let fetch_id = request.fetch_id;
@@ -1110,7 +1110,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingXhrContinue,
     response_code: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_body: RendererSyntheticResponseBody,
 ) {
     let xhr_id = request.xhr_id;
@@ -1150,7 +1150,7 @@ pub(in crate::worker) fn continue_pending_worker_xhr_response(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingXhrContinue,
     response_code: Option<u16>,
-    response_headers: Option<Vec<(String, String)>>,
+    response_headers: Option<Vec<(String, Vec<u8>)>>,
 ) {
     let xhr_id = request.xhr_id;
     let completion = {
@@ -1216,7 +1216,7 @@ pub(in crate::worker) fn fulfill_pending_worker_xhr_response(
     state: &Rc<RefCell<WorkerGlobalState>>,
     request: WorkerPendingXhrContinue,
     response_code: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_body: RendererSyntheticResponseBody,
 ) {
     let xhr_id = request.xhr_id;
@@ -1566,7 +1566,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                 socket_id,
                 &socket_url,
                 &loader,
-                &response_headers.to_byte_strings(),
+                response_headers,
             );
             parent_messages.push(WorkerToParentMessage::WebSocketLifecycle(
                 WorkerWebSocketLifecycleEvent::Open {
@@ -1588,7 +1588,7 @@ pub(in crate::worker) fn dispatch_worker_websocket_event(
                     Vec::new(),
                     socket_url.clone(),
                     *response_status,
-                    response_headers.to_byte_strings(),
+                    response_headers.to_vec(),
                     String::new(),
                     cookie_set_reports,
                 )
@@ -1720,7 +1720,7 @@ pub(in crate::worker) fn store_worker_websocket_response_cookies(
     _socket_id: u64,
     socket_url: &Url,
     request_client: &crate::network::context::WorkerResourceLoader,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
 ) -> Vec<StoredCookieSetReport> {
     if !response_headers
         .iter()
@@ -2456,7 +2456,7 @@ pub(in crate::worker) fn reject_worker_fetches_for_signal(
 pub(in crate::worker) fn worker_response_from_body(
     final_url: Url,
     status: u16,
-    headers: Vec<(String, String)>,
+    headers: Vec<(String, Vec<u8>)>,
     body: RendererSyntheticResponseBody,
 ) -> Response {
     body.into_fetch_response(ResponseHead {

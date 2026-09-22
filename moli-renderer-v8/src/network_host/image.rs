@@ -441,7 +441,7 @@ pub(crate) fn image_response_descriptor_from_parkable(
 
 fn image_response_descriptor_from_bytes(
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &[u8],
 ) -> Option<crate::native_bridge::ImageResponseDescriptor> {
     if !image_response_status_is_successful(status) {

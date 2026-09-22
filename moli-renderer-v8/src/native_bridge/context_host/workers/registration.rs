@@ -820,7 +820,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingFetchContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.workers
             .get_mut(&worker_id)
@@ -843,7 +843,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingXhrContinue,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> bool {
         self.workers
             .get_mut(&worker_id)
@@ -988,7 +988,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.workers
@@ -1013,7 +1013,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.workers
@@ -1038,7 +1038,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.workers
@@ -1063,7 +1063,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingFetchContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.workers
@@ -1088,7 +1088,7 @@ impl JsContextHost {
         worker_id: DedicatedWorkerId,
         request: WorkerPendingXhrContinue,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     ) -> bool {
         self.workers
@@ -1570,7 +1570,7 @@ fn loaded_worker_script_from_navigation_response(
 }
 
 fn dedicated_worker_policy_context_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     creator_policy_context: SubresourcePolicyContext,
 ) -> SubresourcePolicyContext {
     SubresourcePolicyContext {
@@ -1595,14 +1595,14 @@ mod tests {
             cross_origin_isolated: true,
             ..Default::default()
         };
-        let headers = vec![
+        let headers: Vec<(String, Vec<u8>)> = vec![
             (
                 "Cross-Origin-Embedder-Policy".to_owned(),
-                "credentialless".to_owned(),
+                b"credentialless".to_vec(),
             ),
             (
                 "Document-Isolation-Policy".to_owned(),
-                "isolate-and-credentialless".to_owned(),
+                b"isolate-and-credentialless".to_vec(),
             ),
         ];
 

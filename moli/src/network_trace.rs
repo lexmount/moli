@@ -249,7 +249,7 @@ fn render_websocket_summary(
 pub(crate) fn render_http_error_network_trace(
     final_url: &url::Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &str,
     config: Option<&NetworkTraceConfigSummary>,
 ) -> Value {
@@ -300,7 +300,7 @@ fn render_main_document_trace_from_parts(
     requested_url: &url::Url,
     final_url: &url::Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     body: &str,
     redirected: bool,
     redirect_count: usize,
@@ -417,7 +417,7 @@ fn render_success_response_diagnostics(
     request_url: &url::Url,
     final_url: &url::Url,
     status: u16,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     response_body: &str,
     redirect_count: usize,
     redirect_chain: &[NavigationRedirect],
@@ -503,7 +503,8 @@ fn render_diagnostics_payload(
     Some(Value::Object(payload))
 }
 
-fn auth_schemes(headers: &[(String, String)], name: &str) -> Vec<String> {
+fn auth_schemes(headers: &[(String, Vec<u8>)], name: &str) -> Vec<String> {
+    let headers = moli_fetch::headers_to_byte_strings(headers);
     let mut schemes = headers
         .iter()
         .filter(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
@@ -519,7 +520,7 @@ fn auth_schemes(headers: &[(String, String)], name: &str) -> Vec<String> {
 fn gate_hint_reasons(
     request_url: &url::Url,
     final_url: &url::Url,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     response_body: &str,
     redirect_chain: &[NavigationRedirect],
     body_mode: GateHintBodyMode,
@@ -700,14 +701,17 @@ where
     names
 }
 
-fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+fn header_value<'a>(
+    headers: &'a [(String, Vec<u8>)],
+    name: &str,
+) -> Option<std::borrow::Cow<'a, str>> {
     headers
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.as_str())
+        .map(|(_, value)| moli_fetch::decode_header_value(value))
 }
 
-fn json_response_summary(headers: &[(String, String)], body: &str) -> Option<Value> {
+fn json_response_summary(headers: &[(String, Vec<u8>)], body: &str) -> Option<Value> {
     let content_type = header_value(headers, "content-type")?;
     if !content_type
         .split(';')
@@ -761,7 +765,7 @@ fn clamp_diagnostic_string(text: &str) -> String {
     output
 }
 
-fn json_response_error_like(headers: &[(String, String)], body: &str) -> bool {
+fn json_response_error_like(headers: &[(String, Vec<u8>)], body: &str) -> bool {
     let Some(content_type) = header_value(headers, "content-type") else {
         return false;
     };
@@ -873,7 +877,7 @@ mod tests {
             401,
             vec![(
                 "WWW-Authenticate".to_owned(),
-                "Basic realm=\"private\"".to_owned(),
+                b"Basic realm=\"private\"".to_vec(),
             )],
             "auth required".to_owned(),
             Vec::new(),
@@ -930,7 +934,7 @@ mod tests {
             Vec::new(),
             "wss://example.test/socket".parse()?,
             101,
-            vec![("sec-websocket-accept".to_owned(), "accept-token".to_owned())],
+            vec![("sec-websocket-accept".to_owned(), b"accept-token".to_vec())],
             String::new(),
             Vec::new(),
         );
@@ -1073,8 +1077,8 @@ mod tests {
             "http://login.example.test/security/baxia".parse()?,
             200,
             vec![
-                ("content-type".to_owned(), "application/json".to_owned()),
-                ("x-baxia-info".to_owned(), "challenge".to_owned()),
+                ("content-type".to_owned(), b"application/json".to_vec()),
+                ("x-baxia-info".to_owned(), b"challenge".to_vec()),
             ],
             r#"{"success":false,"code":"AUTH_REQUIRED","message":"login required","ret":["FAIL_SYS_USER_VALIDATE"]}"#.to_owned(),
             Vec::new(),
@@ -1110,7 +1114,7 @@ mod tests {
             &requested_url,
             &final_url,
             200,
-            &[("content-type".to_owned(), "text/html".to_owned())],
+            &[("content-type".to_owned(), b"text/html".to_vec())],
             "<html><body>login keyword in body should not drive main document diagnostics</body></html>",
             true,
             1,
@@ -1201,7 +1205,7 @@ mod tests {
             401,
             &[(
                 "www-authenticate".to_owned(),
-                "Bearer realm=\"api\"".to_owned(),
+                b"Bearer realm=\"api\"".to_vec(),
             )],
             "unauthorized",
             Some(&config),

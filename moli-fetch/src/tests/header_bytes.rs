@@ -146,15 +146,12 @@ async fn http_header_bytes_survive_all_transports_and_observation() -> Result<()
             assert_eq!(body, [0, 255, 128], "{mode}");
         }
         let expected = [
-            ("x-bytes".to_owned(), value.clone()),
-            ("x-edges".to_owned(), "\u{a0}value\u{85}".to_owned()),
-            (
-                "x-utf8".to_owned(),
-                "\u{c3}\u{bf}\u{e4}\u{b8}\u{ad}".to_owned(),
-            ),
-            ("x-empty".to_owned(), String::new()),
-            ("x-repeat".to_owned(), "first".to_owned()),
-            ("x-repeat".to_owned(), "second".to_owned()),
+            ("x-bytes".to_owned(), bytes.clone()),
+            ("x-edges".to_owned(), b"\xa0value\x85".to_vec()),
+            ("x-utf8".to_owned(), b"\xc3\xbf\xe4\xb8\xad".to_vec()),
+            ("x-empty".to_owned(), Vec::new()),
+            ("x-repeat".to_owned(), b"first".to_vec()),
+            ("x-repeat".to_owned(), b"second".to_vec()),
         ];
         assert_eq!(
             head.headers
@@ -237,7 +234,7 @@ async fn http_header_bytes_survive_redirect_handle_reuse() -> Result<()> {
     assert!(head.redirected);
     assert_eq!(head.final_url.path(), "/final");
     assert_eq!(body, [0, 255, 128]);
-    assert!(head.headers.contains(&("x-bytes".into(), "\u{ff}".into())));
+    assert!(head.headers.contains(&("x-bytes".into(), b"\xff".to_vec())));
     let requests = server.await??;
     assert_eq!(requests.len(), 2);
     for request in requests {
@@ -276,7 +273,7 @@ async fn http_header_bytes_survive_disk_cache_reopen() -> Result<()> {
             assert_eq!(head.from_cache, index != 0, "{first_mode} to {mode}");
             assert!(
                 head.headers
-                    .contains(&("x-bytes".into(), "\u{a0}\u{c3}\u{bf}\u{85}".into()))
+                    .contains(&("x-bytes".into(), b"\xa0\xc3\xbf\x85".to_vec()))
             );
             assert!(client.shutdown().is_clean());
         }

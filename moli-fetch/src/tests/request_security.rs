@@ -43,7 +43,7 @@ fn synthetic_redirect(from: &Url, to: &Url) -> RedirectInfo {
         from_url: from.clone(),
         to_url: to.clone(),
         status: 302,
-        headers: vec![("Location".to_owned(), to.to_string())],
+        headers: vec![("Location".to_owned(), to.as_str().as_bytes().to_vec())],
         network_extra_info_available: false,
         request_extra_info: None,
         response_extra_info: None,

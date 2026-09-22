@@ -1,5 +1,65 @@
 use anyhow::{Context, Result};
 
+/// Decode HTTP bytes isomorphically, without treating valid UTF-8 sequences specially.
+pub fn decode_header_value(value: &[u8]) -> std::borrow::Cow<'_, str> {
+    if value.is_ascii() {
+        std::borrow::Cow::Borrowed(std::str::from_utf8(value).expect("ASCII is valid UTF-8"))
+    } else {
+        std::borrow::Cow::Owned(value.iter().copied().map(char::from).collect())
+    }
+}
+
+/// Project a raw header list onto a WebIDL ByteString or protocol text boundary.
+pub fn headers_to_byte_strings(headers: &[(String, Vec<u8>)]) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| (name.clone(), decode_header_value(value).into_owned()))
+        .collect()
+}
+
+/// Recover raw bytes from a WebIDL ByteString header list.
+pub fn headers_from_byte_strings(headers: &[(String, String)]) -> Result<Vec<(String, Vec<u8>)>> {
+    headers
+        .iter()
+        .map(|(name, value)| Ok((name.clone(), header_value_from_byte_string(value)?)))
+        .collect()
+}
+
+/// Recover HTTP value bytes from an isomorphic string, without UTF-8 encoding.
+pub fn header_value_from_byte_string(value: &str) -> Result<Vec<u8>> {
+    value
+        .chars()
+        .map(|ch| u8::try_from(u32::from(ch)))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("HTTP header ByteString contains a non-byte character")
+}
+
+/// Read persisted raw headers, including the legacy isomorphic string representation.
+pub fn deserialize_headers<'de, D>(deserializer: D) -> Result<Vec<(String, Vec<u8>)>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Value {
+        Bytes(Vec<u8>),
+        ByteString(String),
+    }
+    Vec::<(String, Value)>::deserialize(deserializer)?
+        .into_iter()
+        .map(|(name, value)| {
+            let bytes = match value {
+                Value::Bytes(bytes) => bytes,
+                Value::ByteString(value) => {
+                    header_value_from_byte_string(&value).map_err(serde::de::Error::custom)?
+                }
+            };
+            Ok((name, bytes))
+        })
+        .collect()
+}
+
 /// Ordered HTTP field names and encoded values, including duplicate fields.
 ///
 /// Ordinary Rust strings use UTF-8. WebIDL ByteStrings must enter through
@@ -33,31 +93,12 @@ impl HeaderFields {
     }
 
     pub fn from_byte_strings(headers: &[(String, String)]) -> Result<Self> {
-        headers
-            .iter()
-            .map(|(name, value)| {
-                let bytes = value
-                    .chars()
-                    .map(|ch| u8::try_from(u32::from(ch)))
-                    .collect::<std::result::Result<Vec<_>, _>>()
-                    .context("HTTP header ByteString contains a non-byte character")?;
-                Ok((name.clone(), bytes))
-            })
-            .collect::<Result<Vec<_>>>()
-            .map(Self)
+        headers_from_byte_strings(headers).map(Self)
     }
 
     /// A lossless string projection for Fetch and network observation surfaces.
     pub fn to_byte_strings(&self) -> Vec<(String, String)> {
-        self.0
-            .iter()
-            .map(|(name, value)| {
-                (
-                    name.clone(),
-                    value.iter().copied().map(char::from).collect(),
-                )
-            })
-            .collect()
+        headers_to_byte_strings(&self.0)
     }
 }
 
@@ -102,6 +143,29 @@ impl std::ops::DerefMut for HeaderFields {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn persisted_headers_read_legacy_byte_strings_and_write_raw_bytes() {
+        #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+        struct Record {
+            #[serde(deserialize_with = "deserialize_headers")]
+            headers: Vec<(String, Vec<u8>)>,
+        }
+        let legacy = r#"{"headers":[["X-Bytes","ÿ"],["X-Bytes","Ã¿"],["X-Empty",""]]}"#;
+        let record: Record = serde_json::from_str(legacy).unwrap();
+        assert_eq!(
+            record.headers,
+            vec![
+                ("X-Bytes".into(), vec![0xff]),
+                ("X-Bytes".into(), vec![0xc3, 0xbf]),
+                ("X-Empty".into(), vec![]),
+            ]
+        );
+        let encoded = serde_json::to_value(&record).unwrap();
+        assert_eq!(encoded["headers"][0][1], serde_json::json!([255]));
+        assert_eq!(serde_json::from_value::<Record>(encoded).unwrap(), record);
+        assert!(serde_json::from_str::<Record>(r#"{"headers":[["X-Invalid","中"]]}"#).is_err());
+    }
 
     #[test]
     fn string_encodings_are_explicit() {

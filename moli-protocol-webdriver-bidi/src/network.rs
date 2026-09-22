@@ -507,18 +507,23 @@ fn network_request_event_cdp_params(event: &NetworkRequestEvent, method: &str) -
     }
 }
 
-fn json_object_from_header_pairs(headers: &[(String, String)]) -> serde_json::Map<String, Value> {
+fn json_object_from_header_pairs(headers: &[(String, Vec<u8>)]) -> serde_json::Map<String, Value> {
     headers
         .iter()
-        .map(|(name, value)| (name.clone(), json!(value)))
+        .map(|(name, value)| {
+            (
+                name.clone(),
+                json!(moli_header_field::decode_header_value(value)),
+            )
+        })
         .collect()
 }
 
-fn response_header_value(headers: &[(String, String)], name: &str) -> Option<String> {
+fn response_header_value(headers: &[(String, Vec<u8>)], name: &str) -> Option<String> {
     headers
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
-        .map(|(_, value)| value.clone())
+        .map(|(_, value)| moli_header_field::decode_header_value(value).into_owned())
 }
 
 fn response_protocol_for_url(url: &str) -> String {

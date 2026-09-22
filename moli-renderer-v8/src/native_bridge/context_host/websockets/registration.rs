@@ -253,7 +253,7 @@ impl JsContextHost {
         request_url: Url,
         request_headers: moli_fetch::RequestHeaders,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
     ) -> Result<(), String> {
         let event_sender = self.page_websocket_sender().event_sender();
         let Some(state) = self.websockets.get_mut(&pending.socket_id) else {
@@ -263,8 +263,7 @@ impl JsContextHost {
             pending.socket_id,
             request_headers,
             response_status,
-            moli_fetch::ResponseHeaders::from_byte_strings(&response_headers)
-                .map_err(|error| error.to_string())?,
+            moli_fetch::ResponseHeaders::from_bytes(response_headers),
             event_sender,
         );
         state.url = request_url;
@@ -304,7 +303,7 @@ impl JsContextHost {
                 request_cookie_report: None,
                 network_request_headers: None,
                 response_status,
-                response_headers: response_headers.to_byte_strings(),
+                response_headers: response_headers.into_iter().collect(),
                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                 from_cache: false,
             }),
@@ -316,7 +315,7 @@ impl JsContextHost {
         &mut self,
         pending: PendingWebSocketResponseState,
         response_status: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     ) -> Result<(), String> {
         let Some(state) = self.websockets.get_mut(&pending.socket_id) else {
             return Err(format!("unknown pending WebSocket `{}`", pending.socket_id));
@@ -330,11 +329,7 @@ impl JsContextHost {
         controller
             .continue_open(
                 response_status,
-                response_headers
-                    .as_ref()
-                    .map(|headers| moli_fetch::ResponseHeaders::from_byte_strings(headers))
-                    .transpose()
-                    .map_err(|error| error.to_string())?,
+                response_headers.map(moli_fetch::ResponseHeaders::from_bytes),
             )
             .map_err(|error| format!("pending WebSocket `{}`: {error}", pending.socket_id))
     }

@@ -7,15 +7,15 @@ fn browser_context_cookie_sites_and_clear_for_sites_use_site_keys() {
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "b=1; Path=/assets".to_owned())],
+            &[("set-cookie".to_owned(), b"b=1; Path=/assets".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "c=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"c=1; Path=/app".to_vec())],
         );
     }
 
@@ -34,20 +34,20 @@ fn browser_context_clear_cookies_for_sites_report_projects_replaced_and_remainin
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persistent=1; Path=/assets; Max-Age=3600".to_owned(),
+                b"persistent=1; Path=/assets; Max-Age=3600".to_vec(),
             )],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -71,17 +71,17 @@ fn browser_context_cookie_site_data_summarizes_counts_by_site() {
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "b=1; Path=/assets".to_owned())],
+            &[("set-cookie".to_owned(), b"b=1; Path=/assets".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[
-                ("set-cookie".to_owned(), "c=1; Path=/app".to_owned()),
-                ("set-cookie".to_owned(), "d=1; Path=/app".to_owned()),
+                ("set-cookie".to_owned(), b"c=1; Path=/app".to_vec()),
+                ("set-cookie".to_owned(), b"d=1; Path=/app".to_vec()),
             ],
         );
     }
@@ -102,13 +102,13 @@ fn browser_context_preview_clear_cookies_for_sites_reports_targeted_removal_with
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -145,13 +145,13 @@ fn browser_context_preview_clear_cookies_for_sites_with_persistent_scope_keeps_s
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persist=1; Path=/app; Max-Age=3600".to_owned(),
+                b"persist=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -182,13 +182,13 @@ fn browser_context_preview_clear_cookie_store_defaults_to_all_scope() {
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persist=1; Path=/app; Max-Age=3600".to_owned(),
+                b"persist=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -273,13 +273,13 @@ fn browser_context_preview_clear_cookie_storage_with_site_target_projects_target
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -372,18 +372,18 @@ fn connection_clear_cookie_storage_with_site_target_projects_targeted_report() {
             .lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persist=1; Path=/assets; Max-Age=3600".to_owned(),
+                b"persist=1; Path=/assets; Max-Age=3600".to_vec(),
             )],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "other=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"other=1; Path=/app".to_vec())],
         );
     }
 
@@ -417,13 +417,13 @@ fn browser_context_preview_cookie_site_data_operation_clear_projects_generic_own
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -450,13 +450,13 @@ fn browser_context_cookie_storage_state_snapshot_distinguishes_live_and_persiste
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persistent=1; Path=/app; Max-Age=3600".to_owned(),
+                b"persistent=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -489,20 +489,20 @@ fn browser_context_cookie_storage_state_snapshot_for_sites_filters_views() {
         let mut store = bc.cookie_store_for_test().lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persistent=1; Path=/assets; Max-Age=3600".to_owned(),
+                b"persistent=1; Path=/assets; Max-Age=3600".to_vec(),
             )],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -567,13 +567,13 @@ fn connection_clear_cookies_for_sites_report_projects_targeted_state() {
         let mut store = cookie_store.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -636,7 +636,7 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -672,11 +672,11 @@ fn connection_cookie_sites_reflect_active_browser_store() {
         let mut store = cookie_store.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "b=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"b=1; Path=/app".to_vec())],
         );
     }
 
@@ -695,15 +695,15 @@ fn connection_cookie_site_data_reflects_active_browser_store() {
         let mut store = cookie_store.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "a=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "b=1; Path=/assets".to_owned())],
+            &[("set-cookie".to_owned(), b"b=1; Path=/assets".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "c=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"c=1; Path=/app".to_vec())],
         );
     }
 
@@ -725,13 +725,13 @@ fn connection_cookie_storage_state_snapshot_reflects_active_browser_store() {
         let mut store = cookie_store.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persistent=1; Path=/app; Max-Age=3600".to_owned(),
+                b"persistent=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }
@@ -752,20 +752,20 @@ fn connection_cookie_storage_state_snapshot_for_sites_filters_active_store() {
         let mut store = cookie_store.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
-            &[("set-cookie".to_owned(), "session=1; Path=/app".to_owned())],
+            &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
         );
         store.store_response_headers(
             &Url::parse("https://cdn.example.com/assets/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "persistent=1; Path=/assets; Max-Age=3600".to_owned(),
+                b"persistent=1; Path=/assets; Max-Age=3600".to_vec(),
             )],
         );
         store.store_response_headers(
             &Url::parse("https://foo.co.uk/app/index.html").unwrap(),
             &[(
                 "set-cookie".to_owned(),
-                "other=1; Path=/app; Max-Age=3600".to_owned(),
+                b"other=1; Path=/app; Max-Age=3600".to_vec(),
             )],
         );
     }

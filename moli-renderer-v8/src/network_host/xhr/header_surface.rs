@@ -61,14 +61,16 @@ pub(super) fn xhr_set_request_header_callback<'s>(
 }
 
 pub(super) fn xhr_response_headers_for_script(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Vec<(String, String)> {
     use crate::network_host::headers::{
         HeadersGuard, filter_headers_for_guard, normalized_headers_entries,
     };
 
-    let mut headers =
-        normalized_headers_entries(&filter_headers_for_guard(headers, HeadersGuard::Response));
+    let mut headers = normalized_headers_entries(&filter_headers_for_guard(
+        &moli_fetch::headers_to_byte_strings(headers),
+        HeadersGuard::Response,
+    ));
     // XHR uses legacy uppercase-byte order, unlike Headers iteration. Keep
     // the serialized names lowercase and preserve duplicate values in order.
     headers.sort_by(|(left, _), (right, _)| {

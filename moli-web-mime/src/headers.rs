@@ -1,22 +1,22 @@
 use crate::classification::is_binary_document_mime_type;
 use crate::parse::{mime_essence, normalize_web_api_mime_type};
 
-pub fn response_header_value(headers: &[(String, String)], name: &str) -> Option<String> {
+pub fn response_header_value(headers: &[(String, Vec<u8>)], name: &str) -> Option<String> {
     response_header_values(headers, name).into_iter().next()
 }
 
-pub fn response_header_values(headers: &[(String, String)], name: &str) -> Vec<String> {
+pub fn response_header_values(headers: &[(String, Vec<u8>)], name: &str) -> Vec<String> {
     let Some(name) = parsed_header_name(name) else {
         return Vec::new();
     };
     headers
         .iter()
         .filter(|(header_name, _)| header_name_matches(header_name, &name))
-        .map(|(_, value)| value.to_owned())
+        .map(|(_, value)| moli_header_field::decode_header_value(value).into_owned())
         .collect()
 }
 
-pub fn response_content_type(headers: &[(String, String)]) -> Option<String> {
+pub fn response_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
     response_header_value(headers, "content-type")
 }
 
@@ -27,7 +27,7 @@ pub fn response_content_type(headers: &[(String, String)]) -> Option<String> {
 /// Repeated values with the same essence inherit the first value's charset
 /// when their own charset is absent.
 pub fn extract_response_mime_type(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Option<moli_content_type::MimeType> {
     let combined = response_header_values(headers, "content-type").join(", ");
     let mut quoted = false;
@@ -70,33 +70,36 @@ pub fn extract_response_mime_type(
 }
 
 /// The essence returned by Fetch's "extract a MIME type" algorithm.
-pub fn extract_response_mime_essence(headers: &[(String, String)]) -> Option<String> {
+pub fn extract_response_mime_essence(headers: &[(String, Vec<u8>)]) -> Option<String> {
     extract_response_mime_type(headers).map(|mime| mime.essence())
 }
 
-pub fn response_headers_indicate_attachment_download(headers: &[(String, String)]) -> bool {
+pub fn response_headers_indicate_attachment_download(headers: &[(String, Vec<u8>)]) -> bool {
     headers.iter().any(|(name, value)| {
         let Ok(name) = http::HeaderName::from_bytes(name.as_bytes()) else {
             return false;
         };
         name == http::header::CONTENT_DISPOSITION
-            && content_disposition::parse_content_disposition(value).disposition
+            && content_disposition::parse_content_disposition(
+                &moli_header_field::decode_header_value(value),
+            )
+            .disposition
                 == content_disposition::DispositionType::Attachment
     })
 }
 
-pub fn response_headers_indicate_binary_document(headers: &[(String, String)]) -> bool {
+pub fn response_headers_indicate_binary_document(headers: &[(String, Vec<u8>)]) -> bool {
     response_content_type(headers)
         .as_deref()
         .is_some_and(is_binary_document_mime_type)
 }
 
-pub fn response_headers_indicate_raw_document(headers: &[(String, String)]) -> bool {
+pub fn response_headers_indicate_raw_document(headers: &[(String, Vec<u8>)]) -> bool {
     response_headers_indicate_attachment_download(headers)
         || response_headers_indicate_binary_document(headers)
 }
 
-pub fn response_document_content_type(headers: &[(String, String)]) -> Option<String> {
+pub fn response_document_content_type(headers: &[(String, Vec<u8>)]) -> Option<String> {
     let content_type = response_header_values(headers, "content-type")
         .into_iter()
         .last()?;
@@ -106,7 +109,7 @@ pub fn response_document_content_type(headers: &[(String, String)]) -> Option<St
 }
 
 pub fn effective_response_mime_type(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     override_mime_type: Option<&str>,
 ) -> Option<String> {
     override_mime_type
@@ -116,7 +119,7 @@ pub fn effective_response_mime_type(
 }
 
 pub fn effective_response_mime_essence(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     override_mime_type: Option<&str>,
 ) -> Option<String> {
     effective_response_mime_type(headers, override_mime_type)
@@ -124,7 +127,7 @@ pub fn effective_response_mime_essence(
         .and_then(mime_essence)
 }
 
-pub fn response_blob_mime_type(headers: &[(String, String)]) -> String {
+pub fn response_blob_mime_type(headers: &[(String, Vec<u8>)]) -> String {
     normalize_response_blob_mime_type(response_content_type(headers).as_deref())
 }
 

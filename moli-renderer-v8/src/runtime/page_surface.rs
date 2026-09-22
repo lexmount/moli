@@ -49,7 +49,7 @@ pub struct RendererPageView {
 pub struct RendererPendingDownloadResponse {
     pub final_url: String,
     pub status: u16,
-    pub headers: Vec<(String, String)>,
+    pub headers: Vec<(String, Vec<u8>)>,
     pub body: Vec<u8>,
 }
 
@@ -732,7 +732,7 @@ pub enum RendererServiceWorkerFetchDiagnosticResult {
         final_url: String,
         status: u16,
         status_text: String,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         body_len: usize,
     },
     Failure {
@@ -5244,13 +5244,13 @@ pub enum RendererPageCommand {
     FulfillPendingSubresourceFetch {
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     ContinuePendingSubresourceResponse {
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     FailPendingSubresourceResponse {
         internal_id: u64,
@@ -5259,7 +5259,7 @@ pub enum RendererPageCommand {
     FulfillPendingSubresourceResponse {
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     ReceiveSyntheticWebSocketText {

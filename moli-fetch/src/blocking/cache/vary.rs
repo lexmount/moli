@@ -35,7 +35,7 @@ pub(super) fn vary_headers_for_response(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
 ) -> Option<Vec<HttpCacheVaryHeader>> {
     let mut out = Vec::new();
     for normalized_name in response_vary_header_names(response_headers)? {

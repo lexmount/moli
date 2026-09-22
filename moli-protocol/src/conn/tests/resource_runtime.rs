@@ -131,7 +131,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
             &navigation,
             requested_url,
             200,
-            vec![("content-type".to_owned(), "text/html".to_owned())],
+            vec![("content-type".to_owned(), b"text/html".to_vec())],
             crate::conn::CapturedBody::from_string("<main>target</main>".to_owned()),
             None,
             moli_fetch::NetworkObservationJournal::default(),
@@ -356,7 +356,7 @@ fn browser_context_request_cookie_report_reads_storage_partition_cookie_handle()
             &request_url,
             &[(
                 "set-cookie".to_owned(),
-                "sid=partition; Path=/app".to_owned(),
+                b"sid=partition; Path=/app".to_vec(),
             )],
         );
     }
@@ -384,7 +384,7 @@ fn browser_context_cookie_snapshot_and_delete_use_storage_partition_cookie_handl
             &request_url,
             &[(
                 "set-cookie".to_owned(),
-                "sid=partition; Path=/app".to_owned(),
+                b"sid=partition; Path=/app".to_vec(),
             )],
         );
     }
@@ -441,7 +441,7 @@ fn navigation_load_inputs_own_cookie_request_and_response_reports() {
         &response_url,
         &[(
             "set-cookie".to_owned(),
-            "sid=load-input; Path=/app".to_owned(),
+            b"sid=load-input; Path=/app".to_vec(),
         )],
     );
     assert_eq!(set_reports.len(), 1);
@@ -596,7 +596,7 @@ async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_a
         &requested_url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/app; Secure".to_owned(),
+            b"sid=1; Path=/app; Secure".to_vec(),
         )],
     );
     let before = bc
@@ -649,7 +649,7 @@ async fn rebuild_buffered_response_preserving_request_report_avoids_second_acces
         &requested_url,
         &[(
             "set-cookie".to_owned(),
-            "sid=1; Path=/app; Secure".to_owned(),
+            b"sid=1; Path=/app; Secure".to_vec(),
         )],
     );
     conn.install_browser_context_fixture_for_test(bc);
@@ -3614,7 +3614,7 @@ async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
     assert_eq!(navigation.response_status, 200);
     assert_eq!(
         navigation.response_headers,
-        vec![("Content-Type".to_owned(), "image/png".to_owned())]
+        vec![("Content-Type".to_owned(), b"image/png".to_vec())]
     );
     assert!(navigation.pending_download.is_none());
 
@@ -3625,7 +3625,7 @@ async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
     assert_eq!(network_events.response_status, 200);
     assert_eq!(
         network_events.response_headers,
-        vec![("Content-Type".to_owned(), "image/png".to_owned())]
+        vec![("Content-Type".to_owned(), b"image/png".to_vec())]
     );
     assert!(network_events.response_cookie_reports.is_empty());
     assert!(network_events.redirect_chain.is_empty());

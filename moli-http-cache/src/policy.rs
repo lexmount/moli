@@ -11,7 +11,7 @@ pub struct HttpCacheResponsePolicy {
 
 /// Parses the subset of HTTP response cache policy currently enforced by
 /// Moli's conservative disk cache.
-pub fn response_cache_policy(headers: &[(String, String)]) -> HttpCacheResponsePolicy {
+pub fn response_cache_policy(headers: &[(String, Vec<u8>)]) -> HttpCacheResponsePolicy {
     let mut store = true;
     let mut requires_validation = false;
     let mut max_age_seconds = None;
@@ -20,11 +20,12 @@ pub fn response_cache_policy(headers: &[(String, String)]) -> HttpCacheResponseP
     let mut age_seconds = 0u64;
 
     for (name, value) in headers {
+        let value = moli_header_field::decode_header_value(value);
         if name.eq_ignore_ascii_case("cache-control") {
             // A quoted directive argument may contain `,`, as in
             // `private="Set-Cookie, X-Auth"`, so splitting on every comma
             // would read the argument's own text as further directives.
-            for directive in split_outside_quoted_strings(value, ',')
+            for directive in split_outside_quoted_strings(&value, ',')
                 .into_iter()
                 .map(str::trim)
             {
@@ -56,12 +57,12 @@ pub fn response_cache_policy(headers: &[(String, String)]) -> HttpCacheResponseP
                 store = false;
             }
         } else if name.eq_ignore_ascii_case("expires")
-            && let Ok(expires_at) = parse_http_date(value)
+            && let Ok(expires_at) = parse_http_date(&value)
             && let Ok(duration) = expires_at.duration_since(std::time::UNIX_EPOCH)
         {
             expires_header_unix_ms = Some(duration.as_millis() as u64);
         } else if name.eq_ignore_ascii_case("date")
-            && let Ok(date) = parse_http_date(value)
+            && let Ok(date) = parse_http_date(&value)
             && let Ok(duration) = date.duration_since(std::time::UNIX_EPOCH)
         {
             date_unix_ms = Some(duration.as_millis() as u64);
@@ -98,7 +99,7 @@ pub fn cacheable_response_parts_policy(
     request_url: &Url,
     final_url: &Url,
     status: u16,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     redirected: bool,
 ) -> Option<HttpCacheResponsePolicy> {
     if !cacheable_response_status(status)
@@ -132,7 +133,7 @@ fn cached_response_is_stale_at(
 }
 
 pub fn cached_response_is_fresh_immutable(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     expires_at_unix_ms: Option<u64>,
 ) -> bool {
     cached_response_is_fresh_immutable_at(unix_now_ms(), headers, expires_at_unix_ms)
@@ -140,9 +141,10 @@ pub fn cached_response_is_fresh_immutable(
 
 fn cached_response_is_fresh_immutable_at(
     now_ms: u64,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
     expires_at_unix_ms: Option<u64>,
 ) -> bool {
+    let headers = moli_header_field::headers_to_byte_strings(headers);
     expires_at_unix_ms.is_some_and(|expires_at| now_ms < expires_at)
         && headers
             .iter()
@@ -222,9 +224,9 @@ mod tests {
 
     #[test]
     fn freshness_requires_expiration_to_be_strictly_after_now() {
-        let immutable_headers = vec![(
+        let immutable_headers: Vec<(String, Vec<u8>)> = vec![(
             "cache-control".to_owned(),
-            "max-age=60, immutable".to_owned(),
+            b"max-age=60, immutable".to_vec(),
         )];
 
         assert!(!cached_response_is_stale_at(99, Some(100), false));
@@ -262,9 +264,9 @@ mod tests {
 
     #[test]
     fn response_policy_ignores_directives_inside_a_quoted_argument() {
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Cache-Control".to_owned(),
-            "max-age=600, community=\"x, no-store, y\"".to_owned(),
+            b"max-age=600, community=\"x, no-store, y\"".to_vec(),
         )];
 
         assert!(response_cache_policy(&headers).store);
@@ -278,12 +280,13 @@ mod tests {
             "max-age=0, no-store",
             "no-store, max-age=600",
         ] {
-            let headers = vec![("Cache-Control".to_owned(), value.to_owned())];
+            let headers: Vec<(String, Vec<u8>)> =
+                vec![("Cache-Control".to_owned(), value.as_bytes().to_vec())];
             assert!(!response_cache_policy(&headers).store, "value={value}");
         }
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Cache-Control".to_owned(),
-            "private=\"Set-Cookie\"".to_owned(),
+            b"private=\"Set-Cookie\"".to_vec(),
         )];
         assert!(!response_cache_policy(&headers).store);
     }
@@ -299,10 +302,8 @@ mod tests {
     #[test]
     fn a_trailing_backslash_does_not_manufacture_a_freshness_lifetime() {
         // `31536000\` is malformed and must not parse as one year.
-        let headers = vec![(
-            "Cache-Control".to_owned(),
-            "max-age=\"31536000\\".to_owned(),
-        )];
+        let headers: Vec<(String, Vec<u8>)> =
+            vec![("Cache-Control".to_owned(), b"max-age=\"31536000\\".to_vec())];
 
         assert_eq!(response_cache_policy(&headers).expires_at_unix_ms, None);
     }

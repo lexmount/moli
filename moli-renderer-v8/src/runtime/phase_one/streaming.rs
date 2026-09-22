@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot};
 
 pub(in crate::runtime) struct StreamingHtmlPageCreationResult {
     pub(in crate::runtime) response_status: u16,
-    pub(in crate::runtime) response_headers: Vec<(String, String)>,
+    pub(in crate::runtime) response_headers: Vec<(String, Vec<u8>)>,
     pub(in crate::runtime) outcome: ParseTimePageVmCreationOutcome,
 }
 
@@ -179,7 +179,7 @@ impl ConcurrentParseTimeRuntime {
         started: Instant,
         final_url: Url,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
         reply_boundary: crate::RendererReplyBoundary,
     ) -> Result<StreamingNavigationPageCreationResult> {
@@ -233,7 +233,7 @@ impl ConcurrentParseTimeRuntime {
         started: Instant,
         final_url: Url,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
     ) -> Result<StreamingNavigationPageCreationResult> {
         Self::create_from_committed_external_raw_document_response(
@@ -263,7 +263,7 @@ impl ConcurrentParseTimeRuntime {
         started: Instant,
         final_url: Url,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
     ) -> Result<StreamingNavigationPageCreationResult> {
         Self::create_from_committed_external_raw_document_response(
@@ -293,7 +293,7 @@ impl ConcurrentParseTimeRuntime {
         started: Instant,
         final_url: Url,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
         boundary: CommittedNavigationBootstrapBoundary,
     ) -> Result<StreamingNavigationPageCreationResult> {
@@ -480,7 +480,7 @@ impl ConcurrentParseTimeRuntime {
     }
 }
 
-fn response_headers_indicate_xml_document(headers: &[(String, String)]) -> bool {
+fn response_headers_indicate_xml_document(headers: &[(String, Vec<u8>)]) -> bool {
     moli_web_mime::response_document_content_type(headers)
         .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime))
 }
@@ -898,7 +898,9 @@ fn sync_state_document_character_set_from_decoder(
         .set_document_character_set(encoding);
 }
 
-pub(in crate::runtime) fn response_headers_indicate_download(headers: &[(String, String)]) -> bool {
+pub(in crate::runtime) fn response_headers_indicate_download(
+    headers: &[(String, Vec<u8>)],
+) -> bool {
     response_headers_indicate_attachment_download(headers)
 }
 
@@ -1198,9 +1200,9 @@ mod tests {
         drop(body_tx);
         completion_tx.send(Ok(())).unwrap();
         let mut source = RawDocumentBodySource::External(raw_body);
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Content-Type".to_owned(),
-            "text/html; charset=utf-8".to_owned(),
+            b"text/html; charset=utf-8".to_vec(),
         )];
         let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -1273,9 +1275,9 @@ mod tests {
         drop(body_tx);
         completion_tx.send(Ok(())).unwrap();
         let mut source = RawDocumentBodySource::External(raw_body);
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Content-Type".to_owned(),
-            "text/html; charset=utf-8".to_owned(),
+            b"text/html; charset=utf-8".to_vec(),
         )];
         let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -1334,9 +1336,9 @@ mod tests {
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(
             Url::parse("https://example.test/").expect("test url"),
         );
-        let headers = vec![(
+        let headers: Vec<(String, Vec<u8>)> = vec![(
             "Content-Type".to_owned(),
-            "text/html; charset=utf-8".to_owned(),
+            b"text/html; charset=utf-8".to_vec(),
         )];
         let mut decoder = HtmlDocumentStreamingDecoder::new(&headers);
 
@@ -1359,12 +1361,12 @@ mod tests {
     fn streaming_navigation_download_detection_uses_content_disposition_type() {
         assert!(response_headers_indicate_download(&[(
             "Content-Disposition".to_owned(),
-            "attachment; filename=report.html".to_owned(),
+            b"attachment; filename=report.html".to_vec(),
         )]));
 
         assert!(!response_headers_indicate_download(&[(
             "Content-Disposition".to_owned(),
-            "inline; filename=attachment.html".to_owned(),
+            b"inline; filename=attachment.html".to_vec(),
         )]));
     }
 }

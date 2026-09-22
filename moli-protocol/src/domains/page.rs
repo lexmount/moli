@@ -4123,7 +4123,7 @@ mod producer_tests {
                     request_headers: vec![("Accept".to_owned(), "text/html".to_owned())],
                     final_url: "https://example.test/child".to_owned(),
                     status: 200,
-                    response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                    response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
                     encoded_data_length: 3,
                     response_body: Some(SubresourceResponseBody::from_bytes(vec![
                         0x00, 0xff, b'a',
@@ -4261,7 +4261,7 @@ mod producer_tests {
                     request_headers: Vec::new(),
                     final_url: "https://example.test/retired-child".to_owned(),
                     status: 200,
-                    response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+                    response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
                     encoded_data_length: 21,
                     response_body: Some(SubresourceResponseBody::from_bytes(
                         b"historical child body".to_vec(),
@@ -4369,7 +4369,7 @@ mod producer_tests {
             request_headers: Vec::new(),
             final_url: "https://example.test/legacy-child".to_owned(),
             status: 200,
-            response_headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
+            response_headers: vec![("Content-Type".to_owned(), b"text/html".to_vec())],
             encoded_data_length: 0,
             response_body: None,
             from_cache: false,
