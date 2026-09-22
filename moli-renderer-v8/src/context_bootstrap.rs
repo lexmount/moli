@@ -82,6 +82,7 @@ mod navigation_event_worlds;
 mod navigation_events;
 mod navigation_handler_callbacks;
 mod navigation_history_pruning;
+mod navigation_download;
 mod navigation_interception;
 mod navigation_lifecycle;
 mod navigation_mutation;
