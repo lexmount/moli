@@ -39,6 +39,7 @@ struct DocumentPageLoadOptions {
     pub resource_source: CommittedDocumentResourceSource,
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
+    pub navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     pub requested_url: Url,
     pub final_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -1173,6 +1174,7 @@ impl NavigationEngine {
         fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<BuiltDocumentPage> {
         let built = self
             .build_html_page_from_response_options_async(
@@ -1184,6 +1186,7 @@ impl NavigationEngine {
                     resource_source: CommittedDocumentResourceSource::Synthetic,
                     root_frame_id,
                     main_document_commit,
+                    navigation_history,
                     requested_url: document_url.clone(),
                     final_url: document_url,
                     navigation_initiator_url,
@@ -1250,6 +1253,7 @@ impl NavigationEngine {
             fetch_subresource_interception_resource_type,
             None,
             None,
+            None,
         )
         .await
     }
@@ -1274,6 +1278,7 @@ impl NavigationEngine {
         fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -1298,6 +1303,7 @@ impl NavigationEngine {
             fetch_subresource_interception_resource_type,
             root_frame_id,
             main_document_commit,
+            navigation_history,
         )
         .await
     }
@@ -1331,6 +1337,7 @@ impl NavigationEngine {
         fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<BuiltDocumentPage> {
         self.build_html_page_from_response_options_async(
             cookie_store,
@@ -1341,6 +1348,7 @@ impl NavigationEngine {
                 resource_source: CommittedDocumentResourceSource::Synthetic,
                 root_frame_id,
                 main_document_commit,
+                navigation_history,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -1413,6 +1421,7 @@ impl NavigationEngine {
             fetch_subresource_interception_resource_type,
             None,
             None,
+            None,
         )
         .await
     }
@@ -1443,6 +1452,7 @@ impl NavigationEngine {
         fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
         root_frame_id: Option<String>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -1473,6 +1483,7 @@ impl NavigationEngine {
             fetch_subresource_interception_resource_type,
             root_frame_id,
             main_document_commit,
+            navigation_history,
         )
         .await
     }
@@ -1515,6 +1526,7 @@ impl NavigationEngine {
         root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<PendingBuiltDocumentPage> {
         let loader = self.ensure_resource_request_client(cookie_store)?;
         loader.set_extra_http_headers(&extra_http_headers);
@@ -1552,6 +1564,7 @@ impl NavigationEngine {
                 runtime_inspector_session_restore_snapshots,
                 root_frame_id,
                 main_document_commit,
+                navigation_history,
             },
         )?;
         Ok(PendingBuiltDocumentPage { pending })
@@ -1607,6 +1620,7 @@ impl NavigationEngine {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -1638,6 +1652,7 @@ impl NavigationEngine {
         root_frame_id: Option<String>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<PendingBuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -1670,6 +1685,7 @@ impl NavigationEngine {
             root_frame_id,
             top_level_storage_key,
             main_document_commit,
+            navigation_history,
         )
     }
 
@@ -1705,6 +1721,7 @@ impl NavigationEngine {
         resource_source: CommittedDocumentResourceSource,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<BuiltDocumentPage> {
         let page_reservation = self.reserve_page_for_creation();
         let prepared = self
@@ -1740,6 +1757,7 @@ impl NavigationEngine {
                 resource_source,
                 reserved_service_worker_client,
                 main_document_commit,
+                navigation_history,
             )
             .await?;
         let permit = prepared.issue_commit_permit();
@@ -1780,6 +1798,7 @@ impl NavigationEngine {
         resource_source: CommittedDocumentResourceSource,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<PreparedDocumentPage> {
         let loader = self.resource_request_client_for_committed_document(
             cookie_store,
@@ -1829,6 +1848,7 @@ impl NavigationEngine {
                     runtime_inspector_session_restore_snapshots,
                     root_frame_id,
                     main_document_commit,
+                    navigation_history,
                 },
             )
             .await
@@ -1887,6 +1907,7 @@ impl NavigationEngine {
             CommittedDocumentResourceSource::Synthetic,
             None,
             None,
+            None,
         )
         .await
     }
@@ -1920,6 +1941,7 @@ impl NavigationEngine {
         resource_source: CommittedDocumentResourceSource,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<BuiltDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -1953,6 +1975,7 @@ impl NavigationEngine {
             resource_source,
             reserved_service_worker_client,
             main_document_commit,
+            navigation_history,
         )
         .await
     }
@@ -1988,6 +2011,7 @@ impl NavigationEngine {
         resource_source: CommittedDocumentResourceSource,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<PreparedDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -2023,6 +2047,7 @@ impl NavigationEngine {
             resource_source,
             reserved_service_worker_client,
             main_document_commit,
+            navigation_history,
         )
         .await
     }
@@ -2083,6 +2108,7 @@ impl NavigationEngine {
                         .runtime_inspector_session_restore_snapshots,
                     root_frame_id: options.root_frame_id,
                     main_document_commit: options.main_document_commit,
+                    navigation_history: options.navigation_history,
                 },
             )
             .await
@@ -2140,6 +2166,7 @@ impl NavigationEngine {
             options.resource_source,
             None,
             options.main_document_commit,
+            options.navigation_history,
         )
         .await
     }
@@ -2196,6 +2223,7 @@ impl NavigationEngine {
         root_frame_id: Option<String>,
         resource_source: CommittedDocumentResourceSource,
         main_document_commit: Option<RendererMainDocumentCommit>,
+        navigation_history: Option<moli_renderer_v8::RendererNavigationHistoryRequest>,
     ) -> Result<PreparedDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
@@ -2209,6 +2237,7 @@ impl NavigationEngine {
                 resource_source,
                 root_frame_id,
                 main_document_commit,
+                navigation_history,
                 requested_url,
                 final_url,
                 navigation_initiator_url,
@@ -2270,6 +2299,7 @@ impl NavigationEngine {
                 resource_source,
                 root_frame_id: None,
                 main_document_commit: None,
+                navigation_history: None,
                 requested_url,
                 final_url,
                 navigation_initiator_url,

@@ -2475,6 +2475,7 @@ async fn page_navigate_network_failure_commits_error_document() {
             request_body_bytes: None,
             request_headers: Vec::new().into(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            navigation_history: None,
             timestamp: 0.0,
             source_document_security: crate::conn::NavigationSourceDocumentSecurityContext::new(
                 "http://127.0.0.1".to_owned(),

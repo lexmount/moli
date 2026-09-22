@@ -74,6 +74,7 @@ pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
     if !window.strict_equals(scope.get_current_context().global(scope).into()) {
         sync_window_location_history_navigation_runtime_surface(scope, window);
     }
+    super::navigation_serialize::publish_top_level_navigation_history(scope, window);
     Ok(())
 }
 
@@ -148,6 +149,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     set_private_value(scope, window, WINDOW_NAVIGATION_SLOT, navigation.into());
 
     sync_window_location_history_navigation_runtime_surface(scope, window);
+    super::navigation_serialize::publish_top_level_navigation_history(scope, window);
     Ok(())
 }
 

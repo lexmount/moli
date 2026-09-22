@@ -23,7 +23,7 @@ use super::navigation_result::{
     cancel_pending_same_document_navigation_finishes_including_reentrant,
     queue_same_document_navigation_success,
 };
-use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
+use super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
     window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
@@ -80,7 +80,7 @@ pub(crate) fn update_history_for_document_open<'s>(
     let _ = entries.set_index(scope, index, entry.into());
     set_history_entries(scope, history, entries);
     sync_navigation_current_entry_from_history_entry(scope, window, entry);
-    sync_child_navigation_entry_seed_from_owner(scope, window);
+    sync_navigation_entry_seed_from_owner(scope, window);
     if let Some(navigation) = window_navigation_for_holder(scope, window) {
         dispatch_navigation_currententrychange(scope, navigation, Some(previous), Some("replace"));
         dispatch_navigation_entry_dispose(scope, previous);
@@ -315,7 +315,7 @@ fn mutate_history_object<'s>(
     );
     // A currententrychange listener may immediately start another navigation.
     // Its source Document and frame owner must already reflect this commit.
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
+    sync_navigation_entry_seed_from_owner(scope, owner);
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         refresh_navigation_destination_indexes(scope, navigation, history);
         dispatch_navigation_currententrychange(

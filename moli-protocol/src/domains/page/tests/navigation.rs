@@ -1442,6 +1442,7 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         "SID-RENDERER-HISTORY",
         "about:blank",
     );
+    ctx.enable_page_events_for_test(Some("SID-RENDERER-HISTORY"));
     let first_url = "data:text/html,<title>First</title><main>first</main>";
     let second_url = "data:text/html,<title>Second</title><main>second</main>";
 
@@ -1454,6 +1455,12 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         }))
         .await;
         take_response_by_id(&mut ctx, id);
+        ctx.wait_for_scheduler_message("initial history entry commit", |message| {
+            message["method"] == "Page.frameNavigated"
+                && message["sessionId"] == "SID-RENDERER-HISTORY"
+                && message["params"]["frame"]["url"] == url
+        })
+        .await;
         ctx.sent.clear();
     }
 
@@ -1470,10 +1477,10 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
 
     let response = take_response_by_id(&mut ctx, 12);
     assert_eq!(response["result"]["result"]["value"], json!("queued"));
-    ctx.wait_until_scheduler_state("renderer history.back() commit", |conn| {
-        conn.browser_context
-            .as_ref()
-            .is_some_and(|context| context.target_url() == first_url)
+    ctx.wait_for_scheduler_message("renderer history.back() commit", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["sessionId"] == "SID-RENDERER-HISTORY"
+            && message["params"]["frame"]["url"] == first_url
     })
     .await;
     assert_eq!(
@@ -1510,10 +1517,10 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         response["result"]["result"]["value"],
         json!("to-initial-empty-document")
     );
-    ctx.wait_until_scheduler_state("renderer history.back() to initial document", |conn| {
-        conn.browser_context
-            .as_ref()
-            .is_some_and(|context| context.target_url() == "about:blank")
+    ctx.wait_for_scheduler_message("renderer history.back() to initial document", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["sessionId"] == "SID-RENDERER-HISTORY"
+            && message["params"]["frame"]["url"] == "about:blank"
     })
     .await;
     assert_eq!(
@@ -1551,10 +1558,10 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
     .await;
     let response = take_response_by_id(&mut ctx, 16);
     assert_eq!(response["result"]["result"]["value"], json!("queued"));
-    ctx.wait_until_scheduler_state("renderer history.forward() commit", |conn| {
-        conn.browser_context
-            .as_ref()
-            .is_some_and(|context| context.target_url() == first_url)
+    ctx.wait_for_scheduler_message("renderer history.forward() commit", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["sessionId"] == "SID-RENDERER-HISTORY"
+            && message["params"]["frame"]["url"] == first_url
     })
     .await;
     assert_eq!(

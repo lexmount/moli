@@ -314,6 +314,7 @@ pub struct NavigationDispatchState {
     pub request_body_bytes: Option<Vec<u8>>,
     pub request_headers: moli_fetch::RequestHeaders,
     pub request_load_policy: NavigationRequestLoadPolicy,
+    pub(crate) navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
     pub timestamp: f64,
     pub(crate) source_document_security: NavigationSourceDocumentSecurityContext,
 }

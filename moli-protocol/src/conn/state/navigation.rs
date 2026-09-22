@@ -169,6 +169,31 @@ impl TargetNavigationHistoryState {
         true
     }
 
+    pub(crate) fn renderer_navigation_request(
+        &self,
+        history: &moli_core::RendererNavigationHistory,
+        url: &url::Url,
+        reload: bool,
+    ) -> Option<moli_core::RendererNavigationHistoryRequest> {
+        if let Some(PendingNavigationHistoryUpdate::TraverseToEntry(id)) = self.pending_update {
+            let target_index = self.entries.iter().position(|entry| entry.id == id)?;
+            return history.traverse(
+                i64::try_from(target_index).ok()? - i64::try_from(self.current_index?).ok()?,
+            );
+        }
+        if reload {
+            return history.reload();
+        }
+        let mutation = match self.pending_update {
+            Some(
+                PendingNavigationHistoryUpdate::ReplaceCurrent
+                | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument,
+            ) => moli_page_types::NavigationHistoryMutation::Replace,
+            _ => moli_page_types::NavigationHistoryMutation::Push,
+        };
+        history.navigate(url, mutation)
+    }
+
     pub(crate) fn snapshot(&self) -> (usize, Vec<PageNavigationHistoryEntry>) {
         (self.current_index.unwrap_or(0), self.entries.clone())
     }

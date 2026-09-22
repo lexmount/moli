@@ -133,6 +133,7 @@ pub struct RendererCreateHtmlPageRequest {
     pub page_reservation: RendererPageReservationToken,
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
+    pub navigation_history: Option<super::RendererNavigationHistoryRequest>,
     pub top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     pub requested_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -181,6 +182,7 @@ pub struct RendererCreateHtmlPageRequest {
 pub struct RendererCreateStreamingRawPageRequest {
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
+    pub navigation_history: Option<super::RendererNavigationHistoryRequest>,
     pub requested_url: Url,
     pub final_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -2115,6 +2117,7 @@ impl RendererOwnerHandle {
             page_reservation,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
+            navigation_history: options.navigation_history,
             top_level_storage_key: None,
             requested_url,
             navigation_initiator_url,
@@ -2178,6 +2181,7 @@ impl RendererOwnerHandle {
         RendererCreateStreamingRawPageRequest {
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
+            navigation_history: options.navigation_history,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -6778,6 +6782,7 @@ impl RendererOwnerHandle {
             page_reservation,
             root_frame_id,
             main_document_commit,
+            navigation_history,
             top_level_storage_key,
             requested_url,
             navigation_initiator_url,
@@ -6903,7 +6908,10 @@ impl RendererOwnerHandle {
                     root_frame_id,
                     main_document_commit,
                     top_level_storage_key,
-                    navigation_bootstrap_entry: None,
+                    navigation_bootstrap_entry: navigation_history
+                        .as_ref()
+                        .map(|request| request.resolve(&final_url))
+                        .transpose()?,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };
@@ -7089,6 +7097,7 @@ impl RendererOwnerHandle {
         let RendererCreateStreamingRawPageRequest {
             root_frame_id,
             main_document_commit,
+            navigation_history,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -7202,7 +7211,7 @@ impl RendererOwnerHandle {
                     root_frame_id,
                     main_document_commit,
                     top_level_storage_key: None,
-                    navigation_bootstrap_entry: None,
+                    navigation_bootstrap_entry: navigation_history.as_ref().map(|request| request.resolve(&final_url)).transpose()?,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };

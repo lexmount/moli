@@ -8873,8 +8873,7 @@ async fn webdriver_classic_url_routes_execute_through_devtools_runtime() {
 }
 
 #[tokio::test]
-async fn webdriver_classic_history_traversal_preserves_live_same_document_and_falls_back_after_restore()
- {
+async fn webdriver_classic_history_traversal_preserves_same_document_before_and_after_restore() {
     async fn page() -> impl IntoResponse {
         (
             [(header::CONTENT_TYPE.as_str(), "text/html")],
@@ -9015,6 +9014,15 @@ async fn webdriver_classic_history_traversal_preserves_live_same_document_and_fa
     .await;
     assert_eq!(restored, json!({ "value": null }));
 
+    let (stale_status, stale) = classic_request_status_and_json(
+        app.clone(),
+        Method::GET,
+        &format!("/session/{session_id}/element/{element_id}/text"),
+    )
+    .await;
+    assert_eq!(stale_status, StatusCode::NOT_FOUND);
+    assert_eq!(stale["value"]["error"], json!("stale element reference"));
+
     let restored_element = classic_request_json_with_body(
         app.clone(),
         Method::POST,
@@ -9040,15 +9048,15 @@ async fn webdriver_classic_history_traversal_preserves_live_same_document_and_fa
     .await;
     assert_eq!(marked_restored_realm, json!({ "value": "?step=two" }));
 
-    let fallback_back = classic_request_json(
+    let same_document_back = classic_request_json(
         app.clone(),
         Method::POST,
         &format!("/session/{session_id}/back"),
     )
     .await;
-    assert_eq!(fallback_back, json!({ "value": null }));
+    assert_eq!(same_document_back, json!({ "value": null }));
 
-    let fallback_state = classic_request_json_with_body(
+    let restored_state = classic_request_json_with_body(
         app.clone(),
         Method::POST,
         &format!("/session/{session_id}/execute/sync"),
@@ -9059,23 +9067,22 @@ async fn webdriver_classic_history_traversal_preserves_live_same_document_and_fa
     )
     .await;
     assert_eq!(
-        fallback_state,
+        restored_state,
         json!({
             "value": {
                 "search": "?step=one",
-                "marker": false,
+                "marker": true,
             }
         })
     );
 
-    let (stale_status, stale) = classic_request_status_and_json(
+    let preserved_text = classic_request_json(
         app.clone(),
         Method::GET,
         &format!("/session/{session_id}/element/{restored_element_id}/text"),
     )
     .await;
-    assert_eq!(stale_status, StatusCode::NOT_FOUND);
-    assert_eq!(stale["value"]["error"], json!("stale element reference"));
+    assert_eq!(preserved_text, json!({ "value": "same-document" }));
 
     fixture_server.abort();
 }
