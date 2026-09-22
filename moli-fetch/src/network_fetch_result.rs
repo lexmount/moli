@@ -14,6 +14,7 @@ const MAX_OBSERVED_HEADER_BLOCK_BYTES: usize = 256 * 1024;
 /// Request headers observed after the transport has finalized an HTTP exchange.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkRequestObservation {
+    method: Option<String>,
     headers: Vec<(String, String)>,
     cookie_report: Option<StoredCookieQueryReport>,
     truncated: bool,
@@ -22,6 +23,16 @@ pub struct NetworkRequestObservation {
 impl NetworkRequestObservation {
     pub fn new(headers: Vec<(String, String)>) -> Self {
         Self {
+            method: None,
+            headers,
+            cookie_report: None,
+            truncated: false,
+        }
+    }
+
+    pub fn new_with_method(method: impl Into<String>, headers: Vec<(String, String)>) -> Self {
+        Self {
+            method: Some(method.into()),
             headers,
             cookie_report: None,
             truncated: false,
@@ -31,10 +42,15 @@ impl NetworkRequestObservation {
     fn from_header_block(data: &[u8], cookie_report: Option<StoredCookieQueryReport>) -> Self {
         let (data, truncated) = bounded_header_data(data);
         Self {
+            method: parse_request_method(data),
             headers: parse_request_header_block(data),
             cookie_report,
             truncated,
         }
+    }
+
+    pub fn method(&self) -> Option<&str> {
+        self.method.as_deref()
     }
 
     pub fn headers(&self) -> &[(String, String)] {
@@ -336,6 +352,14 @@ fn parse_request_header_block(data: &[u8]) -> Vec<(String, String)> {
             parse_http_header_line(line)
         })
         .collect()
+}
+
+fn parse_request_method(data: &[u8]) -> Option<String> {
+    let line = String::from_utf8_lossy(data);
+    let line = line.lines().next()?.trim_end_matches('\r');
+    is_http_request_line(line)
+        .then(|| line.split_whitespace().next().map(str::to_owned))
+        .flatten()
 }
 
 fn is_http_request_line(line: &str) -> bool {
@@ -648,7 +672,7 @@ mod tests {
     fn recorder_preserves_redirect_exchange_order_and_raw_response_status() {
         let recorder = NetworkObservationRecorder::default();
         recorder.record_request_header_block(
-            b"GET /start HTTP/1.1\r\nHost: example.test\r\nAccept-Encoding: gzip\r\n\r\n",
+            b"POST /start HTTP/1.1\r\nHost: example.test\r\nAccept-Encoding: gzip\r\n\r\n",
         );
         recorder.record_response_header_line(b"HTTP/1.1 302 Found\r\n");
         recorder.record_response_header_line(b"Location: /final\r\n");
@@ -662,6 +686,7 @@ mod tests {
 
         let journal = recorder.snapshot();
         assert_eq!(journal.exchanges().len(), 2);
+        assert_eq!(journal.exchanges()[0].request().method(), Some("POST"));
         assert_eq!(
             journal.exchanges()[0].request().headers(),
             [
@@ -675,6 +700,13 @@ mod tests {
                 .expect("redirect response")
                 .status(),
             302
+        );
+        assert_eq!(
+            journal
+                .final_request_observation()
+                .expect("final request")
+                .method(),
+            Some("GET")
         );
         assert_eq!(
             journal
