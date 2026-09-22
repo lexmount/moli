@@ -536,6 +536,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_crypto_template_bindings(scope, template, spec.interface.name());
     install_navigator_template_bindings(scope, template, spec.interface.name());
     install_screen_template_bindings(scope, template, spec.interface.name());
+    crate::context_bootstrap::bar_prop::install_bar_prop_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     install_visual_viewport_template_bindings(scope, template, spec.interface.name());
     install_speech_synthesis_template_bindings(scope, template, spec.interface.name());
     install_storage_access_template_bindings(scope, template, spec.interface.name());
