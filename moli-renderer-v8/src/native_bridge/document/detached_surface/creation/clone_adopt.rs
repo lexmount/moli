@@ -37,7 +37,7 @@ fn detached_document_root_local_name<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
-    let root = object_property_as_object(scope, document, "documentElement")?;
+    let root = detached_document_element_object(scope, document)?;
     detached_native_element_local_name(scope, root)
         .or_else(|| object_string_property(scope, root, "localName"))
 }
@@ -64,6 +64,8 @@ fn clone_detached_document_shell<'s>(
     };
     let cloned = call_global_bridge_method(scope, helper, &[])
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let content_type = detached_document_content_type_value(scope, document)?;
+    set_detached_document_content_type(scope, cloned, &content_type)?;
     if html_shell {
         for child in detached_child_node_objects(scope, cloned) {
             detached_detach_from_parent(scope, child);

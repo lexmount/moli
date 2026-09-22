@@ -361,7 +361,7 @@ fn detached_document_shell_child_lists_materialize_from_native_tree() {
 }
 
 #[test]
-fn detached_xhtml_document_uses_native_root_namespace_after_property_tamper() {
+fn detached_xhtml_document_uses_native_content_type_after_property_tamper() {
     let status = eval(
         r#"
         (() => {
@@ -387,6 +387,77 @@ fn detached_xhtml_document_uses_native_root_namespace_after_property_tamper() {
     assert_eq!(
         status,
         "application/xhtml+xml|http://www.w3.org/1999/xhtml|false"
+    );
+}
+
+#[test]
+fn detached_document_content_type_changes_in_native_metadata_reach_all_wrappers() {
+    let (status, mut vm) = eval_with_vm(
+        r#"
+        globalThis.nativeContentTypeDocument = new DOMParser().parseFromString(
+            '<root id="native-content-type-root"/>',
+            'text/xml'
+        );
+        nativeContentTypeDocument.contentType
+        "#,
+    );
+    assert_eq!(status, "text/xml");
+
+    let root = element_handle_by_id(&vm, "native-content-type-root");
+    let document = vm
+        .document_runtime
+        .dom_host()
+        .dom()
+        .parent_node(root)
+        .unwrap();
+    assert_eq!(
+        vm.document_runtime
+            .dom_host()
+            .document_content_type_for_handle(document),
+        Some("text/xml")
+    );
+    vm.document_runtime
+        .dom_host_mut()
+        .set_document_content_type_for_handle(document, "application/xhtml+xml");
+
+    let status = vm
+        .eval(
+            r#"
+            (() => {
+                const doc = nativeContentTypeDocument;
+                doc.removeChild(doc.documentElement);
+                const contentType = Object.getOwnPropertyDescriptor(
+                    Document.prototype, 'contentType'
+                ).get;
+                const values = [
+                    doc.contentType,
+                    contentType.call(doc),
+                    doc.createElement('MiXeD').namespaceURI,
+                    Document.prototype.createElement.call(doc, 'MiXeD').namespaceURI
+                ];
+                let reads = 0;
+                Object.defineProperty(doc, 'contentType', {
+                    get() { reads++; return 'tampered/type'; }
+                });
+                for (const deep of [false, true]) {
+                    const clone = doc.cloneNode(deep);
+                    const node = clone.createElement('MiXeD');
+                    values.push(clone.contentType, node.namespaceURI, node.localName);
+                }
+                values.push(reads);
+                return values.join('|');
+            })()
+            "#,
+        )
+        .expect("native content type should determine document behavior");
+    assert_eq!(
+        status,
+        concat!(
+            "application/xhtml+xml|application/xhtml+xml|",
+            "http://www.w3.org/1999/xhtml|http://www.w3.org/1999/xhtml|",
+            "application/xhtml+xml|http://www.w3.org/1999/xhtml|MiXeD|",
+            "application/xhtml+xml|http://www.w3.org/1999/xhtml|MiXeD|0"
+        )
     );
 }
 

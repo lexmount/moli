@@ -208,7 +208,7 @@ pub(in crate::native_bridge) use detached_objects::{
 pub(in crate::native_bridge) use detached_objects::{
     detached_shadow_root_active_element_value, detached_shadow_root_selection_value,
 };
-pub(in crate::native_bridge::document) use detached_surface::detached_document_content_type_value;
+pub(in crate::native_bridge::document) use detached_surface::set_detached_document_content_type;
 pub(super) use detached_surface::{
     bridge_adopt_node_into_document_callback, bridge_clone_node_into_document_callback,
     bridge_create_cdata_section_not_supported_callback, bridge_create_detached_comment_callback,
@@ -839,63 +839,6 @@ fn document_ready_state_getter_function<'s>(
     set_document_string_return_value(scope, &mut rv, &ready_state);
 }
 
-fn document_content_type_for_receiver<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    receiver: v8::Local<'s, v8::Object>,
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> String {
-    if let Some(content_type) =
-        detached_state_string(scope, receiver, "contentType").filter(|value| !value.is_empty())
-    {
-        return content_type;
-    }
-    let Some(document) = runtime.dom_host().node(handle).and_then(Node::as_document) else {
-        return runtime
-            .dom_host()
-            .document_content_type_for_handle(handle)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "application/xml".to_owned());
-    };
-    if document.is_html_document() {
-        let content_type = document.content_type();
-        return if content_type.is_empty() {
-            "text/html".to_owned()
-        } else {
-            content_type.to_owned()
-        };
-    }
-    if let Some(creation_namespace) = detached_state_string(scope, receiver, "creationNamespace")
-        .filter(|value| !value.is_empty())
-    {
-        if creation_namespace == XHTML_NS {
-            return "application/xhtml+xml".to_owned();
-        }
-        if creation_namespace == SVG_NS {
-            return "image/svg+xml".to_owned();
-        }
-    }
-    if let Some(content_type) = runtime.dom_host().document_content_type_for_handle(handle) {
-        return content_type.to_owned();
-    }
-    let root_namespace = document
-        .document_element_handle(runtime.dom_host().dom(), handle)
-        .and_then(|root| runtime.dom_host().node(root))
-        .and_then(Node::as_element)
-        .map(|element| element.namespace().to_owned());
-    if root_namespace.as_deref() == Some(XHTML_NS) {
-        "application/xhtml+xml".to_owned()
-    } else if root_namespace.as_deref() == Some(SVG_NS) {
-        "image/svg+xml".to_owned()
-    } else {
-        runtime
-            .dom_host()
-            .document_content_type_for_handle(handle)
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| "application/xml".to_owned())
-    }
-}
-
 fn document_content_type_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -907,8 +850,11 @@ fn document_content_type_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    let content_type = document_content_type_for_receiver(scope, receiver, runtime, handle);
-    set_document_string_return_value(scope, &mut rv, &content_type);
+    let Some(content_type) = runtime.dom_host().document_content_type_for_handle(handle) else {
+        rv.set_undefined();
+        return;
+    };
+    set_document_string_return_value(scope, &mut rv, content_type);
 }
 
 fn document_character_set_getter_function<'s>(

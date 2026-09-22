@@ -4,8 +4,7 @@ use super::super::node::{
     remove_child_in_reaction_scope,
 };
 use super::{
-    JsContextHost, detached_document_content_type_value, detached_native_handle_for_runtime,
-    is_html_document, throw_dom_exception,
+    JsContextHost, detached_native_handle_for_runtime, is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
     contenteditable_editing_host, dispatch_text_control_event, is_text_control,
@@ -415,9 +414,7 @@ fn editing_command_document<'s>(
         || runtime
             .dom_host()
             .document_content_type_for_handle(document_handle)
-            .is_some_and(|content_type| content_type.eq_ignore_ascii_case("application/xhtml+xml"))
-        || detached_document_content_type_value(scope, args.this())
-            .eq_ignore_ascii_case("application/xhtml+xml");
+            .is_some_and(|content_type| content_type.eq_ignore_ascii_case("application/xhtml+xml"));
     if !supports_editing_commands {
         throw_dom_exception(scope, "InvalidStateError", 11, non_html_message);
         return None;
