@@ -287,6 +287,10 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
                     surfaceEvents.push(['focus', event.isTrusted, event.target === window]));
                 window.addEventListener('blur', event =>
                     surfaceEvents.push(['blur', event.isTrusted, event.target === window]));
+                globalThis.focusDelivered = new Promise(resolve =>
+                    window.addEventListener('focus', resolve, {once: true}));
+                globalThis.blurDelivered = new Promise(resolve =>
+                    window.addEventListener('blur', resolve, {once: true}));
                 [Object.hasOwn(document, 'hidden'), Object.hasOwn(document, 'visibilityState'),
                  Object.hasOwn(document, 'hasFocus')]"#,
         )
@@ -302,7 +306,7 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
     )
     .await;
     assert_eq!(
-        evaluate(&mut ctx, "surfaceEvents").await,
+        evaluate(&mut ctx, "focusDelivered.then(() => surfaceEvents)").await,
         json!([["visibilitychange", true, true], ["focus", true, true]])
     );
     expect_session_command_result(
@@ -314,7 +318,7 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
     )
     .await;
     assert_eq!(
-        evaluate(&mut ctx, "surfaceEvents.slice(2)").await,
+        evaluate(&mut ctx, "blurDelivered.then(() => surfaceEvents.slice(2))").await,
         json!([["visibilitychange", true, true], ["blur", true, true]])
     );
 }
