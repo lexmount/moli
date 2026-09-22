@@ -1,5 +1,5 @@
 use chromiumoxide_cdp::cdp::browser_protocol::browser::{
-    CancelDownloadParams, SetWindowBoundsParams,
+    CancelDownloadParams, GetWindowBoundsParams, SetWindowBoundsParams,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -157,8 +157,14 @@ pub(crate) fn try_start_browser_command_dispatch(
     };
     match action {
         BrowserAction::GetVersion => BrowserCommandTaskStep::Complete(get_version(conn)),
+        BrowserAction::GetBrowserCommandLine => {
+            BrowserCommandTaskStep::Complete(get_browser_command_line())
+        }
         BrowserAction::GetWindowForTarget => {
             BrowserCommandTaskStep::Complete(get_window_for_target(conn))
+        }
+        BrowserAction::GetWindowBounds => {
+            BrowserCommandTaskStep::Complete(get_window_bounds(conn, cmd))
         }
         BrowserAction::SetWindowBounds => {
             BrowserCommandTaskStep::Complete(set_window_bounds(conn, cmd))
@@ -183,6 +189,19 @@ fn get_version(conn: &CdpConnection) -> CommandOutputPlan {
         "revision": version::REVISION,
         "userAgent": conn.user_agent(),
         "jsVersion": version::js_version(),
+    }))
+}
+
+fn get_browser_command_line() -> CommandOutputPlan {
+    let arguments: Vec<_> = std::env::args_os().collect();
+    if !arguments.iter().any(|arg| arg == "--enable-automation") {
+        return CommandOutputPlan::error(
+            -32000,
+            "Command line not returned because --enable-automation not set.",
+        );
+    }
+    CommandOutputPlan::result(json!({
+        "arguments": arguments.iter().map(|arg| arg.to_string_lossy()).collect::<Vec<_>>()
     }))
 }
 
@@ -213,6 +232,16 @@ fn get_window_for_target(conn: &CdpConnection) -> CommandOutputPlan {
         "windowId": DEV_TOOLS_WINDOW_ID,
         "bounds": bounds_json(&conn.window_bounds)
     }))
+}
+
+fn get_window_bounds(conn: &CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let Ok(Some(params)) = cmd.get_params::<GetWindowBoundsParams>() else {
+        return CommandOutputPlan::error(-32602, "InvalidParams");
+    };
+    if *params.window_id.inner() != i64::from(DEV_TOOLS_WINDOW_ID) {
+        return CommandOutputPlan::error(-32602, "InvalidParams");
+    }
+    CommandOutputPlan::result(json!({"bounds": bounds_json(&conn.window_bounds)}))
 }
 
 #[derive(Deserialize)]
@@ -301,10 +330,10 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    conn.window_bounds.left = left;
-    conn.window_bounds.top = top;
-    conn.window_bounds.width = width;
-    conn.window_bounds.height = height;
+    conn.window_bounds.left = left.or(conn.window_bounds.left);
+    conn.window_bounds.top = top.or(conn.window_bounds.top);
+    conn.window_bounds.width = width.or(conn.window_bounds.width);
+    conn.window_bounds.height = height.or(conn.window_bounds.height);
     if let Some(window_state) = params.bounds.window_state {
         conn.window_bounds.window_state = window_state.as_ref().to_owned();
     }

@@ -1988,6 +1988,7 @@ impl CdpConnection {
         };
         let request = RendererCaptureScreencastFrameRequest {
             base_background_color: self.default_background_color_for_owner(&owner_scope),
+            vision_deficiency: self.vision_deficiency_for_owner(&owner_scope),
             format: match config.format() {
                 PageScreencastFormat::Png => RendererScreenshotFormat::Png,
                 PageScreencastFormat::Jpeg => RendererScreenshotFormat::Jpeg,
@@ -6872,6 +6873,7 @@ fn start_devtools_capture_screenshot_command(
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let base_background_color = conn.default_background_color_for_owner(&owner_scope);
+    let vision_deficiency = conn.vision_deficiency_for_owner(&owner_scope);
     let page = match conn.loaded_page_mut_for_protocol_access(session_id) {
         Ok(page) => page,
         Err(message) => {
@@ -6914,6 +6916,7 @@ fn start_devtools_capture_screenshot_command(
     let request = RendererCaptureScreenshotRequest {
         purpose: RendererScreenshotPurpose::Screenshot,
         base_background_color,
+        vision_deficiency,
         format,
         quality: command.quality.unwrap_or(80),
         region,
@@ -6975,6 +6978,7 @@ fn start_devtools_print_to_pdf_command(
     };
     let request = RendererCaptureScreenshotRequest {
         base_background_color: [255; 4],
+        vision_deficiency: Default::default(),
         purpose: RendererScreenshotPurpose::Print {
             print_background: command.print_background.unwrap_or(false),
         },
