@@ -823,27 +823,14 @@ async fn fetch_browser_image_into_parkable(
     ),
     String,
 > {
-    let requires_manual_preflight_redirects =
-        browser_request_needs_cors_redirect_checks(&request);
-    let observed = if requires_manual_preflight_redirects {
-        fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
-            loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    } else {
-        fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
-            loader,
-            request,
-            cancel_handle,
-            preflight_request_headers,
-            preflight_observer,
-        )
-        .await?
-    };
+    let observed = fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer(
+        loader,
+        request,
+        cancel_handle,
+        preflight_request_headers,
+        preflight_observer,
+    )
+    .await?;
     collect_image_response_into_parkable(observed, manager).await
 }
 
@@ -2127,15 +2114,21 @@ mod tests {
                 },
                 url,
                 "GET".to_owned(),
-                Vec::new(),
+                Default::default(),
                 None,
             );
             match next_async_subresource_event(&mut queue).await? {
                 AsyncSubresourceFetchEvent::Completion(completion) => {
                     if truncated {
-                        assert!(completion.result.is_err());
+                        assert!(completion.result.as_ref().is_err());
                     } else {
-                        assert_eq!(completion.result.unwrap().body_bytes(), b"hello integrity");
+                        assert_eq!(
+                            completion
+                                .result
+                                .expect("completed integrity response")
+                                .body_bytes(),
+                            b"hello integrity"
+                        );
                     }
                 }
                 other => anyhow::bail!("integrity fetch exposed an incomplete body: {other:?}"),
