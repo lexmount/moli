@@ -4,6 +4,79 @@ const JOINT_HISTORY_TRAVERSAL: &str =
     include_str!("../../../tests/fixtures/joint-history-traversal.js");
 
 #[tokio::test]
+async fn popup_joint_history_tracks_children_without_mutating_the_opener() {
+    for mode in ["fork", "cross-document"] {
+        let child_requests = if mode == "cross-document" { 10 } else { 2 };
+        let popup = format!(
+            "<!doctype html><body><script>{JOINT_HISTORY_TRAVERSAL}\n\
+             onload = () => setTimeout(() => {{\n\
+               jointHistoryTraversal(location.origin, {mode:?}).then(\n\
+                 value => opener.popupJointHistoryResult = value,\n\
+                 error => opener.popupJointHistoryResult = String(error));\n\
+             }}, 0);</script>"
+        );
+        let mut bodies = vec![popup];
+        bodies.extend(vec![
+            "<!doctype html><body>child fixture</body>".to_owned();
+            child_requests
+        ]);
+        let server = StaticHttpServer::spawn_with_bodies(bodies).await;
+        let base = server.base_url().origin().ascii_serialization();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/opener"), &loader);
+        vm.eval(
+            "history.pushState(null, '', '#opener');\n\
+             globalThis.openerHistoryLength = history.length;\n\
+             globalThis.popupJointHistoryResult = 'pending';\n\
+             globalThis.jointHistoryPopup = open('/popup');",
+        )
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(popupJointHistoryResult !== 'pending')",
+            "true",
+            mode,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(popupJointHistoryResult)").unwrap())
+                .unwrap();
+        let steps = result
+            .as_array()
+            .unwrap_or_else(|| panic!("{mode}: {result}"));
+        for step in steps {
+            let length = if step["label"] == "fork" { 2 } else { 3 };
+            assert_eq!(step["length"], length, "{mode}: {step}");
+            assert_eq!(
+                step["childLengths"],
+                serde_json::json!([length, length]),
+                "{mode}: {step}"
+            );
+        }
+        let expected = if mode == "fork" {
+            serde_json::json!(["/a0#fork", "/b0"])
+        } else {
+            serde_json::json!(["/a2", "/b1"])
+        };
+        assert_eq!(steps.last().unwrap()["paths"], expected, "{mode}: {result}");
+        assert_eq!(
+            vm.eval("history.length === openerHistoryLength && location.hash === '#opener'")
+                .unwrap(),
+            "true",
+            "popup traversals must not consume or prune the opener's history"
+        );
+        vm.eval("jointHistoryPopup.close()").unwrap();
+        assert_eq!(
+            server.finish_targets().await.len(),
+            child_requests + 1,
+            "{mode}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn joint_history_traversal_uses_commit_order_and_shared_positions() {
     for mode in [
         "back",
