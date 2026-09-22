@@ -49,7 +49,7 @@ impl PageVm {
             PageDomManipulationTurnAction::ImageLoadEvent(action) => {
                 action.into_page_task_completion()
             }
-            PageDomManipulationTurnAction::PopupLoadEvent(action) => {
+            PageDomManipulationTurnAction::PopupDocumentLifecycle(action) => {
                 action.into_page_task_completion()
             }
             PageDomManipulationTurnAction::PopupClose(action) => action.into_page_task_completion(),

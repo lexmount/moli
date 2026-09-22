@@ -436,6 +436,7 @@ impl JsContextHost {
             lightweight_popup_document_handles: HashMap::new(),
             pending_lightweight_popup_document_loads: HashMap::new(),
             pending_lightweight_popup_classic_script_loads: HashMap::new(),
+            completed_popup_javascript_url_parsers: Vec::new(),
             #[cfg(test)]
             pending_javascript_dialogs: Vec::new(),
             javascript_dialog_runtime,
@@ -717,16 +718,16 @@ impl JsContextHost {
             .hash_change_delivery()
     }
 
-    pub(crate) fn page_popup_load_event_sender(
+    pub(crate) fn page_popup_document_lifecycle_sender(
         &self,
-    ) -> crate::page_task_queue::RendererPagePopupLoadEventSender {
+    ) -> crate::page_task_queue::RendererPagePopupDocumentLifecycleSender {
         self.page_task_capabilities
             .get()
             .expect(
                 "a live Page Window must install its complete Page task capabilities before popup load admission",
             )
             .dom_manipulation()
-            .popup_load_event()
+            .popup_document_lifecycle()
     }
 
     pub(crate) fn page_popup_close_sender(

@@ -107,6 +107,7 @@ pub(crate) enum PopupDocumentLoadApplication {
     NotApplied,
     Applied {
         body_activity: PopupDocumentLoadBodyActivity,
+        parser_completion: Option<PopupDocumentParserCompletion>,
     },
 }
 
@@ -116,7 +117,27 @@ pub(crate) enum PopupClassicScriptLoadApplication {
     NotApplied,
     Applied {
         body_activity: PopupDocumentLoadBodyActivity,
+        parser_completion: Option<PopupDocumentParserCompletion>,
     },
+}
+
+/// Execution-produced parser completion, resumed only after its producing
+/// resource or javascript-URL task has completed the script checkpoint.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PopupDocumentParserCompletion {
+    pub(crate) window: PopupWindowEventTarget,
+    pub(crate) task: LightweightPopupNavigationTaskToken,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PopupDomContentLoadedState {
+    NotRequired,
+    Parsing,
+    AwaitingInteractive,
+    AwaitingDomContentLoaded,
+    Queued,
+    Dispatching,
+    Dispatched,
 }
 
 #[derive(WebApiObject)]
@@ -456,6 +477,7 @@ struct LightweightPopupDocumentRecord {
     handle: Option<DomHandle>,
     script_globals: HashMap<String, v8::Global<v8::Value>>,
     incomplete_child_frame_loads: HashSet<DomHandle>,
+    dom_content_loaded: PopupDomContentLoadedState,
     pending_load_event: Option<LightweightPopupNavigationTaskToken>,
     queued_load_event: Option<LightweightPopupNavigationTaskToken>,
     load_event_dispatched: bool,
@@ -1053,6 +1075,7 @@ impl JsContextHost {
                         handle: None,
                         script_globals: HashMap::new(),
                         incomplete_child_frame_loads: HashSet::new(),
+                        dom_content_loaded: PopupDomContentLoadedState::NotRequired,
                         pending_load_event: None,
                         queued_load_event: None,
                         load_event_dispatched: false,
@@ -2133,6 +2156,7 @@ impl JsContextHost {
                     handle: None,
                     script_globals: HashMap::new(),
                     incomplete_child_frame_loads: HashSet::new(),
+                    dom_content_loaded: PopupDomContentLoadedState::NotRequired,
                     pending_load_event: None,
                     queued_load_event: None,
                     load_event_dispatched: false,
@@ -2713,7 +2737,10 @@ impl JsContextHost {
                     self,
                     OwnerDispatchScope::LightweightPopup(popup_id),
                 );
-                return PopupDocumentLoadApplication::Applied { body_activity };
+                return PopupDocumentLoadApplication::Applied {
+                    body_activity,
+                    parser_completion: None,
+                };
             }
             Ok(PopupDocumentLoadOutcome::Loaded(loaded)) => {
                 if matches!(
@@ -2768,7 +2795,10 @@ impl JsContextHost {
                     return PopupDocumentLoadApplication::NotApplied;
                 }
                 if !self.lightweight_popup_committed_navigation_task_is_current(task) {
-                    return PopupDocumentLoadApplication::Applied { body_activity };
+                    return PopupDocumentLoadApplication::Applied {
+                        body_activity,
+                        parser_completion: None,
+                    };
                 }
                 finish_cross_document_navigation_for_window(
                     scope,
@@ -2813,7 +2843,10 @@ impl JsContextHost {
                     body_activity = application.body_activity;
                     classic_script_load_pending = application.classic_script_load_pending;
                     if !self.lightweight_popup_committed_navigation_task_is_current(task) {
-                        return PopupDocumentLoadApplication::Applied { body_activity };
+                        return PopupDocumentLoadApplication::Applied {
+                            body_activity,
+                            parser_completion: None,
+                        };
                     }
                     if !classic_script_load_pending
                         && let Some(document_handle) = application.document_handle
@@ -2821,7 +2854,10 @@ impl JsContextHost {
                         self.sync_child_browsing_context_subtree(scope, document_handle);
                     }
                     if !self.lightweight_popup_committed_navigation_task_is_current(task) {
-                        return PopupDocumentLoadApplication::Applied { body_activity };
+                        return PopupDocumentLoadApplication::Applied {
+                            body_activity,
+                            parser_completion: None,
+                        };
                     }
                 }
             }
@@ -2844,7 +2880,10 @@ impl JsContextHost {
                 );
                 let Some(current_owner) = self.current_lightweight_popup_document_owner(popup_id)
                 else {
-                    return PopupDocumentLoadApplication::Applied { body_activity };
+                    return PopupDocumentLoadApplication::Applied {
+                        body_activity,
+                        parser_completion: None,
+                    };
                 };
                 load_event_task = LightweightPopupNavigationTaskToken::from_parts(
                     current_owner,
@@ -2853,11 +2892,20 @@ impl JsContextHost {
             }
         }
         if classic_script_load_pending {
-            return PopupDocumentLoadApplication::Applied { body_activity };
+            return PopupDocumentLoadApplication::Applied {
+                body_activity,
+                parser_completion: None,
+            };
         }
-        self.queue_lightweight_popup_load_event(load_event_task);
+        let parser_completion = self.prepare_lightweight_popup_parser_completion(load_event_task);
+        if parser_completion.is_none() {
+            self.queue_lightweight_popup_load_event(load_event_task);
+        }
         self.finish_service_worker_clients_open_window_popup(document_owner);
-        PopupDocumentLoadApplication::Applied { body_activity }
+        PopupDocumentLoadApplication::Applied {
+            body_activity,
+            parser_completion,
+        }
     }
 
     pub(crate) fn lightweight_popup_id_for_document_handle(
@@ -3040,7 +3088,9 @@ impl JsContextHost {
         &self,
         target: PopupWindowEventTarget,
     ) -> bool {
-        self.current_popup_window_event_target(target.document_owner.popup_id()) == Some(target)
+        self.lightweight_popup_is_open(target.document_owner.popup_id())
+            && self.current_popup_window_event_target(target.document_owner.popup_id())
+                == Some(target)
     }
 
     pub(crate) fn popup_window_event_target_wrapper<'s>(
@@ -3288,16 +3338,15 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
-    ) {
+    ) -> bool {
         let window = self
             .lightweight_popup_window(scope, popup_id)
             .expect("authorized popup load event must retain its WindowProxy");
-        let document_owner = self.current_lightweight_popup_document_owner(popup_id);
         let Some(document) = self.lightweight_popup_document_wrapper(scope, popup_id) else {
             // A failed initial network navigation can settle before this
             // lightweight popup has materialized a Document. There is no
             // Document to load; the inherited getter may expose the opener's.
-            return;
+            return false;
         };
         let context = window
             .get_creation_context(scope)
@@ -3312,11 +3361,24 @@ impl JsContextHost {
             event,
             Some(document),
         );
-        if !self.lightweight_popup_is_open(popup_id)
-            || self.current_lightweight_popup_document_owner(popup_id) != document_owner
-        {
+        true
+    }
+
+    pub(crate) fn dispatch_lightweight_popup_pageshow_event(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+    ) {
+        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
-        }
+        };
+        let Some(document) = self.lightweight_popup_document_wrapper(scope, popup_id) else {
+            return;
+        };
+        let context = window
+            .get_creation_context(scope)
+            .unwrap_or_else(|| scope.get_current_context());
+        let scope = &mut v8::ContextScope::new(scope, context);
         if let Some(event) = construct_original_page_transition_event(scope, "pageshow", false) {
             self.dispatch_lightweight_popup_window_event_with_original_target(
                 scope,
@@ -3383,6 +3445,15 @@ impl JsContextHost {
         }
         let _ =
             self.set_lightweight_popup_document_wrapper(popup_id, v8::Global::new(scope, document));
+        if let Some(document_handle) = document_handle {
+            self.set_dom_document_ready_state_for_handle(
+                document_handle,
+                crate::dom::native::DocumentReadyState::Loading,
+            );
+            self.lightweight_popup_document_record_mut(popup_id)
+                .expect("installed popup parser must retain its Document")
+                .dom_content_loaded = PopupDomContentLoadedState::Parsing;
+        }
         let script_advance = self.execute_lightweight_popup_document_scripts(
             scope,
             source.task,
@@ -3817,7 +3888,10 @@ impl JsContextHost {
         }
 
         if !self.lightweight_popup_committed_navigation_task_is_current(task) {
-            return PopupClassicScriptLoadApplication::Applied { body_activity };
+            return PopupClassicScriptLoadApplication::Applied {
+                body_activity,
+                parser_completion: None,
+            };
         }
         match self.advance_lightweight_popup_classic_scripts(
             scope,
@@ -3827,21 +3901,27 @@ impl JsContextHost {
             LightweightPopupClassicScriptAdvance::Pending(activity) => {
                 PopupClassicScriptLoadApplication::Applied {
                     body_activity: activity,
+                    parser_completion: None,
                 }
             }
             LightweightPopupClassicScriptAdvance::Completed(activity) => {
+                let mut parser_completion = None;
                 if self.lightweight_popup_committed_navigation_task_is_current(task) {
                     if let Some(document_handle) = self.lightweight_popup_document_handle(popup_id)
                     {
                         self.sync_child_browsing_context_subtree(scope, document_handle);
                     }
                     if self.lightweight_popup_committed_navigation_task_is_current(task) {
-                        self.queue_lightweight_popup_load_event(task);
+                        parser_completion = self.prepare_lightweight_popup_parser_completion(task);
+                        if parser_completion.is_none() {
+                            self.queue_lightweight_popup_load_event(task);
+                        }
                         self.finish_service_worker_clients_open_window_popup(task.document_owner());
                     }
                 }
                 PopupClassicScriptLoadApplication::Applied {
                     body_activity: activity,
+                    parser_completion,
                 }
             }
         }
@@ -4305,10 +4385,189 @@ impl JsContextHost {
                 self.sync_child_browsing_context_subtree(scope, document_handle);
             }
             if self.lightweight_popup_committed_navigation_task_is_current(task) {
-                self.queue_lightweight_popup_load_event(task);
+                if let Some(completion) = self.prepare_lightweight_popup_parser_completion(task) {
+                    self.completed_popup_javascript_url_parsers.push(completion);
+                } else {
+                    self.queue_lightweight_popup_load_event(task);
+                }
             }
         }
         true
+    }
+
+    fn prepare_lightweight_popup_parser_completion(
+        &mut self,
+        task: LightweightPopupNavigationTaskToken,
+    ) -> Option<PopupDocumentParserCompletion> {
+        if !self.lightweight_popup_committed_navigation_task_is_current(task) {
+            return None;
+        }
+        let window = self.current_popup_window_event_target(task.popup_id())?;
+        let document = self.lightweight_popup_document_record_mut(task.popup_id())?;
+        if document.dom_content_loaded != PopupDomContentLoadedState::Parsing {
+            return None;
+        }
+        document.dom_content_loaded = PopupDomContentLoadedState::AwaitingInteractive;
+        document.pending_load_event = Some(task);
+        Some(PopupDocumentParserCompletion { window, task })
+    }
+
+    pub(crate) fn take_completed_popup_javascript_url_parsers(
+        &mut self,
+    ) -> Vec<PopupDocumentParserCompletion> {
+        std::mem::take(&mut self.completed_popup_javascript_url_parsers)
+    }
+
+    pub(crate) fn begin_lightweight_popup_interactive(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        completion: PopupDocumentParserCompletion,
+    ) -> bool {
+        if !self.popup_window_event_target_is_current(completion.window)
+            || !self.lightweight_popup_committed_navigation_task_is_current(completion.task)
+        {
+            return false;
+        }
+        let document = self
+            .lightweight_popup_document_record_mut(completion.task.popup_id())
+            .expect("current parser completion must retain its Document");
+        if document.dom_content_loaded != PopupDomContentLoadedState::AwaitingInteractive {
+            return false;
+        }
+        document.dom_content_loaded = PopupDomContentLoadedState::AwaitingDomContentLoaded;
+        self.dispatch_lightweight_popup_document_readiness(
+            scope,
+            completion.window,
+            crate::dom::native::DocumentReadyState::Interactive,
+        );
+        true
+    }
+
+    pub(crate) fn dispatch_lightweight_popup_document_readiness(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        window: PopupWindowEventTarget,
+        state: crate::dom::native::DocumentReadyState,
+    ) {
+        if !self.popup_window_event_target_is_current(window) {
+            return;
+        }
+        let popup_id = window.document_owner.popup_id();
+        let Some(handle) = self.lightweight_popup_document_handle(popup_id) else {
+            return;
+        };
+        if self.set_dom_document_ready_state_for_handle(handle, state) {
+            self.dispatch_lightweight_popup_document_event(scope, popup_id, "readystatechange");
+        }
+    }
+
+    fn dispatch_lightweight_popup_document_event(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        popup_id: u64,
+        event_type: &str,
+    ) {
+        let Some(handle) = self.lightweight_popup_document_handle(popup_id) else {
+            return;
+        };
+        let Some(document) = self.lightweight_popup_document_wrapper(scope, popup_id) else {
+            return;
+        };
+        let (bubbles, cancelable) = crate::host::host_event_defaults(event_type);
+        let Ok(event) = crate::host::create_host_event(
+            scope,
+            event_type,
+            document.into(),
+            document.into(),
+            bubbles,
+            cancelable,
+        ) else {
+            return;
+        };
+        crate::native_bridge::element::dispatch_public_event(
+            scope,
+            self as *mut JsContextHost,
+            handle,
+            event,
+        );
+    }
+
+    pub(crate) fn finish_lightweight_popup_interactive(
+        &mut self,
+        completion: PopupDocumentParserCompletion,
+    ) {
+        if !self.popup_window_event_target_is_current(completion.window)
+            || !self.lightweight_popup_committed_navigation_task_is_current(completion.task)
+        {
+            return;
+        }
+        let document = self
+            .lightweight_popup_document_record_mut(completion.task.popup_id())
+            .expect("current interactive completion must retain its Document");
+        if document.dom_content_loaded != PopupDomContentLoadedState::AwaitingDomContentLoaded {
+            return;
+        }
+        document.dom_content_loaded = PopupDomContentLoadedState::Queued;
+        if self
+            .page_popup_document_lifecycle_sender()
+            .send(
+                completion.task,
+                crate::page_task_queue::PopupDocumentLifecycleEvent::DomContentLoaded,
+            )
+            .is_err()
+        {
+            self.lightweight_popup_document_record_mut(completion.task.popup_id())
+                .expect("rejected DOMContentLoaded must retain its Document")
+                .dom_content_loaded = PopupDomContentLoadedState::AwaitingDomContentLoaded;
+        }
+    }
+
+    pub(crate) fn current_lightweight_popup_dom_content_loaded_task(
+        &self,
+        expected: LightweightPopupNavigationTaskToken,
+    ) -> Option<LightweightPopupNavigationTaskToken> {
+        self.lightweight_popup_committed_navigation_task_is_current(expected)
+            .then(|| self.lightweight_popup_document_record(expected.popup_id()))
+            .flatten()
+            .filter(|document| {
+                document.dom_content_loaded == PopupDomContentLoadedState::Queued
+                    && document.pending_load_event == Some(expected)
+            })
+            .map(|_| expected)
+    }
+
+    pub(crate) fn dispatch_lightweight_popup_dom_content_loaded(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: LightweightPopupNavigationTaskToken,
+    ) {
+        assert_eq!(
+            self.current_lightweight_popup_dom_content_loaded_task(task),
+            Some(task),
+            "authorized DOMContentLoaded must retain its queued parser completion"
+        );
+        self.lightweight_popup_document_record_mut(task.popup_id())
+            .expect("authorized DOMContentLoaded must retain its Document")
+            .dom_content_loaded = PopupDomContentLoadedState::Dispatching;
+        self.dispatch_lightweight_popup_document_event(scope, task.popup_id(), "DOMContentLoaded");
+    }
+
+    pub(crate) fn finish_lightweight_popup_dom_content_loaded(
+        &mut self,
+        window: PopupWindowEventTarget,
+    ) {
+        if !self.popup_window_event_target_is_current(window) {
+            return;
+        }
+        let popup_id = window.document_owner.popup_id();
+        let document = self
+            .lightweight_popup_document_record_mut(popup_id)
+            .expect("current DOMContentLoaded must retain its Document");
+        if document.dom_content_loaded != PopupDomContentLoadedState::Dispatching {
+            return;
+        }
+        document.dom_content_loaded = PopupDomContentLoadedState::Dispatched;
+        self.publish_lightweight_popup_load_event_if_ready(popup_id);
     }
 
     fn queue_lightweight_popup_load_event(&mut self, task: LightweightPopupNavigationTaskToken) {
@@ -4330,6 +4589,11 @@ impl JsContextHost {
             .lightweight_popup_document_record(popup_id)
             .filter(|document| {
                 !document.load_event_dispatched
+                    && matches!(
+                        document.dom_content_loaded,
+                        PopupDomContentLoadedState::NotRequired
+                            | PopupDomContentLoadedState::Dispatched
+                    )
                     && document.queued_load_event.is_none()
                     && document.incomplete_child_frame_loads.is_empty()
                     && !self
@@ -4347,7 +4611,14 @@ impl JsContextHost {
         self.lightweight_popup_document_record_mut(popup_id)
             .expect("ready popup load event must retain its Document record")
             .queued_load_event = Some(task);
-        if self.page_popup_load_event_sender().send(task).is_err() {
+        if self
+            .page_popup_document_lifecycle_sender()
+            .send(
+                task,
+                crate::page_task_queue::PopupDocumentLifecycleEvent::Load,
+            )
+            .is_err()
+        {
             let document = self
                 .lightweight_popup_document_record_mut(popup_id)
                 .expect("rejected popup load event must retain its Document record");

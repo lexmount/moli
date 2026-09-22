@@ -372,8 +372,18 @@ impl PageVm {
                 selection,
             } => {
                 let outcome = self.apply_selected_page_timer_turn(deadline, selection)?;
-                if matches!(outcome.action, PageTimerTurnAction::Consumed { .. }) {
-                    self.finish_selected_page_callback_task(loader).await?;
+                if let PageTimerTurnAction::Consumed {
+                    root_document,
+                    popup_parser_completions,
+                    ..
+                } = outcome.action
+                {
+                    self.finish_popup_parser_producing_callback_task(
+                        root_document,
+                        popup_parser_completions,
+                        loader,
+                    )
+                    .await?;
                 }
                 Ok(())
             }
