@@ -2904,6 +2904,7 @@ dependencies = [
  "anyrender",
  "anyrender_svg",
  "anyrender_vello_cpu",
+ "image",
  "moli-image",
  "moli-layout",
  "peniko",

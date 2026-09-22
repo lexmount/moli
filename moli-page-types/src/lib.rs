@@ -3111,8 +3111,10 @@ pub struct RuntimeIsolatedWorldDefinition {
     pub grant_universal_access: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmulatedMediaOverrides {
+    /// CSS environment preference, independent of media query feature overrides.
+    pub preferred_text_scale: Option<f32>,
     pub media: Option<String>,
     pub color_scheme: Option<String>,
     pub reduced_motion: Option<String>,

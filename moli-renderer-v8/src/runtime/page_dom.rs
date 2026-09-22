@@ -3919,6 +3919,7 @@ impl PageVm {
         &mut self,
         inspector_session_id: Option<&str>,
     ) -> bool {
+        self.inspector_overlay.detach_session(inspector_session_id);
         let session_key = DevToolsSessionKey::from_wire_session_id(
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
@@ -3994,7 +3995,7 @@ impl PageVm {
             .mutate_document_node_attribute(handle, mutation)
     }
 
-    fn live_handle_for_dom_frontend_node_id(
+    pub(super) fn live_handle_for_dom_frontend_node_id(
         &mut self,
         inspector_session_id: Option<&str>,
         frontend_node_id: u32,

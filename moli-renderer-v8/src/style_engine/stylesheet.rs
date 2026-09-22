@@ -398,6 +398,7 @@ pub(super) fn new_style_device_with_viewport(
         PointerCapabilities::default(),
         PointerCapabilities::default(),
     );
+    device.set_preferred_text_scale(environment.preferred_text_scale());
     device.set_media_feature_preferences(environment.stylo_media_feature_preferences());
     device.set_page_color_schemes(environment.stylo_page_color_schemes());
     device

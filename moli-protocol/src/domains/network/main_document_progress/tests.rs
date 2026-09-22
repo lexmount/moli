@@ -51,6 +51,36 @@ fn completed_events() -> CompletedMainDocumentNetworkEvents {
     )
 }
 
+#[test]
+fn download_response_terminates_document_request_as_aborted_once() {
+    let events = completed_events();
+    let url = Url::parse("http://example.test/attachment").unwrap();
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &url,
+        MainDocumentNetworkCompletion::Download,
+    );
+    let mut drain =
+        MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
+    drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
+    let messages = drain_into_protocol_messages(&mut drain);
+    let terminal: Vec<_> = messages
+        .iter()
+        .filter(|m| {
+            matches!(
+                m["method"].as_str(),
+                Some("Network.loadingFailed" | "Network.loadingFinished")
+            )
+        })
+        .collect();
+    assert_eq!(terminal.len(), 1);
+    assert_eq!(terminal[0]["method"], "Network.loadingFailed");
+    assert_eq!(terminal[0]["params"]["requestId"], "REQ-1");
+    assert_eq!(terminal[0]["params"]["errorText"], "net::ERR_ABORTED");
+    assert_eq!(terminal[0]["params"]["canceled"], true);
+    assert!(drain_into_protocol_messages(&mut drain).is_empty());
+}
+
 fn observation_journal(
     exchanges: Vec<(Vec<(String, String)>, u16, Vec<(String, String)>)>,
 ) -> NetworkObservationJournal {
@@ -743,7 +773,11 @@ fn completed_body_http_response_emits_correlated_empty_cookie_extra_info() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let mut events = completed_events();
     events.network_extra_info_available = true;
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -797,7 +831,11 @@ fn completed_body_extra_info_uses_transport_observed_headers() {
         200,
         vec![("X-Raw-Response".to_owned(), "observed".to_owned())],
     )]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -852,7 +890,11 @@ fn completed_body_auth_retry_uses_initial_request_and_final_response_observation
             vec![("X-Final-Response".to_owned(), "yes".to_owned())],
         ),
     ]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -894,7 +936,11 @@ fn completed_body_revalidation_keeps_raw_304_extra_info() {
         304,
         vec![("ETag".to_owned(), "\"v1\"".to_owned())],
     )]));
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -922,7 +968,11 @@ fn completed_body_revalidation_keeps_raw_304_extra_info() {
 fn completed_body_http_service_worker_response_does_not_infer_extra_info_from_url() {
     let final_url = Url::parse("http://example.test/sw-controlled").unwrap();
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1007,7 +1057,11 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {
         "FRAME-1".to_owned(),
         12.5,
     );
-    let batches = context.event_batches(&events, &final_url, 17);
+    let batches = context.event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1099,7 +1153,11 @@ fn completed_body_redirect_without_transport_extra_info_keeps_flag_false() {
         from_cache: false,
         negotiated_http_version: None,
     }];
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1179,7 +1237,11 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro
         negotiated_http_version: Some(NegotiatedHttpVersion::Http11),
     }];
 
-    let batches = completed_progress_context().event_batches(&events, &navigation_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &navigation_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
     drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
@@ -1267,7 +1329,11 @@ fn transportless_https_upgrade_attributes_wire_headers_to_upgraded_request() {
         negotiated_http_version: Some(NegotiatedHttpVersion::Http11),
     }];
 
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
     drain.mark_output_visible_until(MainDocumentProgressOutputBoundary::BodyFinishedVisible);
@@ -1321,7 +1387,11 @@ fn completed_body_uses_negotiated_protocol_for_redirect_and_final_response() {
         from_cache: false,
         negotiated_http_version: Some(NegotiatedHttpVersion::Http10),
     }];
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1347,7 +1417,11 @@ fn cached_completed_body_emits_served_from_cache_before_response() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let mut events = completed_events();
     events.response_from_cache = true;
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1402,7 +1476,11 @@ fn cached_completed_body_redirect_emits_cache_event_before_next_request() {
         from_cache: true,
         negotiated_http_version: None,
     }];
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1543,7 +1621,11 @@ fn progress_output_queue_buffers_body_finished_until_response_received() {
 fn completed_body_progress_queue_drains_network_events_by_milestone() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1582,7 +1664,11 @@ fn completed_body_progress_queue_drains_network_events_by_milestone() {
 fn completed_body_progress_queue_can_release_all_materialized_events_at_body_finished() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1602,7 +1688,11 @@ fn completed_body_progress_queue_can_release_all_materialized_events_at_body_fin
 fn completed_body_progress_drain_keeps_mark_ready_separate_from_output_drain() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut drain =
         MainDocumentProgressDrain::from_source(MainDocumentProgressSource::completed_body(batches));
 
@@ -1636,7 +1726,11 @@ fn completed_body_progress_drain_keeps_mark_ready_separate_from_output_drain() {
 fn progress_output_barrier_drains_source_generated_progress_before_cdp_output() {
     let final_url = Url::parse("http://example.test/final").unwrap();
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut gate = MainDocumentProgressGate::new(MainDocumentProgressDrain::from_source(
         MainDocumentProgressSource::completed_body(batches),
     ));
@@ -1660,7 +1754,11 @@ fn progress_output_barrier_drains_source_generated_progress_before_cdp_output() 
     );
 
     let events = completed_events();
-    let batches = completed_progress_context().event_batches(&events, &final_url, 17);
+    let batches = completed_progress_context().event_batches(
+        &events,
+        &final_url,
+        MainDocumentNetworkCompletion::Loaded(17),
+    );
     let mut gate = MainDocumentProgressGate::new(MainDocumentProgressDrain::from_source(
         MainDocumentProgressSource::completed_body(batches),
     ));

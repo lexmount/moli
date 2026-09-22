@@ -331,6 +331,22 @@ impl Page {
         .await
     }
 
+    pub fn start_set_inspector_overlay(
+        &self,
+        inspector_session_id: Option<String>,
+        command: super::RendererInspectorOverlayCommand,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetInspectorOverlay {
+            inspector_session_id,
+            command,
+        })
+    }
+
+    pub fn finish_set_inspector_overlay(&mut self, completion: CompletedPageCommand) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(reply, "set inspector overlay", "a unit reply", RendererPageReply::Unit => Ok(()),)
+    }
+
     pub fn start_set_emulated_media(
         &self,
         overrides: &EmulatedMediaOverrides,

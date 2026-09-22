@@ -20,6 +20,7 @@ use tokio::{
 };
 
 mod device_geometry;
+mod inspector_surfaces;
 mod native_navigator;
 
 async fn evaluate(ctx: &mut TestContext, expression: &str) -> serde_json::Value {
