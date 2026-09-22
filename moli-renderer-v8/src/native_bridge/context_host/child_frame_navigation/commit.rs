@@ -344,7 +344,10 @@ impl JsContextHost {
                 entry.apply_initial_attribute_target_navigation_entry(&url);
             } else if is_initial_attribute_target_seed {
                 entry.mark_initial_attribute_target_navigation_activation();
-            } else {
+            } else if !matches!(
+                attribute_bootstrap,
+                ChildBrowsingContextBootstrap::Srcdoc { .. }
+            ) {
                 entry.replace_navigation_in_entry_seed(&url);
             }
         }

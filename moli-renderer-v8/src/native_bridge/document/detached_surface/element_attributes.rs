@@ -552,6 +552,22 @@ fn sync_detached_surface_set_attribute<'s>(
     let old_value = unsafe { &*runtime_ptr }
         .dom_host()
         .get_attribute(handle, name);
+    let runtime = unsafe { &*runtime_ptr };
+    if name.eq_ignore_ascii_case("src")
+        && runtime.dom_host().is_html_element_named(handle, "iframe")
+        && runtime.dom_host().is_connected(handle)
+        && !crate::native_bridge::element::iframe_uses_detached_content_cache(runtime, handle)
+    {
+        // Popup and child Documents also expose native nodes through this
+        // wrapper. Reuse the live iframe path, including same-value reloads.
+        crate::native_bridge::element::update_iframe_snapshot_navigation(
+            scope,
+            runtime_ptr,
+            handle,
+            value,
+        );
+        return Some(old_value.as_deref() != Some(value));
+    }
     let clears_iframe_context = old_value.as_deref() != Some(value)
         && detached_iframe_navigation_attribute_changed(runtime_ptr, handle, name);
     if clears_iframe_context {
