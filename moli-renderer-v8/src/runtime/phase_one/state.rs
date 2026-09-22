@@ -199,6 +199,12 @@ impl ConcurrentParseTimeRuntime {
         self.page_vm
     }
 
+    pub(super) fn into_stopped_page_vm(mut self) -> PageVm {
+        self.state.parser_session.stop(ParserStopReason::Stopped);
+        drop(self.retire_main_parser_continuation());
+        self.page_vm
+    }
+
     pub(super) fn new_parser_owner(
         loader: ResourceRequestClient,
         stage: PageVmInitStage,
