@@ -236,6 +236,12 @@ pub(crate) fn try_start_emulation_command_dispatch(
             Some(start_user_agent_override_command(conn, cmd))
         }
         Some(EmulationAction::SetEmulatedMedia) => Some(start_emulated_media_command(conn, cmd)),
+        Some(EmulationAction::SetEmulatedOSTextScale) => {
+            Some(start_os_text_scale_command(conn, cmd))
+        }
+        Some(EmulationAction::SetEmulatedVisionDeficiency) => Some(
+            EmulationCommandTaskStep::Complete(vision_deficiency_command(conn, cmd)),
+        ),
         Some(EmulationAction::SetDefaultBackgroundColorOverride) => Some(
             EmulationCommandTaskStep::Complete(default_background_color_command(conn, cmd)),
         ),
@@ -832,7 +838,48 @@ fn start_emulated_media_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let page_overrides: moli_core::page::EmulatedMediaOverrides = (&overrides).into();
+    start_style_environment_update(conn, cmd)
+}
+
+fn start_os_text_scale_command(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    #[derive(serde::Deserialize, Default)]
+    struct TextScaleParams {
+        scale: Option<f32>,
+    }
+    let params = match cmd.get_params::<TextScaleParams>() {
+        Ok(params) => params.unwrap_or_default(),
+        Err(error) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32602, error));
+        }
+    };
+    if params
+        .scale
+        .is_some_and(|scale| !scale.is_finite() || scale <= 0.0)
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32602,
+            "Text scale must be finite and positive",
+        ));
+    }
+    if let Err(error) =
+        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+            state.set_preferred_text_scale(params.scale);
+        })
+    {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, error));
+    }
+    start_style_environment_update(conn, cmd)
+}
+
+fn start_style_environment_update(
+    conn: &mut CdpConnection,
+    cmd: &Cmd<'_>,
+) -> EmulationCommandTaskStep {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let page_overrides = conn.navigation_load_inputs_for_owner(&owner).emulated_media;
     let pending = if emulation_command_is_context_wide(conn, cmd.session_id) {
         match start_context_emulated_media_page_commands(conn, &page_overrides) {
             Ok(pending) => pending,
@@ -2854,5 +2901,30 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetUserAgentLoader => {
             unreachable!("user agent loader rebuild finishes through the session owner")
         }
+    }
+}
+
+fn vision_deficiency_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    use chromiumoxide_cdp::cdp::browser_protocol::emulation::{
+        SetEmulatedVisionDeficiencyParams, SetEmulatedVisionDeficiencyType,
+    };
+    use moli_core::page::RendererVisionDeficiency as Vision;
+    let Ok(Some(params)) = cmd.get_params::<SetEmulatedVisionDeficiencyParams>() else {
+        return CommandOutputPlan::error(-32602, "Invalid vision deficiency");
+    };
+    let vision = match params.r#type {
+        SetEmulatedVisionDeficiencyType::None => Vision::None,
+        SetEmulatedVisionDeficiencyType::BlurredVision => Vision::BlurredVision,
+        SetEmulatedVisionDeficiencyType::ReducedContrast => Vision::ReducedContrast,
+        SetEmulatedVisionDeficiencyType::Achromatopsia => Vision::Achromatopsia,
+        SetEmulatedVisionDeficiencyType::Deuteranopia => Vision::Deuteranopia,
+        SetEmulatedVisionDeficiencyType::Protanopia => Vision::Protanopia,
+        SetEmulatedVisionDeficiencyType::Tritanopia => Vision::Tritanopia,
+    };
+    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        state.set_vision_deficiency(vision)
+    }) {
+        Ok(()) => CommandOutputPlan::success(),
+        Err(error) => CommandOutputPlan::error(-31998, error),
     }
 }

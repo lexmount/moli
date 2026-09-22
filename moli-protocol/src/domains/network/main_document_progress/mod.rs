@@ -203,7 +203,6 @@ impl CompletedDownloadProgressTransfer {
     ) -> (MainDocumentProgressGate, CompletedDownloadBodyArtifact) {
         let response_headers = self.network_events.response_headers.clone();
         let progress = CompletedDownloadBodyNetworkProgress {
-            encoded_data_length: completed_download_body_len_hint(&self.body, &response_headers),
             network_events: self.network_events,
         };
         let queue = completed_download_body_progress_queue(progress, conn, state, final_url);
@@ -222,31 +221,12 @@ impl CompletedDownloadProgressTransfer {
     }
 }
 
-fn completed_download_body_len_hint(
-    body: &CompletedDownloadProgressBody,
-    response_headers: &[(String, String)],
-) -> usize {
-    match body {
-        CompletedDownloadProgressBody::Buffered(body) => body.len(),
-        CompletedDownloadProgressBody::Streaming(_) => response_headers
-            .iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .and_then(|(_, value)| value.trim().parse().ok())
-            .unwrap_or_default(),
-    }
-}
-
 #[derive(Debug)]
 struct CompletedDownloadBodyNetworkProgress {
-    encoded_data_length: usize,
     network_events: CompletedMainDocumentNetworkEvents,
 }
 
 impl CompletedDownloadBodyNetworkProgress {
-    fn len(&self) -> usize {
-        self.encoded_data_length
-    }
-
     fn into_network_events(self) -> CompletedMainDocumentNetworkEvents {
         self.network_events
     }
@@ -494,7 +474,7 @@ fn completed_document_body_progress_queue(
         event_request_id,
         body_progress_source.into_completed_body_events(),
         final_url,
-        encoded_data_length,
+        MainDocumentNetworkCompletion::Loaded(encoded_data_length),
     )
 }
 
@@ -505,7 +485,6 @@ fn completed_download_body_progress_queue(
     final_url: &Url,
 ) -> MainDocumentProgressQueueHandle {
     let network_observed = main_document_network_observed(conn, state.session_id.as_deref());
-    let encoded_data_length = progress.len();
     completed_or_streaming_document_progress_queue(
         conn,
         state,
@@ -513,7 +492,7 @@ fn completed_download_body_progress_queue(
         state.request_id.clone(),
         Some(progress.into_network_events()),
         final_url,
-        encoded_data_length,
+        MainDocumentNetworkCompletion::Download,
     )
 }
 
@@ -524,7 +503,7 @@ fn completed_or_streaming_document_progress_queue(
     request_id: Option<String>,
     events: Option<CompletedMainDocumentNetworkEvents>,
     final_url: &Url,
-    encoded_data_length: usize,
+    completion: MainDocumentNetworkCompletion,
 ) -> MainDocumentProgressQueueHandle {
     let Some(events) = events else {
         return MainDocumentProgressQueueHandle::from_source(
@@ -544,7 +523,7 @@ fn completed_or_streaming_document_progress_queue(
         state.timestamp,
     );
     MainDocumentProgressQueueHandle::from_source(MainDocumentProgressSource::completed_body(
-        context.event_batches(&events, final_url, encoded_data_length),
+        context.event_batches(&events, final_url, completion),
     ))
 }
 
@@ -1632,6 +1611,13 @@ fn main_document_network_event_session_ids(
     conn.network_event_session_ids_for_session_owner(trigger_session_id)
 }
 
+#[derive(Clone, Copy)]
+enum MainDocumentNetworkCompletion {
+    Loaded(usize),
+    // The response body belongs to the download manager; document loading is aborted.
+    Download,
+}
+
 struct CompletedMainDocumentProgressContext {
     session_ids: Vec<Option<String>>,
     request_id: Option<String>,
@@ -1676,12 +1662,30 @@ impl CompletedMainDocumentProgressContext {
         &self,
         events: &CompletedMainDocumentNetworkEvents,
         final_url: &Url,
-        encoded_data_length: usize,
+        completion: MainDocumentNetworkCompletion,
     ) -> MainDocumentNavigationProgressEventBatches {
+        let encoded_data_length = match completion {
+            MainDocumentNetworkCompletion::Loaded(length) => length,
+            MainDocumentNetworkCompletion::Download => 0,
+        };
+        let terminal = self.progress_target().map(|target| match completion {
+            MainDocumentNetworkCompletion::Loaded(encoded_data_length) => {
+                MainDocumentNavigationProgressEvent::LoadingFinished {
+                    target,
+                    encoded_data_length,
+                }
+            }
+            MainDocumentNetworkCompletion::Download => {
+                MainDocumentNavigationProgressEvent::LoadingFailed {
+                    target,
+                    error_text: moli_fetch::NET_ERR_ABORTED_ERROR_TEXT.to_owned(),
+                }
+            }
+        });
         MainDocumentNavigationProgressEventBatches::new(
             self.request_and_redirect_progress_events(events),
             self.response_received_progress_events(events, final_url, encoded_data_length),
-            self.loading_finished_progress_events(encoded_data_length),
+            terminal.into_iter().collect(),
         )
     }
 
@@ -1882,19 +1886,6 @@ impl CompletedMainDocumentProgressContext {
             from_cache: events.response_from_cache,
             negotiated_http_version: events.negotiated_http_version,
             has_extra_info: events.network_extra_info_available && !events.response_from_cache,
-        }]
-    }
-
-    fn loading_finished_progress_events(
-        &self,
-        encoded_data_length: usize,
-    ) -> Vec<MainDocumentNavigationProgressEvent> {
-        let Some(target) = self.progress_target() else {
-            return Vec::new();
-        };
-        vec![MainDocumentNavigationProgressEvent::LoadingFinished {
-            target,
-            encoded_data_length,
         }]
     }
 

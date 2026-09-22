@@ -103,6 +103,7 @@ impl From<Option<f64>> for StyleViewport {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub(crate) struct StyloStyleEnvironment {
+    preferred_text_scale_bits: Option<u32>,
     media_type: StyloStyleMediaType,
     color_scheme: StyloStyleColorScheme,
     page_color_scheme_bits: u8,
@@ -155,6 +156,7 @@ impl StyloStyleEnvironment {
         overrides: &crate::protocol_types::EmulatedMediaOverrides,
     ) -> Self {
         Self {
+            preferred_text_scale_bits: overrides.preferred_text_scale.map(f32::to_bits),
             media_type: if overrides.media.as_deref() == Some("print") {
                 StyloStyleMediaType::Print
             } else {
@@ -195,6 +197,12 @@ impl StyloStyleEnvironment {
     pub(crate) fn with_page_color_schemes(mut self, color_schemes: ColorSchemeFlags) -> Self {
         self.page_color_scheme_bits = color_schemes.bits();
         self
+    }
+
+    pub(super) fn preferred_text_scale(self) -> f32 {
+        self.preferred_text_scale_bits
+            .map(f32::from_bits)
+            .unwrap_or(1.0)
     }
 
     pub(super) fn stylo_media_type(self) -> MediaType {

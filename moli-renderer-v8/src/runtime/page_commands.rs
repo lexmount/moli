@@ -1116,6 +1116,10 @@ impl PageVm {
                 self.set_bypass_content_security_policy(bypass);
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SetInspectorOverlay { inspector_session_id, command } => {
+                self.set_inspector_overlay(inspector_session_id.as_deref(), command)?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::SetEmulatedMedia(overrides) => {
                 self.set_emulated_media(&overrides);
                 Ok(RendererPageReply::Unit)
