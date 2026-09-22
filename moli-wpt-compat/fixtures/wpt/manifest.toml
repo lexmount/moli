@@ -20633,3 +20633,17 @@ source_path = "workers/semantics/xhr/006.html"
 source_commit = "a03603fe9af6230a12f1b2fb2c18a7d003a0d937"
 tags = ["sharedworker", "worker", "xhr", "sync-xhr", "baseurl"]
 notes = "Imported upstream WPT SharedWorker synchronous XMLHttpRequest coverage for resolving relative URLs against the shared worker script directory. Uses the long local timeout because full-workspace nextest can run many fixture servers and worker runtimes concurrently before this window/iframe/SharedWorker chain reports its first subtest."
+
+[[test]]
+id = "testharness-dom-exception-assertions"
+upstream = "local WPT harness DOMException assertion overload and realm canary"
+upstream_commit = "local-regression-2026-09-20"
+local_path = "ported/harness/dom-exception-assertions.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+tags = ["testharness", "domexception", "cross-realm"]
+notes = "Local harness canary for implicit and explicit DOMException constructors, cross-realm exceptions, and rejection of incorrect constructors or missing exceptions."
