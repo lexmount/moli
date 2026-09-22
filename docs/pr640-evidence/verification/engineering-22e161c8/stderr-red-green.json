@@ -1,0 +1,29 @@
+{
+  "base_commit": "de1093d9c1ab23a0bf9b1c7d0ee99141c2eee134",
+  "head_commit": "22e161c85c399420b2fb1957d5c3ee9bba822a66",
+  "command": "moli fetch --log-level error --wait-until load --timeout 5000 --dump html <data URL that throws an error then provides main#after>",
+  "base": {
+    "binary_sha256": "555448f4473f720418dd8e1efdde4c7de82c8b88e672b8c5634506a62101a6f4",
+    "normal": {
+      "exit_code": 0,
+      "has_after": true,
+      "has_error": true
+    },
+    "broken_pipe": {
+      "exit_code": -6,
+      "has_after": false
+    }
+  },
+  "head": {
+    "binary_sha256": "b0666845a19400c375364604f73d9df42b74df7820b5cbaa210470afe62a7413",
+    "normal": {
+      "exit_code": 0,
+      "has_after": true,
+      "has_error": true
+    },
+    "broken_pipe": {
+      "exit_code": 0,
+      "has_after": true
+    }
+  }
+}

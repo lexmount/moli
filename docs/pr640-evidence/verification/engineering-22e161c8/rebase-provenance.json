@@ -1,0 +1,9 @@
+{
+  "validated_commit": "22e161c85c399420b2fb1957d5c3ee9bba822a66",
+  "validated_base": "de1093d9c1ab23a0bf9b1c7d0ee99141c2eee134",
+  "published_commit": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+  "published_base": "7241328085c8fdf0e18cbd6a2ef4d0eec878efb5",
+  "feature_patch_unchanged": true,
+  "feature_patch_sha256": "799b25e732c7d4ff0c9f6405b8a67262c93706f9e64dac40c8df237e0517f0a5",
+  "published_head_full_gates": "CI"
+}

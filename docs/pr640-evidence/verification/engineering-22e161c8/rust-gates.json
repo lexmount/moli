@@ -1,0 +1,30 @@
+{
+  "source_commit": "22e161c85c399420b2fb1957d5c3ee9bba822a66",
+  "base_commit": "de1093d9c1ab23a0bf9b1c7d0ee99141c2eee134",
+  "source_tree": "84c6370a17829eb10ff4c8d6389ed8fc89d929be",
+  "group": "engineering",
+  "completed_at_unix": 1790048871.442892,
+  "test_summary": "Summary [ 456.336s] 18416 tests run: 18416 passed (24 slow), 13 skipped",
+  "build_env": {
+    "CARGO_INCREMENTAL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0"
+  },
+  "gates": {
+    "fmt": {
+      "command": "cargo fmt --all",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "clippy": {
+      "command": "cargo clippy --workspace --all-targets --all-features -- -D warnings",
+      "exit_code": 0,
+      "log_sha256": "d4ec5257c28e767a99c12c98af8ffa2ae7b8238813d6e7a54f0b281a26ba9c33"
+    },
+    "nextest": {
+      "command": "cargo nextest run --no-fail-fast",
+      "exit_code": 0,
+      "log_sha256": "931ea8f2f363d80b92ecd238dfa1a33ca614ccc88f1efd00ac723b3717a6c874"
+    }
+  }
+}
