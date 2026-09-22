@@ -155,6 +155,46 @@ fn template_contents_uses_and_releases_rare_data() {
 }
 
 #[test]
+fn element_reference_state_is_owned_by_the_content_attribute() {
+    let mut element = Element::new_html("div");
+    assert!(element.set_attribute("commandfor".to_owned(), String::new(), None, String::new(),));
+    element.set_explicit_element_references("commandfor", vec![NativeNodeId::new(7)]);
+
+    assert!(!element.set_attribute("commandfor".to_owned(), String::new(), None, String::new(),));
+    assert_eq!(element.explicit_element_references("commandfor"), None);
+
+    element.set_explicit_element_references("commandfor", vec![NativeNodeId::new(8)]);
+    assert!(element.set_attribute_ns(
+        "commandfor".to_owned(),
+        "urn:example".to_owned(),
+        Some("x".to_owned()),
+        "foreign".to_owned(),
+    ));
+    assert_eq!(
+        element.explicit_element_references("commandfor"),
+        Some([NativeNodeId::new(8)].as_slice())
+    );
+
+    assert!(element.remove_attribute("commandfor"));
+    assert_eq!(element.explicit_element_references("commandfor"), None);
+
+    assert!(element.set_attribute(
+        "popovertarget".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    element.set_explicit_element_references("popovertarget", vec![NativeNodeId::new(9)]);
+    assert!(!element.set_attribute(
+        "popovertarget".to_owned(),
+        String::new(),
+        None,
+        String::new(),
+    ));
+    assert_eq!(element.explicit_element_references("popovertarget"), None);
+}
+
+#[test]
 fn html_element_interface_name_covers_replay_tags() {
     assert_eq!(html_element_interface_name("meta"), "HTMLMetaElement");
     assert_eq!(html_element_interface_name("span"), "HTMLSpanElement");
