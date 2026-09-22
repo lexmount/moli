@@ -4200,8 +4200,8 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         lane: RendererInspectorCommandRoute,
     ) -> Result<&state::RendererAgentBinding, String> {
-        // Migration navigation gate: Main waits for the replacement, while IO
-        // may still enter the outgoing binding. Neither lane borrows its Page.
+        // Main waits for the AgentHost's document projection; IO may still
+        // enter the outgoing binding. Neither lane consults the Browser queue.
         if lane == RendererInspectorCommandRoute::MainThread {
             self.ensure_document_accessible_for_owner(owner)?;
         }

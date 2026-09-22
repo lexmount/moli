@@ -1216,7 +1216,7 @@ impl BrowserContext {
         };
         self.browser_context
             .observe_renderer_page_state(handle, snapshot.clone())
-            .unwrap_or(false)
+            .is_ok()
     }
 }
 

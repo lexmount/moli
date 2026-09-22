@@ -129,6 +129,7 @@ impl TargetRootDocumentProtocolAttachmentIdentity {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TargetIdentityState {
     url: String,
+    document_url_override: Option<String>,
     security_origin: String,
     secure_context_type: String,
 }
@@ -137,6 +138,7 @@ impl TargetIdentityState {
     pub(crate) fn new(url: String, security_origin: String, secure_context_type: String) -> Self {
         Self {
             url,
+            document_url_override: None,
             security_origin,
             secure_context_type,
         }
@@ -177,6 +179,14 @@ impl TargetIdentityState {
         &self.url
     }
 
+    pub(crate) fn document_url(&self) -> &str {
+        self.document_url_override.as_deref().unwrap_or(&self.url)
+    }
+
+    pub(crate) fn set_document_url_override(&mut self, url: Option<String>) {
+        self.document_url_override = url;
+    }
+
     pub(crate) fn security_origin(&self) -> &str {
         &self.security_origin
     }
@@ -187,6 +197,7 @@ impl TargetIdentityState {
 
     pub(crate) fn set_url(&mut self, url: String) {
         self.url = url;
+        self.document_url_override = None;
     }
 
     pub(crate) fn set_security_origin(&mut self, security_origin: String) {

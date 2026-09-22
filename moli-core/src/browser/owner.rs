@@ -355,6 +355,25 @@ impl BrowserHandle {
             .map_err(|_| "Browser owner stopped before completing the operation".to_owned())
     }
 
+    /// Hold the owner queue until the test drops the returned release sender.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn block_owner_for_test(&self) -> Result<std_mpsc::Sender<()>, String> {
+        let (release, wait) = std_mpsc::channel();
+        let (entered, ready) = std_mpsc::sync_channel(1);
+        self.endpoint
+            .tx
+            .send(BrowserOwnerMessage::Execute(Box::new(move |_| {
+                let _ = entered.send(());
+                let _ = wait.recv();
+            })))
+            .map_err(|_| "Browser owner is unavailable".to_owned())?;
+        ready
+            .recv()
+            .map_err(|_| "Browser owner stopped before the test gate".to_owned())?;
+        Ok(release)
+    }
+
     pub fn create_context(
         &self,
         handles: BrowserContextStoragePartitionHandles,
@@ -362,19 +381,25 @@ impl BrowserHandle {
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Result<BrowserContextHandle, String> {
-        let (id, renderer_runtime_id) = self.execute(move |browser| {
+        let (id, renderer_runtime_id, selection) = self.execute(move |browser| {
             let context = BrowserContext::new(handles, kind, http_cache_root, http_cache_max_bytes);
             context.renderer_runtime().bind_resource_task_runner(
                 moli_renderer_v8::network::RendererResourceTaskRunner::from_current_tokio()
                     .expect("Browser owner runs on its resource executor"),
             );
             let renderer_runtime_id = context.renderer_runtime().id();
-            (browser.insert_context(context), renderer_runtime_id)
+            let selection = context.observe_selection();
+            (
+                browser.insert_context(context),
+                renderer_runtime_id,
+                selection,
+            )
         })?;
         Ok(BrowserContextHandle {
             browser: self.clone(),
             id,
             renderer_runtime_id,
+            selection,
         })
     }
 
@@ -384,15 +409,16 @@ impl BrowserHandle {
     }
 
     pub fn context_handle(&self, id: BrowserContextId) -> Result<BrowserContextHandle, String> {
-        let renderer_runtime_id = self.execute(move |browser| {
+        let (renderer_runtime_id, selection) = self.execute(move |browser| {
             browser
                 .context(id)
-                .map(|context| context.renderer_runtime().id())
+                .map(|context| (context.renderer_runtime().id(), context.observe_selection()))
         })??;
         Ok(BrowserContextHandle {
             browser: self.clone(),
             id,
             renderer_runtime_id,
+            selection,
         })
     }
 
@@ -654,6 +680,7 @@ pub struct BrowserContextHandle {
     browser: BrowserHandle,
     id: BrowserContextId,
     renderer_runtime_id: crate::RendererBrowserContextRuntimeId,
+    selection: tokio::sync::watch::Receiver<Option<super::WebContentsSelection>>,
 }
 
 /// Completion of a Browser-owned WebContents teardown.
@@ -1020,21 +1047,20 @@ impl BrowserContextHandle {
     }
 
     pub fn selected_web_contents_id(&self) -> Option<super::WebContentsId> {
-        self.read(BrowserContext::selected_web_contents_id)
-            .ok()
-            .flatten()
+        self.selected_web_contents_handle()
+            .map(WebContentsHandle::id)
     }
 
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
-        self.read(BrowserContext::selected_web_contents_handle)
-            .ok()
-            .flatten()
+        self.selected_web_contents_snapshot()
+            .map(|selection| selection.web_contents)
     }
 
     pub fn selected_web_contents_snapshot(&self) -> Option<super::WebContentsSelection> {
-        self.read(BrowserContext::selected_web_contents_snapshot)
-            .ok()
-            .flatten()
+        // Core owns the sole selection value. Reading its observation does not
+        // enqueue work or keep a disposed Context's selection alive.
+        self.selection.has_changed().ok()?;
+        *self.selection.borrow()
     }
 
     pub fn web_contents_count(&self) -> usize {
@@ -1090,8 +1116,20 @@ impl BrowserContextHandle {
         &self,
         handle: WebContentsHandle,
         snapshot: Arc<moli_renderer_v8::RendererPageState>,
-    ) -> Result<bool, String> {
-        self.try_update(move |context| context.observe_renderer_page_state(handle, &snapshot))
+    ) -> Result<(), String> {
+        let id = self.id;
+        // Inspection has already completed on its endpoint. Cache observation
+        // remains ordered with subsequent Browser operations, but its receipt
+        // must not block the renderer reply on the Browser owner queue.
+        self.browser
+            .endpoint
+            .tx
+            .send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
+                if let Ok(context) = browser.context_mut(id) {
+                    let _ = context.observe_renderer_page_state(handle, &snapshot);
+                }
+            })))
+            .map_err(|_| "Browser owner is unavailable".to_owned())
     }
 
     pub fn web_contents_window_surface(
@@ -2380,6 +2418,54 @@ impl BrowserContextHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn selection_observers_follow_native_activation_close_and_context_disposal() {
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let context = browser
+            .create_context(
+                BrowserContextStoragePartitionHandles::memory(),
+                StoragePartitionKind::Ephemeral,
+                None,
+                None,
+            )
+            .unwrap();
+        let observer = browser.context_handle(context.id()).unwrap();
+        let (first, _) = context
+            .create_web_contents(WebContentsCreation::default())
+            .unwrap();
+        let (second, _) = context
+            .create_web_contents(WebContentsCreation::default())
+            .unwrap();
+        context
+            .activate_web_contents(first)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        let first_selection = observer.selected_web_contents_snapshot().unwrap();
+        assert_eq!(first_selection.web_contents, first);
+        context
+            .activate_web_contents(second)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        let second_selection = observer.selected_web_contents_snapshot().unwrap();
+        assert_eq!(second_selection.web_contents, second);
+        assert!(second_selection.sequence > first_selection.sequence);
+        context
+            .close_web_contents(second)
+            .unwrap()
+            .close_async()
+            .await;
+        assert_eq!(observer.selected_web_contents_handle(), Some(first));
+        assert!(context.remove().unwrap());
+        assert!(observer.selected_web_contents_snapshot().is_none());
+        assert!(context.selected_web_contents_id().is_none());
+        service.shutdown();
+    }
 
     #[test]
     fn context_capability_does_not_own_the_physical_context() {

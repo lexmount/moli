@@ -12,10 +12,10 @@ use crate::conn::state::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
-    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL,
-    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseNavigation,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
+    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, PendingFetchAuthNavigation,
+    PendingFetchNavigation, PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
+    RuntimeBindingDefinition,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 #[cfg(test)]
@@ -508,17 +508,9 @@ impl<'a> TargetSessionOwnerRef<'a> {
 
     pub(super) fn frame_tree_identity(&self) -> (String, String, String, String) {
         let target = self.target();
-        let document_url = self
-            .browser_context
-            .target_document_url(&self.target_id)
-            // Only a browser-owned network error Document diverges from the
-            // user-visible Target/history URL.
-            .filter(|url| url.as_str() == NETWORK_ERROR_PAGE_URL)
-            .map(|url| url.to_string())
-            .unwrap_or_else(|| target.target_identity().url().to_owned());
         (
             target.target_id().to_owned(),
-            document_url,
+            target.target_identity().document_url().to_owned(),
             target.target_identity().security_origin().to_owned(),
             target.target_identity().secure_context_type().to_owned(),
         )
@@ -1101,7 +1093,7 @@ impl CdpConnection {
         )
     }
 
-    // In-place Browser operations; replaced by BrowserHandle at Commit 22.
+    // Browser-owned state is accessed through the exact Context capability.
     pub(crate) fn target_is_crashed_for_owner(&self, owner: &CommandOwnerScope) -> bool {
         self.target_session_owner_ref_for_owner(owner)
             .is_some_and(|owner| owner.browser_context.target_is_crashed(&owner.target_id))
@@ -1307,9 +1299,17 @@ impl CdpConnection {
     pub(crate) fn has_loaded_page_for_owner(&self, owner: &CommandOwnerScope) -> bool {
         self.target_session_owner_ref_for_owner(owner)
             .is_some_and(|owner| {
-                owner
-                    .browser_context
-                    .target_has_loaded_page(&owner.target_id)
+                (owner
+                    .runtime_slot()
+                    .current_renderer_inspection_binding()
+                    .is_some()
+                    && owner
+                        .browser_context
+                        .renderer_document_lifecycle_binding_for_target(&owner.target_id)
+                        .is_some())
+                    || owner
+                        .browser_context
+                        .target_has_loaded_page(&owner.target_id)
             })
     }
 

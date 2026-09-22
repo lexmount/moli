@@ -357,42 +357,36 @@ impl CdpConnection {
     }
 
     pub(crate) fn native_startup_allows_document_access(&self, owner: &CommandOwnerScope) -> bool {
+        let Some(binding) = self.committed_renderer_document_binding_for_owner(owner) else {
+            return false;
+        };
+        // An initial Document has no committed navigation. This binding also
+        // observes native retirement, so a delayed projection cannot grant
+        // access to an initial Document that Browser has already replaced.
+        if binding.navigation.is_some() {
+            return false;
+        }
         let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
         else {
             return false;
         };
-        let Some(contents) = self
+        let Some(target) = self
             .browser_context_by_id(&context_id)
-            .and_then(|context| context.web_contents_handle_for_target(&target_id))
+            .and_then(|context| context.page_target(&target_id))
         else {
             return false;
         };
-        let Ok(context) = self.browser.context_handle(contents.context()) else {
-            return false;
-        };
-        let Ok(Some(navigation)) = context.native_initial_document_navigation(contents) else {
-            return false;
-        };
-        // Initial-document access is for a real inspector pause, not for the
-        // brief request-admission turns of an unpaused background navigation.
-        let inspecting_initial = self.target_has_waiting_for_debugger_session(&target_id)
-            || self
-                .browser_context_by_id(&context_id)
-                .and_then(|projection| {
-                    projection.native_navigation_dispatch(&target_id, navigation)
-                })
-                .is_some_and(|pending| {
-                    context
-                        .navigation_interception_awaits_decision(
-                            contents,
-                            pending.navigation_permit,
-                        )
-                        .unwrap_or(false)
-                });
-        inspecting_initial
-            && self
-                .runtime_session_owner_slot_for_owner(owner)
-                .is_ok_and(|slot| slot.allows_initial_document_access(navigation))
+        target
+            .runtime_slot
+            .observed_document_navigations()
+            .into_iter()
+            .any(|navigation| {
+                target
+                    .runtime_slot
+                    .allows_initial_document_access(navigation)
+                    && (self.target_has_waiting_for_debugger_session(&target_id)
+                        || target.fetch_owner.navigation_awaits_action(navigation))
+            })
     }
 
     pub(crate) fn native_navigation_decision_for_target(

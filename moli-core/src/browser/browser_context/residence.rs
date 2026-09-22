@@ -90,7 +90,7 @@ impl BrowserContext {
     }
 
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
-        self.selected_web_contents
+        self.selected_web_contents_snapshot()
             .map(|selection| selection.web_contents)
     }
 

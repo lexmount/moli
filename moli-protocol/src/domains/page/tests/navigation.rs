@@ -6155,6 +6155,15 @@ async fn navigate_failure_commits_error_document_with_visible_unreachable_url() 
         history["result"]["entries"][current_index]["url"],
         unreachable_url
     );
+    ctx.process_async(json!({
+        "id": 234, "method": "DOM.getDocument", "sessionId": "SID-1",
+    }))
+    .await;
+    let document = take_response_by_id(&mut ctx, 234);
+    assert_eq!(
+        document["result"]["root"]["documentURL"],
+        NETWORK_ERROR_PAGE_URL
+    );
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn navigate_failure_creates_runtime_context_and_completes_lifecycle() {

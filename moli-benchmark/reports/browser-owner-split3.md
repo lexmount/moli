@@ -1,9 +1,52 @@
 # Browser owner acceptance measurements
 
-The fresh frozen comparison below supersedes earlier measurements for the
-current branch. Historical results and failures remain unchanged afterward.
+The frozen comparison below covers `d743043ab7`. Historical results and failures
+remain unchanged; they do not validate later source changes.
 
-## Final frozen acceptance, 2026-09-23
+## Completion audit reopened, 2026-09-23
+
+A blocked-owner regression disproved the earlier inspection-independence claim:
+ordinary DOM/Runtime commands held an exact renderer endpoint but still waited
+for synchronous Browser queries and snapshot receipts. The initial regression
+failed at its unchanged five-second watchdog. Two intermediate fixes retained
+the failure; the final call trace identified frame descriptions querying Browser
+only to distinguish the error Document URL from its visible Target URL.
+
+Inspection admission now follows the existing AgentHost projection fence and
+native Document retirement observation. Initial debugger/Fetch pauses use their
+existing exact navigation correlations. The unused native initial-navigation
+query is deleted. Core owns the sole selected-WebContents value in a watch
+channel; Context handles only observe it, including closure. Renderer snapshot
+observation is queued in owner order without delaying an already-frozen reply.
+The error Document URL is carried by the commit's existing Target metadata
+projection, so DOM/CSS frame descriptions need no Browser query.
+
+The regression exercises DOM, Runtime, Debugger, CSS, Accessibility and
+DOMSnapshot through command completion while BrowserOwner is blocked. A native
+selection test covers activation, selected-page close and Context disposal; the
+error-navigation test also checks DOM's Document URL. After fixing the three
+adjacent regressions recorded in the artifacts, root fmt, strict workspace
+Clippy and full nextest pass: 19,533 passed, 13 configured skips, run
+`465f6839-ae83-4a1d-8b30-f17aa644bec4`. Six focused cases also pass three
+zero-retry iterations. The 91 expected panic records match the prior baseline
+exactly, with no additions or missing records.
+
+The ordinary release SHA256 is
+`52d85f3f9c429b41e0c316f0db514cba75112cf7d0ee77ad25c6a87e52de0e29`.
+All 3,993 tracked Rust/build files match the validated source. This binary passes
+48 CDP groups / 536 scenarios, 165 WebDriver cases, shared-page lifecycle from
+all three frontends, and both 32 × 4 MiB network burst probes with Log disabled
+and enabled. Exact bodies, event order and terminal uniqueness remain asserted.
+The original failures, temporary diagnostic patch, source hashes and final
+results are retained in `target/smoke/inspection-admission.gb7ksf_g/`.
+
+The [current requirement review](browser-owner-requirements.md) records the
+checked ownership boundaries and remaining fixture/deletion work. The plan
+remains open for that cleanup and its final frozen comparison. The previously
+referenced scratch ownership audit is unavailable and is not relied on as
+completion evidence.
+
+## Frozen acceptance for d743043ab7, 2026-09-23
 
 The final source is `d743043ab71e6274df4f946ac0ee390fe298d2d8`, compared with
 fixed main `8e7be5c3fb144189335de3a61731f3e4717b6bcb`. The ordinary release is
@@ -95,9 +138,7 @@ candidate concurrent rounds. No Rust panic is captured. These controls
 identify the observed site variability; they do not turn failed full-run rows
 into passes or establish exact external-site parity.
 
-The functional/source checks are listed below. The unchanged ownership audit
-continues to cover the final model; the follow-ups remove redundant reads and
-keep the existing lifecycle/publication authorities. Source patches, complete
+The functional/source checks for this revision are listed below. Source patches, complete
 results and failures remain in `target/smoke/native-throughput.txjx99ee/`, with
 `final-local-summary.json`, `command-cost-summary.json`, and the final external
 comparisons as entry points.

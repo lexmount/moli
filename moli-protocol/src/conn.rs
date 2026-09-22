@@ -1427,7 +1427,12 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Result<(), String> {
-        if self.has_pending_document_navigation_for_owner(owner)
+        // Admission follows this AgentHost's output boundary. The exact
+        // renderer endpoint rejects retired Documents; Browser operations
+        // independently validate their typed DocumentHandle at the owner.
+        if self
+            .runtime_session_owner_slot_for_owner(owner)
+            .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
             && !self.native_startup_allows_document_access(owner)
         {
             return Err("Navigation is changing the document".to_owned());

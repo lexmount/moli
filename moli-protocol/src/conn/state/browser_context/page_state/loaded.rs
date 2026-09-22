@@ -355,6 +355,16 @@ impl BrowserContext {
             target.set_target_security_origin(info.security_origin.clone());
             target.set_target_secure_context_type(info.secure_context_type.clone());
         }
+        // The frame exposes the committed error Document while Target keeps
+        // the requested URL. Keep both views in this exact commit projection;
+        // inspection must not query Browser for each frame description.
+        target.target_identity.set_document_url_override(
+            metadata
+                .info
+                .as_ref()
+                .and_then(|info| info.error_page.as_ref())
+                .map(|_| crate::conn::NETWORK_ERROR_PAGE_URL.to_owned()),
+        );
         self.clear_target_loaded_document_session_state(target_id);
         self.retain_navigation_projections_for_target(target_id);
         self.finish_document_projection_replacement_for_target(target_id, retiring_projection);

@@ -9,6 +9,49 @@ mod lifecycle;
 mod native_commands;
 mod runtime_agents;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn renderer_inspection_completes_while_browser_owner_is_blocked() {
+    let mut ctx = dom_context().await;
+    let release = ctx.conn.browser.block_owner_for_test().unwrap();
+    let (finished, completion) = std::sync::mpsc::channel();
+    // An OS thread releases the gate even if a synchronous owner call blocks
+    // the async test itself. A timeout is a failure, never test synchronization.
+    let watchdog = std::thread::spawn(move || {
+        let completed = completion
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok();
+        drop(release);
+        completed
+    });
+    for (id, method, params) in [
+        (1, "DOM.getDocument", json!({"depth": -1})),
+        (
+            2,
+            "Runtime.evaluate",
+            json!({"expression": "6 * 7", "returnByValue": true}),
+        ),
+        (3, "Runtime.getHeapUsage", json!({})),
+        (4, "Debugger.enable", json!({})),
+        (5, "CSS.enable", json!({})),
+        (6, "Accessibility.getFullAXTree", json!({})),
+        (
+            7,
+            "DOMSnapshot.captureSnapshot",
+            json!({"computedStyles": []}),
+        ),
+    ] {
+        let response = dom_command(&mut ctx, id, method, params).await;
+        if method == "Runtime.evaluate" {
+            assert_eq!(response["result"]["value"], json!(42));
+        }
+    }
+    let _ = finished.send(());
+    assert!(
+        watchdog.join().unwrap(),
+        "inspection entered the blocked BrowserOwner queue"
+    );
+}
+
 pub(super) struct InspectionDocumentHandle {
     context: moli_core::browser::BrowserContextHandle,
     document: moli_core::browser::DocumentHandle,

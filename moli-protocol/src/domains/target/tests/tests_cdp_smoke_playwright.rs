@@ -827,8 +827,11 @@ async fn assert_native_popup_response(resolution: NativePopupResponseResolution)
             )
             .await;
             ctx.expect_result(93_031, json!({}), Some(&session));
+            // Direct test dispatch must observe the projection gate that the
+            // production scheduler waits for before the next Main command.
             ctx.wait_until_scheduler_state("exact borrowed-response navigation canceled", |conn| {
                 !conn.has_pending_document_navigation_for_owner(&owner)
+                    && !conn.document_projection_is_pending_for_session_owner(Some(&session))
             })
             .await;
             assert!(!ctx.conn.resolve_native_navigation_decision(

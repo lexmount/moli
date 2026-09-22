@@ -229,7 +229,7 @@ pub struct BrowserContext {
     // The Browser collection and its only selector have the same lifetime.
     // Keep insertion order when choosing a replacement foreground page.
     web_contents: IndexMap<WebContentsId, WebContents>,
-    selected_web_contents: Option<WebContentsSelection>,
+    selected_web_contents: tokio::sync::watch::Sender<Option<WebContentsSelection>>,
     // Drop Documents/engines before the runtime root and its storage handles.
     renderer_output_transport_sender: Option<crate::RendererOutputTransportSender>,
     renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
@@ -368,7 +368,7 @@ impl BrowserContext {
             service_workers: IndexMap::new(),
             dedicated_workers: IndexMap::new(),
             web_contents: IndexMap::new(),
-            selected_web_contents: None,
+            selected_web_contents: tokio::sync::watch::channel(None).0,
             renderer_output_transport_sender: None,
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
             storage_partition: StoragePartition::new(
@@ -381,22 +381,29 @@ impl BrowserContext {
     }
 
     pub fn selected_web_contents_id(&self) -> Option<WebContentsId> {
-        self.selected_web_contents
+        self.selected_web_contents_snapshot()
             .map(|selection| selection.web_contents.id())
     }
 
     pub fn selected_web_contents_snapshot(&self) -> Option<WebContentsSelection> {
-        self.selected_web_contents
+        *self.selected_web_contents.borrow()
+    }
+
+    pub(in crate::browser) fn observe_selection(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Option<WebContentsSelection>> {
+        self.selected_web_contents.subscribe()
     }
 
     pub(in crate::browser) fn select_web_contents(&mut self, id: WebContentsId) -> bool {
         if !self.web_contents.contains_key(&id) {
             return false;
         }
-        self.selected_web_contents = Some(WebContentsSelection {
-            web_contents: WebContentsHandle::new(self.id, id),
-            sequence: super::BrowserSequence::allocate(),
-        });
+        self.selected_web_contents
+            .send_replace(Some(WebContentsSelection {
+                web_contents: WebContentsHandle::new(self.id, id),
+                sequence: super::BrowserSequence::allocate(),
+            }));
         true
     }
 
@@ -411,7 +418,7 @@ impl BrowserContext {
             .shift_remove(&id)
             .expect("validated WebContents must remain resident until close");
         if self.selected_web_contents_id() == Some(id) {
-            self.selected_web_contents = self
+            let selected = self
                 .web_contents
                 .values()
                 .rev()
@@ -421,6 +428,7 @@ impl BrowserContext {
                     web_contents: WebContentsHandle::new(self.id, contents.id()),
                     sequence: super::BrowserSequence::allocate(),
                 });
+            self.selected_web_contents.send_replace(selected);
         }
         for contents in self.web_contents.values_mut() {
             if contents
@@ -435,7 +443,7 @@ impl BrowserContext {
     }
 
     pub fn close_all_web_contents(&mut self) -> Vec<ClosingWebContents> {
-        self.selected_web_contents = None;
+        self.selected_web_contents.send_replace(None);
         std::mem::take(&mut self.web_contents)
             .into_values()
             .map(WebContents::begin_close)

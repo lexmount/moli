@@ -183,22 +183,6 @@ impl BrowserContextHandle {
         })?
     }
 
-    pub fn native_initial_document_navigation(
-        &self,
-        contents: WebContentsHandle,
-    ) -> Result<Option<NavigationId>, String> {
-        let context = self.id;
-        self.browser.execute(move |browser| {
-            let navigation = browser
-                .context(context)?
-                .web_contents(contents)?
-                .navigation();
-            Ok(navigation
-                .pending_document()
-                .and_then(|(id, _)| navigation.has_native_initial_document().then_some(id)))
-        })?
-    }
-
     pub fn navigation_interception_awaits_decision(
         &self,
         contents: WebContentsHandle,
