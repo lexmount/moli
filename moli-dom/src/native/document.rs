@@ -90,6 +90,8 @@ struct DocumentMetadata {
 #[derive(Debug, Clone, Default)]
 struct DocumentArenaState {
     source_response_status: Option<u16>,
+    // Sticky for this Document; aborting a parser disables document.open/write.
+    active_parser_was_aborted: bool,
     is_inert_template_document: bool,
     associated_inert_template_document: Option<NativeNodeId>,
     css_target: Option<NativeNodeId>,
@@ -225,6 +227,14 @@ impl Document {
 
     pub fn meta_referrer_policy(&self) -> Option<&str> {
         self.metadata.meta_referrer_policy
+    }
+
+    pub fn active_parser_was_aborted(&self) -> bool {
+        self.arena_state.active_parser_was_aborted
+    }
+
+    pub fn mark_active_parser_aborted(&mut self) {
+        self.arena_state.active_parser_was_aborted = true;
     }
 
     pub fn visibility_hidden(&self) -> bool {
