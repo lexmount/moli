@@ -2,6 +2,8 @@
 
 七个独立职责的 PR；按依赖阅读机制，再核对精确版本的验证证据。
 
+> 本指南中的 HEAD 与真实任务结果对应已测归档版本。当前七个 PR 已重放到 main@a54ba82a；[当前 HEAD、直接父 PR、补丁等价与账号核验](../pr640-evidence/verification/final-rebase-current-heads.md)给出逐项映射。旧二进制的35题结果不挪作新 HEAD 的运行结果。
+
 审查与合入顺序：734 → 735 → 736 → 737 → 738 → 739 → 740。该顺序不是线性依赖链：734→735→{736,737}；734→{738,739,740}。
 
 ![依赖地图](assets/review-map.png)
@@ -18,8 +20,8 @@ Review：正常日志是否保留？测试是否仍验证真实请求、几何�
 
 不认领 35 题；诊断管道与工程契约由专项测试覆盖。
 
-HEAD：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`  
-直接 base：`2793b2407fc7805afcb531e94fc02da4ac7bf33d`（main）
+已测 HEAD：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`<br>
+已测直接 base：`2793b2407fc7805afcb531e94fc02da4ac7bf33d`（main）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
@@ -33,8 +35,8 @@ Review：DOM、样式、字体和视口是否完整使快照失效？干净读�
 
 原冻结合同：26/27 通过；714 失败，原始记录保留。
 
-HEAD：`b0f237b0955784c12a22bdda3996f52a8610f4cd`  
-直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
+已测 HEAD：`b0f237b0955784c12a22bdda3996f52a8610f4cd`<br>
+已测直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 2 项未完成、0 项失败。
 
@@ -48,8 +50,8 @@ Review：preventDefault、遮挡和跨 frame 是否保持语义？是否只处�
 
 原冻结合同：4/4 通过。
 
-HEAD：`fa1c36ef558cde8751883bff174dac7417395220`  
-直接 base：`b0f237b0955784c12a22bdda3996f52a8610f4cd`（codex/pr640-layout-final）
+已测 HEAD：`fa1c36ef558cde8751883bff174dac7417395220`<br>
+已测直接 base：`b0f237b0955784c12a22bdda3996f52a8610f4cd`（codex/pr640-layout-final）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
@@ -63,8 +65,8 @@ Review：ExtraInfo 是否与真实 wire 一致？302 后307是否保留正确方
 
 原冻结合同：2/3 通过；676 失败，保留原始产物。
 
-HEAD：`db091f6976d3742a669b64c85360d4dfd3e41ca6`  
-直接 base：`b0f237b0955784c12a22bdda3996f52a8610f4cd`（codex/pr640-layout-final）
+已测 HEAD：`db091f6976d3742a669b64c85360d4dfd3e41ca6`<br>
+已测直接 base：`b0f237b0955784c12a22bdda3996f52a8610f4cd`（codex/pr640-layout-final）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 0 项未完成、0 项失败。
 
@@ -78,8 +80,8 @@ Review：停止是否幂等？旧回调能否影响新导航？解析器退役�
 
 不认领 35 题；提交前后取消、held socket 与后续导航采用专项契约。
 
-HEAD：`b43a213dc6b68a314dadcdf36d3b5fb4dc8d8d3b`  
-直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
+已测 HEAD：`b43a213dc6b68a314dadcdf36d3b5fb4dc8d8d3b`<br>
+已测直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 3 项未完成、0 项失败。
 
@@ -93,8 +95,8 @@ Review：改名、归属变更与跨文档收养是否立即生效？getter、�
 
 不认领 35 题；命名语义与扫描计数正反对照由专项测试覆盖。
 
-HEAD：`7919ed092465dd2e8c288201bde5aa7d7f71ad2c`  
-直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
+已测 HEAD：`7919ed092465dd2e8c288201bde5aa7d7f71ad2c`<br>
+已测直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 0 项未完成、0 项失败。
 
@@ -108,8 +110,8 @@ Review：编码与分块是否改变正文？快照与 live DOM 是否一致？�
 
 原冻结合同：1/1 通过。
 
-HEAD：`ca2a8d39572644de1211e3aba30d239abf0ffb17`  
-直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
+已测 HEAD：`ca2a8d39572644de1211e3aba30d239abf0ffb17`<br>
+已测直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
 Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
