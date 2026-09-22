@@ -579,6 +579,9 @@ impl JsContextHost {
             return WindowAccessOrigin::from_serialized_origin(serialized_origin, document_domain);
         }
         if entry.security_origin_inherited() && !entry.document_sandbox_forces_opaque_origin() {
+            if let Some(origin) = entry.current_srcdoc_history_origin() {
+                return Some(origin.clone());
+            }
             if let Some(popup_id) = self.child_browsing_context_popup_owner_id(handle) {
                 return self.lightweight_popup_window_access_origin(popup_id);
             }
