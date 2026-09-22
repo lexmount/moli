@@ -1122,12 +1122,14 @@ impl Request {
     }
 }
 
-fn redirect_status_rewrites_to_get(status: u16, method: &str) -> bool {
+/// Whether following this HTTP redirect replaces the request method with GET.
+pub fn redirect_status_rewrites_to_get(status: u16, method: &str) -> bool {
     status == 303 && !method.eq_ignore_ascii_case("GET") && !method.eq_ignore_ascii_case("HEAD")
         || matches!(status, 301 | 302) && method.eq_ignore_ascii_case("POST")
 }
 
-fn is_request_body_header_name(name: &str) -> bool {
+/// Whether a header must be removed when a redirect discards the request body.
+pub fn is_request_body_header_name(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
         "content-encoding"
