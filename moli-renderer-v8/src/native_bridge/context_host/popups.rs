@@ -132,36 +132,6 @@ enum PopupDomContentLoadedState {
     Dispatched,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct LightweightPopupDocumentStreamMethodsDeclaration<'scope> {
-    popup_id: v8::Local<'scope, v8::BigInt>,
-    #[webapi(
-        method,
-        callback = lightweight_popup_document_open_callback,
-        data = self.popup_id
-    )]
-    open: (),
-    #[webapi(
-        method,
-        callback = lightweight_popup_document_write_callback,
-        data = self.popup_id
-    )]
-    write: (),
-    #[webapi(
-        method,
-        callback = lightweight_popup_document_writeln_callback,
-        data = self.popup_id
-    )]
-    writeln: (),
-    #[webapi(
-        method,
-        callback = lightweight_popup_document_close_callback,
-        data = self.popup_id
-    )]
-    close: (),
-}
-
 #[derive(Default, WebApiObject)]
 #[webapi(plain)]
 struct LightweightPopupWindowMethodsDeclaration {
@@ -1161,6 +1131,9 @@ impl PageScriptHost {
                     crate::parser::HtmlParser::with_scripting_enabled(
                         self.lightweight_popup_scripting_enabled(popup_id),
                     ),
+                    &initial_document_state
+                        .policy_container
+                        .inherited_meta_content_security_policies,
                 )
         {
             if let Some(document_handle) =
@@ -2665,6 +2638,9 @@ impl PageScriptHost {
                 crate::parser::HtmlParser::with_scripting_enabled(
                     self.lightweight_popup_scripting_enabled(popup_id),
                 ),
+                self.lightweight_popup_policy_container(popup_id)
+                    .map(|policy| policy.inherited_meta_content_security_policies.as_slice())
+                    .unwrap_or(&[]),
             )
         else {
             return;
@@ -3618,6 +3594,9 @@ impl PageScriptHost {
             crate::parser::HtmlParser::with_scripting_enabled(
                 self.lightweight_popup_scripting_enabled(popup_id),
             ),
+            &source
+                .policy_container
+                .inherited_meta_content_security_policies,
         )?;
         let host_ptr = self as *mut PageScriptHost;
         let document_base_url = lightweight_popup_parsed_document_base_url(
@@ -5545,19 +5524,6 @@ fn sync_lightweight_popup_document_window_slots<'s>(
         set_object_slot(scope, document, "referrer", referrer.into());
     }
     set_document_associated_window(scope, document, window);
-    install_lightweight_popup_document_stream_methods(scope, document, window);
-}
-
-fn install_lightweight_popup_document_stream_methods<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    window: v8::Local<'s, v8::Object>,
-) {
-    let Some(popup_id) = lightweight_popup_id_from_window(scope, window) else {
-        return;
-    };
-    let data = v8::BigInt::new_from_u64(scope, popup_id);
-    let _ = LightweightPopupDocumentStreamMethodsDeclaration::new(data).initialize(scope, document);
 }
 
 fn install_lightweight_popup_get_computed_style<'s>(
@@ -5709,17 +5675,6 @@ fn lightweight_popup_location_href<'s>(
     Url::parse(&href).ok()
 }
 
-fn lightweight_popup_document_handle_for_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-) -> Option<(*mut PageScriptHost, DomHandle)> {
-    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
-    let handle = crate::native_bridge::document::detached_native_handle_for_runtime(
-        scope, host_ptr, document,
-    )?;
-    Some((host_ptr, handle))
-}
-
 fn lightweight_popup_document_write_session_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
@@ -5746,15 +5701,15 @@ fn set_lightweight_popup_document_write_session<'s>(
     );
 }
 
-fn lightweight_popup_document_open_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let document = args.this();
-    if let Some((host_ptr, document_handle)) =
-        lightweight_popup_document_handle_for_callback(scope, document)
-    {
+impl PageScriptHost {
+    pub(in crate::native_bridge) fn open_lightweight_popup_document_stream<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut PageScriptHost,
+        document_handle: DomHandle,
+        document: v8::Local<'s, v8::Object>,
+    ) {
+        debug_assert!(std::ptr::eq(host_ptr, self));
         crate::native_bridge::document::set_detached_html_document_body_html(
             scope,
             host_ptr,
@@ -5765,80 +5720,37 @@ fn lightweight_popup_document_open_callback<'s>(
             .reset_meta_content_security_policy_processing_for_document(document_handle);
         set_lightweight_popup_document_write_session(scope, document, true);
     }
-    rv.set(document.into());
-}
 
-fn lightweight_popup_document_write_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    lightweight_popup_document_write_or_writeln_callback(scope, args, rv, false);
-}
-
-fn lightweight_popup_document_writeln_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    lightweight_popup_document_write_or_writeln_callback(scope, args, rv, true);
-}
-
-fn lightweight_popup_document_write_or_writeln_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-    append_newline: bool,
-) {
-    let document = args.this();
-    let Some((host_ptr, document_handle)) =
-        lightweight_popup_document_handle_for_callback(scope, document)
-    else {
-        rv.set_undefined();
-        return;
-    };
-    let popup_id = lightweight_popup_id_from_value(scope, args.data());
-    let writing_during_load = popup_id.is_some_and(|popup_id| {
-        active_lightweight_popup_id(scope) == Some(popup_id)
-            && !lightweight_popup_document_write_session_active(scope, document)
-    });
-    if writing_during_load {
-        crate::native_bridge::document::set_detached_html_document_body_html(
+    pub(in crate::native_bridge) fn write_lightweight_popup_document_stream<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        host_ptr: *mut PageScriptHost,
+        popup_id: u64,
+        document_handle: DomHandle,
+        document: v8::Local<'s, v8::Object>,
+        html: &str,
+    ) {
+        debug_assert!(std::ptr::eq(host_ptr, self));
+        let writing_during_load = active_lightweight_popup_id(scope) == Some(popup_id)
+            && !lightweight_popup_document_write_session_active(scope, document);
+        if writing_during_load {
+            self.open_lightweight_popup_document_stream(scope, host_ptr, document_handle, document);
+        }
+        crate::native_bridge::document::append_detached_html_document_body_html(
             scope,
             host_ptr,
             document_handle,
-            "",
+            html,
         );
-        unsafe { &*host_ptr }
-            .reset_meta_content_security_policy_processing_for_document(document_handle);
-        set_lightweight_popup_document_write_session(scope, document, true);
     }
-    let mut html = String::new();
-    for index in 0..args.length() {
-        let Some(value) = args.get(index).to_string(scope) else {
-            return;
-        };
-        html.push_str(&value.to_rust_string_lossy(scope));
-    }
-    if append_newline {
-        html.push('\n');
-    }
-    crate::native_bridge::document::append_detached_html_document_body_html(
-        scope,
-        host_ptr,
-        document_handle,
-        &html,
-    );
-    rv.set_undefined();
-}
 
-fn lightweight_popup_document_close_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    set_lightweight_popup_document_write_session(scope, args.this(), false);
-    rv.set_undefined();
+    pub(in crate::native_bridge) fn close_lightweight_popup_document_stream<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        document: v8::Local<'s, v8::Object>,
+    ) {
+        set_lightweight_popup_document_write_session(scope, document, false);
+    }
 }
 
 fn lightweight_popup_javascript_url_callback<'s>(

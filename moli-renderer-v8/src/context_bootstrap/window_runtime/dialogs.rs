@@ -576,21 +576,18 @@ fn window_open_entered_policy_container<'s>(
     host: &crate::native_bridge::PageScriptHost,
     entered_window: v8::Local<'s, v8::Object>,
 ) -> DocumentPolicyContainer {
-    // Use the same creator Window that supplies the opener and its origin;
-    // ambient child markers can be absent in a child Document's native realm.
-    if let Some(handle) = window_receiver_child_handle(scope, entered_window)
-        && let Some(policy_container) =
-            host.child_browsing_context_policy_container_snapshot(handle)
-    {
-        return policy_container;
-    }
-    if let Some(popup_id) =
+    // Policy inheritance follows the same concrete creator Window as opener/origin.
+    let owner = if let Some(handle) = window_receiver_child_handle(scope, entered_window) {
+        crate::native_bridge::OwnerDispatchScope::Child(handle)
+    } else if let Some(popup_id) =
         crate::native_bridge::lightweight_popup_id_from_window(scope, entered_window)
-        && let Some(policy_container) = host.lightweight_popup_policy_container(popup_id)
     {
-        return policy_container.clone();
-    }
-    host.document_policy_container().clone()
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
+    } else {
+        crate::native_bridge::OwnerDispatchScope::Top
+    };
+    host.document_policy_container_for_inheritance(owner)
+        .unwrap_or_else(|| host.document_policy_container().clone())
 }
 
 fn window_open_entered_window<'s>(

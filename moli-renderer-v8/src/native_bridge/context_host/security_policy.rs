@@ -189,16 +189,23 @@ impl PageScriptHost {
     pub(crate) fn document_policy_container_for_inheritance(
         &self,
         owner: OwnerDispatchScope,
-    ) -> Option<crate::document_runtime::DocumentPolicyContainer> {
+    ) -> Option<DocumentPolicyContainer> {
         let snapshot = self.owner_document_policy_snapshot(owner)?;
         let mut policy = snapshot.policy_container;
+        policy
+            .content_security_policy_self_url
+            .get_or_insert(snapshot.document_url);
         if let Some(document) = snapshot.document_handle {
-            // Capture the creator's effective meta policy at Document creation.
-            // Subsequent mutations of the creator must not change the child.
+            // Capture the creator policy before its later mutations.
             policy.referrer_policy =
                 crate::context_bootstrap::document_referrer_policy_for_native_document(
                     self, document,
                 );
+            // Meta policies are delivered separately from response headers.
+            // Capture their current list so later creator mutations cannot
+            // change the new Document's policy container.
+            policy.inherited_meta_content_security_policies = unsafe { &*self.runtime }
+                .meta_content_security_policy_strings_for_document(document);
         }
         Some(policy)
     }
