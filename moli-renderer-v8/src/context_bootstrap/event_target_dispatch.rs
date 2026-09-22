@@ -1,4 +1,4 @@
-use super::events::{clear_event_dispatch_fields, set_event_dispatch_fields};
+use super::events::{clear_event_dispatch_fields, set_event_dispatch_fields_with_original_target};
 use super::{
     EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
     clear_event_composed_path, event_initialized, event_internal_bool_flag, event_is_dispatching,
@@ -42,12 +42,27 @@ pub(crate) fn begin_dispatch<'s>(
     target: v8::Local<'s, v8::Object>,
     event: v8::Local<'s, v8::Object>,
 ) -> bool {
+    begin_dispatch_with_original_target(scope, target, target, event)
+}
+
+pub(crate) fn begin_dispatch_with_original_target<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    target: v8::Local<'s, v8::Object>,
+    original_target: v8::Local<'s, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
+) -> bool {
     let backing = super::events::event_backing(scope, event);
     let target = backing
         .get_creation_context(scope)
         .map(|context| super::shared_event_targets::target_in_realm(scope, target, context))
         .unwrap_or(target);
-    set_event_dispatch_fields(scope, target, event);
+    let original_target = backing
+        .get_creation_context(scope)
+        .map(|context| super::shared_event_targets::target_in_realm(scope, original_target, context))
+        .unwrap_or(original_target);
+    // HTML's legacy target override changes Event.target, not the dispatch
+    // path or the Window whose listeners are invoked.
+    set_event_dispatch_fields_with_original_target(scope, target, original_target, event);
     let path = v8::Array::new_with_elements(scope, &[target.into()]);
     set_event_composed_path(scope, event, path);
     !event_internal_bool_flag(scope, event, EVENT_STOP_PROPAGATION_SLOT)

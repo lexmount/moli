@@ -15,6 +15,7 @@ pub(crate) use dispatch::{
     dispatch_simple_event_target_event, dispatch_simple_event_target_event_collecting_errors,
     dispatch_simple_event_target_event_with_ancestors,
     dispatch_simple_event_target_event_with_checkpoint,
+    dispatch_simple_event_target_event_with_original_target,
 };
 pub(crate) use handlers::{
     install_simple_event_target_handlers, simple_event_target_handler_getter_callback,
