@@ -664,6 +664,7 @@ fn parser_owner_boundary_with_live_backend_queues_document_turn_before_runtime_w
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            navigation_history_source: None,
             reserved_service_worker_client_id: None,
         },
         PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -891,158 +892,159 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
         .expect("current-thread runtime should build");
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader =
-                Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
-            let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
-            let mut driver = ParserDriver {
-                loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader =
+            Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
+        let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
+        let mut driver = ParserDriver {
+            loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
-                input_closed: &state.input_closed,
-            };
+            input_closed: &state.input_closed,
+        };
 
-            let html = "<!doctype html><html><head><script>const body = document.createElement('body');document.documentElement.appendChild(body);const early = document.createElement('div');early.id = 'early';body.appendChild(early);</script><meta charset='utf-8'><title>x</title></head><body><main>late</main></body></html>";
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at inline script handoff");
-            };
+        let html = "<!doctype html><html><head><script>const body = document.createElement('body');document.documentElement.appendChild(body);const early = document.createElement('div');early.id = 'early';body.appendChild(early);</script><meta charset='utf-8'><title>x</title></head><body><main>late</main></body></html>";
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_modulepreload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at inline script handoff");
+        };
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(1),
-                local_executor,
-                loader,
-                &PageVmEnvConfig {
-            web_storage: crate::RendererWebStorageHandles::ephemeral(),
-                    root_frame_id: None,
-                    main_document_commit: None,
-                    top_level_storage_key: None,
-                    document_start_scripts: vec![],
-                    runtime_bindings: vec![],
-                    runtime_inspector_session_restore_snapshots: vec![],
-                    runtime_isolated_worlds: vec![],
-                    permission_overrides: vec![],
-                    extra_http_headers: Default::default(),
-                    navigator_identity: Default::default(),
-                    document_policy_container: Default::default(),
-                    document_default_language: None,
-                    document_last_modified: None,
-                    document_settings: Default::default(),
-                    network_offline: false,
-                    blocked_url_patterns: Vec::new(),
-                indexed_db_manager: None,
-            storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
-                    layout_configuration: moli_page_types::LayoutConfiguration {
-                        policy: moli_page_types::LayoutPolicy::default(),
-                        scrollbars_hidden: false,
-                    },
-                    wpt_extensions_enabled: false,
-                navigation_bootstrap_entry: None,
-            reserved_service_worker_client_id: None,
-},
-            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-
-            let local_executor = page_vm.local_executor.clone();
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let handoff = handoff.clone();
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one inline script handoff local task channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver
-                        .handle_parse_time_script_handoff(page_vm, *handoff, None)
-                        .await
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(1),
+            local_executor,
+            loader,
+            &PageVmEnvConfig {
+        web_storage: crate::RendererWebStorageHandles::ephemeral(),
+                root_frame_id: None,
+                main_document_commit: None,
+                top_level_storage_key: None,
+                document_start_scripts: vec![],
+                runtime_bindings: vec![],
+                runtime_inspector_session_restore_snapshots: vec![],
+                runtime_isolated_worlds: vec![],
+                permission_overrides: vec![],
+                extra_http_headers: Default::default(),
+                navigator_identity: Default::default(),
+                document_policy_container: Default::default(),
+                document_default_language: None,
+                document_last_modified: None,
+                document_settings: Default::default(),
+                network_offline: false,
+                blocked_url_patterns: Vec::new(),
+            indexed_db_manager: None,
+        storage_bucket_store: None,
+                fetch_subresource_interception_enabled: false,
+                fetch_subresource_interception_resource_type: None,
+                layout_configuration: moli_page_types::LayoutConfiguration {
+                    policy: moli_page_types::LayoutPolicy::default(),
+                    scrollbars_hidden: false,
                 },
-            )
-            .await
-            .expect("inline script handoff should execute");
-            assert!(
-                matches!(outcome, ScriptHandoffOutcome::NoNavigation),
-                "inline parser-connected script should not navigate in this fixture"
-            );
+                wpt_extensions_enabled: false,
+            navigation_bootstrap_entry: None,
+            navigation_history_source: None,
+        reserved_service_worker_client_id: None,
+            },
+        PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
 
-            let local_executor = page_vm.local_executor.clone();
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one inline script continuation local task channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver.advance_parser_step(page_vm, "", None).await
-                },
-            )
-            .await
-            .expect("parser should continue after the inline script");
-            assert!(
-                matches!(outcome, ParserStepAdvanceOutcome::Continue),
-                "parser should finish the remaining buffered html after the script"
-            );
+        let local_executor = page_vm.local_executor.clone();
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let handoff = handoff.clone();
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one inline script handoff local task channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver
+                    .handle_parse_time_script_handoff(page_vm, *handoff, None)
+                    .await
+            },
+        )
+        .await
+        .expect("inline script handoff should execute");
+        assert!(
+            matches!(outcome, ScriptHandoffOutcome::NoNavigation),
+            "inline parser-connected script should not navigate in this fixture"
+        );
 
-            let snapshot = page_vm.vm().snapshot_live_document();
-            let serialized = snapshot.serialize_document();
-            assert!(
-                serialized.to_ascii_lowercase().contains("<!doctype html>"),
-                "doctype should survive parser-connected script execution: {serialized}"
-            );
+        let local_executor = page_vm.local_executor.clone();
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one inline script continuation local task channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver.advance_parser_step(page_vm, "", None).await
+            },
+        )
+        .await
+        .expect("parser should continue after the inline script");
+        assert!(
+            matches!(outcome, ParserStepAdvanceOutcome::Continue),
+            "parser should finish the remaining buffered html after the script"
+        );
 
-            let head = snapshot.document_head_handle().expect("head should exist");
-            let body = snapshot.document_body_handle().expect("body should exist");
-            let head_children = snapshot.child_ids(head).collect::<Vec<_>>();
-            let body_children = snapshot.child_ids(body).collect::<Vec<_>>();
+        let snapshot = page_vm.vm().snapshot_live_document();
+        let serialized = snapshot.serialize_document();
+        assert!(
+            serialized.to_ascii_lowercase().contains("<!doctype html>"),
+            "doctype should survive parser-connected script execution: {serialized}"
+        );
 
-            assert!(
-                head_children.iter().any(|handle| {
-                    snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.is_html_element("meta"))
-                }),
-                "later <meta> should stay under <head>: {serialized}"
-            );
-            assert!(
-                head_children.iter().any(|handle| {
-                    snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.is_html_element("title"))
-                }),
-                "later <title> should stay under <head>: {serialized}"
-            );
-            assert!(
-                body_children.iter().all(|handle| {
-                    !snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| {
-                            element.is_html_element("meta") || element.is_html_element("title")
-                        })
-                }),
-                "<body> should not receive later head-only tokens: {serialized}"
-            );
-        }));
+        let head = snapshot.document_head_handle().expect("head should exist");
+        let body = snapshot.document_body_handle().expect("body should exist");
+        let head_children = snapshot.child_ids(head).collect::<Vec<_>>();
+        let body_children = snapshot.child_ids(body).collect::<Vec<_>>();
+
+        assert!(
+            head_children.iter().any(|handle| {
+                snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element("meta"))
+            }),
+            "later <meta> should stay under <head>: {serialized}"
+        );
+        assert!(
+            head_children.iter().any(|handle| {
+                snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element("title"))
+            }),
+            "later <title> should stay under <head>: {serialized}"
+        );
+        assert!(
+            body_children.iter().all(|handle| {
+                !snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| {
+                        element.is_html_element("meta") || element.is_html_element("title")
+                    })
+            }),
+            "<body> should not receive later head-only tokens: {serialized}"
+        );
+    }));
 }
 #[test]
 fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_later_head_tokens_in_head()
@@ -1053,235 +1055,236 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
         .expect("current-thread runtime should build");
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = Box::leak(Box::new(
-                ResourceRequestClient::new(&FetchConfig::default()).expect("default loader"),
-            ));
-            let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
-            let mut driver = ParserDriver {
-                loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = Box::leak(Box::new(
+            ResourceRequestClient::new(&FetchConfig::default()).expect("default loader"),
+        ));
+        let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
+        let mut driver = ParserDriver {
+            loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
 
-                input_closed: &state.input_closed,
-            };
+            input_closed: &state.input_closed,
+        };
 
-            let external_script = "globalThis.__runtimeHeadMutationStage='start';const body = document.createElement('body');globalThis.__runtimeHeadMutationStage='body-created';document.documentElement.appendChild(body);globalThis.__runtimeHeadMutationStage='body-appended';const early = document.createElement('div');early.id = 'early';body.appendChild(early);const style = document.createElement('style');style.textContent = '.runtime-style { color: red; }';document.head.appendChild(style);const script = document.createElement('script');script.textContent = 'window.__runtimeHeadMutation = true;';document.head.appendChild(script);globalThis.__runtimeHeadMutationStage='complete';";
-            let encoded_script = url::form_urlencoded::byte_serialize(external_script.as_bytes())
-                .collect::<String>()
-                .replace('+', "%20");
-            let html = format!(
-                "<!doctype html><html><head><script src=\"data:text/javascript,{encoded_script}\"></script><meta charset='utf-8'><title>x</title></head><body><main>late</main></body></html>"
-            );
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(&html);
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at external script handoff");
-            };
-            let ParserScriptHandoff::BlockingClassic { script, .. } = handoff.as_ref() else {
-                panic!("expected external parser-blocking classic handoff");
-            };
-            driver.buffered_document_preloads.entries.insert(
-                BufferedScriptPreloadKey::from_script(script).expect("preload key"),
-                ready_preload_entry_for_script(script, external_script),
-            );
+        let external_script = "globalThis.__runtimeHeadMutationStage='start';const body = document.createElement('body');globalThis.__runtimeHeadMutationStage='body-created';document.documentElement.appendChild(body);globalThis.__runtimeHeadMutationStage='body-appended';const early = document.createElement('div');early.id = 'early';body.appendChild(early);const style = document.createElement('style');style.textContent = '.runtime-style { color: red; }';document.head.appendChild(style);const script = document.createElement('script');script.textContent = 'window.__runtimeHeadMutation = true;';document.head.appendChild(script);globalThis.__runtimeHeadMutationStage='complete';";
+        let encoded_script = url::form_urlencoded::byte_serialize(external_script.as_bytes())
+            .collect::<String>()
+            .replace('+', "%20");
+        let html = format!(
+            "<!doctype html><html><head><script src=\"data:text/javascript,{encoded_script}\"></script><meta charset='utf-8'><title>x</title></head><body><main>late</main></body></html>"
+        );
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_modulepreload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(&html);
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at external script handoff");
+        };
+        let ParserScriptHandoff::BlockingClassic { script, .. } = handoff.as_ref() else {
+            panic!("expected external parser-blocking classic handoff");
+        };
+        driver.buffered_document_preloads.entries.insert(
+            BufferedScriptPreloadKey::from_script(script).expect("preload key"),
+            ready_preload_entry_for_script(script, external_script),
+        );
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(1),
-                local_executor,
-                loader,
-                &PageVmEnvConfig {
-            web_storage: crate::RendererWebStorageHandles::ephemeral(),
-                    root_frame_id: None,
-                    main_document_commit: None,
-                    top_level_storage_key: None,
-                    document_start_scripts: vec![],
-                    runtime_bindings: vec![],
-                    runtime_inspector_session_restore_snapshots: vec![],
-                    runtime_isolated_worlds: vec![],
-                    permission_overrides: vec![],
-                    extra_http_headers: Default::default(),
-                    navigator_identity: Default::default(),
-                    document_policy_container: Default::default(),
-                    document_default_language: None,
-                    document_last_modified: None,
-                    document_settings: Default::default(),
-                    network_offline: false,
-                    blocked_url_patterns: Vec::new(),
-                indexed_db_manager: None,
-            storage_bucket_store: None,
-                    fetch_subresource_interception_enabled: false,
-                    fetch_subresource_interception_resource_type: None,
-                    layout_configuration: moli_page_types::LayoutConfiguration {
-                        policy: moli_page_types::LayoutPolicy::default(),
-                        scrollbars_hidden: false,
-                    },
-                    wpt_extensions_enabled: false,
-                navigation_bootstrap_entry: None,
-            reserved_service_worker_client_id: None,
-},
-            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-
-            let local_executor = page_vm.local_executor.clone();
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let handoff = handoff.clone();
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one external script handoff local task channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver
-                        .handle_parse_time_script_handoff(page_vm, *handoff, None)
-                        .await
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(1),
+            local_executor,
+            loader,
+            &PageVmEnvConfig {
+        web_storage: crate::RendererWebStorageHandles::ephemeral(),
+                root_frame_id: None,
+                main_document_commit: None,
+                top_level_storage_key: None,
+                document_start_scripts: vec![],
+                runtime_bindings: vec![],
+                runtime_inspector_session_restore_snapshots: vec![],
+                runtime_isolated_worlds: vec![],
+                permission_overrides: vec![],
+                extra_http_headers: Default::default(),
+                navigator_identity: Default::default(),
+                document_policy_container: Default::default(),
+                document_default_language: None,
+                document_last_modified: None,
+                document_settings: Default::default(),
+                network_offline: false,
+                blocked_url_patterns: Vec::new(),
+            indexed_db_manager: None,
+        storage_bucket_store: None,
+                fetch_subresource_interception_enabled: false,
+                fetch_subresource_interception_resource_type: None,
+                layout_configuration: moli_page_types::LayoutConfiguration {
+                    policy: moli_page_types::LayoutPolicy::default(),
+                    scrollbars_hidden: false,
                 },
-            )
-            .await
-            .expect("external parser-connected script should execute");
-            assert!(
-                matches!(outcome, ScriptHandoffOutcome::NoNavigation),
-                "external parser-connected script should not navigate in this fixture"
-            );
-            let before_resume = page_vm.vm().snapshot_live_document();
-            assert_eq!(
-                page_vm
-                    .vm_mut()
-                    .eval("String(globalThis.__runtimeHeadMutationStage)")
-                    .expect("runtime head mutation stage should evaluate"),
-                "complete",
-                "external parser-blocking script should complete before parser resume"
-            );
-            let before_resume_head = before_resume
-                .document_head_handle()
-                .expect("head should exist before parser resume");
-            let before_resume_body = before_resume
-                .document_body_handle()
-                .expect("runtime body should exist before parser resume");
-            assert!(
-                before_resume
-                    .child_ids(before_resume_head)
-                    .any(|handle| before_resume
-                        .node(handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.is_html_element("style"))),
-                "runtime style should exist before parser resume: {}",
-                before_resume.serialize_document()
-            );
-            assert!(
-                before_resume
-                    .child_ids(before_resume_body)
-                    .any(|handle| before_resume
-                        .node(handle)
-                        .and_then(Node::as_element)
-                        .and_then(Element::id)
-                        .is_some_and(|id| id == "early")),
-                "runtime body node should exist before parser resume: {}",
-                before_resume.serialize_document()
-            );
-            assert_eq!(
-                page_vm
-                    .vm_mut()
-                    .eval("String(globalThis.__runtimeHeadMutation === true)")
-                    .expect("runtime head script marker should evaluate"),
-                "true",
-                "runtime-inserted script should execute before parser resume"
-            );
+                wpt_extensions_enabled: false,
+            navigation_bootstrap_entry: None,
+            navigation_history_source: None,
+        reserved_service_worker_client_id: None,
+            },
+        PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
 
-            let local_executor = page_vm.local_executor.clone();
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one external script continuation local task channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver.advance_parser_step(page_vm, "", None).await
-                },
-            )
-            .await
-            .expect("parser should continue after the external script");
-            assert!(
-                matches!(outcome, ParserStepAdvanceOutcome::Continue),
-                "parser should finish the remaining buffered html after the script"
-            );
+        let local_executor = page_vm.local_executor.clone();
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let handoff = handoff.clone();
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one external script handoff local task channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver
+                    .handle_parse_time_script_handoff(page_vm, *handoff, None)
+                    .await
+            },
+        )
+        .await
+        .expect("external parser-connected script should execute");
+        assert!(
+            matches!(outcome, ScriptHandoffOutcome::NoNavigation),
+            "external parser-connected script should not navigate in this fixture"
+        );
+        let before_resume = page_vm.vm().snapshot_live_document();
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("String(globalThis.__runtimeHeadMutationStage)")
+                .expect("runtime head mutation stage should evaluate"),
+            "complete",
+            "external parser-blocking script should complete before parser resume"
+        );
+        let before_resume_head = before_resume
+            .document_head_handle()
+            .expect("head should exist before parser resume");
+        let before_resume_body = before_resume
+            .document_body_handle()
+            .expect("runtime body should exist before parser resume");
+        assert!(
+            before_resume
+                .child_ids(before_resume_head)
+                .any(|handle| before_resume
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element("style"))),
+            "runtime style should exist before parser resume: {}",
+            before_resume.serialize_document()
+        );
+        assert!(
+            before_resume
+                .child_ids(before_resume_body)
+                .any(|handle| before_resume
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .and_then(Element::id)
+                    .is_some_and(|id| id == "early")),
+            "runtime body node should exist before parser resume: {}",
+            before_resume.serialize_document()
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("String(globalThis.__runtimeHeadMutation === true)")
+                .expect("runtime head script marker should evaluate"),
+            "true",
+            "runtime-inserted script should execute before parser resume"
+        );
 
-            let snapshot = page_vm.vm().snapshot_live_document();
-            let serialized = snapshot.serialize_document();
-            assert!(
-                serialized.to_ascii_lowercase().contains("<!doctype html>"),
-                "doctype should survive external parser-connected script execution: {serialized}"
-            );
+        let local_executor = page_vm.local_executor.clone();
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one external script continuation local task channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver.advance_parser_step(page_vm, "", None).await
+            },
+        )
+        .await
+        .expect("parser should continue after the external script");
+        assert!(
+            matches!(outcome, ParserStepAdvanceOutcome::Continue),
+            "parser should finish the remaining buffered html after the script"
+        );
 
-            let head = snapshot.document_head_handle().expect("head should exist");
-            let body = snapshot.document_body_handle().expect("body should exist");
-            let head_children = snapshot.child_ids(head).collect::<Vec<_>>();
-            let body_children = snapshot.child_ids(body).collect::<Vec<_>>();
+        let snapshot = page_vm.vm().snapshot_live_document();
+        let serialized = snapshot.serialize_document();
+        assert!(
+            serialized.to_ascii_lowercase().contains("<!doctype html>"),
+            "doctype should survive external parser-connected script execution: {serialized}"
+        );
 
-            assert!(
-                head_children.iter().any(|handle| {
-                    snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.is_html_element("meta"))
-                }),
-                "later <meta> should stay under <head>: {serialized}"
-            );
-            assert!(
-                head_children.iter().any(|handle| {
-                    snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.is_html_element("title"))
-                }),
-                "later <title> should stay under <head>: {serialized}"
-            );
-            assert!(
-                head_children.iter().any(|handle| {
-                    snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.is_html_element("style"))
-                }),
-                "runtime-inserted <style> should stay under <head>: {serialized}"
-            );
-            assert!(
-                body_children.iter().any(|handle| {
-                    snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .and_then(Element::id)
-                        .is_some_and(|id| id == "early")
-                }),
-                "runtime-inserted body node should stay under <body>: {serialized}"
-            );
-            assert!(
-                body_children.iter().all(|handle| {
-                    !snapshot
-                        .node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| {
-                            element.is_html_element("meta") || element.is_html_element("title")
-                        })
-                }),
-                "<body> should not receive later head-only tokens: {serialized}"
-            );
-        }));
+        let head = snapshot.document_head_handle().expect("head should exist");
+        let body = snapshot.document_body_handle().expect("body should exist");
+        let head_children = snapshot.child_ids(head).collect::<Vec<_>>();
+        let body_children = snapshot.child_ids(body).collect::<Vec<_>>();
+
+        assert!(
+            head_children.iter().any(|handle| {
+                snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element("meta"))
+            }),
+            "later <meta> should stay under <head>: {serialized}"
+        );
+        assert!(
+            head_children.iter().any(|handle| {
+                snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element("title"))
+            }),
+            "later <title> should stay under <head>: {serialized}"
+        );
+        assert!(
+            head_children.iter().any(|handle| {
+                snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| element.is_html_element("style"))
+            }),
+            "runtime-inserted <style> should stay under <head>: {serialized}"
+        );
+        assert!(
+            body_children.iter().any(|handle| {
+                snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .and_then(Element::id)
+                    .is_some_and(|id| id == "early")
+            }),
+            "runtime-inserted body node should stay under <body>: {serialized}"
+        );
+        assert!(
+            body_children.iter().all(|handle| {
+                !snapshot
+                    .node(*handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(|element| {
+                        element.is_html_element("meta") || element.is_html_element("title")
+                    })
+            }),
+            "<body> should not receive later head-only tokens: {serialized}"
+        );
+    }));
 }
 #[test]
 fn empty_parser_blocking_script_drains_observers_before_declarative_shadow() {
@@ -1686,7 +1689,8 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
         let _js_runtime = crate::JsRuntime::initialize();
         let final_url = Url::parse("https://example.test/").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let loader =
+            ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
         let parser_dom_host = state
             .parser_session
@@ -1726,6 +1730,7 @@ fn parser_owner_body_stylesheet_pause_preserves_unconsumed_tail_on_live_page_vm(
                 },
                 wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                navigation_history_source: None,
                 reserved_service_worker_client_id: None,
             },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),

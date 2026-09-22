@@ -290,6 +290,7 @@ async fn fixture_handler(
             &[],
         ),
         "/plain" => html("<!doctype html><main>plain ok</main>"),
+        "/history-markup" => html(query.get("markup").map(String::as_str).unwrap_or_default()),
         "/iframe" => html(r#"<!doctype html><main>parent</main><iframe src="/child"></iframe>"#),
         "/child" => html("<!doctype html><body>child body text</body>"),
         "/wait-for-function" => html(

@@ -935,6 +935,9 @@ impl RendererOwnerHandle {
                         .as_ref()
                         .map(|request| request.resolve(&final_url))
                         .transpose()?,
+                    navigation_history_source: navigation_history
+                        .as_ref()
+                        .map(|request| request.source_history()),
                     reserved_service_worker_client_id,
                 };
                 env.apply_main_document_commit_referrer();
