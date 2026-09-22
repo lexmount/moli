@@ -1,0 +1,32 @@
+{
+  "source_commit": "ed844e7cf8c2f1f7d79a6215936c6055b1eb3b65",
+  "tree": "6fe6dd8f43edca8585379cd23b957057d902f0f1",
+  "binary_sha256": "a5d78fef756d7ad81f01c889c1deff12c77c1cc7acb6c12ef0717234ce40473f",
+  "script_sha256": "ed17aeb03988069cc78d29423a8d3f5eac0a4c25705f4d866285448ce95a8546",
+  "result_sha256": "a9c968057585ea3e9c39a332588816c187e52b39d0cc44227ad53101ea58e8d7",
+  "transport": "localhost HTTP + public CDP",
+  "attempts_executed": 1,
+  "passed": 3,
+  "failed": 0,
+  "cases": [
+    {
+      "case": "completed-text-dom-vs-raw-network-body",
+      "passed": true
+    },
+    {
+      "case": "stop-committed-text-and-navigate-again",
+      "passed": true
+    },
+    {
+      "case": "parser-retirement-retains-network-response-capture",
+      "passed": true
+    }
+  ],
+  "scope": "Combined seven-partition integration binary only; not a per-PR result or WebArena score. Main documents only. No child-frame cancellation or internal owner-state claim.",
+  "oracles": [
+    "79 transmitted UTF8 bytes preserved in Network.getResponseBody while DOM normalizes CR and retains markup literally; no executable script or secondary request.",
+    "Explicit stop retains committed text and one PRE, closes held transfer before tail release, permits successor navigation, and late tail does not overwrite successor.",
+    "document.open/write/close retires streaming HTML parser without closing held transfer; Network.loadingFinished and all 143 bytes remain obtainable; replacement DOM/title survive late bytes."
+  ],
+  "environment_note": "An initial sandbox-only launch failed to bind 127.0.0.1 before any browser/scenario executed; the single authorized localhost run passed all scenarios. No oracle or script edits were made after the first functional run."
+}

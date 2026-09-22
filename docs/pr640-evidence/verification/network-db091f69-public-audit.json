@@ -1,0 +1,50 @@
+{
+  "schema": "pr640-targeted-acceptance/1",
+  "partition": "PR-3",
+  "scope_revision": 2,
+  "assignment_evidence": {
+    "case_id": 595,
+    "prior_layout_run": "layout-48d78ac6-targeted",
+    "prior_result": "fail",
+    "prior_run_total": 28,
+    "prior_run_pass": 27,
+    "reason": "Layout interaction succeeded, but frozen network evaluator rejected missing Referer on successful subscription POST. Acceptance belongs to network atop layout.",
+    "prior_evidence_is_immutable": true
+  },
+  "binary_sha256": "bc2398197bd5c4e1835421acc3c7a89f89bc9391ccbc69886d92c51a33c5235a",
+  "receipt_sha256": "69b8d3c903ee22931c07da7d544e9abc2c0792bc824480a0c2f8fc40285e6c18",
+  "manifest_sha256": "f6bd4db583106f02b032a75f654b367f065e77ef88b5ec5e05916629f1f07efd",
+  "gates": {
+    "subset_evidence_certified": true,
+    "complete_90_cohort": false,
+    "17_hashes_unchanged": true,
+    "all_artifact_hashes_valid": true,
+    "one_run_zero_retries": true,
+    "frozen_actions_and_scoring": true,
+    "all_assigned_cases_pass": false
+  },
+  "comparison_note": "Baseline ran in a full90 sequence; this result is a freshly reset subset. Outcome differences alone do not prove causality.",
+  "cases": [
+    {
+      "case_id": 339,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "769dc02bf468e85d3e791a8a25a9d26b95f74f5b546c9f979e56672021d6c26c"
+    },
+    {
+      "case_id": 595,
+      "status": "pass",
+      "score": 1.0,
+      "base_status": "fail",
+      "trace_sha256": "fc388e2532a8304aeeb456c68b3dab8a06092922d20d0c1a0296e3e197eeab7c"
+    },
+    {
+      "case_id": 676,
+      "status": "fail",
+      "score": null,
+      "base_status": "fail",
+      "trace_sha256": "ec1e92b1bec96af9cdd8e8e050c862863ed90904c0e1dc2a63310c9adee9b3e5"
+    }
+  ]
+}
