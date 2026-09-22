@@ -1577,9 +1577,7 @@ impl CdpConnection {
             self.navigation_load_inputs_for_owner(&navigation.owner),
             navigation.request_load_policy,
         )
-        .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(
-            navigation,
-        ))
+        .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(navigation))
         .with_navigation_history(navigation.navigation_history.clone());
         inputs.redirect_headers = navigation.redirect_headers.clone();
         inputs.redirect_chain = navigation.redirect_chain.clone();
