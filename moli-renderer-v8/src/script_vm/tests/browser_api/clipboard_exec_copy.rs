@@ -35,6 +35,36 @@ fn copied_text(vm: &mut ScriptVm) -> String {
 }
 
 #[test]
+fn exec_copy_commits_contents_and_presentation_style_together() {
+    for (listener, text, style) in [
+        ("", "🦊", "unspecified"),
+        (
+            "document.addEventListener('copy', e => {e.clipboardData.setData('text/plain', 'author');e.preventDefault()})",
+            "author",
+            "unspecified",
+        ),
+        (
+            "document.addEventListener('copy', e => e.preventDefault())",
+            "seed",
+            "inline",
+        ),
+    ] {
+        let mut vm = copy_command_vm("input");
+        vm.eval("navigator.clipboard.write([new ClipboardItem({'text/plain': 'seed'}, {presentationStyle: 'inline'})])")
+            .unwrap();
+        vm.eval(listener).unwrap();
+        assert_eq!(
+            activated_copy_eval(&mut vm, "document.execCommand('copy')"),
+            "true"
+        );
+        assert_eq!(copied_text(&mut vm), text, "{listener}");
+        vm.eval("navigator.clipboard.read().then(([item]) => globalThis.clipboardStyle = item.presentationStyle)")
+            .unwrap();
+        assert_eq!(vm.eval("clipboardStyle").unwrap(), style, "{listener}");
+    }
+}
+
+#[test]
 fn exec_copy_dispatches_trusted_events_and_copies_text_control_selections() {
     for tag in ["input", "textarea"] {
         let mut vm = copy_command_vm(tag);

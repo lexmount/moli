@@ -2,6 +2,7 @@ use super::clipboard::{dispatch_clipboard_action_event, native_clipboard_text_by
 use crate::context_bootstrap::selection_text_for_clipboard;
 use crate::dom::{forms::InputType, native::Node};
 use crate::native_bridge::element::*;
+use crate::runtime::ClipboardSnapshot;
 use crate::util::utf16_units;
 
 pub(crate) fn document_copy_command_supported(
@@ -144,10 +145,13 @@ pub(crate) fn run_document_copy_command(
         if let Some(text) = copy_selection_text(scope, unsafe { &*runtime_ptr }, document) {
             unsafe { &*runtime_ptr }
                 .browser_context_runtime()
-                .set_clipboard_data(vec![(
-                    "text/plain".to_owned(),
-                    native_clipboard_text_bytes(&text),
-                )]);
+                .set_clipboard_snapshot(ClipboardSnapshot {
+                    representations: vec![(
+                        "text/plain".to_owned(),
+                        native_clipboard_text_bytes(&text),
+                    )],
+                    ..ClipboardSnapshot::default()
+                });
         }
     }
     true
