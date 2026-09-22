@@ -314,7 +314,9 @@ impl JsContextHost {
             return None;
         }
         let target_name = match target {
-            EventTargetHandle::Window | EventTargetHandle::ChildWindow(_) => "Window".to_owned(),
+            EventTargetHandle::Window
+            | EventTargetHandle::ChildWindow(_)
+            | EventTargetHandle::PopupWindow(_) => "Window".to_owned(),
             EventTargetHandle::Node(handle) => self
                 .dom_host()
                 .node(handle)

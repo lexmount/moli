@@ -86,6 +86,7 @@ impl JsContextHost {
                     capture,
                 ),
             crate::document_runtime::EventTargetHandle::Window
+            | crate::document_runtime::EventTargetHandle::PopupWindow(_)
             | crate::document_runtime::EventTargetHandle::Node(_) => {
                 self.remove_event_listener_by_id(target, event_type, callback_id, capture)
             }
