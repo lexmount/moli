@@ -1519,11 +1519,11 @@ fn maps_element_click_to_shared_dom_geometry_and_input_commands() {
 
     let input = element_click_input_commands(
         &context,
-        &box_model_geometry([10.0, 20.0, 30.0, 20.0, 30.0, 40.0, 10.0, 40.0], 20, 20),
-    )
-    .expect("input commands");
-    assert_eq!(input.len(), 2);
+        ClassicViewportPoint::new(20.0, 30.0).expect("valid point"),
+    );
+    assert_eq!(input.len(), 3);
     for (command, (event_type, buttons)) in input.into_iter().zip([
+        (DevToolsMouseEventType::Moved, Some(0)),
         (DevToolsMouseEventType::Pressed, Some(1)),
         (DevToolsMouseEventType::Released, Some(0)),
     ]) {
@@ -3223,6 +3223,10 @@ fn maps_alert_commands_to_shared_page_dialog_commands() {
 
 #[test]
 fn serializes_element_not_interactable_error_code() {
+    assert_eq!(
+        error_response(ClassicErrorCode::ElementClickIntercepted, "obscured")["value"]["error"],
+        json!("element click intercepted")
+    );
     assert_eq!(
         error_response(
             ClassicErrorCode::ElementNotInteractable,

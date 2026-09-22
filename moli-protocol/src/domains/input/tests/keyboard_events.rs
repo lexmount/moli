@@ -134,6 +134,54 @@ async fn cdp_combined_keydown_honors_each_cancellation_boundary() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cdp_canceled_raw_keydown_suppresses_only_its_following_char_phase() {
+    let mut ctx = keyboard_fixture(CONTROLS[0]).await;
+    assert!(evaluate_bool(&mut ctx, "(__cancel = 'keydown') === 'keydown'").await);
+
+    dispatch(&mut ctx, "rawKeyDown", "a", "KeyA", "").await;
+    dispatch(&mut ctx, "char", "a", "KeyA", "a").await;
+    assert_eq!(field_value(&mut ctx).await, "");
+    assert_eq!(events(&mut ctx).await, json!(["keydown:field"]));
+
+    assert!(evaluate_bool(&mut ctx, "(__cancel = '') === ''").await);
+    dispatch(&mut ctx, "rawKeyDown", "b", "KeyB", "").await;
+    dispatch(&mut ctx, "char", "b", "KeyB", "b").await;
+    assert_eq!(field_value(&mut ctx).await, "b");
+    assert_eq!(
+        events(&mut ctx).await,
+        json!([
+            "keydown:field",
+            "keydown:field",
+            "keypress:field",
+            "beforeinput:field",
+            "input:field"
+        ])
+    );
+
+    assert!(evaluate_bool(&mut ctx, "(__cancel = 'keydown') === 'keydown'").await);
+    dispatch(&mut ctx, "rawKeyDown", "c", "KeyC", "").await;
+    dispatch(&mut ctx, "keyUp", "c", "KeyC", "").await;
+    assert!(evaluate_bool(&mut ctx, "(__cancel = '') === ''").await);
+    dispatch(&mut ctx, "char", "c", "KeyC", "c").await;
+    assert_eq!(field_value(&mut ctx).await, "bc");
+    assert_eq!(
+        events(&mut ctx).await,
+        json!([
+            "keydown:field",
+            "keydown:field",
+            "keypress:field",
+            "beforeinput:field",
+            "input:field",
+            "keydown:field",
+            "keyup:field",
+            "keypress:field",
+            "beforeinput:field",
+            "input:field"
+        ])
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cdp_combined_keydown_delivers_trusted_keypresses_for_typed_characters() {
     let mut ctx = keyboard_fixture(CONTROLS[0]).await;
     for (key, code) in [("a", "KeyA"), ("@", "Digit2"), ("A", "KeyA")] {

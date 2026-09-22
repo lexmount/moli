@@ -9,6 +9,7 @@ from playwright.async_api import Error as PlaywrightError, expect
 
 from . import SmokeState
 from ..assertions import SmokeError, assert_equal, wait_until
+from ..progress import await_with_progress
 
 
 async def run_dom_input_group(state: SmokeState) -> None:
@@ -192,7 +193,11 @@ async def run_dom_input_group(state: SmokeState) -> None:
     await run_playwright_expect_matcher_workflows(state)
     await run_locator_composition_workflows(state)
     await run_keyboard_editing_workflows(state)
-    await run_keypress_dispatch_workflow(state)
+    await await_with_progress(
+        "scenario/playwright-and-cdp-keypress",
+        run_keypress_dispatch_workflow(state),
+        timeout_seconds=30,
+    )
     await run_cdp_control_key_name_workflow(state)
     await run_cdp_input_navigation_replacement_workflows(state)
     await run_mouse_event_workflows(state)
@@ -976,10 +981,10 @@ async def run_keyboard_editing_workflows(state: SmokeState) -> None:
 
 
 async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
-    page = await state.context.new_page()
+    page = await await_with_progress("keypress/new-page", state.context.new_page())
     session = None
     try:
-        await page.set_content("""
+        await await_with_progress("keypress/set-content", page.set_content("""
             <input id="field">
             <script>
               window.__keyEvents = [];
@@ -992,8 +997,10 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
                 });
               }
             </script>
-        """)
-        session = await state.context.new_cdp_session(page)
+        """))
+        session = await await_with_progress(
+            "keypress/new-cdp-session", state.context.new_cdp_session(page),
+        )
         full_sequence = ["keydown", "keypress", "beforeinput", "input", "keyup"]
 
         async def reset(cancel_at: bool = False) -> None:
@@ -1045,8 +1052,8 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:
         state.record("playwright_and_cdp_keypress_dispatch")
     finally:
         if session is not None:
-            await session.detach()
-        await page.close()
+            await await_with_progress("keypress/detach", session.detach(), timeout_seconds=5)
+        await await_with_progress("keypress/close-page", page.close(), timeout_seconds=5)
 
 
 async def run_cdp_control_key_name_workflow(state: SmokeState) -> None:
