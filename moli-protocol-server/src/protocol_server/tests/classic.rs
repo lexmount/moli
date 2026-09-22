@@ -4,6 +4,99 @@ use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use serde_json::{Map, Value};
 
 #[tokio::test]
+async fn webdriver_classic_document_mime_is_shared_by_main_and_child_documents() {
+    const PAYLOAD: &str =
+        "<meta charset='gbk'><script>window.executed=42;</script><b>literal&amp;Gülçek</b>";
+    let cases = [
+        (
+            "plain",
+            "text/plain; charset=utf-8",
+            "text/plain",
+            true,
+            PAYLOAD,
+        ),
+        (
+            "plain-bom",
+            "text/plain; charset=utf-8",
+            "text/plain",
+            true,
+            "\u{feff}\u{feff}",
+        ),
+        (
+            "json",
+            "application/json",
+            "application/json",
+            true,
+            PAYLOAD,
+        ),
+        (
+            "javascript",
+            "text/javascript; charset=utf-8",
+            "text/javascript",
+            true,
+            PAYLOAD,
+        ),
+        (
+            "html",
+            "text/html; charset=utf-8",
+            "text/html",
+            false,
+            PAYLOAD,
+        ),
+    ];
+    let mut fixture = axum::Router::new();
+    for (name, mime, _, _, payload) in cases {
+        fixture = fixture.route(
+            &format!("/{name}"),
+            axum::routing::get(move || async move { ([(header::CONTENT_TYPE, mime)], payload) }),
+        );
+    }
+    fixture = fixture.route(
+        "/frame/{kind}",
+        axum::routing::get(
+            |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                (
+                    [(header::CONTENT_TYPE, "text/html")],
+                    format!("<iframe src='/{kind}'></iframe>"),
+                )
+            },
+        ),
+    );
+    let (addr, _server) = spawn_dedicated_fixture_server(fixture, "document-mime");
+    let app = build_router(test_state());
+    let session = classic_request_json(app.clone(), Method::POST, "/session").await;
+    let session_id = session["value"]["sessionId"].as_str().unwrap();
+    for (name, _, content_type, literal, payload) in cases {
+        for prefix in ["", "frame/"] {
+            let navigated = classic_request_json_with_body(
+                app.clone(),
+                Method::POST,
+                &format!("/session/{session_id}/url"),
+                json!({"url":format!("http://{addr}/{prefix}{name}")}),
+            )
+            .await;
+            assert_eq!(navigated, json!({"value":null}), "{prefix}{name}");
+            let observed = classic_request_json_with_body(
+                app.clone(), Method::POST, &format!("/session/{session_id}/execute/sync"),
+                json!({"script": "const w=document.querySelector('iframe')?.contentWindow ?? window; return [w.document.body.textContent,w.executed??null,w.document.querySelectorAll('script').length,w.document.contentType];", "args": []}),
+            ).await;
+            let expected = if literal {
+                json!([
+                    payload.strip_prefix('\u{feff}').unwrap_or(payload),
+                    null,
+                    0,
+                    content_type
+                ])
+            } else {
+                json!(["literal&Gülçek", 42, 1, content_type])
+            };
+            assert_eq!(observed["value"], expected, "{prefix}{name}");
+        }
+    }
+    classic_request_json(app, Method::DELETE, &format!("/session/{session_id}")).await;
+}
+
+#[tokio::test]
 async fn webdriver_classic_status_session_and_delete_routes_use_value_envelope() {
     let app = build_router(test_state());
 
