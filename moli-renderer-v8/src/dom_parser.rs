@@ -366,7 +366,11 @@ pub(crate) fn preserve_decoded_bom_only_browsing_context_body<'a>(
     source: &'a str,
     content_type: Option<&str>,
 ) -> std::borrow::Cow<'a, str> {
-    if source == "\u{feff}" && !content_type.is_some_and(is_dom_parser_xml_mime) {
+    if source == "\u{feff}"
+        && !content_type.is_some_and(|mime| {
+            is_dom_parser_xml_mime(mime) || moli_web_mime::is_text_document_mime(mime)
+        })
+    {
         std::borrow::Cow::Borrowed("<body>\u{feff}</body>")
     } else {
         std::borrow::Cow::Borrowed(source)
