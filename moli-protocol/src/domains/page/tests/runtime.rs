@@ -602,6 +602,19 @@ async fn runtime_add_binding_with_child_default_execution_context_id_installs_ch
 async fn runtime_add_binding_before_navigation_keeps_child_default_binding_context_id() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.enable_page_events_for_test(Some("SID-1"));
+    ctx.install_navigation_fixture_for_session_owner("about:blank", Some("SID-1"))
+        .await;
+
+    // V8 installs persisted bindings into future contexts while Runtime is
+    // enabled. Subscribing after navigation makes this race child creation.
+    ctx.process_async(json!({
+        "id": 40800,
+        "method": "Runtime.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(40800, json!({}), Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 40801,
@@ -624,20 +637,15 @@ async fn runtime_add_binding_before_navigation_keeps_child_default_binding_conte
         }
     })).await;
     let _ = take_response_by_id(&mut ctx, 40802);
-    ctx.sent.clear();
 
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 40803).await;
-    ctx.process_async(json!({
-        "id": 40804,
-        "method": "Runtime.enable",
-        "sessionId": "SID-1"
-    }))
-    .await;
-    let _ = take_response_by_id(&mut ctx, 40804);
+    // Navigation acceptance can precede replacement of the initial empty
+    // child's context. Observe its load before retaining the replayed id.
+    wait_until_frame_stopped_loading(&mut ctx, &child_frame_id).await;
     let child_default_context_id = wait_for_child_default_execution_context_id(
         &mut ctx,
         &child_frame_id,
-        "child default context after Runtime.enable",
+        "child default context after navigation",
     )
     .await;
     ctx.sent.clear();
@@ -653,7 +661,7 @@ async fn runtime_add_binding_before_navigation_keeps_child_default_binding_conte
     }))
     .await;
     let eval = take_response_by_id(&mut ctx, 40805);
-    assert_eq!(eval["result"]["result"]["value"], json!(1));
+    assert_eq!(eval["result"]["result"]["value"], json!(1), "{eval}");
     let binding_called = ctx
         .sent
         .iter()
