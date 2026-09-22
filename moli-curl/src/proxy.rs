@@ -519,10 +519,7 @@ mod tests {
 
     #[test]
     fn no_proxy_routes_match_libcurl() {
-        use std::{
-            net::TcpListener,
-            time::{Duration, Instant},
-        };
+        use std::{net::TcpListener, time::Duration};
 
         use curl::easy::{Easy, List};
 
@@ -579,23 +576,7 @@ mod tests {
                 assert!(connected_port == origin_port || connected_port == proxy_port);
                 let curl_uses_proxy = connected_port == proxy_port;
                 let listener = if curl_uses_proxy { &proxy } else { &origin };
-                // Client connect completion does not guarantee the server's
-                // nonblocking accept queue is observable in the same turn.
-                let deadline = Instant::now() + Duration::from_secs(2);
-                let _connection = loop {
-                    match listener.accept() {
-                        Ok(connection) => break connection,
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                            ) && Instant::now() < deadline =>
-                        {
-                            std::thread::sleep(Duration::from_millis(5));
-                        }
-                        Err(error) => panic!("libcurl's selected endpoint did not accept: {error}"),
-                    }
-                };
+                let _connection = listener.accept().unwrap();
 
                 for (scheme, proxy_env) in [
                     ("http", "http_proxy"),

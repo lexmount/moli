@@ -519,29 +519,6 @@ mod tests {
     }
 
     #[test]
-    fn global_named_item_candidate_check_tracks_live_attributes_in_detached_trees() {
-        let mut host = test_host();
-        assert!(!host.has_element_with_named_item_key("late"));
-        assert!(!host.has_element_with_named_item_key(""));
-        let input = host.create_element("input");
-        assert!(host.set_attribute(input, "name", "late"));
-        assert!(host.has_element_with_named_item_key("late"));
-        assert!(host.set_attribute(input, "name", "renamed"));
-        assert!(!host.has_element_with_named_item_key("late"));
-        assert!(host.has_element_with_named_item_key("renamed"));
-        assert!(host.set_attribute(input, "id", "renamed"));
-        assert!(host.remove_attribute(input, "name"));
-        assert!(host.has_element_with_named_item_key("renamed"));
-        let root = host.create_element("div");
-        assert!(host.append_child(root, input));
-        assert!(host.has_element_with_named_item_key("renamed"));
-        assert!(host.remove_attribute(input, "id"));
-        assert!(!host.has_element_with_named_item_key("renamed"));
-        assert!(host.set_attribute(input, "name", ""));
-        assert!(!host.has_element_with_named_item_key(""));
-    }
-
-    #[test]
     fn cached_tag_name_collection_reuses_query_until_mutation() {
         let mut host = test_host();
         let document = host.document_handle();

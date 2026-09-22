@@ -1002,6 +1002,14 @@ impl JsContextHost {
             let mut owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
             parser.finish(&mut owner)
         };
+        if self
+            .dom_host()
+            .document_content_type_for_handle(document_handle)
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain"))
+        {
+            self.dom_host_mut()
+                .set_html_quirks_mode_for_parser_document(document_handle, QuirksMode::NoQuirks);
+        }
         self.queue_live_child_parser_discovery_signals(
             child_handle,
             document_handle,
@@ -1687,7 +1695,6 @@ impl JsContextHost {
         document_base_url: Url,
         markup: &str,
         is_xml_document: bool,
-        content_type: Option<&str>,
     ) -> ChildLiveDocumentParserStartResult {
         let owner = FrameDocumentOwner::new(owner_local_window_id, owner_document_id);
         self.child_document_parsers.clear(owner);
@@ -1695,13 +1702,6 @@ impl JsContextHost {
             DocumentParserSession::start_finite_live_xml_document(
                 document_base_url,
                 document_handle,
-            )
-        } else if content_type.is_some_and(moli_web_mime::is_text_document_mime) {
-            let mut parser_owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
-            DocumentParserSession::start_finite_live_text_document(
-                document_base_url,
-                document_handle,
-                &mut parser_owner,
             )
         } else {
             DocumentParserSession::start_finite_live_document(

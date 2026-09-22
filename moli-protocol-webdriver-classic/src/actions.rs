@@ -164,18 +164,10 @@ enum ClassicActionCancel {
 
 pub fn element_click_input_commands(
     context: &ClassicDevToolsCommandContext,
-    point: ClassicViewportPoint,
-) -> Vec<DevToolsCommand> {
-    vec![
-        dispatch_mouse_event_command(
-            context,
-            DevToolsMouseEventType::Moved,
-            DevToolsPointerType::Mouse,
-            point.x,
-            point.y,
-            0,
-            Some(0),
-        ),
+    geometry: &DevToolsDomGeometryResult,
+) -> Result<Vec<DevToolsCommand>, ClassicError> {
+    let point = element_center_from_geometry(geometry)?;
+    Ok(vec![
         dispatch_mouse_event_command(
             context,
             DevToolsMouseEventType::Pressed,
@@ -194,7 +186,7 @@ pub fn element_click_input_commands(
             0,
             Some(0),
         ),
-    ]
+    ])
 }
 
 pub fn element_send_keys_text(params: &Value) -> Result<String, ClassicError> {
@@ -1641,9 +1633,7 @@ fn webdriver_key_for_action_character(character: char) -> ClassicWebDriverKey {
     match character {
         '\u{E003}' => ClassicWebDriverKey::named("Backspace", "Backspace"),
         '\u{E004}' => ClassicWebDriverKey::named("Tab", "Tab"),
-        '\u{E006}' | '\u{E007}' => {
-            ClassicWebDriverKey::text("Enter".to_owned(), "Enter", "\r".to_owned())
-        }
+        '\u{E006}' | '\u{E007}' => ClassicWebDriverKey::named("Enter", "Enter"),
         '\u{E008}' => ClassicWebDriverKey::modifier("Shift", "ShiftLeft", CLASSIC_MODIFIER_SHIFT),
         '\u{E009}' => {
             ClassicWebDriverKey::modifier("Control", "ControlLeft", CLASSIC_MODIFIER_CONTROL)

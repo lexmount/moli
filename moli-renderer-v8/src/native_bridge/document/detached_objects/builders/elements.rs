@@ -487,16 +487,9 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
     let mut object = if let Some(proto) =
         element_interface_prototype(scope, owner_document, prototype_name, html_interface_like)
     {
-        let declaration = DetachedElementObjectDeclaration::new(proto, to_string_tag);
-        if html_interface_like && local_name == "form" {
-            let template = v8::ObjectTemplate::new(scope);
-            crate::native_bridge::element::install_form_property_handlers(template);
-            let object = template.new_instance(scope)?;
-            declaration.bind_into(scope, object).ok()?;
-            object
-        } else {
-            declaration.bind(scope).ok()?
-        }
+        DetachedElementObjectDeclaration::new(proto, to_string_tag)
+            .bind(scope)
+            .ok()?
     } else {
         new_detached_object_with_prototype(scope, "__detachedElementPrototype", to_string_tag)?
     };

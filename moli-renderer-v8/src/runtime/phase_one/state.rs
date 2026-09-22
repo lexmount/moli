@@ -11,7 +11,6 @@ pub(super) struct ParseTimeDriverState {
     pub(super) buffered_document_preloads: Box<BufferedDocumentPreloadState>,
     pub(super) service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
     pub(super) input_closed: bool,
-    pub(super) is_text_document: bool,
 }
 
 impl ParseTimeDriverState {
@@ -33,24 +32,6 @@ impl ParseTimeDriverState {
             buffered_document_preloads: Box::default(),
             service_worker_preload_context: None,
             input_closed: false,
-            is_text_document: false,
-        }
-    }
-
-    pub(super) fn new_text(final_url: Url, mime: &str) -> Self {
-        Self {
-            parser_session: DocumentParserSession::start_main_text_document(
-                final_url.clone(),
-                mime,
-            ),
-            final_url,
-            document_character_set: "UTF-8".to_owned(),
-            scheduler: DocumentScriptScheduler::new(),
-            pending_parsing_blocking_script: PendingParsingBlockingClassicScriptRunner::empty(),
-            buffered_document_preloads: Box::default(),
-            service_worker_preload_context: None,
-            input_closed: false,
-            is_text_document: true,
         }
     }
 
@@ -64,7 +45,6 @@ impl ParseTimeDriverState {
             buffered_document_preloads: Box::default(),
             service_worker_preload_context: None,
             input_closed: false,
-            is_text_document: false,
         }
     }
 
@@ -215,12 +195,6 @@ impl ConcurrentParseTimeRuntime {
     /// continuation before returning the Page so an already-queued Networking
     /// task cannot grant an admission to a driver that no longer exists.
     pub(super) fn into_navigation_triggered_page_vm(mut self) -> PageVm {
-        drop(self.retire_main_parser_continuation());
-        self.page_vm
-    }
-
-    pub(super) fn into_stopped_page_vm(mut self) -> PageVm {
-        self.state.parser_session.stop(ParserStopReason::Stopped);
         drop(self.retire_main_parser_continuation());
         self.page_vm
     }

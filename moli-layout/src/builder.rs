@@ -622,9 +622,6 @@ where
         let mut output = Vec::new();
         let mut current = Some(principal);
         let mut run = Vec::new();
-        let mut blocks: Option<crate::world::InlineSplitBlockRun> = None;
-        let mut preceding_inline = principal;
-        world.inline_split_sources.insert(owner);
 
         for child in children {
             if self.is_block_in_flow(world, child) {
@@ -635,24 +632,11 @@ where
                         std::mem::take(&mut run),
                     )?;
                     output.push(fragment);
-                    preceding_inline = fragment;
-                }
-                if let Some(run) = blocks.as_mut() {
-                    run.last = child;
-                } else {
-                    blocks = Some(crate::world::InlineSplitBlockRun {
-                        preceding_inline,
-                        first: child,
-                        last: child,
-                    });
                 }
                 output.push(child);
                 continue;
             }
 
-            if let Some(run) = blocks.take() {
-                world.inline_split_block_runs.push(run);
-            }
             if current.is_none() {
                 current =
                     Some(self.allocate_inline_continuation(world, owner, style, semantics.clone()));
@@ -660,9 +644,6 @@ where
             run.push(child);
         }
 
-        if let Some(run) = blocks {
-            world.inline_split_block_runs.push(run);
-        }
         if let Some(fragment) = current {
             self.replace_children_and_mark_context(world, fragment, run)?;
             output.push(fragment);

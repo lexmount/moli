@@ -358,8 +358,6 @@ fn collect_form_control_elements_from(
     form_handle: Option<DomHandle>,
     include_image_inputs: bool,
 ) -> Vec<DomHandle> {
-    #[cfg(test)]
-    crate::native_bridge::element::record_form_lookup_traversal_for_test();
     let mut out = Vec::new();
     let mut stack = Vec::new();
     if include_root {
@@ -544,14 +542,13 @@ pub(in crate::native_bridge) fn form_target_setter_function<'s>(
     rv.set_undefined();
 }
 
-pub(in crate::native_bridge) fn form_named_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_named_getter(
+    scope: &mut v8::PinScope<'_, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -588,32 +585,33 @@ pub(in crate::native_bridge) fn form_named_getter<'s>(
         let Some(past_handle) = runtime.form_past_named_item(handle, &key) else {
             return v8::Intercepted::kNo;
         };
-        let Some(node) =
-            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), past_handle)
+        let Some(node) = runtime
+            .native_bridge_mut()
+            .wrap_handle(scope, runtime_ptr, past_handle)
         else {
             return v8::Intercepted::kNo;
         };
-        rv.set(node);
+        rv.set(node.into());
         return v8::Intercepted::kYes;
     };
     runtime.remember_form_past_named_item(handle, key, match_handle);
-    let Some(node) =
-        wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), match_handle)
+    let Some(node) = runtime
+        .native_bridge_mut()
+        .wrap_handle(scope, runtime_ptr, match_handle)
     else {
         return v8::Intercepted::kNo;
     };
-    rv.set(node);
+    rv.set(node.into());
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_named_descriptor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_named_descriptor(
+    scope: &mut v8::PinScope<'_, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -646,22 +644,24 @@ pub(in crate::native_bridge) fn form_named_descriptor<'s>(
         list.into()
     } else if let Some(match_handle) = matches.first().copied() {
         runtime.remember_form_past_named_item(handle, key, match_handle);
-        let Some(node) =
-            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), match_handle)
+        let Some(node) = runtime
+            .native_bridge_mut()
+            .wrap_handle(scope, runtime_ptr, match_handle)
         else {
             return v8::Intercepted::kNo;
         };
-        node
+        node.into()
     } else {
         let Some(past_handle) = runtime.form_past_named_item(handle, &key) else {
             return v8::Intercepted::kNo;
         };
-        let Some(node) =
-            wrapped_handle_value_for_receiver(scope, runtime_ptr, args.holder(), past_handle)
+        let Some(node) = runtime
+            .native_bridge_mut()
+            .wrap_handle(scope, runtime_ptr, past_handle)
         else {
             return v8::Intercepted::kNo;
         };
-        node
+        node.into()
     };
     let Ok(descriptor) = DataPropertyDescriptorDeclaration::new(value, false, false).bind(scope)
     else {
@@ -671,14 +671,13 @@ pub(in crate::native_bridge) fn form_named_descriptor<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_named_deleter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_named_deleter(
+    scope: &mut v8::PinScope<'_, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -698,15 +697,14 @@ pub(in crate::native_bridge) fn form_named_deleter<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_named_definer<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_named_definer(
+    scope: &mut v8::PinScope<'_, '_>,
     key: v8::Local<'_, v8::Name>,
     _desc: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -734,15 +732,30 @@ fn object_has_expando_named_property(
     if form_native_property_can_be_overridden(key) {
         return false;
     }
-    let Some(key) = v8_string(scope, key) else {
+    let Some(names) = object.get_own_property_names(
+        scope,
+        v8::GetPropertyNamesArgs {
+            mode: v8::KeyCollectionMode::OwnOnly,
+            property_filter: v8::PropertyFilter::ALL_PROPERTIES | v8::PropertyFilter::SKIP_SYMBOLS,
+            index_filter: v8::IndexFilter::IncludeIndices,
+            key_conversion: v8::KeyConversionMode::KeepNumbers,
+        },
+    ) else {
         return false;
     };
-    // Enumerating own keys invokes the indexed interceptor, which resolves every
-    // form control. A real-property check neither enumerates virtual properties
-    // nor evaluates an own accessor getter.
-    object
-        .has_real_named_property(scope, key.into())
-        .unwrap_or(false)
+    for index in 0..names.length() {
+        let Some(name) = names
+            .get_index(scope, index)
+            .and_then(|value| value.to_string(scope))
+            .map(|value| value.to_rust_string_lossy(scope))
+        else {
+            continue;
+        };
+        if name == key {
+            return true;
+        }
+    }
+    false
 }
 
 fn form_native_property_can_be_overridden(key: &str) -> bool {
@@ -788,14 +801,13 @@ fn form_has_named_item_or_past_name(
         || runtime.form_past_named_item(form_handle, key).is_some()
 }
 
-pub(in crate::native_bridge) fn form_indexed_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_indexed_getter(
+    scope: &mut v8::PinScope<'_, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -815,14 +827,13 @@ pub(in crate::native_bridge) fn form_indexed_getter<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_indexed_query<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_indexed_query(
+    scope: &mut v8::PinScope<'_, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -841,15 +852,14 @@ pub(in crate::native_bridge) fn form_indexed_query<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_indexed_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_indexed_setter(
+    scope: &mut v8::PinScope<'_, '_>,
     index: u32,
     _value: v8::Local<'_, v8::Value>,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -860,14 +870,13 @@ pub(in crate::native_bridge) fn form_indexed_setter<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_indexed_descriptor<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_indexed_descriptor(
+    scope: &mut v8::PinScope<'_, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -891,14 +900,13 @@ pub(in crate::native_bridge) fn form_indexed_descriptor<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_indexed_deleter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_indexed_deleter(
+    scope: &mut v8::PinScope<'_, '_>,
     index: u32,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -909,15 +917,12 @@ pub(in crate::native_bridge) fn form_indexed_deleter<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_indexed_enumerator<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::PropertyCallbackArguments<'s>,
+pub(in crate::native_bridge) fn form_indexed_enumerator(
+    scope: &mut v8::PinScope<'_, '_>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
-    #[cfg(test)]
-    crate::native_bridge::element::record_form_lookup_enumeration_for_test();
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         rv.set(v8::Array::new(scope, 0));
         return;
@@ -928,15 +933,14 @@ pub(in crate::native_bridge) fn form_indexed_enumerator<'s>(
     rv.set(v8::Array::new_with_elements(scope, &keys));
 }
 
-pub(in crate::native_bridge) fn form_indexed_definer<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_indexed_definer(
+    scope: &mut v8::PinScope<'_, '_>,
     index: u32,
     _desc: &v8::PropertyDescriptor,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Boolean>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, form_handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, form_handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -947,14 +951,13 @@ pub(in crate::native_bridge) fn form_indexed_definer<'s>(
     v8::Intercepted::kYes
 }
 
-pub(in crate::native_bridge) fn form_named_query<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn form_named_query(
+    scope: &mut v8::PinScope<'_, '_>,
     key: v8::Local<'_, v8::Name>,
-    args: v8::PropertyCallbackArguments<'s>,
+    args: v8::PropertyCallbackArguments<'_>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.holder())
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.holder())
     else {
         return v8::Intercepted::kNo;
     };
@@ -981,12 +984,6 @@ fn form_named_item_matches(
     form_handle: DomHandle,
     key: &str,
 ) -> Vec<DomHandle> {
-    // Only a miss is conclusive. A hit still needs the existing form-owner,
-    // custom-element, shadow-tree and image-fallback rules below. The caller
-    // separately checks the past-names map even when this returns no matches.
-    if !runtime.dom_host().has_element_with_named_item_key(key) {
-        return Vec::new();
-    }
     let controls = form_control_elements(runtime, form_handle)
         .into_iter()
         .filter(|handle| {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use axum::{Router, response::Html, routing::get};
+use axum::{Router, routing::get};
 use moli_core::{
     LayoutPolicy,
     page::Page,
@@ -36,7 +36,7 @@ async fn load_page_with_config(
             "/",
             get(move || {
                 let body = Arc::clone(&server_body);
-                async move { Html((*body).clone()) }
+                async move { (*body).clone() }
             }),
         );
         axum::serve(listener, app).await.unwrap();

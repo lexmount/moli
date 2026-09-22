@@ -21,8 +21,7 @@ use crate::{
         LoadedChildDocument, SubresourceResponseBody,
     },
 };
-use moli_encoding::{HtmlDocumentStreamingDecoder, decode_html_document_with_fallback};
-use moli_encoding_detector::detect_legacy_html_encoding;
+use moli_encoding::decode_html_document_with_fallback;
 
 pub(crate) struct AppliedChildDocumentLoadCompletion {
     /// Initial parser-classic work produced by the committed child document.
@@ -230,24 +229,20 @@ impl JsContextHost {
                         request_url,
                         request_method,
                         request_headers,
-                        moli_fetch::NetworkObservationJournal::default(),
                         head,
                         body,
                         &parent_character_set,
                     );
                 }
                 let response = task_resource_loader
-                    .fetch_raw_with_network_metadata(request)
+                    .fetch_raw(request)
                     .await
                     .map_err(|error| error.to_string())?;
-                let (response, network_observation_journal) =
-                    response.into_parts_with_observation_journal();
                 let (head, body) = response.into_body();
                 child_document_load_outcome_from_response(
                     request_url,
                     request_method,
                     request_headers,
-                    network_observation_journal,
                     head,
                     body,
                     &parent_character_set,
@@ -742,8 +737,7 @@ fn child_document_load_outcome_from_response(
     request_url: String,
     request_method: String,
     request_headers: Vec<(String, String)>,
-    network_observation_journal: moli_fetch::NetworkObservationJournal,
-    mut head: moli_fetch::ResponseHead,
+    head: moli_fetch::ResponseHead,
     body: moli_fetch::ResponseBody,
     parent_character_set: &str,
 ) -> Result<ChildDocumentLoadOutcome, String> {
@@ -763,29 +757,12 @@ fn child_document_load_outcome_from_response(
         let body_bytes = response_body
             .try_bytes()
             .map_err(|error| format!("failed to read child document response body: {error}"))?;
-        let (markup, character_set) = if let Some(mime) = content_type
-            .as_deref()
-            .filter(|mime| moli_web_mime::is_text_document_mime(mime))
-        {
-            let mut decoder = HtmlDocumentStreamingDecoder::new_text_document(
-                &head.headers,
-                head.final_url.as_str(),
-                detect_legacy_html_encoding,
-                moli_web_mime::is_json_module_mime(mime) || mime == "text/json",
-            );
-            let mut markup = decoder.push(&body_bytes).concat();
-            if let Some(tail) = decoder.finish() {
-                markup.push_str(&tail);
-            }
-            (markup, decoder.document_encoding_name())
-        } else {
-            decode_html_document_with_fallback(&body_bytes, &head.headers, Some(&fallback))
-        };
+        let (markup, character_set) =
+            decode_html_document_with_fallback(&body_bytes, &head.headers, Some(&fallback));
         (markup, character_set.to_owned())
     };
     let policy_container =
         DocumentPolicyContainer::from_navigation_response_headers(&head.headers, &head.final_url);
-    let redirect_chain = std::mem::take(&mut head.redirect_chain);
     Ok(ChildDocumentLoadOutcome::Loaded(Box::new(
         LoadedChildDocument {
             final_url: head.final_url.clone(),
@@ -797,8 +774,6 @@ fn child_document_load_outcome_from_response(
                 request_url,
                 request_method,
                 request_headers,
-                network_observation_journal,
-                redirect_chain,
                 final_url: head.final_url.as_str().to_owned(),
                 status: head.status,
                 response_headers: head.headers.clone(),
@@ -857,45 +832,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loaded_child_document_retains_exact_network_response_and_transport_metadata() {
+    fn loaded_child_document_retains_exact_network_response_body() {
         let body_bytes = b"<!doctype html><p>child network body \xff</p>".to_vec();
-        let journal = moli_fetch::NetworkObservationJournal::from_exchanges(vec![
-            moli_fetch::NetworkExchangeObservation::new(
-                moli_fetch::NetworkRequestObservation::new_with_method(
-                    "GET",
-                    vec![("Referer".to_owned(), "https://example.test/".to_owned())],
-                ),
-                Some(moli_fetch::NetworkResponseObservation::new(200, Vec::new())),
-            ),
-        ]);
-        let redirect = moli_fetch::RedirectInfo {
-            source: moli_fetch::RedirectSource::Network,
-            from_url: url::Url::parse("https://example.test/start").unwrap(),
-            to_url: url::Url::parse("https://example.test/child").unwrap(),
-            status: 302,
-            headers: Vec::new(),
-            network_extra_info_available: true,
-            request_extra_info: None,
-            response_extra_info: None,
-            redirect_has_extra_info: true,
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        };
         let outcome = child_document_load_outcome_from_response(
             "https://example.test/child".to_owned(),
             "GET".to_owned(),
             Vec::new(),
-            journal.clone(),
             moli_fetch::ResponseHead {
                 final_url: url::Url::parse("https://example.test/child").unwrap(),
                 status: 200,
                 headers: vec![("Content-Type".to_owned(), "text/html".to_owned())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
-                redirected: true,
-                redirect_chain: vec![redirect.clone()],
+                redirected: false,
+                redirect_chain: Vec::new(),
                 from_cache: false,
                 negotiated_http_version: None,
             },
@@ -911,8 +861,6 @@ mod tests {
             .as_ref()
             .expect("loaded child document should retain Network metadata");
         assert_eq!(network.encoded_data_length, body_bytes.len());
-        assert_eq!(network.network_observation_journal, journal);
-        assert_eq!(network.redirect_chain, vec![redirect]);
         assert_eq!(
             network
                 .response_body

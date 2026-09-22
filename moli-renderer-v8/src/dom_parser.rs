@@ -1,4 +1,5 @@
 use crate::web_api_interfaces;
+use html5ever::tree_builder::QuirksMode;
 use moli_web_mime::{is_dom_parser_xml_mime, is_html_document_mime};
 use moli_webapi_declare::WebApiFunctionTemplate;
 use url::Url;
@@ -366,11 +367,7 @@ pub(crate) fn preserve_decoded_bom_only_browsing_context_body<'a>(
     source: &'a str,
     content_type: Option<&str>,
 ) -> std::borrow::Cow<'a, str> {
-    if source == "\u{feff}"
-        && !content_type.is_some_and(|mime| {
-            is_dom_parser_xml_mime(mime) || moli_web_mime::is_text_document_mime(mime)
-        })
-    {
+    if source == "\u{feff}" && !content_type.is_some_and(is_dom_parser_xml_mime) {
         std::borrow::Cow::Borrowed("<body>\u{feff}</body>")
     } else {
         std::borrow::Cow::Borrowed(source)
@@ -384,7 +381,7 @@ fn parse_browsing_context_document_snapshot(
     html_parser: HtmlParser,
 ) -> (DomHost, DetachedDocumentKind) {
     if content_type.is_some_and(is_dom_parser_xml_mime)
-        || (content_type.is_none() && child_document_url_is_xml_like(&document_url))
+        || child_document_url_is_xml_like(&document_url)
     {
         let parser = XmlParser;
         return (
@@ -392,18 +389,34 @@ fn parse_browsing_context_document_snapshot(
             DetachedDocumentKind::Xml,
         );
     }
-    if let Some(content_type) =
-        content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime))
-    {
-        let stream = HtmlParser::with_scripting_enabled(false)
-            .start_text_document(document_url, content_type);
-        stream.feed(source);
-        return (stream.finish_dom_host(), DetachedDocumentKind::Html);
+    if content_type.is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain")) {
+        let mut document =
+            html_parser.parse_dom_host(document_url, plain_text_document_parser_input(source));
+        // Text documents are HTML Documents whose mode is explicitly no-quirks,
+        // despite having no doctype that would select that mode through parsing.
+        document.set_html_quirks_mode_for_parser(QuirksMode::NoQuirks);
+        return (document, DetachedDocumentKind::Html);
     }
     (
         html_parser.parse_dom_host(document_url, source.to_owned()),
         DetachedDocumentKind::Html,
     )
+}
+
+pub(crate) fn plain_text_document_parser_input(source: &str) -> String {
+    let mut input = String::with_capacity(source.len().saturating_add(64));
+    // The HTML parser discards the first LF after <pre>; preserve any source LF.
+    input.push_str("<html><head></head><body><pre>\n");
+    for character in source.chars() {
+        match character {
+            '&' => input.push_str("&amp;"),
+            '<' => input.push_str("&lt;"),
+            '\0' => input.push('\u{fffd}'),
+            _ => input.push(character),
+        }
+    }
+    input.push_str("</pre></body></html>");
+    input
 }
 
 fn child_document_url_is_xml_like(url: &Url) -> bool {
@@ -584,50 +597,6 @@ mod tests {
 
         let disabled = parse(HtmlParser::SCRIPTING_DISABLED);
         assert!(disabled.element_handle_by_id("fallback").is_some());
-    }
-
-    #[test]
-    fn child_projection_explicit_mime_overrides_xml_extension() {
-        let source = "\n<&amp;</pre><script>window.executed=1</script>";
-        for mime in [
-            "text/plain",
-            "application/json",
-            "application/problem+json",
-            "text/javascript",
-        ] {
-            let (document, kind) = parse_browsing_context_document_snapshot(
-                Url::parse("https://example.test/data.xml").unwrap(),
-                source,
-                Some(mime),
-                HtmlParser::SCRIPTING_ENABLED,
-            );
-            let root = document.document_handle();
-            assert_eq!(kind, DetachedDocumentKind::Html);
-            assert_eq!(
-                document.text_content(root).as_deref(),
-                Some(source),
-                "{mime}"
-            );
-            let children = document.child_handles(root).collect::<Vec<_>>();
-            assert_eq!(children.len(), 1);
-            assert!(document.is_html_element_named(children[0], "html"));
-            assert_eq!(
-                document.document_quirks_mode_for_handle(root),
-                Some(selectors::matching::QuirksMode::NoQuirks)
-            );
-        }
-        let (document, kind) = parse_browsing_context_document_snapshot(
-            Url::parse("https://example.test/page.svg").unwrap(),
-            "<!doctype html><b id='parsed'>&amp;</b>",
-            Some("text/html"),
-            HtmlParser::SCRIPTING_ENABLED,
-        );
-        assert_eq!(kind, DetachedDocumentKind::Html);
-        assert!(document.element_handle_by_id("parsed").is_some());
-        assert_eq!(
-            document.text_content(document.document_handle()).as_deref(),
-            Some("&")
-        );
     }
 
     #[test]

@@ -5,7 +5,6 @@ mod input;
 mod select;
 
 use self::controls::install_form_control_template_accessors;
-pub(in crate::native_bridge) use self::controls::install_form_property_handlers;
 use self::input::install_input_template_accessors;
 use self::select::install_select_option_template_accessors;
 

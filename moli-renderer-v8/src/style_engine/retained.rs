@@ -2,9 +2,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use style::{
     author_styles::AuthorStyles,
-    device::Device,
     invalidation::stylesheets::StylesheetInvalidationSet,
-    properties::ComputedValues,
     servo_arc::Arc as ServoArc,
     shared_lock::{SharedRwLock, StylesheetGuards},
     stylesheets::{CustomMediaMap, DocumentStyleSheet, Origin, OriginSet, UrlExtraData},
@@ -167,7 +165,6 @@ pub(super) fn build_retained_style_system(
         stylist_identity: NEXT_STYLIST_IDENTITY.fetch_add(1, Ordering::Relaxed),
         key,
         stylist,
-        root_style: Default::default(),
         document_stylesheets,
         shadow_scopes,
         stylesheet_resources,
@@ -386,9 +383,6 @@ fn update_document_scope(
     if device_changed {
         let device =
             new_style_device_with_viewport(key.style_viewport(), key.environment, key.quirks_mode);
-        if let Some(root_style) = retained.root_style.borrow().as_ref() {
-            synchronize_root_style_device(&device, root_style);
-        }
         let guard = shared_lock.read();
         let guards = StylesheetGuards::same(&guard);
         device_affected_origins = retained.stylist.set_device(device, &guards);
@@ -440,32 +434,6 @@ fn update_document_scope(
         used_color_scheme_changed,
         device_affected_origins,
         stylesheets_changed,
-    }
-}
-
-/// Synchronizes the state Stylo uses for root font-relative units.
-///
-/// Full Stylo traversal performs this in `matching.rs`, but Moli deliberately
-/// uses the single-node `resolve_style` API and therefore must mirror the
-/// update when the root element is materialized. Keeping this helper at the
-/// Device boundary also lets a rebuilt Device inherit the current root state
-/// before any descendant is resolved against it.
-pub(super) fn synchronize_root_style_device(
-    device: &Device,
-    root_style: &ServoArc<ComputedValues>,
-) {
-    device.set_root_style(root_style);
-    let font = root_style.get_font();
-    let font_size = font.clone_font_size().computed_size();
-    device.set_root_font_size(root_style.effective_zoom.unzoom(font_size.px()));
-
-    let line_height = device
-        .calc_line_height(font, root_style.writing_mode, None)
-        .0;
-    device.set_root_line_height(root_style.effective_zoom.unzoom(line_height.px()));
-
-    if device.used_root_font_metrics() {
-        device.update_root_font_metrics();
     }
 }
 

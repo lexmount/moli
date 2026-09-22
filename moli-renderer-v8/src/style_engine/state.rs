@@ -6,7 +6,6 @@ use std::{
 use moli_selector::StyloSourceInvalidationFallbackReason;
 use selectors::context::SelectorCaches;
 use style::{
-    properties::ComputedValues,
     servo_arc::Arc as ServoArc,
     stylist::{CascadeData, Stylist},
 };
@@ -32,11 +31,6 @@ pub(super) struct RetainedStyleSystem {
     pub(super) stylist_identity: u64,
     pub(super) key: StyleWorldKey,
     pub(super) stylist: Stylist,
-    /// Last computed style for this Document's root element. Stylo normally
-    /// updates the Device's root-relative unit state during a full traversal;
-    /// Moli resolves demanded paths one element at a time, so retain the root
-    /// style explicitly both for those resolutions and for Device rebuilds.
-    pub(super) root_style: RefCell<Option<ServoArc<ComputedValues>>>,
     pub(super) document_stylesheets: ActiveStylesheetCollection,
     pub(super) shadow_scopes: Vec<ShadowScopeStyles>,
     pub(super) stylesheet_resources: StylesheetResourceManifest,

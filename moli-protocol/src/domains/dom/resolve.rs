@@ -5842,7 +5842,6 @@ fn devtools_dom_command_context(
         DevToolsCommand::GetOuterHtml(command) => &command.context,
         DevToolsCommand::DescribeNode(command) => &command.context,
         DevToolsCommand::GetFrameOwner(command) => &command.context,
-        DevToolsCommand::GetNodeForLocation(command) => &command.context,
         DevToolsCommand::ResolveNode(command) => &command.context,
         DevToolsCommand::ScrollIntoViewIfNeeded(command) => &command.context,
         DevToolsCommand::DomObjectReference(command)
@@ -6001,12 +6000,15 @@ async fn execute_devtools_dom_command_for_owner(
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }
-        command @ (DevToolsCommand::DomGeometry(_) | DevToolsCommand::GetNodeForLocation(_)) => {
-            let pending = start_devtools_dom_command_for_owner(conn, None, owner, command)
-                .map_err(DevToolsError::from)?
-                .ok_or_else(|| {
-                    DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand")
-                })?;
+        DevToolsCommand::DomGeometry(command) => {
+            let pending = start_devtools_dom_command_for_owner(
+                conn,
+                None,
+                owner,
+                DevToolsCommand::DomGeometry(command),
+            )
+            .map_err(DevToolsError::from)?
+            .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::Internal, "MissingDomCommand"))?;
 
             await_pending_devtools_dom_command_result(conn, pending).await
         }

@@ -1454,84 +1454,7 @@ body.setHTMLUnsafe(`
 }
 
 #[test]
-fn adopted_stylesheet_geometry_refreshes_across_script_turns_without_rendering() {
-    for shadow in [false, true] {
-        let mut vm = new_parsed_test_vm(
-            "https://adopted-sheet-layout.test/",
-            "<!doctype html><html><body><div id='host'></div></body></html>",
-        );
-        vm.eval(&format!(r#"
-            globalThis.styleRoot = {root};
-            styleRoot.innerHTML = '<style>#target {{width:20px;height:10px}}</style><div id="target"></div>';
-            globalThis.target = styleRoot.querySelector('#target');
-            globalThis.sheet = new CSSStyleSheet();
-            sheet.replaceSync('#target {{width:40px;height:10px}}');
-        "#, root = if shadow {"document.getElementById('host').attachShadow({mode:'open'})"} else {"document.body"}))
-            .expect("create the same baseline rules in document and shadow scopes");
-        // Document adoption is on Document, while its test markup lives in body.
-        vm.eval(if shadow {
-            "globalThis.adopter=styleRoot;"
-        } else {
-            "globalThis.adopter=document;"
-        })
-        .unwrap();
-        let read = "[target.getBoundingClientRect().width,parseFloat(getComputedStyle(target).width),target.offsetWidth].join('|')";
-        assert_eq!(vm.eval(read).unwrap(), "20|20|20");
-        for (mutation, width) in [
-            ("adopter.adoptedStyleSheets=[sheet];", 40),
-            ("sheet.replaceSync('#target {width:80px;height:10px}');", 80),
-            ("sheet.deleteRule(0);", 20),
-            (
-                "sheet.insertRule('#target {width:120px;height:10px}',0);",
-                120,
-            ),
-            ("adopter.adoptedStyleSheets=[];", 20),
-            ("adopter.adoptedStyleSheets.push(sheet);", 120),
-            ("adopter.adoptedStyleSheets.pop();", 20),
-        ] {
-            let before = vm
-                ._context_host
-                .borrow()
-                .layout_pass_observability_for_test()
-                .1;
-            vm.eval(mutation).unwrap();
-            assert_eq!(
-                vm._context_host
-                    .borrow()
-                    .layout_pass_observability_for_test()
-                    .1,
-                before,
-                "stylesheet changes must not eagerly build layout: shadow={shadow} {mutation}"
-            );
-            let expected = format!("{width}|{width}|{width}");
-            assert_eq!(
-                vm.eval(read).unwrap(),
-                expected,
-                "shadow={shadow} {mutation}"
-            );
-            assert_eq!(
-                vm._context_host
-                    .borrow()
-                    .layout_pass_observability_for_test()
-                    .1,
-                before + 1,
-                "first geometry read must refresh exactly once: shadow={shadow} {mutation}"
-            );
-            assert_eq!(vm.eval(read).unwrap(), expected);
-            assert_eq!(
-                vm._context_host
-                    .borrow()
-                    .layout_pass_observability_for_test()
-                    .1,
-                before + 1,
-                "a later clean script turn must reuse layout"
-            );
-        }
-    }
-}
-
-#[test]
-fn geometry_getters_refresh_after_mutation_and_reuse_clean_layout() {
+fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {
     let mut vm = new_storage_test_vm("https://oneshot-layout-demand.test/");
     let passes_before = vm
         ._context_host
@@ -1580,21 +1503,18 @@ fn geometry_getters_refresh_after_mutation_and_reuse_clean_layout() {
         )
         .expect("latest layout snapshot reads should evaluate");
 
-    assert_eq!(result, "38|8|38|8|38|43|8");
+    assert_eq!(result, "38|8|38|8|38|38|0");
     let passes = vm
         ._context_host
         .borrow()
         .layout_pass_observability_for_test()
         .1
         .saturating_sub(passes_before);
-    assert_eq!(
-        passes, 2,
-        "cold and first post-mutation reads each build once"
-    );
+    assert_eq!(passes, 1, "only the cold getter may build layout");
     let cache_after = vm.layout_snapshot_cache_observability_for_test();
-    assert_eq!(cache_after.0, cache_before.0 + 9);
-    assert_eq!(cache_after.1, cache_before.1 + 2);
-    assert_eq!(cache_after.2, cache_before.2 + 2);
+    assert_eq!(cache_after.0, cache_before.0 + 10);
+    assert_eq!(cache_after.1, cache_before.1 + 1);
+    assert_eq!(cache_after.2, cache_before.2 + 1);
     assert!(cache_after.3.is_some());
 }
 

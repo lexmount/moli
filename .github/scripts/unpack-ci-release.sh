@@ -16,9 +16,6 @@ esac
 release_name="moli-release-$side"
 archive="target/ci-artifacts/$side/$release_name.tar.gz"
 test -f "$archive"
-# A download action can terminate with a partial extracted archive. Reject it
-# before touching the executable directory, including after the bounded retry.
-gzip -t "$archive"
 mkdir -p target/ci-bin
 tar -xzf "$archive" -C target/ci-bin
 (cd "target/ci-bin/$release_name" && sha256sum --check SHA256SUMS)

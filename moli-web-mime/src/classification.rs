@@ -51,14 +51,6 @@ pub fn is_text_mime_essence(input: &str) -> bool {
     input.starts_with("text/")
 }
 
-/// Navigation responses rendered as literal text rather than HTML or XML.
-/// This also includes JSON and JavaScript resources opened as documents.
-pub fn is_text_document_mime(input: &str) -> bool {
-    !is_html_document_mime(input)
-        && !is_dom_parser_xml_mime(input)
-        && (is_text_mime(input) || is_json_module_mime(input) || is_javascript_mime(input))
-}
-
 /// Whether a `style` element's raw `type` attribute selects classic CSS.
 ///
 /// HTML's update-a-style-block algorithm compares the untrimmed attribute

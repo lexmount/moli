@@ -519,6 +519,24 @@ impl ClassicSessionRuntimeHandle {
             .await
     }
 
+    pub(super) async fn execute_with_pending_navigation_wait_on_page(
+        &self,
+        command: DevToolsCommand,
+        timeout: Option<Duration>,
+        pending_navigation_timeout: Option<Duration>,
+        expected_page: DevToolsPageResidenceIdentity,
+    ) -> Result<DevToolsCommandResult, DevToolsError> {
+        self.execute_request(
+            command,
+            timeout,
+            pending_navigation_timeout,
+            false,
+            Some(expected_page),
+        )
+        .await
+        .result
+    }
+
     pub(super) async fn wait_for_document_lifecycle(
         &self,
         context: DevToolsCommandContext,

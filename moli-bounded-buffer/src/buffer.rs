@@ -66,21 +66,6 @@ where
         self.limits
     }
 
-    /// Changes budgets, returning oversized and then oldest entries that no
-    /// longer fit. Retained entries keep their original insertion order.
-    pub fn set_limits(&mut self, limits: ByteLimits) -> Vec<(K, V)> {
-        self.limits = limits;
-        let mut evicted = self.retain_entries(|_, entry| entry.byte_len <= limits.max_entry_bytes);
-        while self.used_bytes > limits.max_total_bytes {
-            if let Some(entry) = self.pop_oldest() {
-                evicted.push(entry);
-            } else {
-                break;
-            }
-        }
-        evicted
-    }
-
     /// Returns the sum of the logical byte charges for retained entries.
     pub fn used_bytes(&self) -> usize {
         self.used_bytes
@@ -166,41 +151,10 @@ where
     }
 
     /// Removes all entries and releases all byte charges.
-    ///
-    /// This does not return removed entries; use [`Self::retain`] to take ownership.
     pub fn clear(&mut self) {
         self.entries.clear();
         self.insertion_order.clear();
         self.used_bytes = 0;
-    }
-
-    /// Visits each value once in insertion order, returning removed entries in
-    /// that order and releasing their byte charges. Mutating a value does not
-    /// change its recorded charge; use [`Self::insert`] to replace its charge.
-    pub fn retain(&mut self, mut keep: impl FnMut(&K, &mut V) -> bool) -> Vec<(K, V)> {
-        self.retain_entries(|key, entry| keep(key, &mut entry.value))
-    }
-
-    fn retain_entries(
-        &mut self,
-        mut keep: impl FnMut(&K, &mut BufferedValue<V>) -> bool,
-    ) -> Vec<(K, V)> {
-        let mut removed = Vec::new();
-        self.insertion_order.retain(|key| {
-            if self
-                .entries
-                .get_mut(key)
-                .is_some_and(|entry| keep(key, entry))
-            {
-                return true;
-            }
-            if let Some(entry) = self.entries.remove(key) {
-                self.used_bytes -= entry.byte_len;
-                removed.push((key.clone(), entry.value));
-            }
-            false
-        });
-        removed
     }
 
     fn pop_oldest(&mut self) -> Option<(K, V)> {

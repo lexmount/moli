@@ -7,7 +7,6 @@ mod accessors_structural;
 mod instance;
 mod methods;
 
-pub(in crate::native_bridge) use accessors_forms::install_form_property_handlers;
 use accessors_forms::install_form_template_accessors;
 use accessors_media::install_media_template_accessors;
 use accessors_resource::install_resource_template_accessors;

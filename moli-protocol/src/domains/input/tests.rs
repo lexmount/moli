@@ -1578,151 +1578,6 @@ async fn dispatch_key_event_can_complete_through_pending_command_dispatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dispatch_key_press_acknowledges_real_link_navigation() {
-    tokio::task::LocalSet::new()
-        .run_until(async {
-            let mut ctx = TestContext::new();
-            ctx.enable_background_navigation_scheduler_for_test();
-            with_loaded_document(
-                &mut ctx,
-                r#"<html><body>
-                    <a id='next' href='data:text/html,destination'>next</a>
-                    <input id='field'>
-                    <script>
-                      const field = document.getElementById('field');
-                      field.addEventListener('keydown', event => {
-                        if (event.key === 'Enter') {
-                          document.getElementById('next').click();
-                        }
-                      });
-                      field.focus();
-                    </script>
-                   </body></html>"#,
-            )
-            .await;
-            ctx.enable_page_events_for_test(None);
-
-            for (id, event_type, text) in [(4103, "keyDown", Some("\r")), (4104, "keyUp", None)] {
-                let mut command = json!({
-                    "id": id,
-                    "method": "Input.dispatchKeyEvent",
-                    "params": {
-                        "type": event_type,
-                        "key": "Enter",
-                        "code": "Enter"
-                    }
-                });
-                if let Some(text) = text {
-                    command["params"]["text"] = json!(text);
-                }
-                ctx.process_and_wait_for_response_async(command).await;
-                ctx.expect_result(id, json!({}), None);
-            }
-
-            wait_until_frame_stopped_loading(&mut ctx, "TID-1").await;
-            ctx.expect_event("Page.frameNavigated", None);
-            assert_eq!(
-                evaluate_string(&mut ctx, "document.body.textContent").await,
-                "destination"
-            );
-        })
-        .await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() {
-    let mut ctx = TestContext::new();
-    with_loaded_document(
-        &mut ctx,
-        r#"<html><body>
-                <input id='field'>
-                <script>
-                  window.__keyupCount = 0;
-                  const field = document.getElementById('field');
-                  field.focus();
-                  field.addEventListener('keyup', () => window.__keyupCount += 1);
-                </script>
-               </body></html>"#,
-    )
-    .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-KEYUP".to_owned())
-        .expect("active navigation should start");
-
-    ctx.process_async(json!({
-        "id": 4105,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "keyUp",
-            "key": "Enter",
-            "code": "Enter"
-        }
-    }))
-    .await;
-    ctx.expect_result(4105, json!({}), None);
-
-    let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .clear_pending_document_navigation_for_owner_if_loader_matches(&owner, "PENDING-KEYUP");
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(None)
-    );
-    assert_eq!(
-        evaluate_string(&mut ctx, "String(window.__keyupCount)").await,
-        "1"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn dispatch_keydown_still_rejects_while_navigation_is_pending() {
-    let mut ctx = TestContext::new();
-    with_loaded_document(&mut ctx, "<html><body><input autofocus></body></html>").await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .start_document_navigation_for_active_target("PENDING-KEYDOWN".to_owned())
-        .expect("active navigation should start");
-
-    ctx.process_async(json!({
-        "id": 4106,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "rawKeyDown",
-            "key": "Enter",
-            "code": "Enter"
-        }
-    }))
-    .await;
-    ctx.expect_error(4106, -32000, "Navigation is changing the document");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn dispatch_keyup_without_document_reports_no_document_loaded() {
-    let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-I".into());
-    browser_context.set_active_target_id("TID-1");
-    ctx.conn
-        .install_browser_context_fixture_for_test(browser_context);
-
-    ctx.process_async(json!({
-        "id": 4107,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "keyUp",
-            "key": "Enter",
-            "code": "Enter"
-        }
-    }))
-    .await;
-    ctx.expect_error(4107, -32000, "NoDocumentLoaded");
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn insert_text_can_complete_through_pending_command_dispatch() {
     let mut ctx = TestContext::new();
     with_loaded_document(
@@ -2274,7 +2129,7 @@ async fn dispatch_key_event_enter_inserts_newline_in_textarea() {
                   field.focus();
                   field.setSelectionRange(1, 1);
                   window.__textareaEvents = [];
-                  ['keydown', 'keypress', 'beforeinput', 'input'].forEach((type) => {
+                  ['keydown', 'beforeinput', 'input'].forEach((type) => {
                     field.addEventListener(type, () => window.__textareaEvents.push(type));
                   });
                 </script>
@@ -2294,29 +2149,6 @@ async fn dispatch_key_event_enter_inserts_newline_in_textarea() {
     .await;
     ctx.expect_result(16, json!({}), None);
 
-    // CDP keyDown without text has no character phase and must not edit.
-    assert_eq!(
-        evaluate_string(&mut ctx, "document.getElementById('field').value").await,
-        "ab"
-    );
-    assert_eq!(
-        evaluate_string(&mut ctx, "JSON.stringify(window.__textareaEvents)").await,
-        r#"["keydown"]"#
-    );
-    evaluate_string(&mut ctx, "window.__textareaEvents = []; ''").await;
-    ctx.process_async(json!({
-        "id": 17,
-        "method": "Input.dispatchKeyEvent",
-        "params": {
-            "type": "keyDown",
-            "key": "Enter",
-            "code": "Enter",
-            "text": "\r"
-        }
-    }))
-    .await;
-    ctx.expect_result(17, json!({}), None);
-
     assert_eq!(
         evaluate_string(&mut ctx, "document.getElementById('field').value").await,
         "a\nb"
@@ -2330,7 +2162,7 @@ async fn dispatch_key_event_enter_inserts_newline_in_textarea() {
     );
     assert_eq!(
         evaluate_string(&mut ctx, "JSON.stringify(window.__textareaEvents)").await,
-        r#"["keydown","keypress","beforeinput","input"]"#
+        r#"["keydown","beforeinput","input"]"#
     );
 }
 

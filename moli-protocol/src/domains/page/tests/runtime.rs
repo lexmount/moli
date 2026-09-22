@@ -1269,22 +1269,20 @@ async fn runtime_evaluate_child_history_back_emits_child_frame_navigation_and_li
                 .route(
                     "/main",
                     axum::routing::get(|| async {
-                        axum::response::Html(
-                            "<iframe id='child' name='child-frame' src='/initial'></iframe>",
-                        )
+                        "<iframe id='child' name='child-frame' src='/initial'></iframe>"
                     }),
                 )
                 .route(
                     "/initial",
-                    axum::routing::get(|| async { axum::response::Html("<body>initial</body>") }),
+                    axum::routing::get(|| async { "<body>initial</body>" }),
                 )
                 .route(
                     "/history-a",
-                    axum::routing::get(|| async { axum::response::Html("<body>history-a</body>") }),
+                    axum::routing::get(|| async { "<body>history-a</body>" }),
                 )
                 .route(
                     "/history-b",
-                    axum::routing::get(|| async { axum::response::Html("<body>history-b</body>") }),
+                    axum::routing::get(|| async { "<body>history-b</body>" }),
                 ),
         )
         .await

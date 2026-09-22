@@ -41,7 +41,6 @@ impl StreamingDocumentInputSender {
 /// parked in the owner-local Page slot.
 pub(super) struct StreamingDocumentInputSource {
     rx: mpsc::Receiver<StreamingDocumentInputEvent>,
-    stop_loading_cancellation: Option<moli_fetch::FetchCancelHandle>,
 }
 
 impl StreamingDocumentInputSource {
@@ -50,7 +49,6 @@ impl StreamingDocumentInputSource {
         parser_continuation: RendererPageMainParserContinuationProducer,
         task_runner: crate::network::RendererResourceTaskRunner,
     ) -> Self {
-        let stop_loading_cancellation = raw_body.stop_loading_cancellation();
         let (tx, rx) = mpsc::channel(STREAMING_DOCUMENT_INPUT_BUFFERED_EVENTS);
         let sender = StreamingDocumentInputSender {
             tx,
@@ -84,20 +82,7 @@ impl StreamingDocumentInputSource {
                 .send(StreamingDocumentInputEvent::Finished(terminal))
                 .await;
         });
-        Self {
-            rx,
-            stop_loading_cancellation,
-        }
-    }
-
-    pub(super) fn stop_loading(self) {
-        if let Some(cancellation) = self.stop_loading_cancellation.as_ref()
-            && !cancellation.response_completion_is_committed()
-        {
-            cancellation.cancel();
-        }
-        // Dropping the receiver retires queued bytes and wakes a bridge parked
-        // on input. This is separate from the transport's terminal result.
+        Self { rx }
     }
 
     pub(super) fn has_ready_input(&mut self) -> bool {
@@ -288,45 +273,6 @@ mod tests {
             source.try_next().expect("terminal read should succeed"),
             Some(StreamingDocumentInputEvent::Finished(Ok(())))
         ));
-    }
-
-    #[tokio::test]
-    async fn external_body_transfer_is_cancelled_only_by_explicit_stop() {
-        for explicit_stop in [false, true] {
-            let cancellation = FetchCancelHandle::new();
-            let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
-            let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
-            let raw_body = raw_body.with_stop_loading_cancellation(cancellation.clone());
-            let (_networking, continuation, mut wake_rx) = continuation_fixture(95);
-            let mut source = StreamingDocumentInputSource::bridge(
-                RawDocumentBodySource::External(raw_body),
-                continuation,
-                crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap(),
-            );
-            body_tx
-                .send(b"queued unparsed tail".to_vec())
-                .await
-                .unwrap();
-            tokio::time::timeout(std::time::Duration::from_secs(1), wake_rx.recv())
-                .await
-                .expect("queued body must wake its parser owner")
-                .expect("parser wake channel must stay open");
-            assert!(source.has_ready_input());
-            if explicit_stop {
-                source.stop_loading();
-            } else {
-                drop(source);
-            }
-            tokio::time::timeout(std::time::Duration::from_secs(1), body_tx.closed())
-                .await
-                .expect("retired parser must release external input and queued tail");
-            assert_eq!(
-                cancellation.is_cancelled(),
-                explicit_stop,
-                "ordinary external parser retirement must leave browser response capture running"
-            );
-            assert!(completion_tx.send(Ok(())).is_err());
-        }
     }
 
     #[tokio::test]

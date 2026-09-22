@@ -810,32 +810,6 @@ impl DomHost {
             })
     }
 
-    /// Whether any current element can match this legacy named-property key.
-    ///
-    /// This is deliberately independent of connectivity and document/tree scope:
-    /// callers may use a miss to avoid a traversal, but must still validate the
-    /// owner and scope on a hit. Reuse the incrementally maintained named indexes
-    /// rather than caching misses (custom-element upgrades can change eligibility
-    /// without changing an element's id or name).
-    pub fn has_element_with_named_item_key(&self, key: &str) -> bool {
-        if key.is_empty() {
-            return false;
-        }
-        self.ensure_id_index();
-        self.ensure_name_index();
-        let matches = |index: &NamedElementIndex| {
-            index.handles_by_value.get(key).is_some_and(|handles| {
-                handles.iter().any(|handle| {
-                    self.node(*handle)
-                        .and_then(Node::as_element)
-                        .is_some_and(|element| element.matches_named_item_key(key))
-                })
-            })
-        };
-        self.id_index.borrow().as_ref().is_some_and(matches)
-            || self.name_index.borrow().as_ref().is_some_and(matches)
-    }
-
     pub fn element_handles_by_id_or_name_matching(
         &self,
         key: &str,

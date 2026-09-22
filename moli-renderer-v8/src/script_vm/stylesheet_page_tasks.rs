@@ -1,5 +1,4 @@
 use super::ScriptVm;
-use crate::frame_owner_model::MainDocumentStyleLoadEventSettlement;
 use crate::{
     document_runtime::StylesheetImportCompletionAuthority,
     page_task_queue::{
@@ -116,7 +115,7 @@ impl ScriptVm {
             .borrow_mut()
             .settle_main_style_load_event(binding);
         assert!(
-            settled != MainDocumentStyleLoadEventSettlement::NotOwned,
+            settled,
             "a current connected style event must release its exact load-delay binding"
         );
         tracing::debug!(
@@ -125,9 +124,7 @@ impl ScriptVm {
             load_delay_token = ?binding.load_delay_token(),
             "settled main connected style load inside selected event body"
         );
-        if settled == MainDocumentStyleLoadEventSettlement::CancelledAfterStop {
-            PageConnectedStyleLoadDelayEffect::ExactBindingCancelledByStop
-        } else if had_load_delay_token {
+        if had_load_delay_token {
             PageConnectedStyleLoadDelayEffect::ReleasedExactBinding
         } else {
             PageConnectedStyleLoadDelayEffect::NoBindingRequired

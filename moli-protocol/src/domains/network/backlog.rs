@@ -24,7 +24,6 @@ use super::output_queue::{
     TargetSubresourceRequestNetworkDeliveryOutput, TargetSubresourceResponseNetworkDeliveryOutput,
     TargetWebSocketDeliveryRecord, TargetWebSocketLifecycleDeliveryKind,
 };
-use super::redirect_request::RedirectRequest;
 
 pub(crate) struct NetworkBacklogProjectionContext<'a> {
     owner: CommandOwnerScope,
@@ -262,7 +261,6 @@ fn emit_complete_subresource_network_delivery_record(
                     .then(|| output.request_cookie_report())
                     .flatten(),
                 &[],
-                true,
             );
         }
     }
@@ -288,13 +286,7 @@ fn emit_complete_subresource_network_delivery_record(
             response_headers,
             response_body_len,
         } => {
-            let mut redirected_request = RedirectRequest::new(
-                output.method(),
-                output.request_body(),
-                output.request_headers(),
-            );
             for redirect in redirect_chain {
-                redirected_request.follow(redirect.status);
                 for event_session_id in event_session_ids {
                     emit_request_will_be_sent(
                         out,
@@ -305,9 +297,9 @@ fn emit_complete_subresource_network_delivery_record(
                         timestamp,
                         record_document_url,
                         &redirect.to_url,
-                        redirected_request.method,
-                        redirected_request.body,
-                        &redirected_request.headers,
+                        output.method(),
+                        output.request_body(),
+                        output.request_headers(),
                         resource_type,
                         output.request_initiator_type(),
                         Some((
@@ -320,7 +312,6 @@ fn emit_complete_subresource_network_delivery_record(
                         !redirect.cookie_set_reports.is_empty(),
                         redirect.request_cookie_report.as_ref(),
                         &[],
-                        true,
                     );
                     emit_redirect_response_received_extra_info(
                         out,
@@ -462,10 +453,6 @@ fn emit_staged_subresource_request_started(
                 false,
                 output.request_cookie_report(),
                 &[],
-                // Cookie selection precedes transport header generation. Keep
-                // it in the main event, but defer ExtraInfo until completion
-                // supplies the actual headers (or a terminal fallback).
-                false,
             );
         }
     }
@@ -515,13 +502,7 @@ fn emit_staged_subresource_response_started(
     let loader_id = request.loader_id();
     let timestamp = base_timestamp + ((output.index() + 1) as f64 * 0.000_001);
     let resource_type = request.resource_type().into();
-    let mut redirected_request = RedirectRequest::new(
-        request.method(),
-        request.request_body(),
-        request.request_headers(),
-    );
     for redirect in output.redirect_chain() {
-        redirected_request.follow(redirect.status);
         for event_session_id in event_session_ids {
             emit_request_will_be_sent(
                 out,
@@ -532,9 +513,9 @@ fn emit_staged_subresource_response_started(
                 timestamp,
                 request.document_url(),
                 &redirect.to_url,
-                redirected_request.method,
-                redirected_request.body,
-                &redirected_request.headers,
+                request.method(),
+                request.request_body(),
+                request.request_headers(),
                 resource_type,
                 request.request_initiator_type(),
                 Some((
@@ -547,7 +528,6 @@ fn emit_staged_subresource_response_started(
                 !redirect.cookie_set_reports.is_empty(),
                 redirect.request_cookie_report.as_ref(),
                 &[],
-                true,
             );
             emit_redirect_response_received_extra_info(
                 out,

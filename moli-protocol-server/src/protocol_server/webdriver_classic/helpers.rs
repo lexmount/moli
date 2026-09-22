@@ -59,8 +59,7 @@ fn classic_error_status(code: ClassicErrorCode) -> StatusCode {
         | ClassicErrorCode::InvalidCookieDomain
         | ClassicErrorCode::InvalidElementState
         | ClassicErrorCode::InvalidSelector
-        | ClassicErrorCode::ElementNotInteractable
-        | ClassicErrorCode::ElementClickIntercepted => StatusCode::BAD_REQUEST,
+        | ClassicErrorCode::ElementNotInteractable => StatusCode::BAD_REQUEST,
         ClassicErrorCode::InvalidSessionId
         | ClassicErrorCode::NoSuchAlert
         | ClassicErrorCode::NoSuchCookie

@@ -23,9 +23,9 @@ struct LatestFrozenLayout {
 ///
 /// This owns exactly one recursively frozen snapshot. It has no separately
 /// keyed child tree, working layout world, source index, hit-test index, Taffy
-/// cache, style borrow, pass diagnostics, paint snapshot, timer, or incremental
-/// invalidation state. Ambient environment and the owning layout state's dirty
-/// flag fence geometry reuse; detached DOM mutations need not rebuild it.
+/// cache, style borrow, pass diagnostics, paint snapshot, timer, or invalidation
+/// policy. The captured browser environment lets geometry demands check reuse
+/// without discarding the sample used by snapshot-only CSSOM readers.
 #[derive(Default)]
 pub(super) struct LatestLayoutTreeCache {
     latest: Option<LatestFrozenLayout>,

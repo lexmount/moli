@@ -28,12 +28,6 @@ pub(in crate::runtime) struct PendingStreamingPhaseOneContinuation {
 }
 
 impl PendingStreamingPhaseOneContinuation {
-    pub(in crate::runtime) fn into_stopped_page_vm(self) -> PageVm {
-        let Self { runtime, input, .. } = self;
-        input.stop_loading();
-        runtime.into_stopped_page_vm()
-    }
-
     pub(super) fn publish_pending_page_creation_phase(&self) {
         self.runtime.publish_pending_page_creation_phase();
     }

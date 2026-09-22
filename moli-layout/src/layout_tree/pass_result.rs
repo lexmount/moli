@@ -25,7 +25,6 @@ pub enum LayoutFlushReason {
     Screenshot,
     Screencast,
     SynchronousGeometry,
-    DomGeometry,
     CdpGeometry,
     ObserverDelivery,
     HitTest,

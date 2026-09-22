@@ -760,7 +760,7 @@ impl DocumentLifecycleRecord {
         let previous_readiness = self.readiness?;
         let ready_state_changed = previous_readiness != DocumentReadinessState::Complete;
 
-        self.blockers.cancel_for_stop();
+        self.blockers.clear_for_retirement();
         self.incomplete_child_frames.clear();
         self.parsing_delay_token = None;
         self.interactive_transition_token = None;

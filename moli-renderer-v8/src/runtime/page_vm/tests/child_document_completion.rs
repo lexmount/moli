@@ -732,8 +732,6 @@ pub(super) fn stale_loaded_completion(
                     request_url: request_url.to_owned(),
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new(),
-                    network_observation_journal: Default::default(),
-                    redirect_chain: Vec::new(),
                     final_url: request_url.to_owned(),
                     status: 200,
                     response_headers: Vec::new(),

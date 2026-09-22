@@ -3037,9 +3037,9 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat
             .get(axum::http::header::ACCEPT_LANGUAGE)
             .and_then(|value| value.to_str().ok())
             .unwrap_or("");
-        axum::response::Html(format!(
+        format!(
             "<!doctype html><html><body data-accept-language=\"{accept_language}\"><script>document.body.textContent = [navigator.language, document.body.dataset.acceptLanguage].join('|');</script></body></html>"
-        ))
+        )
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -3204,9 +3204,7 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat
 #[tokio::test(flavor = "multi_thread")]
 async fn same_context_background_session_can_clear_its_own_timezone_before_activation() {
     async fn handler() -> impl IntoResponse {
-        axum::response::Html(
-            "<!doctype html><html><body><script>document.body.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;</script></body></html>",
-        )
+        "<!doctype html><html><body><script>document.body.textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;</script></body></html>"
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

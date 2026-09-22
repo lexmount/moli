@@ -765,7 +765,6 @@ fn register_dedicated_worker_target(
             false,
             None,
             &[],
-            true,
         );
         if !events.is_empty() {
             outputs.push(WorkerTargetLifecycleOutput::DedicatedWorkerEvents {
@@ -3370,7 +3369,6 @@ fn emit_service_worker_fetch_diagnostic_events(
             false,
             None,
             &[],
-            true,
         );
         tag_service_worker_fetch_diagnostic_event(out.get_mut(request_event_index), diagnostic);
 

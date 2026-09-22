@@ -1,45 +1,6 @@
 use super::{BoundedByteBuffer, ByteLimits, InsertOutcome};
 
 #[test]
-fn shrinking_entry_limit_keeps_interleaved_survivors_in_fifo_order() {
-    let mut buffer = BoundedByteBuffer::new(ByteLimits::new(100, 20));
-    for (key, bytes) in [(0, 10), (1, 1), (2, 10), (3, 1), (4, 10)] {
-        buffer.insert(key, key, bytes);
-    }
-    assert_eq!(
-        buffer.set_limits(ByteLimits::new(100, 1)),
-        vec![(0, 0), (2, 2), (4, 4)]
-    );
-    assert_eq!(buffer.used_bytes(), 2);
-    assert_eq!(buffer.set_limits(ByteLimits::new(1, 1)), vec![(1, 1)]);
-    assert_eq!(buffer.get(&3), Some(&3));
-    assert_eq!(buffer.len(), 1);
-}
-
-#[test]
-fn changing_limits_evicts_oversized_then_oldest_without_reordering_survivors() {
-    let mut buffer = BoundedByteBuffer::new(ByteLimits::new(20, 10));
-    buffer.insert("a", 1, 3);
-    buffer.insert("b", 2, 6);
-    buffer.insert("c", 3, 3);
-    assert_eq!(
-        buffer.set_limits(ByteLimits::new(4, 4)),
-        vec![("b", 2), ("a", 1)]
-    );
-    assert_eq!(buffer.used_bytes(), 3);
-    assert_eq!(buffer.get(&"c"), Some(&3));
-    assert!(buffer.set_limits(ByteLimits::new(10, 10)).is_empty());
-    assert_eq!(
-        buffer.insert("d", 4, 8),
-        InsertOutcome::Stored {
-            evicted: vec![("c", 3)]
-        }
-    );
-    assert_eq!(buffer.set_limits(ByteLimits::new(0, 0)), vec![("d", 4)]);
-    assert!(buffer.is_empty());
-}
-
-#[test]
 fn accepts_entries_at_exact_limits() {
     let mut buffer = BoundedByteBuffer::new(ByteLimits::new(4, 4));
 
@@ -153,38 +114,4 @@ fn remove_and_clear_return_all_byte_charges() {
     buffer.clear();
     assert!(buffer.is_empty());
     assert_eq!(buffer.used_bytes(), 0);
-}
-
-#[test]
-fn retain_visits_once_preserves_fifo_and_releases_only_removed_charges() {
-    let mut buffer = BoundedByteBuffer::new(ByteLimits::new(10, 10));
-    for key in 0..4 {
-        let _ = buffer.insert(key, key * 10, 2);
-    }
-    let mut visited = Vec::new();
-    let removed = buffer.retain(|key, value| {
-        visited.push(*key);
-        *value += 1;
-        key % 2 == 0
-    });
-    assert_eq!(visited, vec![0, 1, 2, 3]);
-    assert_eq!(removed, vec![(1, 11), (3, 31)]);
-    assert_eq!(buffer.used_bytes(), 4);
-    assert_eq!(buffer.get(&2), Some(&21));
-    assert_eq!(
-        buffer.insert(4, 40, 8),
-        InsertOutcome::Stored {
-            evicted: vec![(0, 1)]
-        }
-    );
-    assert!(buffer.retain(|_, _| true).is_empty());
-    assert_eq!(buffer.used_bytes(), 10);
-    assert_eq!(buffer.retain(|_, _| false), vec![(2, 21), (4, 40)]);
-    assert_eq!(buffer.used_bytes(), 0);
-    assert!(buffer.is_empty());
-    assert!(
-        buffer
-            .retain(|_, _| panic!("empty buffer must not visit"))
-            .is_empty()
-    );
 }

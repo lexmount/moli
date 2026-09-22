@@ -395,13 +395,11 @@ pub(super) async fn complete_stop_loading_command_dispatch(
     owner: &CommandOwnerScope,
 ) -> PageCommandTaskStep {
     let mut out = Vec::new();
-    if let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) {
-        slot.cancel_inflight_document_navigation();
-        if let Some(page) = slot.loaded_page_mut()
-            && let Err(error) = page.stop_document_lifecycle_async().await
-        {
-            tracing::debug!(%error, "failed to stop renderer document lifecycle");
-        }
+    if let Ok(slot) = conn.runtime_session_owner_slot_mut_for_owner(owner)
+        && let Some(page) = slot.loaded_page_mut()
+        && let Err(error) = page.stop_document_lifecycle_async().await
+    {
+        tracing::debug!(%error, "failed to stop renderer document lifecycle");
     }
     let (
         pending_navigations,

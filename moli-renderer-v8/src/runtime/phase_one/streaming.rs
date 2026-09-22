@@ -94,8 +94,10 @@ impl ConcurrentParseTimeRuntime {
         env.apply_navigation_response_headers(&response_final_url, &response_headers);
 
         let mut body_source = RawDocumentBodySource::fetch_response(response);
-        let (mut state, mut decoder) =
-            response_document_parser(response_final_url, &response_headers, &env);
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled(
+            response_final_url,
+            main_document_parser_scripting_enabled(&env),
+        );
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
@@ -122,6 +124,11 @@ impl ConcurrentParseTimeRuntime {
                 )
             });
         state.service_worker_preload_context = service_worker_preload_context.clone();
+        let mut decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
+            &response_headers,
+            state.final_url.as_str(),
+            detect_legacy_html_encoding,
+        );
         // Raw navigation bodies are decoded during prebootstrap scan. The decoder
         // is carried forward so split multibyte sequences are not decoded twice or
         // lost between the scan and parser handoff.
@@ -325,7 +332,10 @@ impl ConcurrentParseTimeRuntime {
                 },
             )));
         }
-        let (mut state, mut decoder) = response_document_parser(final_url, &response_headers, &env);
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled(
+            final_url,
+            main_document_parser_scripting_enabled(&env),
+        );
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
@@ -352,6 +362,11 @@ impl ConcurrentParseTimeRuntime {
                 )
             });
         state.service_worker_preload_context = service_worker_preload_context.clone();
+        let mut decoder = HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
+            &response_headers,
+            state.final_url.as_str(),
+            detect_legacy_html_encoding,
+        );
         // External raw bodies replay captured chunks. Pre-scan only what is already
         // buffered before bootstrap so the producer's backpressure boundary still
         // controls how far ahead the parser can get.
@@ -436,10 +451,6 @@ impl ConcurrentParseTimeRuntime {
         chunk: String,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
-        if self.state.is_text_document {
-            self.state.parser_session.queue_arrived_chunk(chunk);
-            return;
-        }
         self.state
             .buffered_document_preloads
             .append_to_main_document_scan_with_service_worker_context(
@@ -480,7 +491,6 @@ pub struct ExternalRawDocumentBodyStream {
     body_chunks: mpsc::Receiver<Vec<u8>>,
     completion: Option<oneshot::Receiver<Result<()>>>,
     page_creation_progress: Option<crate::runtime::RendererPageCreationProgress>,
-    stop_loading_cancellation: Option<moli_fetch::FetchCancelHandle>,
 }
 
 impl ExternalRawDocumentBodyStream {
@@ -507,7 +517,6 @@ impl ExternalRawDocumentBodyStream {
                 body_chunks,
                 completion: Some(completion),
                 page_creation_progress: Some(page_creation_progress),
-                stop_loading_cancellation: None,
             },
         )
     }
@@ -520,19 +529,7 @@ impl ExternalRawDocumentBodyStream {
             body_chunks,
             completion: Some(completion),
             page_creation_progress: None,
-            stop_loading_cancellation: None,
         }
-    }
-
-    /// Shares this exact transfer's cancellation authority with an explicit
-    /// document stop. Ordinary parser retirement does not cancel the external
-    /// producer, which may still own browser-side response capture.
-    pub fn with_stop_loading_cancellation(
-        mut self,
-        cancellation: moli_fetch::FetchCancelHandle,
-    ) -> Self {
-        self.stop_loading_cancellation = Some(cancellation);
-        self
     }
 
     pub fn from_bytes(body: Vec<u8>) -> Self {
@@ -559,13 +556,6 @@ pub(super) enum RawDocumentBodySource {
 }
 
 impl RawDocumentBodySource {
-    pub(super) fn stop_loading_cancellation(&self) -> Option<moli_fetch::FetchCancelHandle> {
-        match self {
-            Self::FetchResponse(response) => Some(response.cancellation_handle()),
-            Self::External(source) => source.stop_loading_cancellation.clone(),
-        }
-    }
-
     fn fetch_response(response: Box<StreamingRawResponse>) -> Self {
         Self::FetchResponse(response)
     }
@@ -617,9 +607,6 @@ fn scan_prebootstrap_html_chunk_into_state(
     chunk: &str,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
-    if state.is_text_document {
-        return;
-    }
     state
         .buffered_document_preloads
         .append_to_main_document_prebootstrap_scan_with_service_worker_context(
@@ -628,41 +615,6 @@ fn scan_prebootstrap_html_chunk_into_state(
             loader,
             service_worker_context,
         );
-}
-
-fn response_document_parser(
-    final_url: Url,
-    headers: &[(String, String)],
-    env: &PageVmEnvConfig,
-) -> (ParseTimeDriverState, HtmlDocumentStreamingDecoder) {
-    let content_type = moli_web_mime::response_document_content_type(headers);
-    let text_type = content_type.filter(|mime| moli_web_mime::is_text_document_mime(mime));
-    let mut state = if let Some(mime) = &text_type {
-        ParseTimeDriverState::new_text(final_url, mime)
-    } else {
-        ParseTimeDriverState::new_with_scripting_enabled(
-            final_url,
-            main_document_parser_scripting_enabled(env),
-        )
-    };
-    let decoder = if let Some(mime) = text_type {
-        HtmlDocumentStreamingDecoder::new_text_document(
-            headers,
-            state.final_url.as_str(),
-            detect_legacy_html_encoding,
-            moli_web_mime::is_json_module_mime(&mime) || mime == "text/json",
-        )
-    } else {
-        HtmlDocumentStreamingDecoder::new_with_legacy_encoding_detector(
-            headers,
-            state.final_url.as_str(),
-            detect_legacy_html_encoding,
-        )
-    };
-    // Headers/defaults are observable even when no body chunk is ready yet.
-    // A later BOM or decoder decision can still replace this tentative value.
-    sync_state_document_character_set_from_decoder(&mut state, &decoder);
-    (state, decoder)
 }
 
 pub(super) fn enqueue_streaming_raw_chunk(
@@ -955,105 +907,6 @@ mod tests {
     use super::*;
     use crate::parser::ScriptSource;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-    #[tokio::test]
-    async fn text_document_charset_is_visible_to_document_start_before_body_arrives() {
-        let _js_runtime_owner = crate::JsRuntime::initialize();
-        tokio::task::LocalSet::new().run_until(async {
-            for (mime, chunk, expected) in [
-                ("text/plain; charset=gbk", None, "GBK"),
-                ("application/json", None, "UTF-8"),
-                ("text/plain; charset=gbk", Some(b"\xef\xbb\xbfready".as_slice()), "UTF-8"),
-            ] {
-                let loader_owner = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
-                let loader = loader_owner.handle();
-                let mut env = default_test_page_vm_env_config();
-                env.document_start_scripts.push(crate::DocumentStartScript {
-                    registry_key: None,
-                    devtools_session: None,
-                    source: "document.title = document.characterSet".to_owned(),
-                    world_name: None,
-                    has_bidi_channel_argument: false,
-                    bidi_channel_handoffs: Vec::new(),
-                });
-                let (mut state, mut decoder) = response_document_parser(
-                    Url::parse("https://example.test/data").unwrap(),
-                    &[("Content-Type".to_owned(), mime.to_owned())], &env,
-                );
-                if let Some(chunk) = chunk {
-                    let chunks = decoder.push(chunk);
-                    sync_state_document_character_set_from_decoder(&mut state, &decoder);
-                    for chunk in chunks {
-                        state.parser_session.queue_arrived_chunk(chunk);
-                    }
-                }
-                assert_eq!(state.document_character_set, expected);
-                let (_, page_vm, navigated) = ConcurrentParseTimeRuntime::bootstrap_page_vm_from_state_on_fresh_local_task(
-                    PageId::new_for_testing(1), JsLocalExecutor::new(), loader, env,
-                    PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(), state,
-                    Instant::now(), "charset test bootstrap closed",
-                ).await.unwrap();
-                assert!(!navigated);
-                assert_eq!(page_vm.vm().snapshot_live_document().document_title(), expected, "{mime}");
-            }
-        }).await;
-    }
-
-    #[test]
-    fn response_document_dispatch_distinguishes_text_from_html_and_xml() {
-        for (mime, text) in [
-            ("application/json", true),
-            ("application/problem+json", true),
-            ("text/plain; charset=gbk", true),
-            ("text/javascript", true),
-            ("text/html", false),
-            ("application/xhtml+xml", false),
-            ("application/xml", false),
-            ("text/xml", false),
-        ] {
-            let (state, _) = response_document_parser(
-                Url::parse("https://example.test/data").unwrap(),
-                &[("Content-Type".to_owned(), mime.to_owned())],
-                &default_test_page_vm_env_config(),
-            );
-            assert_eq!(state.is_text_document, text, "{mime}");
-        }
-    }
-
-    #[tokio::test]
-    async fn text_document_does_not_preload_literal_script_tags() {
-        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
-            .expect("default loader");
-        let runtime_hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-        for (mime, expected_preload) in [
-            ("text/plain", false),
-            ("application/json", false),
-            ("text/html", true),
-        ] {
-            let (mut state, _) = response_document_parser(
-                Url::parse("https://example.test/data").unwrap(),
-                &[("Content-Type".to_owned(), mime.to_owned())],
-                &default_test_page_vm_env_config(),
-            );
-            state.buffered_document_preloads.bind_resource_runtime(
-                runtime_hooks.owner_wake(),
-                runtime_hooks.resource_task_runner(),
-            );
-            scan_prebootstrap_html_chunk_into_state(
-                &mut state,
-                &loader,
-                "<script defer src='/literal.js'></script>",
-                None,
-            );
-            assert_eq!(
-                state.buffered_document_preloads.entries.contains_key(
-                    &classic_preload_key_for_streaming_test("https://example.test/literal.js")
-                ),
-                expected_preload,
-                "{mime}",
-            );
-        }
-    }
 
     #[tokio::test]
     async fn external_raw_document_body_source_collects_chunks_and_completion() {

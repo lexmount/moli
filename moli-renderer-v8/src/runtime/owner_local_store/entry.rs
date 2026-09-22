@@ -714,25 +714,6 @@ impl LivePageEntry {
             .ok_or_else(|| anyhow!("renderer page has no pending phase-one navigation to resume"))
     }
 
-    pub(super) fn stop_pending_main_document_loading(&mut self) {
-        let Some(pending) = self.pending_phase_one_navigation.take() else {
-            return;
-        };
-        let (residence, mut metadata) = pending.into_parts();
-        let browser_context_runtime = residence
-            .page_vm()
-            .runtime_hooks
-            .browser_context_runtime
-            .clone();
-        let page_vm = residence.into_stopped_page_vm();
-        metadata.reject(
-            None,
-            &browser_context_runtime,
-            "Navigation stopped".to_owned(),
-        );
-        self.install_resumed_phase_one_page_vm(page_vm);
-    }
-
     pub(super) fn reject_pending_phase_one_navigation_in_place(&mut self, message: &str) {
         let Some(mut pending) = self.pending_phase_one_navigation.take() else {
             return;

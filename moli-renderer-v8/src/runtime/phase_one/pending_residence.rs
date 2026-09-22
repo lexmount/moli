@@ -69,14 +69,6 @@ pub(in crate::runtime) enum PendingPhaseOneResidence {
 }
 
 impl PendingPhaseOneResidence {
-    pub(in crate::runtime) fn into_stopped_page_vm(self) -> PageVm {
-        match self {
-            Self::ParserBlockingSourceLoad { runtime, .. }
-            | Self::ClosedInputPageWork { runtime, .. } => runtime.into_stopped_page_vm(),
-            Self::OpenStreaming(continuation) => continuation.into_stopped_page_vm(),
-        }
-    }
-
     pub(in crate::runtime) fn parser_blocking_source_load(
         runtime: Box<ConcurrentParseTimeRuntime>,
         started: Instant,

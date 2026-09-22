@@ -78,14 +78,9 @@ impl PreparedWorldLayout {
         self.numeric_viewport_layout = world.viewport_layout.unrounded_layout;
     }
 
-    /// Clears the cache entries whose available space can change after a
-    /// scrollbar appears.
-    ///
-    /// A viewport gutter changes the initial containing block, so every box
-    /// is affected. A local gutter changes the scroll container's content box,
-    /// so its complete numeric subtree and ancestor path are affected. Keeping
-    /// descendant caches in either case can reuse a size-only result during
-    /// the corrective pass and leave nested boxes without final geometry.
+    /// Clears only the cache entries on changed scrollbar boxes and their
+    /// numeric ancestors. The reusable mark table makes this proportional to
+    /// the affected paths rather than to every box in the document.
     ///
     /// Taffy's next compute still starts at the viewport root, as its public
     /// API requires, but siblings outside these paths retain their cached
@@ -102,21 +97,15 @@ impl PreparedWorldLayout {
         N: Copy + Debug + Eq + Hash,
     {
         assert!(self.feedback_invalidation_worklist.is_empty());
-        if viewport_changed {
-            for layout_box in &mut world.boxes {
-                layout_box.clear_layout_caches();
-            }
-            world.viewport_layout.cache.clear();
-            return world.boxes.len();
-        }
-        if changed_boxes.is_empty() {
-            return 0;
-        }
         self.feedback_invalidation_marks
             .resize(world.boxes.len(), false);
-        let mut invalidated = Vec::new();
+        if viewport_changed {
+            self.feedback_invalidation_worklist.push(world.root);
+        }
         self.feedback_invalidation_worklist
             .extend(changed_boxes.iter().copied());
+
+        let mut invalidated = Vec::new();
         while let Some(id) = self.feedback_invalidation_worklist.pop() {
             if self.feedback_invalidation_marks[id.index()] {
                 continue;
@@ -124,22 +113,13 @@ impl PreparedWorldLayout {
             self.feedback_invalidation_marks[id.index()] = true;
             invalidated.push(id);
             world.boxes[id.index()].clear_layout_caches();
-            self.feedback_invalidation_worklist
-                .extend(world.boxes[id.index()].layout_children.iter().copied());
-        }
-
-        for changed in changed_boxes.iter().copied() {
-            let mut ancestor = world.boxes[changed.index()].layout_parent;
-            while let Some(id) = ancestor {
-                if !self.feedback_invalidation_marks[id.index()] {
-                    self.feedback_invalidation_marks[id.index()] = true;
-                    invalidated.push(id);
-                    world.boxes[id.index()].clear_layout_caches();
-                }
-                ancestor = world.boxes[id.index()].layout_parent;
+            if let Some(parent) = world.boxes[id.index()].layout_parent {
+                self.feedback_invalidation_worklist.push(parent);
             }
         }
-        world.viewport_layout.cache.clear();
+        if viewport_changed || !changed_boxes.is_empty() {
+            world.viewport_layout.cache.clear();
+        }
         for id in invalidated.iter().copied() {
             self.feedback_invalidation_marks[id.index()] = false;
         }
@@ -1641,14 +1621,6 @@ where
     }
 
     fn compute_child_layout(&mut self, node_id: NodeId, inputs: LayoutInput) -> LayoutOutput {
-        if !self.is_viewport_taffy_node(node_id)
-            && inputs.run_mode == RunMode::PerformLayout
-            && let Some(slot) = self
-                .inline_split_parent_inputs
-                .get_mut(&LayoutBoxId::from_taffy(node_id))
-        {
-            *slot = Some(inputs);
-        }
         // Float parents own horizontal margin subtraction in both the Taffy
         // block path and Moli's Parley IFC path. The generic intrinsic
         // resolver follows Taffy's ordinary child-input contract and subtracts
@@ -1808,13 +1780,6 @@ where
         inputs: LayoutInput,
         block_context: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        if inputs.run_mode == RunMode::PerformLayout
-            && let Some(slot) = self
-                .inline_split_parent_inputs
-                .get_mut(&LayoutBoxId::from_taffy(node_id))
-        {
-            *slot = Some(inputs);
-        }
         if self.should_hide(node_id, inputs) {
             return compute_hidden_layout(self, node_id);
         }
@@ -2868,11 +2833,7 @@ where
                         parent_width: child_inputs.parent_size.width,
                     });
                     let line_y = state.line_y() as f32;
-                    // Keep the immediate edge slot, even when it has no room
-                    // for text. An empty inline boundary remains beside an
-                    // oversized float; the next nonempty line break searches
-                    // for a fitting slot below it.
-                    slot = block_context.find_content_slot(line_y, Clear::None, None);
+                    slot = inline_float_slot(block_context, line_y, None, 0.0);
                     if slot.y > line_y {
                         clearance = clearance.max(slot.y);
                     }

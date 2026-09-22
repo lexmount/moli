@@ -25,7 +25,6 @@ impl ConcurrentParseTimeRuntime {
             let (page_vm, triggered_navigation) = {
                 let buffered_document_preloads = &mut state.buffered_document_preloads;
                 let service_worker_preload_context = state.service_worker_preload_context.as_ref();
-                let document_character_set = &state.document_character_set;
                 PageVm::new_from_parser_stream_and_run_document_start(
                     page_id,
                     local_executor,
@@ -35,7 +34,6 @@ impl ConcurrentParseTimeRuntime {
                     &mut state.parser_session,
                     started,
                     |page_vm| {
-                        page_vm.set_document_character_set(document_character_set.clone());
                         admit_pending_preloads(
                             page_vm,
                             buffered_document_preloads,

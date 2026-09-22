@@ -14,9 +14,9 @@ pub use classification::{
     is_font_mime, is_font_mime_essence, is_form_urlencoded_mime, is_html_document_mime,
     is_image_mime, is_image_mime_essence, is_javascript_mime, is_javascript_mime_essence,
     is_json_module_mime, is_multipart_form_data_mime, is_png_image_mime, is_png_image_mime_essence,
-    is_supported_document_mime_type, is_svg_image_mime, is_svg_image_mime_essence,
-    is_text_document_mime, is_text_mime, is_text_mime_essence, is_video_mime,
-    is_video_mime_essence, is_webassembly_mime, multipart_form_data_boundary,
+    is_supported_document_mime_type, is_svg_image_mime, is_svg_image_mime_essence, is_text_mime,
+    is_text_mime_essence, is_video_mime, is_video_mime_essence, is_webassembly_mime,
+    multipart_form_data_boundary,
 };
 pub use data_url::{
     data_url_body_and_computed_mime_type, data_url_body_and_mime_type, data_url_mime_type,

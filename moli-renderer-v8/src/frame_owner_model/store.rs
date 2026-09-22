@@ -10,8 +10,7 @@ use super::lifecycle_tasks::{
     MainDocumentImageLoadDelayBinding, MainDocumentInteractiveLifecycleAction,
     MainDocumentMediaLoadDelayBinding, MainDocumentScriptLoadDelayKind,
     MainDocumentScriptLoadDelayLease, MainDocumentScriptLoadDelayRelease,
-    MainDocumentStyleLoadEventBinding, MainDocumentStyleLoadEventSettlement,
-    StylesheetSubresourceLoadDelayBinding,
+    MainDocumentStyleLoadEventBinding, StylesheetSubresourceLoadDelayBinding,
 };
 use super::load_event_gate::DocumentLoadGateRelease;
 use super::module_clients::{
@@ -2676,9 +2675,6 @@ impl FrameOwnerStore {
             DocumentLoadGateRelease::BecameUnblocked => {
                 MainDocumentScriptLoadDelayRelease::BecameUnblocked
             }
-            DocumentLoadGateRelease::CancelledAfterStop => {
-                MainDocumentScriptLoadDelayRelease::AlreadyUnblocked
-            }
         }
     }
 
@@ -2727,29 +2723,18 @@ impl FrameOwnerStore {
     pub(crate) fn settle_main_style_load_event(
         &mut self,
         binding: MainDocumentStyleLoadEventBinding,
-    ) -> MainDocumentStyleLoadEventSettlement {
+    ) -> bool {
         if !self.main_style_load_event_is_current(binding) {
-            return MainDocumentStyleLoadEventSettlement::NotOwned;
+            return false;
         }
         let Some(token) = binding.load_delay_token() else {
-            return MainDocumentStyleLoadEventSettlement::Released;
+            return true;
         };
-        let document = self
-            .documents
-            .get_mut(&binding.owner().document_id)
-            .expect("current style event owner must have a Document");
-        match document
-            .lifecycle_progress
-            .release_window_load_delay(token, DocumentLoadDelayReason::StyleLoadEvent)
-        {
-            DocumentLoadGateRelease::NotOwned => MainDocumentStyleLoadEventSettlement::NotOwned,
-            DocumentLoadGateRelease::StillBlocked | DocumentLoadGateRelease::BecameUnblocked => {
-                MainDocumentStyleLoadEventSettlement::Released
-            }
-            DocumentLoadGateRelease::CancelledAfterStop => {
-                MainDocumentStyleLoadEventSettlement::CancelledAfterStop
-            }
-        }
+        self.release_document_load_delay(
+            binding.owner(),
+            token,
+            DocumentLoadDelayReason::StyleLoadEvent,
+        )
     }
 
     pub(crate) fn accept_current_main_stylesheet_subresource_load_delay(

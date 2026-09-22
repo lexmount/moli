@@ -22,77 +22,6 @@ struct OpenStreamingPage {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn explicit_stop_retires_open_parser_and_preserves_committed_partial_document() {
-    let cancellation = moli_fetch::FetchCancelHandle::new();
-    let mut stream = OpenStreamingPage::create_with_cancellation(
-        "https://example.test",
-        "<!doctype html><body><main id='prefix'>committed prefix</main>",
-        Some(cancellation.clone()),
-    )
-    .await;
-    let (prefix, _) = tokio::time::timeout(Duration::from_secs(5), stream.page.run_async_command(
-        RendererPageCommand::EvaluateExpression {
-            expression: "new Promise(resolve => { const check = () => document.getElementById('prefix') ? resolve(document.getElementById('prefix').textContent) : setTimeout(check, 0); check(); })".to_owned(),
-            await_promise: true,
-        },
-    )).await.unwrap().unwrap();
-    assert_eq!(
-        renderer_json_value(prefix),
-        Some(serde_json::json!("committed prefix"))
-    );
-    let original_agent = stream.page.devtools_agent_token();
-    stream
-        .page
-        .run_async_command(RendererPageCommand::StopDocumentLifecycle)
-        .await
-        .unwrap();
-    assert!(cancellation.is_cancelled());
-    tokio::time::timeout(Duration::from_secs(2), stream.body_tx.closed())
-        .await
-        .expect("stop must retire the parser's input receiver");
-    assert!(
-        stream
-            .body_tx
-            .send(b"<main id='tail'>must not parse</main>".to_vec())
-            .await
-            .is_err()
-    );
-    let (state, _) = stream.page.run_async_command(RendererPageCommand::EvaluateExpression {
-        expression: "[document.getElementById('prefix').textContent, !!document.getElementById('tail'), document.readyState].join('|')".to_owned(),
-        await_promise: false,
-    }).await.unwrap();
-    assert_eq!(
-        renderer_json_value(state),
-        Some(serde_json::json!("committed prefix|false|complete"))
-    );
-    assert_eq!(stream.page.devtools_agent_token(), original_agent);
-    // Repeated stops and new ordinary Page tasks must not destroy the owner.
-    stream
-        .page
-        .run_async_command(RendererPageCommand::StopDocumentLifecycle)
-        .await
-        .unwrap();
-    let (timer, _) = tokio::time::timeout(
-        Duration::from_secs(2),
-        stream
-            .page
-            .run_async_command(RendererPageCommand::EvaluateExpression {
-                expression: "new Promise(resolve => setTimeout(() => resolve('still live'), 0))"
-                    .to_owned(),
-                await_promise: true,
-            }),
-    )
-    .await
-    .unwrap()
-    .unwrap();
-    assert_eq!(
-        renderer_json_value(timer),
-        Some(serde_json::json!("still live"))
-    );
-    stream.page.close_async().await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn owner_loop_executes_async_script_while_main_document_stream_remains_open() {
     assert_open_stream_work_executes_before_eof(ASYNC_SCRIPT_HTML, "async script").await;
 }
@@ -231,14 +160,6 @@ async fn assert_open_stream_work_executes_before_eof(html: &str, work_label: &st
 
 impl OpenStreamingPage {
     async fn create(base_url: &str, html: &str) -> Self {
-        Self::create_with_cancellation(base_url, html, None).await
-    }
-
-    async fn create_with_cancellation(
-        base_url: &str,
-        html: &str,
-        cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) -> Self {
         let runtime_owner = JsRuntime::initialize();
         let runtime = runtime_owner.handle();
         let (activity_wake_tx, activity_wake_rx) = renderer_external_activity_test_channel();
@@ -249,10 +170,6 @@ impl OpenStreamingPage {
         let page_url = url::Url::parse(&format!("{base_url}/page")).expect("page url");
         let (completion_tx, completion_rx) = oneshot::channel();
         let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
-        let raw_body = match cancellation {
-            Some(cancellation) => raw_body.with_stop_loading_cancellation(cancellation),
-            None => raw_body,
-        };
         body_tx
             .send(html.as_bytes().to_vec())
             .await

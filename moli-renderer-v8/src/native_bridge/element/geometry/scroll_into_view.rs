@@ -121,7 +121,7 @@ fn scroll_node_into_view_with_params(
     let Some(mut geometry) = observable_scroll_into_view_geometry(
         runtime,
         target,
-        moli_layout::LayoutFlushReason::DomGeometry,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
     )?
     else {
         return Ok(None);
@@ -282,10 +282,12 @@ fn perform_bubbling_scroll_into_view(
     let Some(frame) = runtime.child_browsing_context_host_for_document_handle(document) else {
         return Ok(changed);
     };
-    let Some(frame_content) =
-        observable_box_model(runtime, frame, moli_layout::LayoutFlushReason::DomGeometry)?
-            .map(|model| model.content)
-    else {
+    let Some(frame_content) = observable_box_model(
+        runtime,
+        frame,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
+    )?
+    .map(|model| model.content) else {
         return Ok(changed);
     };
     let Some(parent_target_rects) = convert_quads_to_parent_frame(
@@ -298,7 +300,7 @@ fn perform_bubbling_scroll_into_view(
     let Some(mut parent_geometry) = observable_scroll_into_view_geometry(
         runtime,
         frame,
-        moli_layout::LayoutFlushReason::DomGeometry,
+        moli_layout::LayoutFlushReason::SynchronousGeometry,
     )?
     else {
         return Ok(changed);

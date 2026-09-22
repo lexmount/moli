@@ -13,21 +13,6 @@ runs:
   using: composite
   steps:
     - name: Download release artifact
-      id: download
-      continue-on-error: true
-      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-      with:
-        name: moli-release-${{ inputs.side }}
-        path: target/ci-artifacts/${{ inputs.side }}
-    - name: Check downloaded archive completeness
-      id: archive
-      continue-on-error: true
-      shell: bash
-      env:
-        RELEASE_SIDE: ${{ inputs.side }}
-      run: gzip -t "target/ci-artifacts/$RELEASE_SIDE/moli-release-$RELEASE_SIDE.tar.gz"
-    - name: Retry incomplete release download
-      if: steps.download.outcome != 'success' || steps.archive.outcome != 'success'
       uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
       with:
         name: moli-release-${{ inputs.side }}

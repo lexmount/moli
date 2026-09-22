@@ -4,7 +4,6 @@ use dom::ElementState as StyloElementState;
 use style::{
     Atom,
     animation::DocumentAnimationSet,
-    computed_value_flags::ComputedValueFlags,
     context::{
         QuirksMode, RegisteredSpeculativePainter, RegisteredSpeculativePainters,
         SharedStyleContext, StyleContext, StyleSystemOptions, ThreadLocalStyleContext,
@@ -50,7 +49,6 @@ use super::{
     cache::ComputedElementStyleCacheKey,
     document_world::DocumentStyleWorld,
     lazy_invalidation::StyleValidationPathEntry,
-    retained::synchronize_root_style_device,
     source_lifecycle::StyleSourceDocumentContext,
     world_key::StyleWorldKey,
     world_lifecycle::{
@@ -930,13 +928,12 @@ fn resolve_element_styles(
             shared: &shared,
             thread_local: &mut thread_local,
         };
-        let (ancestor_resolution_count, mut resolved_root_style) =
-            materialize_ancestor_styles_for_resolution(
-                &mut context,
-                element,
-                world,
-                validation_path,
-            );
+        let ancestor_resolution_count = materialize_ancestor_styles_for_resolution(
+            &mut context,
+            element,
+            world,
+            validation_path,
+        );
         let target = DomHandle::new(element.as_node().debug_id());
         world.pseudo_style_cache.invalidate_handles([target]);
         // `resolve_style` is the single-node initial-style API. Keep dirty
@@ -952,14 +949,6 @@ fn resolve_element_styles(
             pseudo_element,
             None,
         );
-        if let Some(root_style) = styles.primary.as_ref().filter(|computed| {
-            computed
-                .flags
-                .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
-        }) {
-            synchronize_root_style_device(context.shared.stylist.device(), root_style);
-            resolved_root_style = Some(root_style.clone());
-        }
         unsafe {
             let mut data = element.ensure_data();
             data.styles = styles.clone();
@@ -981,9 +970,6 @@ fn resolve_element_styles(
         world
             .document_state
             .note_element_style_resolutions(ancestor_resolution_count.saturating_add(1));
-        if let Some(root_style) = resolved_root_style {
-            *retained.root_style.borrow_mut() = Some(root_style);
-        }
         styles
     });
     world
@@ -997,7 +983,7 @@ fn materialize_ancestor_styles_for_resolution<E>(
     element: E,
     world: &DocumentStyleWorld,
     validation_path: Option<&[StyleValidationPathEntry]>,
-) -> (u64, Option<ServoArc<ComputedValues>>)
+) -> u64
 where
     E: TElement,
 {
@@ -1024,7 +1010,6 @@ where
         .note_ancestor_style_validation_visits(ancestors.len() as u64);
 
     let mut resolution_count = 0_u64;
-    let mut resolved_root_style = None;
     let mut force_descendants = false;
     for (ancestor, required_generation) in ancestors {
         let handle = DomHandle::new(ancestor.as_node().debug_id());
@@ -1043,14 +1028,6 @@ where
             ancestor.ensure_data().styles = ElementStyles::default();
         }
         let styles = resolve_style(context, ancestor, RuleInclusion::All, None, None);
-        if let Some(root_style) = styles.primary.as_ref().filter(|computed| {
-            computed
-                .flags
-                .contains(ComputedValueFlags::IS_ROOT_ELEMENT_STYLE)
-        }) {
-            synchronize_root_style_device(context.shared.stylist.device(), root_style);
-            resolved_root_style = Some(root_style.clone());
-        }
         resolution_count = resolution_count.saturating_add(1);
         unsafe {
             let mut data = ancestor.ensure_data();
@@ -1063,7 +1040,7 @@ where
             .mark_element_current(handle, required_generation);
         force_descendants = true;
     }
-    (resolution_count, resolved_root_style)
+    resolution_count
 }
 
 /// Maps the memoized DOM path suffix back to Stylo ancestors.
