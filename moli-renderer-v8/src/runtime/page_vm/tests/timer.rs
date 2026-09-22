@@ -104,7 +104,8 @@ setTimeout(() => {
 
         let deadline = due_timer_deadline(&page_vm);
         let body = page_vm.apply_selected_page_timer_turn(deadline, ANY_READY_TIMER)?;
-        assert_eq!(body.action, PageTimerTurnAction::Consumed { deadline });
+        assert!(matches!(body.action, PageTimerTurnAction::Consumed { deadline: actual, ref popup_parser_completions, .. }
+            if actual == deadline && popup_parser_completions.is_empty()));
         assert_eq!(
             page_vm.vm_mut().eval("__timerBodyBoundary.join('|')")?,
             "callback",

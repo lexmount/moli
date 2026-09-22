@@ -477,7 +477,7 @@ open("about:blank", "hashchange-owner-popup");
         while page_vm
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::DomManipulation(
-                    PageDomManipulationTestFamily::PopupLoadEvent,
+                    PageDomManipulationTestFamily::PopupDocumentLifecycle,
                 ),
                 &loader,
             )

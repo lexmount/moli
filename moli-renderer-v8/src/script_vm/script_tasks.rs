@@ -103,7 +103,21 @@ impl ScriptVm {
         }
         // Timer turns are ordinary runtime activity. Runtime follow-up may
         // publish concrete Page work, but must not wait for network completion.
+        let popup_parsers = self.take_completed_popup_javascript_url_parsers();
         self.finish_selected_page_callback_task(loader).await?;
+        for completion in popup_parsers {
+            let mut step = self.begin_popup_document_interactive(completion)?;
+            loop {
+                match step {
+                    PopupDocumentLifecycleStep::Completed => break,
+                    PopupDocumentLifecycleStep::Checkpoint(checkpoint) => {
+                        self.finish_popup_document_lifecycle_checkpoint()?;
+                        step = self.resume_popup_document_lifecycle_after_checkpoint(checkpoint)?;
+                    }
+                }
+            }
+            self.finish_popup_document_lifecycle_turn(());
+        }
         Ok(true)
     }
 
