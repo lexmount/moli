@@ -340,7 +340,13 @@ impl FrameOwnerStore {
             document_handle,
             url,
             base_url,
-            DocumentCreationKind::DocumentOpen,
+            DocumentCreationKind::DocumentOpen {
+                is_initial_empty: self
+                    .documents
+                    .get(&transition.retired_owner().document_id)?
+                    .creation_kind
+                    .is_initial_empty(),
+            },
         )?;
         self.pending_main_document_owner_transitions
             .push_back(transition);
@@ -426,15 +432,16 @@ impl FrameOwnerStore {
         retired_document.active_requests.clear();
 
         let document_id = transition.current_owner().document_id;
-        let lifecycle_progress = if creation_kind == DocumentCreationKind::DocumentOpen {
-            self.new_loading_document_lifecycle_for_document_open(
-                DocumentLoadDeliveryKind::Main,
-                load_continuation,
-                completely_loaded,
-            )
-        } else {
-            self.new_loading_document_lifecycle(DocumentLoadDeliveryKind::Main)
-        };
+        let lifecycle_progress =
+            if matches!(creation_kind, DocumentCreationKind::DocumentOpen { .. }) {
+                self.new_loading_document_lifecycle_for_document_open(
+                    DocumentLoadDeliveryKind::Main,
+                    load_continuation,
+                    completely_loaded,
+                )
+            } else {
+                self.new_loading_document_lifecycle(DocumentLoadDeliveryKind::Main)
+            };
         self.documents.insert(
             document_id,
             DocumentRecord {
@@ -986,6 +993,7 @@ impl FrameOwnerStore {
             .lifecycle_progress
             .document_open_load_continuation();
         let completely_loaded = retired_document.lifecycle_progress.is_completely_loaded();
+        let is_initial_empty = retired_document.creation_kind.is_initial_empty();
         retired_document.lifecycle = DocumentLifecycleState::Replaced;
         retired_document.lifecycle_progress.retire();
         retired_document.active_requests.clear();
@@ -1004,7 +1012,7 @@ impl FrameOwnerStore {
                 document_handle,
                 url,
                 base_url: base_url.clone(),
-                creation_kind: DocumentCreationKind::DocumentOpen,
+                creation_kind: DocumentCreationKind::DocumentOpen { is_initial_empty },
                 lifecycle: DocumentLifecycleState::Current,
                 lifecycle_progress,
                 active_requests: BTreeMap::new(),
