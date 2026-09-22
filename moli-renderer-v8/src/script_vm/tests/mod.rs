@@ -3467,7 +3467,9 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
         vm.eval_in_child_default_context(
             child_context_id,
             r#"
-            parent.__retiredChildBeacon = (...args) => navigator.sendBeacon(...args);
+            // Capture the old Navigator: resolving the global again after
+            // navigation would intentionally use the replacement Window's one.
+            parent.__retiredChildBeacon = navigator.sendBeacon.bind(navigator);
             String(navigator.sendBeacon(
               "https://beacon-execution-context.test/accepted",
               "payload"
@@ -11430,6 +11432,12 @@ fn child_document_open_context_preflight_failure_preserves_current_document() {
         .expect("failed replacement preflight should return the existing child Document");
 
     assert_eq!(result, "true|old|1");
+    assert!(
+        vm._context_host
+            .borrow()
+            .child_current_document_is_initial_empty(child_handle),
+        "failed document.open must preserve initial about:blank"
+    );
     assert_eq!(
         vm._context_host
             .borrow()

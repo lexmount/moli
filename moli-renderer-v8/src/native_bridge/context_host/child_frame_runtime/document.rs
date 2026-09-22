@@ -705,6 +705,8 @@ impl JsContextHost {
                 &document_url,
             );
         }
+        unsafe { &mut *host_ptr }.frame_owner_store
+            .finish_child_document_open_replacement(child_handle, current_owner);
         (unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
             == Some(current_owner))
         .then_some(script_context)
