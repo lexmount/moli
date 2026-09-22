@@ -27,6 +27,7 @@ pub(crate) use listeners::{
     SimpleObjectEventListenerInspectorSnapshot, simple_event_target_inspector_listener_snapshots,
     simple_object_event_listeners_snapshot, simple_object_event_remove_listener_value_for_type,
     simple_object_event_set_handler, simple_object_has_event_listeners,
+    simple_object_event_activate_uncompiled_handler,
 };
 use listeners::{
     simple_object_event_listeners_snapshot_in_registry,

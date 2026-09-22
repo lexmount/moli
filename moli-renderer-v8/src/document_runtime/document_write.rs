@@ -273,6 +273,7 @@ impl ParserDomMutationConsumer for DocumentWriteParserMutationOwner<'_, '_, '_> 
             .add_attrs_if_missing_for_parser_in_live_dom_host(node_id, attrs);
         for name in window_handlers {
             if let Some(previous) = self.runtime.sync_event_handler_content_attribute(
+                self.scope,
                 self.host_ptr,
                 node_id,
                 &name,
