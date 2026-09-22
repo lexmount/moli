@@ -32,9 +32,7 @@ mod document_front;
 mod local;
 mod same_document;
 
-pub(super) use document_front::{
-    sync_local_document_front_from_window, sync_same_document_navigation_commit,
-};
+pub(super) use document_front::sync_same_document_navigation_commit;
 pub(crate) use local::apply_local_window_location_navigation;
 pub(super) use same_document::{
     apply_navigation_navigate_same_document, update_navigation_current_entry_for_same_document,
