@@ -37,7 +37,7 @@ mod parse_time;
 mod parser_async_module_admission;
 mod parser_owned_module_continuation;
 mod popup_close;
-mod popup_load_event;
+mod popup_document_lifecycle;
 mod post_domcontentloaded_runtime;
 mod post_parse_owner_work;
 mod promise_rejection;
@@ -388,10 +388,11 @@ pub(crate) use self::popup_close::{
     PagePopupCloseTargetEffect, PagePopupCloseTurnAction, PagePopupCloseTurnOutcome,
     RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
 };
-pub(crate) use self::popup_load_event::{
-    PagePopupLoadEventTargetEffect, PagePopupLoadEventTurnAction, PagePopupLoadEventTurnOutcome,
-    RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
-    RendererPagePopupLoadEventTask,
+pub(crate) use self::popup_document_lifecycle::{
+    PagePopupDocumentLifecycleTargetEffect, PagePopupDocumentLifecycleTurnAction,
+    PagePopupDocumentLifecycleTurnOutcome, PopupDocumentLifecycleEvent,
+    RendererPagePopupDocumentLifecycleOwner, RendererPagePopupDocumentLifecycleSender,
+    RendererPagePopupDocumentLifecycleTask,
 };
 pub(crate) use self::post_parse_owner_work::{
     PostParseLifecycleQueueStats, PostParseLifecycleWork, PostParsePageOwnedWork,

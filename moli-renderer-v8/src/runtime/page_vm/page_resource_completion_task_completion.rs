@@ -44,14 +44,22 @@ impl PageVm {
             }
         }
 
-        if let PageResourceCompletionPostCheckpointEffect::PrimeMainDocumentLifecycle { owner } =
-            action.post_checkpoint_effect
-        {
-            let same_root_document =
-                action.owner.root_document() == self.document_lifecycle.identity().document;
-            if same_root_document && self.vm().current_main_document_task_owner() == Some(owner) {
-                self.vm_mut()
-                    .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        if action.owner.root_document() == self.document_lifecycle.identity().document {
+            match action.post_checkpoint_effect {
+                PageResourceCompletionPostCheckpointEffect::None => {}
+                PageResourceCompletionPostCheckpointEffect::PrimeMainDocumentLifecycle {
+                    owner,
+                } => {
+                    if self.vm().current_main_document_task_owner() == Some(owner) {
+                        self.vm_mut().prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+                    }
+                }
+                PageResourceCompletionPostCheckpointEffect::CompletePopupDocumentParser {
+                    completion,
+                } => {
+                    let step = self.vm_mut().begin_popup_document_interactive(completion)?;
+                    self.finish_popup_document_lifecycle_step(step)?;
+                }
             }
         }
 

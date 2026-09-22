@@ -88,6 +88,390 @@ fn loaded_popup_completion(
     )
 }
 
+const POPUP_READINESS_MARKUP: &str = r#"<!doctype html><script>
+(() => {
+  const doc = document;
+  const trace = opener.__popupReadyTrace = [];
+  const errors = opener.__popupReadyErrors = [];
+  const note = label => trace.push(label + ':' + doc.readyState);
+  const check = (event, currentTarget, bubbles) => {
+    if (!(event instanceof Event) || !event.isTrusted || event.target !== doc ||
+        event.currentTarget !== currentTarget || event.bubbles !== bubbles || event.cancelable)
+      errors.push(event.type + ': interface, trust or target');
+  };
+  note('script');
+  Promise.resolve().then(() => note('script-reaction'));
+  doc.addEventListener('readystatechange', event => {
+    check(event, doc, false);
+    note('state');
+    Promise.resolve().then(() => note('state-reaction'));
+  });
+  doc.addEventListener('DOMContentLoaded', event => {
+    check(event, doc, true);
+    note('document-DCL');
+    Promise.resolve().then(() => note('DCL-reaction'));
+  });
+  window.addEventListener('DOMContentLoaded', event => {
+    check(event, window, true);
+    const path = event.composedPath();
+    if (event.eventPhase !== 3 || path.length !== 2 || path[0] !== doc || path[1] !== window)
+      errors.push('DOMContentLoaded: propagation');
+    note('window-DCL');
+  });
+  window.addEventListener('load', event => {
+    check(event, window, false);
+    note('load');
+    Promise.resolve().then(() => note('load-reaction'));
+  });
+  window.addEventListener('pageshow', () => {
+    note('pageshow');
+    Promise.resolve().then(() => note('pageshow-reaction'));
+  });
+})();
+</script>"#;
+
+async fn assert_popup_readiness_tasks(
+    page_vm: &mut PageVm,
+    loader: &crate::network::ResourceRequestClient,
+) -> anyhow::Result<()> {
+    let interactive =
+        "script:loading|script-reaction:loading|state:interactive|state-reaction:interactive";
+    assert_eq!(
+        page_vm.vm_mut().eval("__popupReadyTrace.join('|')")?,
+        interactive
+    );
+    assert!(
+        page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::PopupDocumentLifecycle
+                ),
+                loader,
+            )
+            .await?
+    );
+    let dcl = format!(
+        "{interactive}|document-DCL:interactive|DCL-reaction:interactive|window-DCL:interactive"
+    );
+    assert_eq!(page_vm.vm_mut().eval("__popupReadyTrace.join('|')")?, dcl);
+    assert!(
+        page_vm
+            .run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DomManipulation(
+                    PageDomManipulationTestFamily::PopupDocumentLifecycle
+                ),
+                loader,
+            )
+            .await?
+    );
+    assert_eq!(
+        page_vm.vm_mut().eval("__popupReadyTrace.join('|')")?,
+        format!(
+            "{dcl}|state:complete|state-reaction:complete|load:complete|load-reaction:complete|pageshow:complete|pageshow-reaction:complete"
+        )
+    );
+    assert_eq!(
+        page_vm
+            .vm_mut()
+            .eval("JSON.stringify(__popupReadyErrors)")?,
+        "[]"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_document_readiness_follows_script_reactions_and_separate_dom_tasks() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/readiness.html",
+            "HTTP/1.1 200 OK",
+            POPUP_READINESS_MARKUP.to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, mut queue, mut wake_rx) =
+            owner_attached_popup_page_vm(&loader, Url::parse(&format!("{base_url}/page.html"))?);
+        open_popup(
+            &mut page_vm,
+            &format!("{base_url}/readiness.html"),
+            "readiness",
+            "__readyPopup",
+        );
+        wait_for_popup_terminal(&mut queue, &mut wake_rx, "popup readiness response").await;
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ResourceCompletion,
+                    &loader
+                )
+                .await?
+        );
+        assert_popup_readiness_tasks(&mut page_vm, &loader).await?;
+        server.await.expect("popup readiness server should finish");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popup readiness lifecycle should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_dom_content_loaded_waits_for_external_scripts_but_not_child_frames() {
+    run_page_vm_async_test(async move {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let (release_script, script_released) = oneshot::channel();
+        let (release_child, child_released) = oneshot::channel();
+        let (script_seen, script_requested) = oneshot::channel();
+        let (child_seen, child_requested) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let mut script_released = Some(script_released);
+            let mut child_released = Some(child_released);
+            let mut script_seen = Some(script_seen);
+            let mut child_seen = Some(child_seen);
+            let mut responses = Vec::new();
+            for _ in 0..3 {
+                let (mut stream, _) = listener.accept().await.expect("popup readiness request");
+                let request = read_http_request_head(&mut stream).await.unwrap();
+                let path = request.lines().next().unwrap().split_whitespace().nth(1).unwrap();
+                let (body, content_type, gate) = match path {
+                    "/popup.html" => (format!("{POPUP_READINESS_MARKUP}<script src='/blocking.js'></script><iframe src='/child.html'></iframe><script>opener.__popupReadyTrace.push('tail:' + document.readyState)</script>"), "text/html", None),
+                    "/blocking.js" => {
+                        script_seen.take().unwrap().send(()).unwrap();
+                        ("opener.__popupReadyTrace.push('external:' + document.readyState);".to_owned(), "text/javascript", script_released.take())
+                    }
+                    "/child.html" => {
+                        child_seen.take().unwrap().send(()).unwrap();
+                        ("<!doctype html><p>child</p>".to_owned(), "text/html", child_released.take())
+                    }
+                    other => panic!("unexpected readiness request {other}"),
+                };
+                responses.push(tokio::spawn(async move {
+                    if let Some(gate) = gate { gate.await.expect("release readiness response"); }
+                    let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }));
+            }
+            for response in responses { response.await.expect("readiness response task"); }
+        });
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_popup_page_vm(&loader, Url::parse(&format!("{base_url}/page.html"))?);
+        open_popup(&mut page_vm, &format!("{base_url}/popup.html"), "gated-readiness", "__readyPopup");
+        wait_for_popup_terminal(&mut queue, &mut wake_rx, "gated popup response").await;
+        assert!(page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ResourceCompletion, &loader).await?);
+        tokio::time::timeout(Duration::from_secs(5), script_requested)
+            .await.expect("external script request must start")?;
+        assert_eq!(page_vm.vm_mut().eval("__readyPopup.document.readyState")?, "loading");
+        assert!(!page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle), &loader,
+        ).await?, "an unfinished parser-blocking script must hold DOMContentLoaded");
+        release_script.send(()).expect("release external script");
+        wait_for_popup_terminal(&mut queue, &mut wake_rx, "popup external script").await;
+        assert!(page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ResourceCompletion, &loader).await?);
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            &mut page_vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "popup child navigation start",
+        ).await;
+        tokio::time::timeout(Duration::from_secs(5), child_requested)
+            .await.expect("child request must start after its navigation task")?;
+        assert_eq!(page_vm.vm_mut().eval("__popupReadyTrace.join('|')")?,
+            "script:loading|script-reaction:loading|external:loading|tail:loading|state:interactive|state-reaction:interactive");
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle), &loader,
+        ).await?, "DOMContentLoaded must run while the child response remains gated");
+        assert_eq!(page_vm.vm_mut().eval("__readyPopup.document.readyState")?, "interactive");
+        assert_eq!(page_vm.vm_mut().eval("__popupReadyTrace.slice(-3).join('|')")?,
+            "document-DCL:interactive|DCL-reaction:interactive|window-DCL:interactive");
+        assert!(!page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle), &loader,
+        ).await?, "the same child response must still block load");
+        page_vm.vm_mut().eval("__readyPopup.close(); 'closed'")?;
+        release_child.send(()).expect("release child response after retiring popup");
+        server.await.expect("gated readiness server should finish");
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("popup parser and load gates should remain independent");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_javascript_url_document_uses_the_same_readiness_lifecycle() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _queue, _wake_rx) =
+            owner_attached_popup_page_vm(&loader, Url::parse("https://example.test/page.html")?);
+        let url = format!(
+            "javascript:{}",
+            serde_json::to_string(POPUP_READINESS_MARKUP)?
+        );
+        open_popup(&mut page_vm, &url, "javascript-readiness", "__readyPopup");
+        let selection = crate::page_task_queue::RendererPageTimerSelection::AnyReady;
+        let crate::page_task_queue::RendererPageReadyDescriptor::Timer { deadline, .. } = page_vm
+            .due_page_timer_ready_descriptor(selection)
+            .expect("javascript URL task should be queued")
+        else {
+            panic!("expected javascript URL timer");
+        };
+        page_vm
+            .apply_selected_page_scheduler_task_on_owner_lane_for_test(
+                crate::page_task_queue::RendererPageSchedulerTask::Timer {
+                    deadline,
+                    selection,
+                },
+                loader.clone(),
+            )
+            .await?;
+        // The synthetic initial-window load entry must be discarded after the
+        // javascript response commits its concrete replacement Document.
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DomManipulation(
+                        PageDomManipulationTestFamily::PopupDocumentLifecycle
+                    ),
+                    &loader,
+                )
+                .await?
+        );
+        assert_popup_readiness_tasks(&mut page_vm, &loader).await?;
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("javascript URL popup readiness should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_readiness_reactions_stop_lifecycle_when_the_window_closes() {
+    run_page_vm_async_test(async move {
+        for phase in ["interactive", "DOMContentLoaded", "complete"] {
+            let markup = format!(r#"<!doctype html><script>
+const trace = opener.__popupRetirementTrace = [];
+const record = stage => {{
+  trace.push(stage);
+  if (stage === {phase:?}) Promise.resolve().then(() => {{ trace.push('retire'); window.close(); }});
+}};
+document.addEventListener('readystatechange', () => record(document.readyState));
+document.addEventListener('DOMContentLoaded', () => record('DOMContentLoaded'));
+window.addEventListener('load', () => trace.push('load'));
+window.addEventListener('pageshow', () => trace.push('pageshow'));
+</script>"#);
+            let (base_url, server) = spawn_path_response_http_server(vec![("/retire.html", "HTTP/1.1 200 OK", markup, Duration::ZERO)]).await;
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, mut queue, mut wake_rx) = owner_attached_popup_page_vm(&loader, Url::parse(&format!("{base_url}/page.html"))?);
+            open_popup(&mut page_vm, &format!("{base_url}/retire.html"), "retirement", "__retirementPopup");
+            wait_for_popup_terminal(&mut queue, &mut wake_rx, "popup retirement response").await;
+            assert!(page_vm.run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ResourceCompletion, &loader).await?);
+            for _ in 0..2 {
+                if !page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle), &loader,
+                ).await? { break; }
+            }
+            let expected = match phase {
+                "interactive" => "interactive|retire",
+                "DOMContentLoaded" => "interactive|DOMContentLoaded|retire",
+                _ => "interactive|DOMContentLoaded|complete|retire",
+            };
+            assert_eq!(page_vm.vm_mut().eval("__popupRetirementTrace.join('|')")?, expected, "{phase}");
+            server.await.expect("popup retirement server should finish");
+        }
+        Ok::<_, anyhow::Error>(())
+    }).await.expect("popup readiness retirement should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_load_events_checkpoint_before_pageshow_and_after_pageshow() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for listen_for_load in [false, true] {
+            let (mut page_vm, _queue, _wake_rx) = owner_attached_popup_page_vm(
+                &loader,
+                Url::parse("https://example.test/page.html")?,
+            );
+            page_vm.vm_mut().eval(&format!(r#"
+globalThis.__popupCheckpointTrace = [];
+globalThis.__checkpointPopup = open('about:blank', 'checkpoint-popup');
+open('about:blank', 'checkpoint-popup');
+(() => {{
+  const trace = __popupCheckpointTrace;
+  if ({listen_for_load}) __checkpointPopup.addEventListener('load', () => {{
+    trace.push('load');
+    Promise.resolve().then(() => trace.push('load-reaction'));
+  }});
+  __checkpointPopup.addEventListener('pageshow', () => {{
+    trace.push('pageshow');
+    Promise.resolve().then(() => trace.push('pageshow-reaction'));
+  }});
+}})();
+'ready'
+"#))?;
+            assert!(page_vm.run_exact_selected_page_task_for_test(
+                PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle),
+                &loader,
+            ).await?);
+            assert_eq!(
+                page_vm.vm_mut().eval("__popupCheckpointTrace.join('|')")?,
+                if listen_for_load { "load|load-reaction|pageshow|pageshow-reaction" }
+                else { "pageshow|pageshow-reaction" },
+                "popup lifecycle reactions must finish before the next phase, including when load has no listeners",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popup lifecycle checkpoints should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_load_reactions_retire_pageshow_when_the_document_closes_or_is_replaced() {
+    run_page_vm_async_test(async move {
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        for action in ["close", "replace"] {
+            let (mut page_vm, _queue, _wake_rx) = owner_attached_popup_page_vm(
+                &loader,
+                Url::parse("https://example.test/page.html")?,
+            );
+            page_vm.vm_mut().eval(&format!(
+                r#"
+globalThis.__popupReactionTrace = [];
+globalThis.__reactionPopup = open('about:blank', 'reaction-popup');
+open('about:blank', 'reaction-popup');
+(() => {{
+  const popup = __reactionPopup;
+  const trace = __popupReactionTrace;
+  popup.addEventListener('load', () => {{
+    trace.push('load');
+    Promise.resolve().then(() => {{
+      trace.push('load-reaction');
+      if ({action:?} === 'close') popup.close();
+      else popup.location.href = 'about:blank';
+    }});
+  }});
+  popup.addEventListener('pageshow', () => trace.push('retired-pageshow'));
+}})();
+'ready'
+"#
+            ))?;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::DomManipulation(
+                            PageDomManipulationTestFamily::PopupDocumentLifecycle
+                        ),
+                        &loader,
+                    )
+                    .await?
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval("__popupReactionTrace.join('|')")?,
+                "load|load-reaction",
+                "{action}: pageshow must not outlive a document retired by a load reaction",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popup lifecycle reactions should retire old continuations");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn popup_load_events_have_native_interfaces_and_legacy_document_targets() {
     run_page_vm_async_test(async move {
@@ -161,7 +545,12 @@ async fn popup_load_events_have_native_interfaces_and_legacy_document_targets() 
         ).await?);
         assert_eq!(page_vm.vm_mut().eval("__popupLifecycleEvents.length")?, "0");
         assert!(page_vm.run_exact_selected_page_task_for_test(
-            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupLoadEvent),
+            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle),
+            &loader,
+        ).await?);
+        assert_eq!(page_vm.vm_mut().eval("__popupLifecycleEvents.length")?, "0", "DOMContentLoaded has its own task before load");
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupDocumentLifecycle),
             &loader,
         ).await?);
         assert_eq!(
@@ -233,7 +622,7 @@ __retiredPopup.addEventListener('pageshow', () => __retiredPopupEvents.push('ret
                 page_vm
                     .run_exact_selected_page_task_for_test(
                         PageSelectedTaskTestSelector::DomManipulation(
-                            PageDomManipulationTestFamily::PopupLoadEvent
+                            PageDomManipulationTestFamily::PopupDocumentLifecycle
                         ),
                         &loader,
                     )
@@ -635,7 +1024,7 @@ async fn failed_popup_fetch_settles_only_its_exact_current_load() {
             page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
-                        PageDomManipulationTestFamily::PopupLoadEvent,
+                        PageDomManipulationTestFamily::PopupDocumentLifecycle,
                     ),
                     &loader,
                 )

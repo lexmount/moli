@@ -37,13 +37,16 @@ pub(crate) enum PageResourceCompletionBodyActivity {
 
 /// Follow-up that becomes legal only after this selected task's checkpoint.
 ///
-/// Runtime module graph failure settlement can release the final exact
-/// main-Document load-delay lease. Publishing lifecycle work before its error
-/// callback reactions have run would expose `load` too early, so the body
-/// records this one bounded post-checkpoint obligation explicitly.
+/// Parser completion and release of the final main-Document load-delay lease
+/// must wait for the producing script or error callback's reactions. The body
+/// returns the exact owner and bounded obligation instead of rediscovering
+/// lifecycle work after the checkpoint.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PageResourceCompletionPostCheckpointEffect {
     None,
+    CompletePopupDocumentParser {
+        completion: crate::native_bridge::PopupDocumentParserCompletion,
+    },
     /// The selected resource terminal released the final load-delay lease for
     /// this exact main Document. The resource target itself is normally
     /// consumed by the body, so the post-checkpoint coordinator must validate
