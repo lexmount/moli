@@ -1005,6 +1005,11 @@ impl JsContextHost {
                 .is_some_and(|entry| entry.pending_attribute_bootstrap_commit())
     }
 
+    pub(crate) fn child_has_committed_navigation(&self, handle: DomHandle) -> bool {
+        self.frame_owner_store
+            .child_has_committed_navigation(handle)
+    }
+
     pub(crate) fn retire_child_frame_realm_materialization_request(
         &mut self,
         handle: DomHandle,
