@@ -1433,6 +1433,7 @@ impl DocumentRuntime {
         policy: AttributeChangedReactionPolicy,
     ) {
         let retired_event_callback = self.sync_event_handler_content_attribute(
+            scope,
             host_ptr,
             handle,
             name,

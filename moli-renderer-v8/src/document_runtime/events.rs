@@ -462,6 +462,7 @@ impl DocumentRuntime {
 
     pub(crate) fn sync_event_handler_content_attribute(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         handle: DomHandle,
         name: &str,
@@ -494,9 +495,17 @@ impl DocumentRuntime {
                             present.then_some(handle),
                         );
                 }
-                Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)) | None => {
+                Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+                    unsafe { &mut *host_ptr }
+                        .set_lightweight_popup_event_handler_content_attribute(
+                            scope,
+                            popup_id,
+                            event_type,
+                            present.then_some(handle),
+                        );
                     return None;
                 }
+                None => return None,
             },
             _ => EventTargetHandle::Node(handle),
         };
