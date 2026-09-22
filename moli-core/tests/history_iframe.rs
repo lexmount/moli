@@ -5,6 +5,115 @@ use serde_json::{Value, json};
 use tokio::time::Duration;
 use url::Url;
 
+#[tokio::test(flavor = "multi_thread")]
+async fn iframe_srcdoc_traversal_reapplies_sandbox_flags_and_preserves_origin() -> Result<()> {
+    let fixture = include_str!("fixtures/iframe-srcdoc-sandbox-history.js");
+    let server = FixtureServer::spawn().await?;
+    for (before, after, scripts, accessible) in [
+        (
+            "allow-same-origin",
+            "allow-same-origin allow-scripts",
+            true,
+            true,
+        ),
+        (
+            "allow-same-origin allow-scripts",
+            "allow-same-origin",
+            false,
+            true,
+        ),
+        (
+            "allow-scripts",
+            "allow-same-origin allow-scripts",
+            true,
+            false,
+        ),
+        (
+            "allow-same-origin allow-scripts",
+            "allow-scripts",
+            true,
+            false,
+        ),
+    ] {
+        let browser = Browser::new(BrowserConfig::default())?;
+        let markup = format!(
+            r#"<!doctype html><body><script>{fixture}
+            window.finished = iframeSrcdocSandboxHistory({before:?}, {after:?}, new URL('/static?sandbox-source', location.href).href);
+            </script>"#
+        );
+        let mut url = Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
+        url.query_pairs_mut().append_pair("markup", &markup);
+        let result = tokio::time::timeout(Duration::from_secs(10), async {
+            let mut page = browser.fetch(url.as_str()).await?;
+            page.evaluate_runtime_expression_with_await_async(
+                "finished.then(value => JSON.stringify(value))",
+                true,
+            )
+            .await
+        })
+        .await??;
+        let result: Value =
+            serde_json::from_str(result["value"].as_str().expect("sandbox history result"))?;
+        let messages = if scripts {
+            json!([{"origin": if accessible { url.origin().ascii_serialization() } else { "null".to_owned() },
+                "text": "historical sandbox source"}])
+        } else {
+            json!([])
+        };
+        assert_eq!(
+            result,
+            json!({"messages": messages, "accessible": accessible}),
+            "{before} -> {after}"
+        );
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn iframe_srcdoc_traversal_restores_each_historical_document_resource() -> Result<()> {
+    let fixture = include_str!("fixtures/iframe-srcdoc-traversal.js");
+    let server = FixtureServer::spawn().await?;
+    for mode in ["top", "popup"] {
+        for api in ["property", "setAttribute"] {
+            for route in ["fragment", "url"] {
+                let browser = Browser::new(BrowserConfig::default())?;
+                let markup = format!(
+                    r#"<!doctype html><body><script>{fixture}
+                    window.finished = (async () => {{
+                      const root = {mode:?} === 'popup' ? open('/static?traversal-popup') : window;
+                      if (root !== window) await new Promise(resolve => root.addEventListener('load', resolve, {{once:true}}));
+                      const openerLength = history.length;
+                      try {{
+                        const result = await iframeSrcdocTraversal(root, {api:?}, {route:?}, new URL('/static?traversal-original', location.href).href);
+                        if (root !== window && history.length !== openerLength) throw new Error('popup changed opener history');
+                        return result;
+                      }} finally {{ if (root !== window) root.close(); }}
+                    }})();</script>"#
+                );
+                let mut url = Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
+                url.query_pairs_mut().append_pair("markup", &markup);
+                let result = tokio::time::timeout(Duration::from_secs(10), async {
+                    let mut page = browser.fetch(url.as_str()).await?;
+                    page.evaluate_runtime_expression_with_await_async(
+                        "finished.then(value => JSON.stringify(value))",
+                        true,
+                    )
+                    .await
+                })
+                .await??;
+                assert_eq!(
+                    result["value"],
+                    json!(r#"["back-middle","back-old","forward-new","child-back-old"]"#),
+                    "{mode}/{api}/{route}: {result}"
+                );
+            }
+        }
+    }
+    server.shutdown().await;
+    Ok(())
+}
+
 async fn iframe_attribute_history(phase: &str, api: &str, attribute: &str) -> Result<Value> {
     let child = r#"<!doctype html><body><script>
       const phase = new URL(location.href).searchParams.get('phase');
