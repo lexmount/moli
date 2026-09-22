@@ -64,10 +64,12 @@ fn dispatch_detached_post_insert_events(
     handles: &[DomHandle],
 ) {
     for handle in handles {
-        if !unsafe { &*runtime_ptr }
-            .dom_host()
-            .is_html_element_named(*handle, "iframe")
-        {
+        // A detached JS wrapper can also represent an iframe in a live popup
+        // or child document. Its native document lifecycle owns load delivery.
+        if !crate::native_bridge::element::iframe_uses_detached_content_cache(
+            unsafe { &*runtime_ptr },
+            *handle,
+        ) {
             continue;
         }
         let Some(target) = paired_detached_native_object_for_handle(scope, runtime_ptr, *handle)
