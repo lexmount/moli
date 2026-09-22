@@ -5572,6 +5572,15 @@ impl JsContextHost {
             .lightweight_popup_id_for_document_handle(document_handle)
             .and_then(|popup_id| self.current_lightweight_popup_document_owner(popup_id));
         let entry_document = self.document_open_entry_document(scope);
+        // Erase the current shadow-including tree before disconnecting it.
+        // Popup Windows have their own listener store despite sharing a V8
+        // realm with the opener; do not clear other Windows in that realm.
+        self.clear_event_callbacks_for_document_replacement(document_handle, false);
+        if let Some(window) =
+            owner.and_then(|owner| self.lightweight_popup_window(scope, owner.popup_id()))
+        {
+            clear_lightweight_popup_window_document_event_state(scope, window);
+        }
         crate::native_bridge::document::set_detached_html_document_body_html(
             scope,
             host_ptr,
