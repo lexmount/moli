@@ -89,6 +89,170 @@ fn loaded_popup_completion(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn popup_load_events_have_native_interfaces_and_legacy_document_targets() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/popup-event-targets.html",
+            "HTTP/1.1 200 OK",
+            r#"<!doctype html><script>
+(() => {
+  const OriginalEvent = Event;
+  const OriginalPageTransitionEvent = PageTransitionEvent;
+  const popupDocument = document;
+  opener.__popupLifecycleEvents = [];
+  opener.__popupLifecycleChecks = [];
+  const check = (condition, label) => {
+    if (!condition) opener.__popupLifecycleChecks.push(label);
+  };
+  for (const type of ['load', 'pageshow']) {
+    document.addEventListener(type, () => {
+      opener.__popupLifecycleChecks.push(type + ': dispatched through Document');
+    }, true);
+    window.addEventListener(type, function(event) {
+      const prefix = type + ': ';
+      check(event instanceof OriginalEvent, prefix + 'Event interface');
+      check(event.isTrusted === true, prefix + 'trusted');
+      check(event.target === popupDocument, prefix + 'target');
+      check(event.srcElement === popupDocument, prefix + 'srcElement');
+      check(event.currentTarget === window, prefix + 'currentTarget');
+      check(this === window, prefix + 'callback receiver');
+      check(event.eventPhase === OriginalEvent.AT_TARGET, prefix + 'phase');
+      check(event.composed === false, prefix + 'composed');
+      check(event.bubbles === (type === 'pageshow'), prefix + 'bubbles');
+      check(event.cancelable === (type === 'pageshow'), prefix + 'cancelable');
+      const path = event.composedPath();
+      check(path.length === 1 && path[0] === window, prefix + 'Window-only path');
+      check(Number.isFinite(event.timeStamp) && event.timeStamp >= 0, prefix + 'timestamp');
+      if (type === 'pageshow') {
+        check(event instanceof OriginalPageTransitionEvent, prefix + 'PageTransitionEvent interface');
+        check(event.persisted === false, prefix + 'persisted');
+      }
+      event.preventDefault();
+      check(event.defaultPrevented === (type === 'pageshow'), prefix + 'preventDefault');
+      opener.__popupLifecycleEvents.push(event);
+    });
+  }
+  window.Event = window.PageTransitionEvent = function() {
+    throw new Error('author constructor must not create browser events');
+  };
+  window.dispatchEvent = function() {
+    throw new Error('author dispatchEvent must not dispatch browser events');
+  };
+})();
+</script>"#
+                .to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, mut queue, mut wake_rx) = owner_attached_popup_page_vm(
+            &loader,
+            Url::parse(&format!("{base_url}/page.html"))?,
+        );
+        open_popup(
+            &mut page_vm,
+            &format!("{base_url}/popup-event-targets.html"),
+            "popup-event-targets",
+            "__eventPopup",
+        );
+        wait_for_popup_terminal(&mut queue, &mut wake_rx, "popup lifecycle event fixture").await;
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::ResourceCompletion, &loader,
+        ).await?);
+        assert_eq!(page_vm.vm_mut().eval("__popupLifecycleEvents.length")?, "0");
+        assert!(page_vm.run_exact_selected_page_task_for_test(
+            PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::PopupLoadEvent),
+            &loader,
+        ).await?);
+        assert_eq!(
+            page_vm.vm_mut().eval("JSON.stringify(__popupLifecycleChecks)")?,
+            "[]",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("__popupLifecycleEvents.map(event => event.type).join('|')")?,
+            "load|pageshow",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(r#"
+String(__popupLifecycleEvents.every(event =>
+  event.target === __eventPopup.document && event.srcElement === __eventPopup.document &&
+  event.currentTarget === null && event.eventPhase === 0 && event.composedPath().length === 0))
+"#)?,
+            "true",
+            "dispatch cleanup must preserve the original Document target",
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval(r#"
+(() => {
+  const target = new EventTarget();
+  const event = __popupLifecycleEvents[0];
+  let dispatched = false;
+  target.addEventListener('load', current => {
+    const path = current.composedPath();
+    dispatched = current === event && current.isTrusted === false &&
+      current.target === target && current.srcElement === target &&
+      current.currentTarget === target && path.length === 1 && path[0] === target;
+  });
+  return String(target.dispatchEvent(event) && dispatched);
+})()
+"#)?,
+            "true",
+            "redispatch must clear trust and use the new EventTarget without the legacy override",
+        );
+        server.await.expect("popup event fixture server should finish");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popup load event interface and targeting test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn popup_load_events_do_not_deliver_pageshow_after_load_replaces_or_closes_document() {
+    run_page_vm_async_test(async move {
+        for action in ["close", "replace"] {
+            let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+            let (mut page_vm, _queue, _wake_rx) = owner_attached_popup_page_vm(
+                &loader,
+                Url::parse("https://example.test/page.html")?,
+            );
+            page_vm.vm_mut().eval(&format!(
+                r#"
+globalThis.__retiredPopupEvents = [];
+globalThis.__retiredPopup = open('about:blank', 'retired-load-popup');
+open('about:blank', 'retired-load-popup');
+__retiredPopup.addEventListener('load', function(event) {{
+  __retiredPopupEvents.push('load:' + event.isTrusted + ':' + (event.target === this.document));
+  if ({action:?} === 'close') this.close();
+  else this.location.href = 'about:blank';
+}});
+__retiredPopup.addEventListener('pageshow', () => __retiredPopupEvents.push('retired-pageshow'));
+'ready'
+"#
+            ))?;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::DomManipulation(
+                            PageDomManipulationTestFamily::PopupLoadEvent
+                        ),
+                        &loader,
+                    )
+                    .await?,
+                "{action}: popup load should be queued"
+            );
+            assert_eq!(
+                page_vm.vm_mut().eval("__retiredPopupEvents.join('|')")?,
+                "load:true:true",
+                "{action}: pageshow must not outlive its exact Document owner",
+            );
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("retired popup load test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn production_popup_fetch_reaches_stable_typed_turn_and_commits() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
@@ -430,6 +594,12 @@ async fn failed_popup_fetch_settles_only_its_exact_current_load() {
             "failed-popup",
             "__failedPopup",
         );
+        page_vm.vm_mut().eval(
+            "globalThis.__failedPopupEvents = []; \
+             for (const type of ['load', 'pageshow']) \
+             __failedPopup.addEventListener(type, () => __failedPopupEvents.push(type)); \
+             'ready'",
+        )?;
 
         wait_for_popup_terminal(&mut queue, &mut wake_rx, "failed popup fetch").await;
         let target = queued_popup_target(&mut queue);
@@ -461,6 +631,24 @@ async fn failed_popup_fetch_settles_only_its_exact_current_load() {
             None
         );
         assert!(!queue.has_ready_completion());
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DomManipulation(
+                        PageDomManipulationTestFamily::PopupLoadEvent,
+                    ),
+                    &loader,
+                )
+                .await?,
+            "the failed fetch must consume its queued completion without requiring a Document",
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify(__failedPopupEvents)")?,
+            "[]",
+            "a popup with no materialized Document must not dispatch load events for its opener",
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await
