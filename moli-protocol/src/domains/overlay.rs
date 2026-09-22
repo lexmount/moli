@@ -1,43 +1,18 @@
 use super::command_output::CommandOutputPlan;
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use chromiumoxide_cdp::cdp::browser_protocol::{dom::Rgba, overlay::HighlightNodeParams};
 use moli_core::page::{CompletedPageCommand, PendingPageCommand, RendererInspectorOverlayCommand};
 use serde::Deserialize;
 
-#[derive(Clone, Copy, Deserialize)]
-struct Color {
-    r: i32,
-    g: i32,
-    b: i32,
-    a: Option<f32>,
-}
-impl Color {
-    fn components(self) -> [f32; 4] {
+fn color(value: Option<Rgba>) -> [f32; 4] {
+    value.map_or([0.0; 4], |value| {
         [
-            self.r.clamp(0, 255) as f32 / 255.0,
-            self.g.clamp(0, 255) as f32 / 255.0,
-            self.b.clamp(0, 255) as f32 / 255.0,
-            self.a.unwrap_or(1.0).clamp(0.0, 1.0),
+            value.r.clamp(0, 255) as f32 / 255.0,
+            value.g.clamp(0, 255) as f32 / 255.0,
+            value.b.clamp(0, 255) as f32 / 255.0,
+            value.a.unwrap_or(1.0).clamp(0.0, 1.0) as f32,
         ]
-    }
-}
-fn color(value: Option<Color>) -> [f32; 4] {
-    value.map_or([0.0; 4], Color::components)
-}
-#[derive(Deserialize, Default)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct HighlightConfig {
-    content_color: Option<Color>,
-    padding_color: Option<Color>,
-    border_color: Option<Color>,
-    margin_color: Option<Color>,
-}
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct NodeParams {
-    node_id: Option<u32>,
-    backend_node_id: Option<u32>,
-    object_id: Option<String>,
-    highlight_config: HighlightConfig,
+    })
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -46,18 +21,39 @@ struct RectParams {
     y: i32,
     width: i32,
     height: i32,
-    color: Option<Color>,
-    outline_color: Option<Color>,
+    color: Option<Rgba>,
+    outline_color: Option<Rgba>,
+}
+
+fn unsupported_highlight_option(
+    config: &chromiumoxide_cdp::cdp::browser_protocol::overlay::HighlightConfig,
+) -> Option<String> {
+    let mut fields = serde_json::to_value(config).ok()?.as_object()?.clone();
+    for color in ["contentColor", "paddingColor", "borderColor", "marginColor"] {
+        fields.remove(color);
+    }
+    // These values request exactly the protocol defaults and need no painting.
+    for flag in ["showInfo", "showStyles", "showRulers", "showExtensionLines"] {
+        if fields.get(flag) == Some(&serde_json::Value::Bool(false)) {
+            fields.remove(flag);
+        }
+    }
+    if fields.get("showAccessibilityInfo") == Some(&serde_json::Value::Bool(true)) {
+        fields.remove("showAccessibilityInfo");
+    }
+    fields.into_iter().next().map(|(name, _)| name)
 }
 
 pub(crate) struct PendingOverlayCommandDispatch {
     command_id: Option<u64>,
     owner: CommandOwnerScope,
+    cleanup: bool,
     pending: PendingPageCommand,
 }
 pub(crate) struct CompletedOverlayCommandDispatch {
     command_id: Option<u64>,
     owner: CommandOwnerScope,
+    cleanup: bool,
     completed: Result<CompletedPageCommand, String>,
 }
 pub(crate) enum OverlayCommandTaskStep {
@@ -69,6 +65,7 @@ impl PendingOverlayCommandDispatch {
         CompletedOverlayCommandDispatch {
             command_id: self.command_id,
             owner: self.owner,
+            cleanup: self.cleanup,
             completed: self.pending.wait().await.map_err(|error| error.to_string()),
         }
     }
@@ -104,17 +101,34 @@ fn parse_command(cmd: &Cmd<'_>) -> Result<RendererInspectorOverlayCommand, Comma
         }
         "highlightNode" => {
             let p = cmd
-                .get_params::<NodeParams>()
+                .get_params::<HighlightNodeParams>()
                 .map_err(invalid)?
                 .ok_or_else(|| invalid("Missing node"))?;
+            if p.selector.is_some() {
+                return Err(invalid("selector highlighting is not supported"));
+            }
             if p.node_id.is_none() && p.backend_node_id.is_none() && p.object_id.is_none() {
                 return Err(invalid("A node reference is required"));
             }
+            if let Some(option) = unsupported_highlight_option(&p.highlight_config) {
+                return Err(CommandOutputPlan::error(
+                    -32602,
+                    format!("Highlight option {option} is not supported"),
+                ));
+            }
+            let node_id = p
+                .node_id
+                .map(|id| u32::try_from(*id.inner()).map_err(|_| invalid("Invalid nodeId")))
+                .transpose()?;
+            let backend_node_id = p
+                .backend_node_id
+                .map(|id| u32::try_from(*id.inner()).map_err(|_| invalid("Invalid backendNodeId")))
+                .transpose()?;
             let config = p.highlight_config;
             Ok(RendererInspectorOverlayCommand::Node {
-                node_id: p.node_id,
-                backend_node_id: p.backend_node_id,
-                object_id: p.object_id,
+                node_id,
+                backend_node_id,
+                object_id: p.object_id.map(String::from),
                 colors: [
                     config.content_color,
                     config.padding_color,
@@ -136,6 +150,32 @@ pub(crate) fn try_start_overlay_command_dispatch(
         Ok(command) => command,
         Err(plan) => return OverlayCommandTaskStep::Complete(plan),
     };
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    if conn
+        .target_devtools_session_state_for_owner(&owner)
+        .is_none()
+    {
+        return OverlayCommandTaskStep::Complete(CommandOutputPlan::error(
+            -32000,
+            "No target for Overlay command",
+        ));
+    }
+    if let Some(enabled) = match command {
+        RendererInspectorOverlayCommand::Enable => Some(true),
+        RendererInspectorOverlayCommand::Disable => Some(false),
+        _ => None,
+    } {
+        conn.with_target_devtools_session_state_for_owner_mut(&owner, |state| {
+            state.overlay_enabled = enabled;
+        });
+        if enabled {
+            return OverlayCommandTaskStep::Complete(CommandOutputPlan::success());
+        }
+    }
+    let cleanup = matches!(
+        command,
+        RendererInspectorOverlayCommand::Disable | RendererInspectorOverlayCommand::Hide
+    );
     if conn.layout_policy() == moli_core::LayoutPolicy::Mock
         && matches!(
             command,
@@ -148,18 +188,24 @@ pub(crate) fn try_start_overlay_command_dispatch(
             "Inspector highlighting requires layout",
         ));
     }
-    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let session = conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let result = conn
-        .loaded_page_mut_for_protocol_access_for_owner(&owner)
-        .and_then(|page| {
-            page.start_set_inspector_overlay(session, command)
-                .map_err(|error| error.to_string())
-        });
+    let page = if cleanup {
+        conn.loaded_page_mut_for_target_configuration_for_owner(&owner)
+    } else {
+        conn.loaded_page_mut_for_protocol_access_for_owner(&owner)
+    };
+    if cleanup && page.is_err() {
+        return OverlayCommandTaskStep::Complete(CommandOutputPlan::success());
+    }
+    let result = page.and_then(|page| {
+        page.start_set_inspector_overlay(session, command)
+            .map_err(|error| error.to_string())
+    });
     match result {
         Ok(pending) => OverlayCommandTaskStep::Pending(PendingOverlayCommandDispatch {
             command_id: cmd.id,
             owner,
+            cleanup,
             pending,
         }),
         Err(error) => OverlayCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error)),
@@ -171,11 +217,18 @@ pub(crate) fn complete_pending_overlay_command(
     completed: CompletedOverlayCommandDispatch,
 ) -> CommandOutputPlan {
     let result = completed.completed.and_then(|completion| {
-        conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner)
-            .and_then(|page| {
-                page.finish_set_inspector_overlay(completion)
-                    .map_err(|error| error.to_string())
-            })
+        let page = if completed.cleanup {
+            conn.loaded_page_mut_for_target_configuration_for_owner(&completed.owner)
+        } else {
+            conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner)
+        };
+        match page {
+            Ok(page) => page
+                .finish_set_inspector_overlay(completion)
+                .map_err(|error| error.to_string()),
+            Err(_) if completed.cleanup => Ok(()),
+            Err(error) => Err(error),
+        }
     });
     match result {
         Ok(()) => CommandOutputPlan::success(),
