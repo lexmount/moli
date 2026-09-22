@@ -56,6 +56,10 @@ async fn child_document_lifecycle_body_leaves_reactions_for_selected_completion(
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         install_child_document_lifecycle_fixture(&mut page_vm, "lifecycle-body").await?;
+        page_vm.vm_mut().eval(r#"
+            Object.defineProperty(document.getElementById("lifecycle-body").contentDocument,
+                "dispatchEvent", {get() { throw new Error("host event used dispatchEvent"); }});
+        "#)?;
 
         let body = page_vm
             .run_page_child_document_lifecycle_body_for_test()
