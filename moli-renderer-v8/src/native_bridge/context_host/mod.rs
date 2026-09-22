@@ -81,6 +81,7 @@ mod child_events;
 mod child_frame_navigation;
 mod child_frame_runtime;
 mod child_runtime_script_order;
+mod document_parser_owner;
 pub(crate) use child_frame_runtime::install_child_window_proxy_access_check_handlers;
 mod child_frame_snapshots;
 mod child_frames;
