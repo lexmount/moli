@@ -774,9 +774,20 @@ impl JsContextHost {
         if let Some(document_handle) = document_handle {
             let _ = self.set_dom_document_url_for_handle(document_handle, url.clone());
         }
-        let base_url = self
-            .lightweight_popup_base_url(scope, popup_id)
+        let base_url = document_handle
+            .map(|document| self.document_base_url_for_handle(document))
+            .or_else(|| self.lightweight_popup_base_url(scope, popup_id))
             .unwrap_or_else(|| url.clone());
+        if let Some(record) = self.lightweight_popup_document_record_mut(popup_id) {
+            record.state.base_url = base_url.clone();
+        }
+        if let Some(owner) = self.current_lightweight_popup_document_owner(popup_id)
+            && let Some(loader) = self.document_resource_loader_for_window_owner(
+                super::WindowDocumentOwner::LightweightPopup(owner),
+            )
+        {
+            loader.update_document_urls(url.clone(), base_url.clone());
+        }
         if let Some(document) = self.lightweight_popup_document_wrapper(scope, popup_id) {
             // Keep the Document's exposed URL slots in sync before history
             // events run, without reinstalling its author-visible methods.
@@ -5557,6 +5568,10 @@ impl JsContextHost {
         document: v8::Local<'s, v8::Object>,
     ) {
         debug_assert!(std::ptr::eq(host_ptr, self));
+        let owner = self
+            .lightweight_popup_id_for_document_handle(document_handle)
+            .and_then(|popup_id| self.current_lightweight_popup_document_owner(popup_id));
+        let entry_document = self.document_open_entry_document(scope);
         crate::native_bridge::document::set_detached_html_document_body_html(
             scope,
             host_ptr,
@@ -5564,21 +5579,38 @@ impl JsContextHost {
             "",
         );
         set_lightweight_popup_document_write_session(scope, document, true);
+        if let Some(owner) = owner
+            && self.lightweight_popup_document_owner_is_current(owner)
+            && let Some(entry_document) = entry_document
+        {
+            let popup_id = owner.popup_id();
+            let url = self.document_open_replacement_url(document_handle, entry_document);
+            self.set_lightweight_popup_same_document_url(scope, popup_id, url.clone());
+            if let Some(window) = self.lightweight_popup_window(scope, popup_id) {
+                // Publish native state before the history update can dispatch
+                // author callbacks that perform another URL change.
+                crate::context_bootstrap::update_history_for_document_open(scope, window, &url);
+            }
+            // Initial about:blank suppresses Navigation API events during
+            // the URL/history update. Clear it only after that update.
+            if let Some(record) = self.lightweight_popup_document_record_mut(popup_id)
+                && record.owner == owner
+            {
+                record.is_initial_empty_document = false;
+            }
+        }
     }
 
     pub(in crate::native_bridge) fn write_lightweight_popup_document_stream<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
-        popup_id: u64,
         document_handle: DomHandle,
         document: v8::Local<'s, v8::Object>,
         html: &str,
     ) {
         debug_assert!(std::ptr::eq(host_ptr, self));
-        let writing_during_load = active_lightweight_popup_id(scope) == Some(popup_id)
-            && !lightweight_popup_document_write_session_active(scope, document);
-        if writing_during_load {
+        if !lightweight_popup_document_write_session_active(scope, document) {
             self.open_lightweight_popup_document_stream(scope, host_ptr, document_handle, document);
         }
         crate::native_bridge::document::append_detached_html_document_body_html(
