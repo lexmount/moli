@@ -50,9 +50,11 @@ impl PageVm {
             RendererPageDomManipulationTask::ImageLoadEvent(task) => self
                 .apply_selected_page_image_load_event_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::ImageLoadEvent)),
-            RendererPageDomManipulationTask::PopupLoadEvent(task) => self
-                .apply_selected_page_popup_load_event_turn(task)
-                .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupLoadEvent)),
+            RendererPageDomManipulationTask::PopupDocumentLifecycle(task) => self
+                .apply_selected_page_popup_document_lifecycle_turn(task)
+                .map(|outcome| {
+                    outcome.map_action(PageDomManipulationTurnAction::PopupDocumentLifecycle)
+                }),
             RendererPageDomManipulationTask::PopupClose(task) => self
                 .apply_selected_page_popup_close_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupClose)),
