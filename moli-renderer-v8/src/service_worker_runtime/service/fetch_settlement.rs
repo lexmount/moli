@@ -1483,7 +1483,13 @@ mod tests {
             }),
         });
         let completion = pop_async_subresource_completion(&mut queue);
-        assert_eq!(completion.result.unwrap().body_bytes(), b"hello integrity");
+        assert_eq!(
+            completion
+                .result
+                .expect("completed integrity response")
+                .body_bytes(),
+            b"hello integrity"
+        );
         assert!(queue.pop_next_async_subresource_event().is_none());
     }
 
@@ -1756,7 +1762,7 @@ mod tests {
                     assert!(
                         completion
                             .result
-                            .unwrap_err()
+                            .expect_err("redirect mode rejects redirect responses")
                             .contains("redirect mode is error")
                     );
                     assert_eq!(
@@ -1780,7 +1786,7 @@ mod tests {
                             }
                         ))
                     );
-                    let response = completion.result.unwrap();
+                    let response = completion.result.expect("redirect response");
                     assert_eq!(response.status, status);
                     assert_eq!(response.final_url, request_url);
                     assert_eq!(response.headers, headers);

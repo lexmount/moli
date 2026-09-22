@@ -87,7 +87,7 @@ fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: "GET".to_owned(),
-                            request_headers: Vec::new(),
+                            request_headers: Default::default(),
                             request_body: None,
                             body_source_id,
                             head,
@@ -113,7 +113,7 @@ fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: "GET".to_owned(),
-                            request_headers: Vec::new(),
+                            request_headers: Default::default(),
                             request_body: None,
                             response_status_text: None,
                             network_error_text: None,
@@ -123,7 +123,8 @@ fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
                                     "hello".to_owned(),
                                     b"hello".to_vec(),
                                 ),
-                            ),
+                            )
+                            .into(),
                         },
                     )
                     .unwrap();
@@ -250,7 +251,7 @@ fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
+                        request_headers: Default::default(),
                         request_body: None,
                         body_source_id,
                         head,
@@ -270,7 +271,7 @@ fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: "GET".to_owned(),
-                        request_headers: Vec::new(),
+                        request_headers: Default::default(),
                         request_body: None,
                         response_status_text: None,
                         skip_fetch_security_validation: false,
@@ -282,7 +283,8 @@ fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
                                 String::new(),
                                 Vec::new(),
                             ),
-                        ),
+                        )
+                        .into(),
                     },
                 )
                 .unwrap();
