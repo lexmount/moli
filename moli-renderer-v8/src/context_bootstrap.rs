@@ -2,8 +2,10 @@ pub(crate) mod abort_signal;
 pub(crate) mod abort_signal_events;
 mod animation_runtime;
 mod assets;
+mod bar_prop;
 pub(crate) mod bridge_descriptor;
 mod external;
+pub(crate) use bar_prop::install_window_bar_props;
 pub(crate) use runtime_state::{
     install_lightweight_popup_legacy_objects, window_realm_secure_context_available,
 };

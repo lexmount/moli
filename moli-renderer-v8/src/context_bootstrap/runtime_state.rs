@@ -2126,6 +2126,7 @@ fn install_window_runtime_state<'s>(
     install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
     install_public_window_surface_accessors(scope, global)?;
+    super::install_window_bar_props(scope, global, None)?;
 
     Ok(())
 }
