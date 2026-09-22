@@ -75,6 +75,7 @@ mod popup_document_open_listeners;
 mod popup_document_open_url;
 mod popup_document_stream;
 mod popup_hyperlinks;
+mod popup_live_document_stream;
 mod promise_rejection;
 mod request_init;
 mod retained_simple_targets;
