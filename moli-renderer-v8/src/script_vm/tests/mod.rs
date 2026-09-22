@@ -2345,6 +2345,7 @@ mod geometry_matrix_dictionary_order;
 mod geometry_point_conversion_order;
 mod geometry_point_transform;
 mod headers_list;
+mod history_document_identity;
 mod history_referrer;
 mod http_fixture;
 mod iframe_load_delivery;
