@@ -39,7 +39,7 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                         internal_id: request.internal_id,
                         request_url: request.url.clone(),
                         request_method: request.method.clone(),
-                        request_headers: Vec::new(),
+                        request_headers: Default::default(),
                         request_body: None,
                         response_status_text: Some("Override Text".to_owned()),
                         skip_fetch_security_validation: true,
@@ -62,7 +62,8 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                                 "body".to_owned(),
                                 b"body".to_vec(),
                             ),
-                        ),
+                        )
+                        .into(),
                     },
                 )
                 .unwrap();

@@ -190,7 +190,7 @@ fn xhr_null_body_statuses_discard_buffered_and_streamed_bytes() {
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
                             request_method: method.to_owned(),
-                            request_headers: Vec::new(),
+                            request_headers: Default::default(),
                             request_body: None,
                             body_source_id,
                             head,
@@ -328,7 +328,7 @@ fn xhr_null_body_late_completion_preserves_a_replacement_requests_progress() {
                 internal_id: request.internal_id,
                 request_url: request.url.clone(),
                 request_method: method.to_owned(),
-                request_headers: Vec::new(),
+                request_headers: Default::default(),
                 request_body: None,
                 body_source_id,
                 head: moli_fetch::ResponseHead {
