@@ -1211,6 +1211,7 @@ impl PageVm {
             root_frame_id: self.vm().root_frame_id().map(str::to_owned),
             top_level_storage_key: None,
             navigation_bootstrap_entry: None,
+            navigation_history_source: Some(self.vm().top_level_navigation_history()),
             reserved_service_worker_client_id: None,
         }
     }
