@@ -3,6 +3,49 @@ use super::*;
 use crate::util::{get_private_value, set_private_value};
 
 const WINDOW_UNLOAD_EVENT_ACTIVE_SLOT: &str = "__lmWindowUnloadEventActive";
+const NAVIGATION_DOCUMENT_SLOT: &str = "__lmNavigationDocument";
+
+pub(super) fn bind_navigation_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if let Some(document) = navigation_owner_document(scope, owner) {
+        let value = v8::BigInt::new_from_u64(scope, document.index() as u64);
+        set_private_value(scope, navigation, NAVIGATION_DOCUMENT_SLOT, value.into());
+    }
+}
+
+fn navigation_owner_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<crate::document_runtime::DomHandle> {
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    super::window_accessors::window_document_handle(scope, owner, unsafe { &*host_ptr })
+}
+
+pub(super) fn navigation_has_current_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(document) = get_private_value(scope, navigation, NAVIGATION_DOCUMENT_SLOT)
+        .and_then(|value| dom_handle_from_marker_value(scope, value))
+    else {
+        // Bootstrap may create the surface before registering the child realm.
+        return true;
+    };
+    let owner = runtime_window_owner(scope, navigation);
+    navigation_owner_document(scope, owner) == Some(document)
+}
+
+pub(super) fn navigation_has_disabled_entries<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+) -> bool {
+    let owner = runtime_window_owner(scope, navigation);
+    !navigation_has_current_document(scope, navigation)
+        || navigation_document_has_disabled_entries(scope, owner)
+}
 
 pub(super) fn runtime_window_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -142,15 +185,6 @@ pub(super) fn window_task_target_for_runtime_owner<'s>(
     ))
 }
 
-pub(super) fn navigation_document_is_initial_empty<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-) -> bool {
-    runtime_window_is_global(scope, owner)
-        && context_host_ptr_from_global_bridge(scope)
-            .is_some_and(|host| unsafe { &*host }.main_document_is_initial_empty())
-}
-
 pub(super) fn navigation_document_is_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -158,30 +192,32 @@ pub(super) fn navigation_document_is_active<'s>(
     navigation_document_is_live(scope, owner)
 }
 
-pub(super) fn navigation_document_can_update_current_entry<'s>(
+pub(super) fn navigation_can_update_current_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+) -> bool {
+    let owner = runtime_window_owner(scope, navigation);
+    navigation_document_is_live(scope, owner) && !navigation_has_disabled_entries(scope, navigation)
+}
+
+pub(super) fn navigation_document_is_initial_empty<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    if !navigation_document_is_live(scope, owner) {
-        return false;
-    }
-    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
-        return context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
-            !unsafe { &*host_ptr }.lightweight_popup_current_document_is_initial_empty(popup_id)
-        });
-    }
-    if runtime_window_is_global(scope, owner) {
-        return !navigation_document_is_initial_empty(scope, owner);
-    }
-    let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
-        return false;
-    };
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return false;
     };
-    unsafe { &*host_ptr }
-        .child_browsing_context_current_url(handle)
-        .is_some_and(|url| !url_is_about_blank_document(&url))
+    let host = unsafe { &*host_ptr };
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return host.lightweight_popup_current_document_is_initial_empty(popup_id);
+    }
+    if runtime_window_is_global(scope, owner) {
+        return host.main_document_is_initial_empty();
+    }
+    // Initialness belongs to the Document, not its URL: document.open() can
+    // change that URL, and a later navigation can create a non-initial blank.
+    child_browsing_context_handle_for_runtime_owner(scope, owner)
+        .is_some_and(|handle| host.child_current_document_is_initial_empty(handle))
 }
 
 pub(super) fn navigation_document_has_disabled_entries<'s>(
@@ -190,14 +226,6 @@ pub(super) fn navigation_document_has_disabled_entries<'s>(
 ) -> bool {
     navigation_document_has_opaque_origin(scope, owner)
         || navigation_document_is_initial_empty(scope, owner)
-        || crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some_and(
-            |popup_id| {
-                context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
-                    unsafe { &*host_ptr }
-                        .lightweight_popup_current_document_is_initial_empty(popup_id)
-                })
-            },
-        )
 }
 
 pub(super) fn navigation_document_has_opaque_origin<'s>(

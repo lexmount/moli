@@ -37,9 +37,10 @@ use super::navigation_traversal_plan::{
     navigation_index_traversal_plan,
 };
 use super::navigation_window::{
-    navigation_document_can_update_current_entry, navigation_document_is_active,
-    navigation_unload_event_active, runtime_window_owner, window_history_for_holder,
-    window_location_for_holder, window_navigation_for_holder,
+    navigation_can_update_current_entry,
+    navigation_document_is_active, navigation_has_current_document, navigation_unload_event_active,
+    runtime_window_owner, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
@@ -234,7 +235,9 @@ pub(super) fn navigation_reload_callback<'s>(
             return;
         }
     };
-    if !navigation_document_is_active(scope, owner) {
+    if !navigation_has_current_document(scope, args.this())
+        || !navigation_document_is_active(scope, owner)
+    {
         rv.set(
             navigation_rejected_invalid_state_result(
                 scope,
@@ -270,7 +273,7 @@ pub(super) fn navigation_reload_callback<'s>(
         );
         return;
     }
-    if navigation_document_can_update_current_entry(scope, owner)
+    if navigation_can_update_current_entry(scope, args.this())
         && let Some(navigation) = window_navigation_for_holder(scope, owner)
     {
         if crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some() {
