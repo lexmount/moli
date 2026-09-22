@@ -275,9 +275,6 @@ pub(super) use hit_test::{
     node_document_elements_from_point_callback, node_shadow_root_element_from_point_callback,
     node_shadow_root_elements_from_point_callback,
 };
-pub(in crate::native_bridge) use lifecycle::{
-    append_detached_html_document_body_html, set_detached_html_document_body_html,
-};
 pub(super) use lifecycle::{
     node_document_close_callback, node_document_exec_command_callback, node_document_open_callback,
     node_document_query_command_enabled_callback, node_document_query_command_indeterm_callback,

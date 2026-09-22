@@ -62,7 +62,9 @@ use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiObject};
 use std::collections::{HashMap, HashSet};
 use url::Url;
 
+mod document_stream;
 mod event_handlers;
+use document_stream::{PopupDocumentStream, PopupStreamScriptMode};
 use event_handlers::{
     PopupWindowContentEventHandlers, clear_lightweight_popup_window_document_event_state,
     install_lightweight_popup_event_handler_accessors,
@@ -77,8 +79,6 @@ const LIGHTWEIGHT_POPUP_JAVASCRIPT_DOCUMENT_ID_SLOT: &str =
 const LIGHTWEIGHT_POPUP_JAVASCRIPT_NAVIGATION_ID_SLOT: &str =
     "__lmLightweightPopupJavascriptNavigationId";
 const LIGHTWEIGHT_POPUP_JAVASCRIPT_SOURCE_SLOT: &str = "__lmLightweightPopupJavascriptSource";
-const LIGHTWEIGHT_POPUP_DOCUMENT_WRITE_SESSION_SLOT: &str =
-    "__lmLightweightPopupDocumentWriteSession";
 const LIGHTWEIGHT_POPUP_VIEWPORT_SURFACE_PROPERTIES: &[&str] = &[
     "innerWidth",
     "innerHeight",
@@ -263,6 +263,7 @@ struct LightweightPopupClassicScriptContinuation {
     task: LightweightPopupNavigationTaskToken,
     document_handle: DomHandle,
     document_url: Url,
+    stream_script: Option<(PopupStreamScriptMode, crate::parser::PreparedScript)>,
     parser_steps: Vec<LightweightPopupParserStep>,
     next_step_index: usize,
     response_content_security_policies: Vec<String>,
@@ -440,6 +441,7 @@ struct LightweightPopupDocumentRecord {
     wrapper: Option<v8::Global<v8::Object>>,
     handle: Option<DomHandle>,
     script_globals: HashMap<String, v8::Global<v8::Value>>,
+    stream: Option<PopupDocumentStream>,
     content_event_handlers: PopupWindowContentEventHandlers,
     incomplete_child_frame_loads: HashSet<DomHandle>,
     dom_content_loaded: PopupDomContentLoadedState,
@@ -1050,6 +1052,7 @@ impl JsContextHost {
                         wrapper: None,
                         handle: None,
                         script_globals: HashMap::new(),
+                        stream: None,
                         content_event_handlers: PopupWindowContentEventHandlers::default(),
                         incomplete_child_frame_loads: HashSet::new(),
                         dom_content_loaded: PopupDomContentLoadedState::NotRequired,
@@ -2017,7 +2020,7 @@ impl JsContextHost {
             && self.lightweight_popup_navigation_id(task.popup_id()) == Some(task.navigation_id)
     }
 
-    fn lightweight_popup_committed_navigation_task_is_current(
+    pub(crate) fn lightweight_popup_committed_navigation_task_is_current(
         &self,
         task: LightweightPopupNavigationTaskToken,
     ) -> bool {
@@ -2135,6 +2138,7 @@ impl JsContextHost {
                     wrapper: None,
                     handle: None,
                     script_globals: HashMap::new(),
+                    stream: None,
                     content_event_handlers: PopupWindowContentEventHandlers::default(),
                     incomplete_child_frame_loads: HashSet::new(),
                     dom_content_loaded: PopupDomContentLoadedState::NotRequired,
@@ -3500,6 +3504,7 @@ impl JsContextHost {
             task,
             document_handle,
             document_url: document.url.clone(),
+            stream_script: None,
             parser_steps,
             next_step_index: 0,
             response_content_security_policies: response_content_security_policies.to_vec(),
@@ -3540,14 +3545,25 @@ impl JsContextHost {
             let script_type = self
                 .child_document_native_script_attribute(script, "type")
                 .unwrap_or_default();
-            if !script_type.is_empty()
+            if continuation.stream_script.is_none()
+                && !script_type.is_empty()
                 && !script_type.eq_ignore_ascii_case("text/javascript")
                 && !script_type.eq_ignore_ascii_case("application/javascript")
             {
                 continue;
             }
 
-            let script_src = self.child_document_native_script_attribute(script, "src");
+            let script_src = match continuation
+                .stream_script
+                .as_ref()
+                .map(|(_, prepared)| prepared)
+            {
+                Some(prepared) => {
+                    matches!(prepared.source, crate::planning::ScriptSource::External)
+                        .then(|| prepared.url.to_string())
+                }
+                None => self.child_document_native_script_attribute(script, "src"),
+            };
             let source = if let Some(src) = script_src.as_deref() {
                 if src.is_empty() {
                     continue;
@@ -3556,7 +3572,12 @@ impl JsContextHost {
                     .lightweight_popup_document_record(popup_id)
                     .map(|document| &document.state.base_url)
                     .unwrap_or(&continuation.document_url);
-                let Ok(script_url) = Url::options().base_url(Some(base_url)).parse(src) else {
+                let Some(script_url) = continuation
+                    .stream_script
+                    .as_ref()
+                    .map(|(_, script)| script.url.clone())
+                    .or_else(|| Url::options().base_url(Some(base_url)).parse(src).ok())
+                else {
                     continue;
                 };
                 if let Some(violation) = unsafe { &*self.runtime }
@@ -3594,8 +3615,9 @@ impl JsContextHost {
                     continue;
                 }
                 self.mark_child_document_native_script_already_started(script);
-                if let Some(source) =
-                    self.materialize_local_lightweight_popup_script_source(&script_url)
+                if continuation.stream_script.is_none()
+                    && let Some(source) =
+                        self.materialize_local_lightweight_popup_script_source(&script_url)
                 {
                     source
                 } else {
@@ -3613,6 +3635,26 @@ impl JsContextHost {
                     );
                     return LightweightPopupClassicScriptAdvance::Pending(body_activity);
                 }
+            } else if let Some((_, prepared)) = &continuation.stream_script {
+                let crate::planning::ScriptSource::Inline(source) = &prepared.source else {
+                    continue;
+                };
+                let Some(source) =
+                    crate::native_bridge::element::inline_script_source_for_execution(
+                        scope,
+                        self as *mut JsContextHost,
+                        script,
+                        source,
+                        crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
+                            nonce: prepared.fetch_metadata.nonce.as_deref(),
+                            integrity: prepared.fetch_metadata.integrity.as_deref(),
+                            parser_inserted: true,
+                        },
+                    )
+                else {
+                    continue;
+                };
+                source
             } else {
                 self.child_document_native_script_text_content(script)
             };
@@ -3621,6 +3663,7 @@ impl JsContextHost {
                 continue;
             }
             if script_src.is_none()
+                && continuation.stream_script.is_none()
                 && let Some(violation) = unsafe { &*self.runtime }
                     .inline_script_csp_report_only_violation_for_document(
                         &continuation.document_url,
@@ -3637,6 +3680,7 @@ impl JsContextHost {
                 }
             }
             if script_src.is_none()
+                && continuation.stream_script.is_none()
                 && let Some(violation) = unsafe { &*self.runtime }
                     .inline_script_csp_violation_for_document(
                         Some(continuation.document_handle),
@@ -3665,6 +3709,7 @@ impl JsContextHost {
                 script,
                 &continuation.document_url,
                 &source,
+                continuation.stream_script.as_ref().map(|(mode, _)| *mode),
             );
         }
         LightweightPopupClassicScriptAdvance::Completed(body_activity)
@@ -3677,8 +3722,22 @@ impl JsContextHost {
         script: DomHandle,
         document_url: &Url,
         source: &str,
+        stream_mode: Option<PopupStreamScriptMode>,
     ) {
         let popup_id = task.popup_id();
+        let insertion = (stream_mode == Some(PopupStreamScriptMode::Blocking))
+            .then(|| self.popup_document_stream_insertion(popup_id))
+            .flatten();
+        let _nesting = insertion
+            .as_ref()
+            .map(|insertion| insertion.control_handle().enter_parser_script_nesting());
+        let _input = insertion
+            .as_ref()
+            .map(|insertion| insertion.enter_script_input_context());
+        let _ignore_writes = stream_mode
+            .filter(|mode| *mode != PopupStreamScriptMode::Blocking)
+            .and_then(|_| self.lightweight_popup_document_handle(popup_id))
+            .map(|document| self.enter_ignore_destructive_writes(document));
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return;
         };
@@ -3775,6 +3834,10 @@ impl JsContextHost {
         request: Request,
     ) {
         let task = continuation.task;
+        let local_source = continuation
+            .stream_script
+            .as_ref()
+            .and_then(|_| self.materialize_local_lightweight_popup_script_source(&script_url));
         let load_id = self.next_lightweight_popup_classic_script_load_id;
         self.next_lightweight_popup_classic_script_load_id = self
             .next_lightweight_popup_classic_script_load_id
@@ -3796,6 +3859,13 @@ impl JsContextHost {
         let completion_tx = self.resource_completion_tx.clone();
         loader.spawn_resource_task(async move {
             let result = async {
+                if let Some(source) = local_source {
+                    return Ok(LoadedChildScriptSource {
+                        final_url: script_url.clone(),
+                        redirected: false,
+                        source,
+                    });
+                }
                 let response = request_client
                     .fetch_text_stream_with_cancel(request, cancel_handle)
                     .await
@@ -3845,6 +3915,16 @@ impl JsContextHost {
         let mut body_activity = PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
         let task = pending.continuation.task;
         let popup_id = task.popup_id();
+        let stream_mode = pending
+            .continuation
+            .stream_script
+            .as_ref()
+            .map(|(mode, _)| *mode);
+        if let Some(mode) = stream_mode
+            && !self.prepare_popup_document_stream_script_resume(task, mode)
+        {
+            return PopupClassicScriptLoadApplication::NotApplied;
+        }
 
         match completion.result {
             Ok(fetched_source) => {
@@ -3877,6 +3957,7 @@ impl JsContextHost {
                         pending.script_handle,
                         &pending.continuation.document_url,
                         &fetched_source.source,
+                        stream_mode,
                     );
                 }
             }
@@ -3890,6 +3971,13 @@ impl JsContextHost {
             }
         }
 
+        if let Some(mode) = stream_mode {
+            self.resume_popup_document_stream_script(scope, task, mode);
+            return PopupClassicScriptLoadApplication::Applied {
+                body_activity,
+                parser_completion: None,
+            };
+        }
         if !self.lightweight_popup_committed_navigation_task_is_current(task) {
             return PopupClassicScriptLoadApplication::Applied {
                 body_activity,
@@ -4599,6 +4687,10 @@ impl JsContextHost {
                     )
                     && document.queued_load_event.is_none()
                     && document.incomplete_child_frame_loads.is_empty()
+                    && document
+                        .stream
+                        .as_ref()
+                        .is_none_or(|stream| stream.async_loads_finished())
                     && !self
                         .pending_lightweight_popup_classic_script_loads
                         .values()
@@ -5531,112 +5623,6 @@ fn lightweight_popup_location_href<'s>(
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))?;
     Url::parse(&href).ok()
-}
-
-fn lightweight_popup_document_write_session_active<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(
-        scope,
-        document,
-        LIGHTWEIGHT_POPUP_DOCUMENT_WRITE_SESSION_SLOT,
-    )
-    .is_some_and(|value| value.boolean_value(scope))
-}
-
-fn set_lightweight_popup_document_write_session<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    document: v8::Local<'s, v8::Object>,
-    active: bool,
-) {
-    let value = v8::Boolean::new(scope, active);
-    set_private_value(
-        scope,
-        document,
-        LIGHTWEIGHT_POPUP_DOCUMENT_WRITE_SESSION_SLOT,
-        value.into(),
-    );
-}
-
-impl JsContextHost {
-    pub(in crate::native_bridge) fn open_lightweight_popup_document_stream<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
-        document_handle: DomHandle,
-        document: v8::Local<'s, v8::Object>,
-    ) {
-        debug_assert!(std::ptr::eq(host_ptr, self));
-        let owner = self
-            .lightweight_popup_id_for_document_handle(document_handle)
-            .and_then(|popup_id| self.current_lightweight_popup_document_owner(popup_id));
-        let entry_document = self.document_open_entry_document(scope);
-        // Erase the current shadow-including tree before disconnecting it.
-        // Popup Windows have their own listener store despite sharing a V8
-        // realm with the opener; do not clear other Windows in that realm.
-        self.clear_event_callbacks_for_document_replacement(document_handle, false);
-        if let Some(window) =
-            owner.and_then(|owner| self.lightweight_popup_window(scope, owner.popup_id()))
-        {
-            clear_lightweight_popup_window_document_event_state(scope, window);
-        }
-        crate::native_bridge::document::set_detached_html_document_body_html(
-            scope,
-            host_ptr,
-            document_handle,
-            "",
-        );
-        set_lightweight_popup_document_write_session(scope, document, true);
-        if let Some(owner) = owner
-            && self.lightweight_popup_document_owner_is_current(owner)
-            && let Some(entry_document) = entry_document
-        {
-            let popup_id = owner.popup_id();
-            let url = self.document_open_replacement_url(document_handle, entry_document);
-            self.set_lightweight_popup_same_document_url(scope, popup_id, url.clone());
-            if let Some(window) = self.lightweight_popup_window(scope, popup_id) {
-                // Publish native state before the history update can dispatch
-                // author callbacks that perform another URL change.
-                crate::context_bootstrap::update_history_for_document_open(scope, window, &url);
-            }
-            // Initial about:blank suppresses Navigation API events during
-            // the URL/history update. Clear it only after that update.
-            if let Some(record) = self.lightweight_popup_document_record_mut(popup_id)
-                && record.owner == owner
-            {
-                record.is_initial_empty_document = false;
-            }
-        }
-    }
-
-    pub(in crate::native_bridge) fn write_lightweight_popup_document_stream<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        host_ptr: *mut JsContextHost,
-        document_handle: DomHandle,
-        document: v8::Local<'s, v8::Object>,
-        html: &str,
-    ) {
-        debug_assert!(std::ptr::eq(host_ptr, self));
-        if !lightweight_popup_document_write_session_active(scope, document) {
-            self.open_lightweight_popup_document_stream(scope, host_ptr, document_handle, document);
-        }
-        crate::native_bridge::document::append_detached_html_document_body_html(
-            scope,
-            host_ptr,
-            document_handle,
-            html,
-        );
-    }
-
-    pub(in crate::native_bridge) fn close_lightweight_popup_document_stream<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        document: v8::Local<'s, v8::Object>,
-    ) {
-        set_lightweight_popup_document_write_session(scope, document, false);
-    }
 }
 
 fn lightweight_popup_javascript_url_callback<'s>(

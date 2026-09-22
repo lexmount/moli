@@ -139,7 +139,6 @@ fn node_document_write_or_writeln_callback<'s>(
             scope,
             runtime_ptr,
             handle,
-            args.this(),
             &html,
         );
         rv.set_undefined();
@@ -300,7 +299,6 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
                 scope,
                 runtime_ptr,
                 handle,
-                args.this(),
             );
             rv.set(args.this().into());
             return;
@@ -548,8 +546,7 @@ pub(in crate::native_bridge) fn node_document_close_callback<'s>(
             .lightweight_popup_id_for_document_handle(handle)
             .is_some()
         {
-            unsafe { &mut *runtime_ptr }
-                .close_lightweight_popup_document_stream(scope, args.this());
+            unsafe { &mut *runtime_ptr }.close_lightweight_popup_document_stream(scope, handle);
             rv.set_undefined();
             return;
         }
@@ -624,55 +621,6 @@ fn close_windowless_document<'s>(
         }
     }
     unsafe { &mut *runtime_ptr }.release_finished_windowless_document_parser(handle, &token);
-}
-
-fn detached_html_document_body_handle(
-    runtime: &JsContextHost,
-    document_handle: DomHandle,
-) -> Option<DomHandle> {
-    let dom = runtime.dom_host().dom();
-    dom.node(document_handle)?
-        .as_document()?
-        .body_handle(dom, document_handle)
-}
-
-pub(in crate::native_bridge) fn set_detached_html_document_body_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    document_handle: DomHandle,
-    html: &str,
-) -> bool {
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let Some(body) = detached_html_document_body_handle(runtime, document_handle) else {
-            return false;
-        };
-        if html.is_empty() && runtime.dom_host().child_handles(body).next().is_none() {
-            return true;
-        }
-        runtime.set_inner_html(scope, runtime_ptr, body, html)
-    })
-}
-
-pub(in crate::native_bridge) fn append_detached_html_document_body_html(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    document_handle: DomHandle,
-    html: &str,
-) -> bool {
-    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
-        let runtime = unsafe { &mut *runtime_ptr };
-        let Some(body) = detached_html_document_body_handle(runtime, document_handle) else {
-            return false;
-        };
-        let scripting_enabled_for_node = |node| runtime.node_document_scripting_enabled(node);
-        let mut next = runtime
-            .dom_host()
-            .get_html(body, &scripting_enabled_for_node, false, &[])
-            .unwrap_or_default();
-        next.push_str(html);
-        runtime.set_inner_html(scope, runtime_ptr, body, &next)
-    })
 }
 
 fn normalized_editing_command<'s>(
