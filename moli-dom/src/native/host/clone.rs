@@ -491,10 +491,14 @@ impl DomHost {
                 if !allow_document {
                     return None;
                 }
-                let mut document = document.clone();
+                let mut document = document.clone_for_new_document();
                 document.set_design_mode_enabled(false);
-                self.dom
-                    .create_node(super::NodeData::Document(document), None, false, false)
+                self.dom.create_node(
+                    super::NodeData::Document(Box::new(document)),
+                    None,
+                    false,
+                    false,
+                )
             }
             super::NodeData::DocumentType(doctype) => {
                 self.create_document_type(doctype.name(), doctype.public_id(), doctype.system_id())
