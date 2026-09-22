@@ -1673,7 +1673,14 @@ impl Page {
     }
 
     pub fn start_layout_metrics(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::LayoutMetrics)
+        self.start_layout_metrics_with_publication(false)
+    }
+
+    pub fn start_layout_metrics_with_publication(
+        &self,
+        publish_layout: bool,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::LayoutMetrics { publish_layout })
     }
 
     pub fn finish_layout_metrics(

@@ -78,7 +78,7 @@ impl RendererPageCommand {
             | Self::OuterHtmlForDocument { .. }
             | Self::OuterHtmlForNode { .. }
             | Self::SerializeDocument
-            | Self::LayoutMetrics
+            | Self::LayoutMetrics { .. }
             | Self::PublishLayout
             | Self::CaptureScreencastFrame(..)
             | Self::BlobBytesForUuid { .. }

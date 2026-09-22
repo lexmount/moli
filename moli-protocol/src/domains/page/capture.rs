@@ -357,13 +357,16 @@ pub(super) async fn execute_devtools_get_layout_metrics_command(
     command: DevToolsGetLayoutMetricsCommand,
 ) -> Result<AutomationResult, DevToolsError> {
     let owner = page_command_owner(conn, &command.context)?;
-    let result = execute_devtools_get_layout_metrics_for_current_owner(conn, &owner).await;
+    let result =
+        execute_devtools_get_layout_metrics_for_current_owner(conn, &owner, command.publish_layout)
+            .await;
     result.map(AutomationResult::LayoutMetrics)
 }
 
 pub(super) async fn execute_devtools_get_layout_metrics_for_current_owner(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
+    publish_layout: bool,
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
     let Some(page) = conn
         .runtime_session_owner_slot_mut_for_owner(owner)
@@ -372,9 +375,11 @@ pub(super) async fn execute_devtools_get_layout_metrics_for_current_owner(
     else {
         return Err(devtools_layout_metrics_error("NoDocumentLoaded"));
     };
-    let pending = page.start_layout_metrics().map_err(|error| {
-        devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
-    })?;
+    let pending = page
+        .start_layout_metrics_with_publication(publish_layout)
+        .map_err(|error| {
+            devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
+        })?;
     let completed = pending.wait().await.map_err(|error| {
         devtools_layout_metrics_error(format!("Failed to produce layout metrics: {error}"))
     })?;
@@ -669,6 +674,11 @@ pub(super) fn build_cdp_get_layout_metrics_command(
         .unwrap_or((None, None));
     crate::automation::DevToolsGetLayoutMetricsCommand {
         context: cmd.automation_context(target_id.as_deref(), browser_context_id.as_deref()),
+        publish_layout: cmd
+            .params
+            .and_then(|params| params.get("publishLayout"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
     }
 }
 
@@ -696,7 +706,7 @@ pub(super) fn start_devtools_get_layout_metrics_command(
             devtools_layout_metrics_error("NoDocumentLoaded"),
         ));
     };
-    match page.start_layout_metrics() {
+    match page.start_layout_metrics_with_publication(command.publish_layout) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
