@@ -95,7 +95,9 @@ async fn worker_fetch_request_initializers_use_request_header_guards() {
                 assert_eq!(pending.info.url.path(), "/echo");
                 requests += 1;
                 assert!(requests <= 33);
-                let body = serde_json::json!({"headers": pending.info.request_headers}).to_string();
+                let body =
+                    serde_json::json!({"headers": pending.info.request_headers.to_byte_strings()})
+                        .to_string();
                 let request =
                     pending_worker_fetch_continue(pending.fetch_id, requests, &pending.info, false);
                 handle.fulfill_pending_fetch(

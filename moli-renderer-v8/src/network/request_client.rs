@@ -1219,7 +1219,7 @@ fn local_text_response(request: &Request) -> Option<Result<Response>> {
     crate::network_host::local_url_response_result(
         &request.url,
         &request.method,
-        &request.request_headers,
+        &request.request_headers.to_byte_strings(),
     )
     .map(|result| result.map_err(anyhow::Error::msg))
 }
