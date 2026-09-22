@@ -1,5 +1,6 @@
 mod browser_target;
 mod emulation_input_storage;
+mod nested_history;
 mod network_fetch;
 mod p0_input;
 mod p0_network;

@@ -42,6 +42,13 @@ impl RendererSessionHistories {
         }
     }
 
+    pub(crate) fn bind_context(&mut self, owner: OwnerDispatchScope, context: SessionHistoryContextId) {
+        if let Some(previous) = self.contexts.insert(owner, context) && previous != context {
+            self.main.detach(previous);
+            for history in self.popups.values_mut() { history.detach(previous); }
+        }
+    }
+
     pub(crate) fn context(&mut self, owner: OwnerDispatchScope) -> SessionHistoryContextId {
         match owner {
             OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => {

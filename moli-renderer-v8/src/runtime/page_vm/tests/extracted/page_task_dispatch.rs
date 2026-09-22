@@ -38,6 +38,7 @@ fn default_runtime_hooks_reject_direct_no_owner_page_vm_construction() {
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            navigation_history_source: None,
             reserved_service_worker_client_id: None,
         },
         PageVmRuntimeHooks::default(),
