@@ -264,13 +264,18 @@ fn visible_activation_from(
     destination_url: &Url,
 ) -> Option<NavigationHistorySerializedEntry> {
     previous_entry
-        .filter(|entry| {
-            entry.url == "about:blank"
-                || Url::parse(&entry.url)
-                    .ok()
-                    .is_some_and(|previous_url| same_origin(&previous_url, destination_url))
-        })
+        .filter(|entry| entry_is_same_origin_with_destination(entry, destination_url))
         .cloned()
+}
+
+fn entry_is_same_origin_with_destination(
+    entry: &NavigationHistorySerializedEntry,
+    destination_url: &Url,
+) -> bool {
+    entry.url == "about:blank"
+        || Url::parse(&entry.url)
+            .ok()
+            .is_some_and(|entry_url| same_origin(&entry_url, destination_url))
 }
 
 pub fn replace_child_browsing_context_navigation_in_entry_seed(
@@ -462,6 +467,14 @@ pub fn traversal_navigation_seed_candidate(
 
     let current_url = Url::parse(&current_entry.url).ok()?;
     let target_url = Url::parse(&target_entry.url).ok()?;
+    // Traversals only expose an activation source that belongs to the
+    // destination's contiguous same-origin entry list.
+    let traversed_indices = current_index.min(target_index)..=current_index.max(target_index);
+    let from = entries
+        .iter()
+        .filter(|entry| traversed_indices.contains(&entry.history_index))
+        .all(|entry| entry_is_same_origin_with_destination(entry, &target_url))
+        .then_some(current_entry);
     Some(NavigationTraversalSeedCandidate {
         current_url,
         target_url: target_url.clone(),
@@ -474,7 +487,7 @@ pub fn traversal_navigation_seed_candidate(
             current_index: target_index,
             activation: Some(NavigationActivationSeed {
                 entry: target_entry,
-                from: visible_activation_from(Some(&current_entry), &target_url),
+                from,
                 navigation_type: Some("traverse".to_owned()),
             }),
         },
@@ -520,9 +533,7 @@ fn replacement_entry_key(
 }
 
 fn same_origin(left: &Url, right: &Url) -> bool {
-    left.scheme() == right.scheme()
-        && left.domain() == right.domain()
-        && left.port_or_known_default() == right.port_or_known_default()
+    left.origin() == right.origin()
 }
 
 #[cfg(test)]
@@ -971,5 +982,74 @@ mod tests {
                 .and_then(|activation| activation.navigation_type.as_deref()),
             Some("traverse")
         );
+    }
+
+    #[test]
+    fn traversal_activation_from_requires_a_contiguous_same_origin_region() {
+        for (url, middle_url, visible) in [
+            (
+                "https://example.test/page",
+                "https://example.test:443/middle",
+                true,
+            ),
+            (
+                "https://example.test/page",
+                "http://example.test/middle",
+                false,
+            ),
+            (
+                "https://example.test/page",
+                "https://other.test/middle",
+                false,
+            ),
+            ("http://127.0.0.1/page", "http://127.0.0.1:80/middle", true),
+            ("http://127.0.0.1/page", "http://127.0.0.2/middle", false),
+            (
+                "http://127.0.0.1/page",
+                "http://127.0.0.1:8080/middle",
+                false,
+            ),
+            ("http://[::1]/page", "http://[::2]/middle", false),
+            (
+                "https://example.test/page",
+                "blob:https://example.test/fixture",
+                true,
+            ),
+            (
+                "https://example.test/page",
+                "blob:https://other.test/fixture",
+                false,
+            ),
+            ("https://example.test/page", "data:text/html,fixture", false),
+        ] {
+            let entries: Vec<_> = [url, middle_url, url]
+                .into_iter()
+                .enumerate()
+                .map(|(index, url)| {
+                    navigation_history_entry(
+                        url,
+                        index as u32,
+                        index as u32,
+                        NavigationHistoryDocumentId::allocate(),
+                        NavigationHistoryEntryId::allocate(),
+                        NavigationHistoryEntryKey::allocate(),
+                        None,
+                        None,
+                    )
+                })
+                .collect();
+            for (current, target) in [(0, 2), (2, 0)] {
+                let candidate =
+                    traversal_navigation_seed_candidate(entries.clone(), current, target)
+                        .expect("distinct Documents with identical URLs require a traversal");
+                let activation = candidate.seed.activation.unwrap();
+                assert_eq!(activation.entry, entries[target as usize]);
+                assert_eq!(
+                    activation.from.as_ref(),
+                    visible.then_some(&entries[current as usize]),
+                    "{url} via {middle_url}, from {current} to {target}"
+                );
+            }
+        }
     }
 }

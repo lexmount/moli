@@ -22,7 +22,6 @@ pub(super) use install::{
 };
 pub(super) use navigation::{
     is_same_document_fragment_navigation, resolve_location_navigation_target,
-    urls_refer_to_same_document,
 };
 pub(super) use slots::{location_href_slot, sync_location_object};
 pub(crate) use surface::sync_global_location_runtime_state;
