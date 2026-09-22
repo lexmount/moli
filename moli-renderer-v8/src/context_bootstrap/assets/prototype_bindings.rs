@@ -541,6 +541,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     install_crypto_template_bindings(scope, template, spec.interface.name());
     install_navigator_template_bindings(scope, template, spec.interface.name());
     install_screen_template_bindings(scope, template, spec.interface.name());
+    crate::context_bootstrap::bar_prop::install_bar_prop_template_bindings(
+        scope,
+        template,
+        spec.interface.name(),
+    );
     crate::context_bootstrap::external::install_external_template_bindings(
         scope,
         template,
