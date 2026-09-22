@@ -162,6 +162,32 @@ fn dispatch_resolved_event<'s>(
     result
 }
 
+/// Invoke one phase inside a dispatch owned by the native DOM path.
+pub(crate) fn invoke_simple_event_target_phase<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    event_type: &str,
+    event: v8::Local<'s, v8::Object>,
+    capture: bool,
+) {
+    let Some(target) = resolve_event_target(scope, object) else {
+        return;
+    };
+    let Some(registry) = SimpleEventListenerRegistry::from_owner(scope, target.listener_owner)
+    else {
+        return;
+    };
+    invoke_simple_event_listeners(
+        scope,
+        target.dispatch_target,
+        registry,
+        event_type,
+        event,
+        Some(capture),
+        None,
+    );
+}
+
 fn invoke_simple_event_listeners<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,

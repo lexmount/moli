@@ -500,9 +500,12 @@ fn invoke_event_target_handler_property<'s>(
     if V8ExecutionWatchdog::callback_dispatch_has_timed_out(scope) {
         return;
     }
-    if matches!(target, EventTargetHandle::ChildWindow(_)) {
-        // Child Window event-handler properties share the native listener
-        // registry and are invoked in registration order by the listener phase.
+    if matches!(
+        target,
+        EventTargetHandle::ChildWindow(_) | EventTargetHandle::PopupWindow(_)
+    ) {
+        // Child and popup Window handlers run in registration order
+        // through their own listener registries.
         return;
     }
     invoke_event_handler_property(
@@ -543,6 +546,18 @@ fn call_event_target_listeners_filtered<'s>(
             ),
         );
     }
+    if let EventTargetHandle::PopupWindow(target) = target {
+        return Ok(
+            unsafe { &mut *host_ptr }.call_popup_window_event_path_listeners(
+                scope,
+                target,
+                event_type,
+                event,
+                capture_only,
+                at_target,
+            ),
+        );
+    }
     registry.call_listeners_filtered(
         scope,
         host_ptr,
@@ -563,6 +578,9 @@ fn event_target_is_current(host_ptr: *mut PageScriptHost, target: EventTargetHan
     match target {
         EventTargetHandle::ChildWindow(target) => {
             unsafe { &*host_ptr }.child_window_event_target_is_current(target)
+        }
+        EventTargetHandle::PopupWindow(target) => {
+            unsafe { &*host_ptr }.popup_window_event_target_is_current(target)
         }
         EventTargetHandle::Window | EventTargetHandle::Node(_) => true,
     }
@@ -1403,6 +1421,9 @@ fn dispatch_public_event_with_original_target_impl<'s, 'i>(
             EventTargetHandle::ChildWindow(window) => {
                 host.child_browsing_context_document_handle(window.child_handle())
             }
+            EventTargetHandle::PopupWindow(target) => {
+                host.lightweight_popup_document_handle(target.document_owner.popup_id())
+            }
         }
     } else {
         None
@@ -2121,6 +2142,9 @@ fn event_target_object<'s>(
         EventTargetHandle::ChildWindow(target) => unsafe { &mut *host_ptr }
             .child_window_event_target_wrapper(scope, target)
             .ok_or_else(|| format!("stale child Window event target `{target:?}`")),
+        EventTargetHandle::PopupWindow(target) => unsafe { &*host_ptr }
+            .popup_window_event_target_wrapper(scope, target)
+            .ok_or_else(|| format!("stale popup Window event target `{target:?}`")),
         EventTargetHandle::Node(handle) => {
             let wrapper = unsafe { &mut *host_ptr }
                 .native_bridge_mut()
@@ -2141,6 +2165,9 @@ pub(crate) fn event_target_value<'s>(
         EventTargetHandle::ChildWindow(target) => {
             event_target_object(scope, host_ptr, EventTargetHandle::ChildWindow(target))?.into()
         }
+        EventTargetHandle::PopupWindow(target) => {
+            event_target_object(scope, host_ptr, EventTargetHandle::PopupWindow(target))?.into()
+        }
         EventTargetHandle::Node(handle) => {
             event_target_object(scope, host_ptr, EventTargetHandle::Node(handle))?.into()
         }
@@ -2157,6 +2184,10 @@ fn event_target_receiver<'s>(
         EventTargetHandle::Window => scope.get_current_context().global(scope).into(),
         EventTargetHandle::ChildWindow(target) => unsafe { &mut *host_ptr }
             .child_window_event_target_wrapper(scope, target)
+            .map(Into::into)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        EventTargetHandle::PopupWindow(target) => unsafe { &*host_ptr }
+            .popup_window_event_target_wrapper(scope, target)
             .map(Into::into)
             .unwrap_or_else(|| v8::undefined(scope).into()),
         EventTargetHandle::Node(_) => {
@@ -2528,7 +2559,9 @@ fn current_target_can_access_shadow_root(
 ) -> bool {
     let runtime = unsafe { &*host_ptr };
     match current_target {
-        EventTargetHandle::Window | EventTargetHandle::ChildWindow(_) => false,
+        EventTargetHandle::Window
+        | EventTargetHandle::ChildWindow(_)
+        | EventTargetHandle::PopupWindow(_) => false,
         EventTargetHandle::Node(handle) => {
             shadow_including_tree_contains(runtime.dom_host(), shadow_root, handle)
         }
