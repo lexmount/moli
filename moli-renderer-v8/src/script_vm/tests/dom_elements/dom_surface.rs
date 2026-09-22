@@ -14524,3 +14524,36 @@ fn child_browsing_context_lookup_tolerates_document_handle_cycle() {
         Some(handle)
     );
 }
+
+#[test]
+fn window_named_access_uses_its_realm_during_child_history_callbacks() {
+    let mut vm = new_storage_test_vm("https://joint-history.test/parent");
+    vm.eval(
+        r#"
+      const frame = document.createElement('iframe');
+      frame.id = 'topFrame';
+      frame.srcdoc = '<p id="childOnly">child</p>';
+      (document.body || document.documentElement || document).appendChild(frame);
+    "#,
+    )
+    .unwrap();
+    vm.drain_pending_child_frame_work_for_test();
+    let child = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_handles_in_document_order()[0];
+    let context = &vm.page_default_context as *const v8::Global<v8::Context>;
+    vm.with_context_scope_by_ptr(context, |scope, _| {
+        crate::native_bridge::enter_active_child_window_scope(scope, Some(child));
+        Ok(())
+    })
+    .unwrap();
+    let result =
+        vm.eval("[topFrame.id, typeof childOnly, frame.contentWindow.childOnly.id].join('|')");
+    vm.with_context_scope_by_ptr(context, |scope, _| {
+        crate::native_bridge::enter_active_child_window_scope(scope, None);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(result.unwrap(), "topFrame|undefined|childOnly");
+}

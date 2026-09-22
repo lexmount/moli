@@ -48,6 +48,19 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
     if marked_handle.is_some() {
         return marked_handle;
     }
+    // A callback can run promise reactions from another realm before its
+    // legacy dispatch marker is restored. The holder's native realm remains
+    // authoritative for WindowProperties, including a top-level holder.
+    if let Some(context) = receiver.get_creation_context(scope)
+        && let Some(host_ptr) = context_host_ptr_from_context_slot(context)
+        && let Some(identity) =
+            unsafe { &*host_ptr }.window_execution_context_identity_for_access_check(context)
+    {
+        return unsafe { &*host_ptr }
+            .window_execution_context_identity_is_current(identity)
+            .then(|| identity.dispatch_scope().child_window())
+            .flatten();
+    }
     if let Some(handle) = crate::native_bridge::active_child_window_handle(scope) {
         if receiver_is_current_global {
             return Some(handle);
@@ -76,22 +89,7 @@ pub(in crate::context_bootstrap) fn window_child_context_handle<'s>(
         }
     }
 
-    // WindowProperties is a per-realm prototype-chain object rather than the
-    // global proxy, so it has no child-handle marker of its own. Resolve its
-    // native Window identity through the creation context, mirroring Blink's
-    // native DOMWindow association on WindowProperties.
-    let receiver_context = receiver.get_creation_context(scope)?;
-    let host_ptr = context_host_ptr_from_context_slot(receiver_context)?;
-    let host = unsafe { &*host_ptr };
-    let identity = host.window_execution_context_identity_for_access_check(receiver_context)?;
-    if !host.window_execution_context_identity_is_current(identity) {
-        return None;
-    }
-    match identity.dispatch_scope() {
-        crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
-        crate::native_bridge::OwnerDispatchScope::Top
-        | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
-    }
+    None
 }
 
 pub(crate) fn window_host_ptr(
