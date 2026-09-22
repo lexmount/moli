@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 //! V8-backed renderer implementation for Moli.
 //!
 //! This crate owns the JS/runtime machinery behind page execution: renderer
