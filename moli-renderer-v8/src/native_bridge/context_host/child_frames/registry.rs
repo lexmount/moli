@@ -103,6 +103,7 @@ impl JsContextHost {
         self.retire_web_mcp_document(crate::native_bridge::WindowDocumentOwner::Frame(
             retired_owner,
         ));
+        self.claimed_child_histories.remove(&document_handle);
         let _ = self.retire_document_resource_loader(
             crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
         );
@@ -170,6 +171,17 @@ impl JsContextHost {
                 self.object_fallback_bootstraps.remove(&handle);
                 let existing = self.child_browsing_contexts.get(&handle).cloned();
                 let is_new = existing.is_none();
+                let history_identity = existing
+                    .as_ref()
+                    .and_then(|entry| entry.history_identity.clone())
+                    .or_else(|| self.child_history_identity(scope, handle));
+                let restored_history = if is_new {
+                    history_identity
+                        .as_ref()
+                        .and_then(|identity| self.child_history_for_restoration(handle, identity))
+                } else {
+                    None
+                };
                 let attribute_bootstrap_changed = existing
                     .as_ref()
                     .is_some_and(|entry| entry.attribute_bootstrap_changed(&attribute_bootstrap));
@@ -375,10 +387,12 @@ impl JsContextHost {
                     });
                 }
                 let initial_about_blank_document_is_complete = is_new
+                    && restored_history.is_none()
                     && child_browsing_context_bootstrap_is_initial_about_blank(
                         &attribute_bootstrap,
                     );
                 let initial_navigation_uses_initial_empty_load = is_new
+                    && restored_history.is_none()
                     && child_browsing_context_bootstrap_uses_initial_empty_load(
                         &attribute_bootstrap,
                     );
@@ -513,6 +527,13 @@ impl JsContextHost {
                     ChildBrowsingContextEntry {
                         frame_id,
                         retiring: false,
+                        history_identity,
+                        restoring_history: existing
+                            .as_ref()
+                            .is_some_and(|entry| entry.restoring_history),
+                        restored_history_positions: existing
+                            .as_ref()
+                            .and_then(|entry| entry.restored_history_positions.clone()),
                         current_document_loader_id: existing.as_ref().and_then(|entry| {
                             entry.current_document_loader_id().map(ToOwned::to_owned)
                         }),
@@ -652,6 +673,9 @@ impl JsContextHost {
                     && let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
                 {
                     entry.set_document_permissions_policy(policy);
+                }
+                if let Some(restored) = restored_history {
+                    self.restore_child_history_after_initial_empty(handle, restored);
                 }
                 if attribute_bootstrap_changed {
                     self.cancel_child_meta_refresh_navigation(handle);

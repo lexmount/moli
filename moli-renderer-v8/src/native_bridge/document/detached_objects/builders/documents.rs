@@ -206,7 +206,9 @@ fn import_detached_document_children_from_host<'s>(
     document: v8::Local<'s, v8::Object>,
     parsed: &DomHost,
 ) -> Option<()> {
-    import_detached_document_children_from_host_with_reaction_policy(scope, document, parsed, false)
+    import_detached_document_children_from_host_with_reaction_policy(
+        scope, document, parsed, false, false,
+    )
 }
 
 fn import_detached_document_children_from_host_with_reaction_policy<'s>(
@@ -214,6 +216,7 @@ fn import_detached_document_children_from_host_with_reaction_policy<'s>(
     document: v8::Local<'s, v8::Object>,
     parsed: &DomHost,
     append_to_current_reaction_queue: bool,
+    preserve_parser_frames: bool,
 ) -> Option<()> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let document_handle = detached_native_handle(scope, document)?;
@@ -222,9 +225,34 @@ fn import_detached_document_children_from_host_with_reaction_policy<'s>(
         .collect::<Vec<_>>();
     let lazy_native_import = parsed.dom().len() > 1_000;
     for child in children {
+        let mut imported_handles = std::collections::HashMap::new();
         let imported = unsafe { &mut *runtime_ptr }
             .dom_host_mut()
-            .import_foreign_node_with_shadow_roots(document_handle, parsed, child, true)?;
+            .import_foreign_node_with_shadow_roots_and_handle_map(
+                document_handle,
+                parsed,
+                child,
+                true,
+                &mut imported_handles,
+            )?;
+        if preserve_parser_frames {
+            // This is a navigation Document projection, not author importNode.
+            // Preserve parser frame identity before insertion can discover its
+            // child navigables. Other clone/import paths intentionally clear it.
+            let runtime = unsafe { &mut *runtime_ptr };
+            for (source, destination) in imported_handles {
+                if parsed
+                    .node(source)
+                    .is_some_and(|node| node.flags().parser_created())
+                    && ["iframe", "frame", "object", "embed"]
+                        .iter()
+                        .any(|name| parsed.is_html_element_named(source, name))
+                    && let Some(node) = runtime.dom_host_mut().node_mut(destination)
+                {
+                    node.set_parser_created(true);
+                }
+            }
+        }
         crate::native_bridge::element::queue_parser_details_toggle_events_in_subtree(
             scope,
             runtime_ptr,
@@ -265,7 +293,9 @@ pub(crate) fn build_detached_document_object_from_dom_host<'s>(
     kind: &str,
     parsed: DomHost,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_detached_document_object_from_dom_host_with_content_type(scope, kind, parsed, None, None)
+    build_detached_document_object_from_dom_host_with_content_type(
+        scope, kind, parsed, None, None, false,
+    )
 }
 
 pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>(
@@ -274,6 +304,7 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     parsed: DomHost,
     content_type: Option<&str>,
     character_set: Option<&str>,
+    preserve_parser_frames: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = detached_document_url(&parsed);
     let quirks_mode = parsed.dom().document()?.quirks_mode();
@@ -289,7 +320,13 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
         character_set,
         allow_declarative_shadow_roots,
     )?;
-    import_detached_document_children_from_host(scope, document, &parsed)?;
+    if preserve_parser_frames {
+        import_detached_document_children_from_host_with_reaction_policy(
+            scope, document, &parsed, false, true,
+        )?;
+    } else {
+        import_detached_document_children_from_host(scope, document, &parsed)?;
+    }
     Some(document)
 }
 

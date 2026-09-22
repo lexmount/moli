@@ -695,6 +695,7 @@ fn test_page_vm_with_loader_dom_host_hooks_and_response_referrer_policy(
             },
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            navigation_history_source: None,
             reserved_service_worker_client_id: None,
         },
         runtime_hooks,

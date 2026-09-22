@@ -6,9 +6,14 @@ use moli_page_types::{
     traversal_navigation_seed_candidate,
 };
 use parking_lot::Mutex;
+use moli_page_types::{JointSessionHistory, SessionHistoryStepId, SessionHistoryContextId, SessionHistoryEntry};
 use url::Url;
 
-use crate::native_bridge::{NavigationHistoryEntrySeed, NavigationHistorySerializedEntry};
+use crate::native_bridge::{
+    NavigationHistoryDocumentId, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
+    NestedHistoryStore,
+
+};
 
 /// The committed history of a renderer's top-level Document. Publishing a
 /// snapshot happens at a history mutation, never while capturing Page state.
@@ -17,6 +22,9 @@ use crate::native_bridge::{NavigationHistoryEntrySeed, NavigationHistorySerializ
 #[derive(Clone, Debug, Default)]
 pub struct RendererNavigationHistory {
     snapshot: Arc<Mutex<Option<Arc<NavigationHistoryEntrySeed>>>>,
+    joint: Arc<Mutex<Option<JointSessionHistory>>>,
+    nested: NestedHistoryStore,
+    selected_step: Arc<Mutex<Option<(String, SessionHistoryStepId)>>>,
 }
 
 impl PartialEq for RendererNavigationHistory {
@@ -28,6 +36,80 @@ impl PartialEq for RendererNavigationHistory {
 impl Eq for RendererNavigationHistory {}
 
 impl RendererNavigationHistory {
+    pub(crate) fn nested_history(&self) -> NestedHistoryStore {
+        self.nested.clone()
+    }
+
+    pub(crate) fn current_document_id(&self) -> Option<NavigationHistoryDocumentId> {
+        Some(
+            current_entry(self.snapshot()?.as_ref())?
+                .document_id
+                .clone(),
+        )
+    }
+
+    pub(crate) fn publish_joint_history(&self, joint: Option<JointSessionHistory>) {
+        *self.joint.lock() = joint;
+    }
+
+    pub(crate) fn select_joint_traversal(&self, key: String, step: SessionHistoryStepId) {
+        *self.selected_step.lock() = Some((key, step));
+    }
+
+    pub(crate) fn restore_for(&self, seed: &NavigationHistoryEntrySeed) -> Self {
+        if seed
+            .activation
+            .as_ref()
+            .is_some_and(|activation| activation.navigation_type.as_deref() == Some("push"))
+            && let Some(joint) = self.joint.lock().as_ref()
+        {
+            self.nested.prune(
+                joint,
+                &seed
+                    .entries
+                    .iter()
+                    .map(|entry| entry.document_id.clone())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let current = current_entry(seed);
+        let target_step = self.selected_step.lock().as_ref().and_then(|(key, step)| {
+            current
+                .filter(|entry| entry.key.as_str() == key)
+                .map(|_| *step)
+        });
+        let joint = self.joint.lock().clone().and_then(|mut joint| {
+            let current = current_entry(seed)?;
+            let entry = SessionHistoryEntry {
+                key: moli_page_types::NavigationHistoryEntryKey::from_serialized(crate::context_bootstrap::navigation_entry_public_token(current.key.as_str())),
+                document: current.document_id.clone(),
+            };
+            match seed.session_history.commit {
+                moli_page_types::SessionHistoryCommit::Push => joint.push(SessionHistoryContextId::ROOT, entry),
+                moli_page_types::SessionHistoryCommit::Traverse => {
+                    let step = target_step.or(seed.session_history.target_step).or_else(|| joint.step_for_entry(SessionHistoryContextId::ROOT, &entry.key))?;
+                    joint.traverse(step)?;
+                }
+                _ => joint.replace(SessionHistoryContextId::ROOT, entry),
+            }
+            Some(joint)
+        });
+        Self {
+            snapshot: Arc::new(Mutex::new(Some(Arc::new(seed.clone())))),
+            joint: Arc::new(Mutex::new(joint)),
+            nested: self.nested.clone(),
+            selected_step: Arc::default(),
+        }
+    }
+
+    pub(crate) fn install_joint_history(
+        &self,
+        history: &mut JointSessionHistory,
+    ) {
+        if let Some(joint) = self.joint.lock().clone() {
+            *history = joint;
+        }
+    }
     pub(crate) fn publish(&self, seed: NavigationHistoryEntrySeed) {
         *self.snapshot.lock() = Some(Arc::new(seed));
     }
@@ -95,6 +177,7 @@ impl RendererNavigationHistory {
             requested: Arc::new(seed),
             source_index,
             initial_empty_source: false,
+            selected_step: self.selected_step.lock().clone(),
         }
     }
 }
@@ -109,6 +192,7 @@ pub struct RendererNavigationHistoryRequest {
     requested: Arc<NavigationHistoryEntrySeed>,
     source_index: Option<u32>,
     initial_empty_source: bool,
+    selected_step: Option<(String, SessionHistoryStepId)>,
 }
 
 impl PartialEq for RendererNavigationHistoryRequest {
@@ -122,6 +206,11 @@ impl PartialEq for RendererNavigationHistoryRequest {
 impl Eq for RendererNavigationHistoryRequest {}
 
 impl RendererNavigationHistoryRequest {
+    pub(crate) fn source_history(&self) -> RendererNavigationHistory {
+        let mut source = self.source.clone();
+        source.selected_step = Arc::new(Mutex::new(self.selected_step.clone()));
+        source
+    }
     /// The browser owns the initial-empty Document lifecycle. Its first
     /// navigation has no activation source. Same-document URL updates do not
     /// change that lifecycle state.
