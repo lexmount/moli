@@ -324,6 +324,7 @@ impl CdpConnection {
             | DevToolsCommand::GetOuterHtml(_)
             | DevToolsCommand::DescribeNode(_)
             | DevToolsCommand::GetFrameOwner(_)
+            | DevToolsCommand::GetNodeForLocation(_)
             | DevToolsCommand::ResolveNode(_)
             | DevToolsCommand::ScrollIntoViewIfNeeded(_)
             | DevToolsCommand::DomObjectReference(_)

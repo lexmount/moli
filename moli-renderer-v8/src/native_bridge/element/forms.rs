@@ -224,9 +224,10 @@ pub(in crate::native_bridge) use self::simple_controls::{
     progress_max_setter_function, progress_position_getter_function,
     progress_value_getter_function, progress_value_setter_function,
 };
+pub(crate) use self::submission::submit_form_with_submit_event;
 pub(in crate::native_bridge) use self::submission::{
     FormAssociatedResetCallbackTiming, form_request_submit_callback, form_reset_callback,
-    form_submit_callback, reset_form_default_action, submit_form_with_submit_event,
+    form_submit_callback, reset_form_default_action,
 };
 pub(crate) use self::submission::{
     align_event_constructor_function_realm_with_constructor,

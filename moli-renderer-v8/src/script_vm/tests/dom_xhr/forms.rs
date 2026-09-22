@@ -4754,6 +4754,461 @@ fn submit_button_click_queues_pending_top_level_location_navigation() {
         "default form submission should not synthesize a history seed"
     );
 }
+
+#[test]
+fn enter_implicitly_submits_single_search_input_without_a_submit_button() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-search-submit.test/",
+        r#"<html><body>
+            <form action="/search">
+              <button type="button">toggle</button>
+              <input id="query" name="q" type="search" value="Nvidia RTX 4090">
+            </form>
+        </body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__submitterWasNull = false;
+document.querySelector('form').addEventListener('submit', event => {
+  window.__submitterWasNull = event.submitter === null;
+});
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("implicit submission fixture should initialize");
+
+    let outcome = vm
+        .dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert!(outcome.handled);
+    assert!(outcome.triggered_top_level_navigation);
+    assert_eq!(
+        vm.eval("String(window.__submitterWasNull)")
+            .expect("submitter state should evaluate"),
+        "true"
+    );
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("implicit submission should queue a location navigation");
+    assert_eq!(
+        pending.url.as_str(),
+        "https://implicit-search-submit.test/search?q=Nvidia+RTX+4090"
+    );
+}
+
+#[test]
+fn enter_implicitly_clicks_the_default_submit_button() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-default-button.test/",
+        r#"<html><body>
+            <form action="/search">
+              <input id="query" name="q" type="search" value="moli">
+              <button id="submitter" type="submit" name="source" value="header">Search</button>
+            </form>
+        </body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__events = [];
+const submitter = document.getElementById('submitter');
+submitter.addEventListener('click', event => {
+  __events.push(`click:${event.detail}`);
+});
+document.querySelector('form').addEventListener('submit', event => {
+  __events.push(`submit:${event.submitter === submitter}`);
+});
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("default submit button fixture should initialize");
+
+    let outcome = vm
+        .dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert!(outcome.handled);
+    assert!(outcome.triggered_top_level_navigation);
+    assert_eq!(
+        vm.eval("`${__events.join('|')}|focus:${document.activeElement.id}`")
+            .expect("implicit activation events should evaluate"),
+        "click:0|submit:true|focus:query"
+    );
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("default submit button should queue a location navigation");
+    assert_eq!(
+        pending.url.as_str(),
+        "https://implicit-default-button.test/search?q=moli&source=header"
+    );
+}
+
+#[test]
+fn enter_does_not_implicitly_submit_multiple_blocking_inputs_without_a_submit_button() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-multiple-inputs.test/",
+        r#"<html><body>
+            <form action="/search">
+              <input id="query" name="q" type="search" value="moli">
+              <input name="scope" type="text" value="all">
+            </form>
+        </body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__submitCount = 0;
+document.querySelector('form').addEventListener('submit', () => __submitCount++);
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("multiple blocker fixture should initialize");
+
+    let outcome = vm
+        .dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert!(outcome.handled);
+    assert!(!outcome.triggered_top_level_navigation);
+    assert_eq!(
+        vm.eval("String(window.__submitCount)")
+            .expect("submit count should evaluate"),
+        "0"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn canceling_an_implicit_submit_event_prevents_navigation() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-canceled-submit.test/",
+        r#"<html><body>
+            <form action="/search">
+              <input id="query" name="q" type="search" value="moli">
+            </form>
+        </body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__submitCount = 0;
+document.querySelector('form').addEventListener('submit', event => {
+  __submitCount++;
+  event.preventDefault();
+});
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("canceled implicit submission fixture should initialize");
+
+    let outcome = vm
+        .dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert!(outcome.handled);
+    assert!(!outcome.triggered_top_level_navigation);
+    assert_eq!(
+        vm.eval("String(window.__submitCount)")
+            .expect("submit count should evaluate"),
+        "1"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn disabled_default_submit_button_suppresses_implicit_submission() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-disabled-default.test/",
+        r#"<html><body><form action="/search">
+            <input id="query" name="q" type="search" value="moli">
+            <button id="disabled" type="submit" disabled>Disabled</button>
+            <button id="second" type="submit">Second</button>
+        </form></body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__events = [];
+for (const id of ['disabled', 'second']) {
+  document.getElementById(id).addEventListener('click', () => __events.push(`click:${id}`));
+}
+document.querySelector('form').addEventListener('submit', () => __events.push('submit'));
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("disabled default button fixture should initialize");
+
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert_eq!(
+        vm.eval("`${__events.join('|')}|focus:${document.activeElement.id}`")
+            .expect("disabled default state should evaluate"),
+        "|focus:query"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn external_form_owned_submit_button_participates_in_document_tree_order() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-external-default.test/",
+        r#"<html><body>
+            <button id="external" type="submit" form="search">External</button>
+            <form id="search">
+              <input id="query" name="q" type="search" value="moli">
+              <button id="inside" type="submit">Inside</button>
+            </form>
+        </body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__events = [];
+for (const id of ['external', 'inside']) {
+  document.getElementById(id).addEventListener('click', event => {
+    __events.push(`click:${id}:${event.detail}:${event.isTrusted}`);
+  });
+}
+document.getElementById('search').addEventListener('submit', event => {
+  __events.push(`submit:${event.submitter.id}`);
+  event.preventDefault();
+});
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("external default button fixture should initialize");
+
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert_eq!(
+        vm.eval("`${__events.join('|')}|focus:${document.activeElement.id}`")
+            .expect("external default state should evaluate"),
+        "click:external:0:true|submit:external|focus:query"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn image_input_is_the_default_submit_button_and_serializes_click_coordinates() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-image-default.test/",
+        r#"<html><body><form action="/search">
+            <input id="query" name="q" type="search" value="moli">
+            <input id="image" name="photo" type="image" style="width:20px;height:20px">
+            <button id="second" name="wrong" value="yes" type="submit">Second</button>
+        </form></body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__events = [];
+document.getElementById('image').addEventListener('click', event => {
+  __events.push(`click:image:${event.detail}:${event.isTrusted}`);
+});
+document.querySelector('form').addEventListener('submit', event => {
+  __events.push(`submit:${event.submitter.id}`);
+});
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("image default button fixture should initialize");
+
+    let outcome = vm
+        .dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert!(outcome.triggered_top_level_navigation);
+    assert_eq!(
+        vm.eval("`${__events.join('|')}|focus:${document.activeElement.id}`")
+            .expect("image default state should evaluate"),
+        "click:image:0:true|submit:image|focus:query"
+    );
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("image default button should queue a location navigation");
+    assert_eq!(
+        pending.url.as_str(),
+        "https://implicit-image-default.test/search?q=moli&photo.x=0&photo.y=0"
+    );
+}
+
+#[test]
+fn raw_keydown_waits_for_the_character_phase_before_implicit_submission() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-character-phase.test/",
+        r#"<html><body><form><input id="query" type="search"></form></body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__events = [];
+document.querySelector('form').addEventListener('submit', event => {
+  __events.push('submit');
+  event.preventDefault();
+});
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("character phase fixture should initialize");
+
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "", 0, false, false)
+        .expect("raw Enter keydown should dispatch");
+    assert_eq!(
+        vm.eval("__events.join('|')")
+            .expect("raw keydown event state should evaluate"),
+        ""
+    );
+
+    vm.dispatch_key_event("keypress", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter character phase should dispatch");
+    assert_eq!(
+        vm.eval("__events.join('|')")
+            .expect("character phase event state should evaluate"),
+        "submit"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn canceling_keydown_or_keypress_prevents_implicit_submission() {
+    for canceled_event in ["keydown", "keypress"] {
+        let mut vm = new_parsed_test_vm(
+            "https://implicit-canceled-key-event.test/",
+            r#"<html><body><form><input id="query" type="search"></form></body></html>"#,
+        );
+        vm.eval(&format!(
+            r#"
+window.__submitCount = 0;
+const query = document.getElementById('query');
+query.addEventListener('{canceled_event}', event => event.preventDefault());
+document.querySelector('form').addEventListener('submit', () => __submitCount++);
+query.focus();
+"#
+        ))
+        .expect("canceled key event fixture should initialize");
+
+        vm.dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+            .expect("Enter keydown should dispatch");
+
+        assert_eq!(
+            vm.eval("String(window.__submitCount)")
+                .expect("submit count should evaluate"),
+            "0",
+            "canceling {canceled_event} must suppress implicit submission"
+        );
+        assert!(vm.take_pending_location_navigation_with_seed().is_none());
+    }
+}
+
+#[test]
+fn canceled_raw_keydown_suppresses_only_its_following_implicit_submit_char_phase() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-canceled-raw-keydown.test/",
+        r#"<html><body><form><input id="query" type="search"></form></body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__cancelKeydown = true;
+window.__submitCount = 0;
+const query = document.getElementById('query');
+query.addEventListener('keydown', event => {
+  if (__cancelKeydown) event.preventDefault();
+});
+document.querySelector('form').addEventListener('submit', event => {
+  __submitCount++;
+  event.preventDefault();
+});
+query.focus();
+"#,
+    )
+    .expect("canceled raw keydown fixture should initialize");
+
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "", 0, false, false)
+        .expect("canceled raw Enter keydown should dispatch");
+    vm.dispatch_key_event("keypress", "", "", "\r", 0, false, true)
+        .expect("suppressed Enter character phase should settle");
+    assert_eq!(
+        vm.eval("String(window.__submitCount)")
+            .expect("suppressed submit count should evaluate"),
+        "0"
+    );
+
+    vm.eval("window.__cancelKeydown = false")
+        .expect("keydown cancellation should disable");
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "", 0, false, false)
+        .expect("allowed raw Enter keydown should dispatch");
+    vm.dispatch_key_event("keypress", "", "", "\r", 0, false, true)
+        .expect("allowed Enter character phase should dispatch");
+    assert_eq!(
+        vm.eval("String(window.__submitCount)")
+            .expect("allowed submit count should evaluate"),
+        "1"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn implicit_submission_runs_constraint_validation() {
+    let mut vm = new_parsed_test_vm(
+        "https://implicit-constraint-validation.test/",
+        r#"<html><body><form action="/search">
+            <input id="query" name="q" type="search" required>
+            <button id="submitter" type="submit">Search</button>
+        </form></body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__events = [];
+document.getElementById('submitter').addEventListener('click', () => __events.push('click'));
+document.getElementById('query').addEventListener('invalid', () => __events.push('invalid'));
+document.querySelector('form').addEventListener('submit', () => __events.push('submit'));
+document.getElementById('query').focus();
+"#,
+    )
+    .expect("constraint validation fixture should initialize");
+
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter keydown should dispatch");
+
+    assert_eq!(
+        vm.eval("__events.join('|')")
+            .expect("constraint validation events should evaluate"),
+        "click|invalid"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn textarea_enter_inserts_one_newline_during_the_character_phase_without_submitting() {
+    let mut vm = new_parsed_test_vm(
+        "https://textarea-enter-character-phase.test/",
+        r#"<html><body><form><textarea id="editor">x</textarea></form></body></html>"#,
+    );
+    vm.eval(
+        r#"
+window.__submitCount = 0;
+document.querySelector('form').addEventListener('submit', () => __submitCount++);
+const editor = document.getElementById('editor');
+editor.focus();
+editor.setSelectionRange(1, 1);
+"#,
+    )
+    .expect("textarea Enter fixture should initialize");
+
+    vm.dispatch_key_event("keydown", "Enter", "Enter", "", 0, false, false)
+        .expect("raw Enter keydown should dispatch");
+    assert_eq!(
+        vm.eval("document.getElementById('editor').value")
+            .expect("textarea value after raw keydown should evaluate"),
+        "x"
+    );
+
+    vm.dispatch_key_event("keypress", "Enter", "Enter", "\r", 0, false, true)
+        .expect("Enter character phase should dispatch");
+    assert_eq!(
+        vm.eval("`${document.getElementById('editor').value}|${__submitCount}`")
+            .expect("textarea character phase state should evaluate"),
+        "x\n|0"
+    );
+    assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
 #[test]
 fn empty_get_form_submit_replaces_existing_action_query() {
     let mut vm = new_storage_test_vm("https://form-empty-get.test/path/index.html");

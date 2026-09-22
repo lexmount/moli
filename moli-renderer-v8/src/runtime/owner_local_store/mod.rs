@@ -2569,7 +2569,7 @@ impl RendererOwnerLocalStore {
         let command_epoch = Self::advance_command_epoch(entry);
         let slot = entry.slot.clone();
         let _nested_main_page = super::nested_main::bind_active_nested_main_page(entry);
-        let reply = slot
+        let mut reply = slot
             .dispatch_async_owned(command_epoch, entry.page_vm_mut(), command)
             .await;
         let replacement_lifecycle = {
@@ -2595,6 +2595,15 @@ impl RendererOwnerLocalStore {
         } else {
             Ok(())
         };
+        // Input handlers and their completed microtask checkpoint may request
+        // navigation without running a click default action (pointerdown,
+        // mousemove, focus, etc.). Publish that real pending navigation at this
+        // input task's completion, not as a side effect of a later Runtime
+        // command. Preserve the action-specific download/file-chooser result.
+        if let Ok(RendererPageReply::InputDispatchOutcome(outcome)) = &mut reply {
+            outcome.triggered_top_level_navigation |=
+                entry.page_vm().vm().has_pending_location_navigation();
+        }
         let input_triggered_top_level_navigation = reply.as_ref().is_ok_and(|reply| {
             matches!(
                 reply,
