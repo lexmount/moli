@@ -44,15 +44,25 @@ impl ChildWindowEventTarget {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct PopupWindowEventTarget {
+    pub(crate) document_owner: crate::window_document_identity::LightweightPopupDocumentOwner,
+    pub(crate) local_window_id: crate::window_document_identity::LightweightPopupLocalWindowId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum EventTargetHandle {
     Window,
     ChildWindow(ChildWindowEventTarget),
+    PopupWindow(PopupWindowEventTarget),
     Node(NativeNodeId),
 }
 
 impl EventTargetHandle {
     pub(crate) fn is_window(self) -> bool {
-        matches!(self, Self::Window | Self::ChildWindow(_))
+        matches!(
+            self,
+            Self::Window | Self::ChildWindow(_) | Self::PopupWindow(_)
+        )
     }
 }
 
