@@ -661,6 +661,7 @@ impl RendererOwnerHandle {
             page_reservation,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
+            navigation_history: options.navigation_history,
             top_level_storage_key: None,
             requested_url,
             navigation_initiator_url,
@@ -725,6 +726,7 @@ impl RendererOwnerHandle {
             document_replacement: None,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
+            navigation_history: options.navigation_history,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -800,6 +802,7 @@ impl RendererOwnerHandle {
             page_reservation,
             root_frame_id,
             main_document_commit,
+            navigation_history,
             top_level_storage_key,
             requested_url,
             navigation_initiator_url,
@@ -925,7 +928,10 @@ impl RendererOwnerHandle {
                     root_frame_id,
                     main_document_commit,
                     top_level_storage_key,
-                    navigation_bootstrap_entry: None,
+                    navigation_bootstrap_entry: navigation_history
+                        .as_ref()
+                        .map(|request| request.resolve(&final_url))
+                        .transpose()?,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };
@@ -1112,6 +1118,7 @@ impl RendererOwnerHandle {
             document_replacement: _document_replacement,
             root_frame_id,
             main_document_commit,
+            navigation_history,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -1225,7 +1232,7 @@ impl RendererOwnerHandle {
                     root_frame_id,
                     main_document_commit,
                     top_level_storage_key: None,
-                    navigation_bootstrap_entry: None,
+                    navigation_bootstrap_entry: navigation_history.as_ref().map(|request| request.resolve(&final_url)).transpose()?,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };

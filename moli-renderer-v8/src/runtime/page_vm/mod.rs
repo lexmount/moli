@@ -4054,6 +4054,7 @@ impl PageVm {
         }
 
         Ok(PageVmStateCapture {
+            navigation_history: self.vm().top_level_navigation_history(),
             final_url,
             document_title,
             report,

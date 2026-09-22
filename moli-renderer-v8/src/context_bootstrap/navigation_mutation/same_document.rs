@@ -18,10 +18,10 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
         return;
     };
     let previous_entry = current_entry;
-    let current_navigation_index = get_own_static_property(scope, current_entry, "index")
-        .and_then(|value| value.integer_value(scope))
-        .unwrap_or(0)
-        .max(0) as u32;
+    // The public index is relative to the exposed same-origin entries. A
+    // restored history can contain hidden entries before that region, so use
+    // the same native ordinal as History and Navigation API mutations.
+    let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
     let mut pruned_entries = Vec::new();
     match kind {
         LocationNavigationKind::Assign => {
@@ -92,7 +92,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
         navigation_type,
     );
     dispatch_pruned_history_entry_disposes(scope, pruned_entries);
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
+    sync_navigation_entry_seed_from_owner(scope, owner);
 }
 
 pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
@@ -208,7 +208,7 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
         LocationNavigationKind::Reload => return,
     }
     refresh_navigation_destination_indexes(scope, navigation, history);
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
+    sync_navigation_entry_seed_from_owner(scope, owner);
 }
 
 fn dispatch_pruned_history_entry_disposes<'s>(

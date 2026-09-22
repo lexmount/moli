@@ -11,7 +11,7 @@ use super::super::navigation_events::{
     queue_hash_change_for_runtime_owner,
 };
 use super::super::navigation_mutation::sync_same_document_navigation_commit;
-use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
+use super::super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
     window_location_for_holder, window_navigation_for_holder,
@@ -102,7 +102,7 @@ pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
     applied.resolved_entry = navigation_current_entry(scope, applied.owner)
         .map(Into::into)
         .unwrap_or_else(|| v8::undefined(scope).into());
-    sync_child_navigation_entry_seed_from_owner(scope, applied.owner);
+    sync_navigation_entry_seed_from_owner(scope, applied.owner);
     sync_same_document_navigation_commit(
         scope,
         applied.owner,

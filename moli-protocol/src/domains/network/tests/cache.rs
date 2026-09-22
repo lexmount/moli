@@ -666,6 +666,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             request_body_bytes: None,
             request_headers: Vec::new().into(),
             request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+            navigation_history: None,
             timestamp: 0.0,
             source_document_security: Default::default(),
         },
