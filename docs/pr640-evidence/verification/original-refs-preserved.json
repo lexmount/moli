@@ -1,0 +1,58 @@
+[
+  {
+    "group": "engineering",
+    "branch": "codex/browser-engineering-reliability",
+    "expected": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "actual": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "preserved": true
+  },
+  {
+    "group": "layout",
+    "branch": "codex/layout-geometry-visibility",
+    "expected": "63242ebdfbe7926cc85b774a91db05572d9f9c94",
+    "actual": "63242ebdfbe7926cc85b774a91db05572d9f9c94",
+    "preserved": true
+  },
+  {
+    "group": "input",
+    "branch": "codex/input-activation-lifecycle",
+    "expected": "a25a2c7b6d0c00e4812a1b3f95f9ad786530d034",
+    "actual": "a25a2c7b6d0c00e4812a1b3f95f9ad786530d034",
+    "preserved": true
+  },
+  {
+    "group": "network",
+    "branch": "codex/network-response-evidence",
+    "expected": "ad2d10832ef45ca1b9cd3f817d3222eaa5d26a17",
+    "actual": "ad2d10832ef45ca1b9cd3f817d3222eaa5d26a17",
+    "preserved": true
+  },
+  {
+    "group": "text",
+    "branch": "codex/text-document-parsing",
+    "expected": "05c84841a571984efcd02e97a6b555add0b2b9f4",
+    "actual": "05c84841a571984efcd02e97a6b555add0b2b9f4",
+    "preserved": true
+  },
+  {
+    "group": "stop",
+    "branch": "codex/navigation-stop-loading",
+    "expected": "df82a86bc3cccc00015597c18713a3939b84e9e3",
+    "actual": "df82a86bc3cccc00015597c18713a3939b84e9e3",
+    "preserved": true
+  },
+  {
+    "group": "forms",
+    "branch": "codex/form-named-properties",
+    "expected": "47a9d9cf3564ca8540179034d0d300dc7caafb0e",
+    "actual": "47a9d9cf3564ca8540179034d0d300dc7caafb0e",
+    "preserved": true
+  },
+  {
+    "group": "original640",
+    "branch": "codex/browser-eval-root-causes",
+    "expected": "ad0df2276d10e8f933f0216c30199229c6146b2e",
+    "actual": "ad0df2276d10e8f933f0216c30199229c6146b2e",
+    "preserved": true
+  }
+]

@@ -1,0 +1,68 @@
+{
+  "commit": "ca2a8d39572644de1211e3aba30d239abf0ffb17",
+  "sha256": "882f2803f5c6e5dce8532419e9286027aabc4d90d783020a60e84e66f8508e1f",
+  "passed": 12,
+  "failed": 0,
+  "cases": [
+    {
+      "case": "main:plain.xml",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "iframe:plain.xml",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "main:json.svg",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "iframe:json.svg",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "main:problem.xml",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "iframe:problem.xml",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "main:javascript.svg",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "iframe:javascript.svg",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "main:plain-bom",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "iframe:plain-bom",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "main:html.svg",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "case": "iframe:html.svg",
+      "passed": true,
+      "errors": []
+    }
+  ]
+}
