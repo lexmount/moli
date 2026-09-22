@@ -8889,6 +8889,98 @@ fn document_open_resets_compat_mode_and_parser_updates_it_incrementally() {
     );
 }
 
+#[test]
+fn child_document_open_resets_compat_mode_before_doctype_or_eof() {
+    let mut vm = new_parsed_test_vm(
+        "https://child-document-open-quirks.test/",
+        "<!doctype html><body>parent",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const f = document.body.appendChild(document.createElement('iframe'));
+  const d = f.contentDocument;
+  const rows = [];
+  for (const chunks of [
+    [],
+    ['<!doctype html public', ' "-//IETF//DTD HTML 3//"', '>'],
+    ['<!doctype html', '>'],
+    ['<!--comment-->', '<body>quirks'],
+    ['<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">']
+  ]) {
+    const modes = [d.compatMode];
+    d.open();
+    modes.push(d.compatMode);
+    for (const chunk of chunks) {
+      d.write(chunk);
+      modes.push(d.compatMode);
+    }
+    d.close();
+    modes.push(d.compatMode);
+    rows.push(modes.join('|'));
+  }
+  f.remove();
+  return rows.join('\n');
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(
+        result,
+        [
+            "BackCompat|CSS1Compat|BackCompat",
+            "BackCompat|CSS1Compat|CSS1Compat|CSS1Compat|BackCompat|BackCompat",
+            "BackCompat|CSS1Compat|CSS1Compat|CSS1Compat|CSS1Compat",
+            "CSS1Compat|CSS1Compat|CSS1Compat|BackCompat|BackCompat",
+            "BackCompat|CSS1Compat|CSS1Compat|CSS1Compat",
+        ]
+        .join("\n")
+    );
+    assert_eq!(vm.eval("document.compatMode").unwrap(), "CSS1Compat");
+}
+
+#[test]
+fn child_document_open_initializes_native_no_quirks_mode() {
+    for open in ["d.open()", "d.write('<!doctype html')"] {
+        let mut vm = new_parsed_test_vm(
+            "https://child-document-open-native-mode.test/",
+            "<body>quirks parent",
+        );
+        vm.eval(&format!(
+            r#"
+const f = document.body.appendChild(document.createElement('iframe'));
+f.id = 'mode-frame';
+const d = f.contentDocument;
+{open};
+const html = d.appendChild(d.createElement('html'));
+html.appendChild(d.createElement('body'));
+d.body.innerHTML = '<p class="UPPER">child</p>';
+"#
+        ))
+        .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify([d.compatMode, d.querySelectorAll('.upper').length, document.compatMode])")
+                .unwrap(),
+            r#"["CSS1Compat",0,"BackCompat"]"#,
+            "{open}"
+        );
+        let host = vm._context_host.borrow();
+        let frame = host.dom_host().element_handle_by_id("mode-frame").unwrap();
+        let document = host.child_browsing_context_document_handle(frame).unwrap();
+        assert_eq!(
+            host.dom_host()
+                .node(document)
+                .unwrap()
+                .as_document()
+                .unwrap()
+                .quirks_mode(),
+            selectors::matching::QuirksMode::NoQuirks,
+            "{open}: native mode must not be limited-quirks"
+        );
+    }
+}
+
 // Ported from WPT opening-the-input-stream/custom-element.window.js. The
 // dynamic-markup counter is a parser construction guard, not a blanket custom
 // element construction guard.
