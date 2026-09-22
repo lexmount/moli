@@ -472,7 +472,7 @@ async fn range_requests_respect_native_header_configuration() -> Result<()> {
                 headers
                     .iter()
                     .map(|(n, v)| (n.to_string(), v.to_string()))
-                    .collect(),
+                    .collect::<Vec<_>>(),
             )?;
             fetch_in_mode(&client, request, mode).await?;
         }

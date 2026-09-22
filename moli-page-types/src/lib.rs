@@ -4093,6 +4093,7 @@ mod tests {
             ResponseHead {
                 final_url: test_url("/image.png"),
                 status: 200,
+                status_text: None,
                 headers: vec![("Content-Type".to_owned(), b"image/png".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),

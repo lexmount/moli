@@ -19,7 +19,8 @@ fn fetch_request_initializers_use_request_header_guards() {
         assert_eq!(pending.len(), 1, "request {requests}");
         let request = &pending[0];
         assert_eq!(request.url.path(), "/echo");
-        let body = serde_json::json!({"headers": request.request_headers}).to_string();
+        let body =
+            serde_json::json!({"headers": request.request_headers.to_byte_strings()}).to_string();
         let head = moli_fetch::ResponseHead {
             status_text: None,
             final_url: request.url.clone(),
@@ -48,7 +49,8 @@ fn fetch_request_initializers_use_request_header_guards() {
                     body.clone(),
                     body.into_bytes(),
                 ),
-            ),
+            )
+            .into(),
         })
         .unwrap();
         requests += 1;

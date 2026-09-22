@@ -10130,7 +10130,7 @@ fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
                 internal_id: pending.internal_id,
                 request_url: pending.url.clone(),
                 request_method: "GET".to_owned(),
-                request_headers: Vec::new(),
+                request_headers: Default::default(),
                 request_body: None,
                 body_source_id: id,
                 network_request_headers: None,
