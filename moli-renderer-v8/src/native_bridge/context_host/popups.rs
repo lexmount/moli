@@ -961,7 +961,7 @@ impl PageScriptHost {
                 crate::dom_parser::parse_browsing_context_document_projection_from_source(
                     scope,
                     initial_url.clone(),
-                    "<!doctype html><html><head></head><body></body></html>",
+                    "<html><head></head><body></body></html>",
                     Some("text/html"),
                     None,
                     crate::parser::HtmlParser::with_scripting_enabled(
@@ -2318,7 +2318,7 @@ impl PageScriptHost {
             crate::dom_parser::parse_browsing_context_document_projection_from_source(
                 scope,
                 document_url,
-                "<!doctype html><html><head></head><body></body></html>",
+                "<html><head></head><body></body></html>",
                 Some("text/html"),
                 None,
                 crate::parser::HtmlParser::with_scripting_enabled(
