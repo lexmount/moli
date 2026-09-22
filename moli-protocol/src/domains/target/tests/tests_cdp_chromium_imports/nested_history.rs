@@ -194,7 +194,9 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
             let away = markup_url(&server, "<!doctype html><body><p>away from parent</p>");
             let (mut page, root) = open_root(&source, popup, &server.url("/plain?opener")).await?;
             let list = frames(root);
-            let initial = snapshot(&mut page, root).await?;
+            let initial = snapshot(&mut page, root)
+                .await
+                .with_context(|| format!("popup={popup}, {layout}: initial frames"))?;
             let mut stages = vec![initial.clone()];
             for (index, text) in [
                 (0, "first historical source"),
@@ -211,7 +213,9 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
                     &format!("({list})[{index}].contentDocument.body.textContent === '{text}'"),
                 )
                 .await?;
-                stages.push(snapshot(&mut page, root).await?);
+                stages.push(snapshot(&mut page, root).await.with_context(|| {
+                    format!("popup={popup}, {layout}: frame {index} srcdoc loaded")
+                })?);
             }
             page.evaluate(&format!(
                 "({list})[0].contentWindow.location.hash = 'fragment'; true"
@@ -223,7 +227,9 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
             )
             .await?;
             page.evaluate(&format!("({list})[0].contentWindow.history.replaceState({{classic:3}}, ''); ({list})[0].contentWindow.navigation.updateCurrentEntry({{state:{{navigation:3}}}}); true")).await?;
-            let expected = snapshot(&mut page, root).await?;
+            let expected = snapshot(&mut page, root)
+                .await
+                .with_context(|| format!("popup={popup}, {layout}: fragment state updated"))?;
             assert_eq!(
                 expected["length"].as_u64(),
                 initial["length"].as_u64().map(|length| length + 3)
@@ -237,7 +243,9 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
             )
             .await?;
             navigate(&mut page, root, "history.back()", &source).await?;
-            let restored = snapshot(&mut page, root).await?;
+            let restored = snapshot(&mut page, root)
+                .await
+                .with_context(|| format!("popup={popup}, {layout}: parent restored"))?;
             assert_eq!(
                 restored["frames"], expected["frames"],
                 "popup={popup}, {layout}: {restored}"
@@ -255,15 +263,19 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
                     .iter()
                     .map(|frame| frame["url"].clone())
                     .collect::<Vec<_>>();
+                // The URL changes at commit, before the restored child document
+                // finishes parsing. Read its body only after that load completes.
                 wait(
                     &mut page,
                     &format!(
-                        "JSON.stringify(({list}).map(f=>f.contentWindow.location.href)) === {}",
+                        "({list}).every(f=>f.contentDocument?.readyState === 'complete') && JSON.stringify(({list}).map(f=>f.contentWindow.location.href)) === {}",
                         serde_json::to_string(&serde_json::to_string(&urls)?)?
                     ),
                 )
                 .await?;
-                let current = snapshot(&mut page, root).await?;
+                let current = snapshot(&mut page, root).await.with_context(|| {
+                    format!("popup={popup}, {layout}: traversed child entries {urls:?}")
+                })?;
                 for index in 0..2 {
                     assert_eq!(
                         current["frames"][index]["id"], reference["frames"][index]["id"],
@@ -273,7 +285,9 @@ async fn check_interleaved_frames_after_parent_document_replacement() -> Result<
             }
             navigate(&mut page, root, "history.go(4)", &away).await?;
             navigate(&mut page, root, "history.go(-3)", &source).await?;
-            let restored = snapshot(&mut page, root).await?;
+            let restored = snapshot(&mut page, root)
+                .await
+                .with_context(|| format!("popup={popup}, {layout}: parent restored by delta"))?;
             for index in 0..2 {
                 assert_eq!(
                     restored["frames"][index]["id"], stages[1]["frames"][index]["id"],
