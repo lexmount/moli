@@ -74,6 +74,8 @@ mod navigation_restore;
 mod navigation_result;
 mod navigation_seed;
 mod navigation_serialize;
+pub(crate) use navigation_entry::navigation_entry_public_token;
+pub(crate) use navigation_serialize::history_document_id_for_holder;
 mod navigation_surface;
 mod navigation_transition_worlds;
 mod navigation_traversal;

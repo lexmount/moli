@@ -146,6 +146,8 @@ pub(super) fn restore<'s>(
     if let Some(update) = update {
         publish(scope, owner, update);
     }
+    let root = binding.popup.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::LightweightPopup);
+    unsafe { &mut *host_ptr }.remember_nested_histories(root);
 }
 
 pub(crate) fn install_session_history_position(
@@ -244,6 +246,8 @@ pub(super) fn commit<'s>(
     if let Some(update) = update {
         publish(scope, owner, update);
     }
+    let root = binding.popup.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::LightweightPopup);
+    unsafe { &mut *host_ptr }.remember_nested_histories(root);
 }
 
 /// Capture the next top-level Document's history without committing a pending

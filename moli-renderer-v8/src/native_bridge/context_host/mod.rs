@@ -196,6 +196,7 @@ pub(crate) use child_frame_snapshots::{
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;
+pub(crate) use child_frames::{NestedHistoryStore};
 pub(crate) use event_callbacks::{EventCallbackId, PreparedEventCallback};
 pub(crate) use host_loads::ChildFrameAttachmentSnapshot;
 #[cfg(test)]
@@ -964,6 +965,8 @@ pub(crate) struct JsContextHost {
     >,
     opfs_owner_state: Option<opfs_tasks::WindowOpfsOwnerState>,
     pub(super) history_queue: HistoryQueueState,
+    popup_nested_histories: HashMap<OwnerDispatchScope, NestedHistoryStore>,
+    claimed_child_histories: HashMap<DomHandle, HashSet<child_frames::ChildHistoryIdentity>>,
     rendering_updates: rendering_updates::RenderingUpdateState,
     scroll_observable_effect_batch: interaction_batch::ScrollObservableEffectBatchState,
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,

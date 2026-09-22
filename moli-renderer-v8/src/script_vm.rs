@@ -6074,14 +6074,27 @@ impl ScriptVm {
         });
     }
 
+    #[cfg(test)]
     pub(super) fn install_navigation_bootstrap_entry(
         &mut self,
         entry_seed: Option<super::native_bridge::NavigationHistoryEntrySeed>,
     ) {
+        self.install_navigation_bootstrap_from_history(entry_seed, None);
+    }
+
+    pub(super) fn install_navigation_bootstrap_from_history(
+        &mut self,
+        entry_seed: Option<super::native_bridge::NavigationHistoryEntrySeed>,
+        source: Option<crate::runtime::RendererNavigationHistory>,
+    ) {
         let Some(entry_seed) = entry_seed else {
             return;
         };
-        let _ = self.with_default_context_scope(|scope, _runtime_ptr| {
+        let _ = self.with_default_context_scope(|scope, runtime_ptr| {
+            if let Some(source) = &source {
+                unsafe { &mut *runtime_ptr }
+                    .restore_top_level_navigation_history(source, &entry_seed);
+            }
             super::context_bootstrap::install_navigation_bootstrap_entry(scope, &entry_seed);
             Ok(())
         });

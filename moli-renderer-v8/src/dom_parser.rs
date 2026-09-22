@@ -388,13 +388,13 @@ pub(crate) fn parse_browsing_context_document_projection_from_source<'s>(
     let source = preserve_decoded_bom_only_browsing_context_body(source, content_type);
     let (parsed, kind) =
         parse_browsing_context_document_snapshot(document_url, &source, content_type, html_parser);
-    build_detached_document_from_dom_host_with_content_type(
+    build_detached_document_object_from_dom_host_with_content_type(
         scope,
+        kind.bridge_kind(),
         parsed,
-        kind,
-        true,
         content_type,
         character_set,
+        true,
     )
 }
 
@@ -473,6 +473,7 @@ fn build_detached_document_with_content_type<'s>(
         DomHost::from_dom(parsed),
         content_type,
         None,
+        false,
     )
 }
 
@@ -501,6 +502,7 @@ fn build_detached_document_from_dom_host_with_content_type<'s>(
         parsed,
         content_type,
         character_set,
+        false,
     )
 }
 

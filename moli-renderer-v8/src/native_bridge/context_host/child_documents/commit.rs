@@ -237,6 +237,7 @@ impl JsContextHost {
         {
             entry.remember_srcdoc_history_resource(snapshot, origin);
         }
+        self.remember_child_history(handle);
         let owner_local_window_id = current_owner.local_window_id;
         let owner_document_id = current_owner.document_id;
         self.dom_host_mut()
