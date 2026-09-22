@@ -301,10 +301,7 @@ fn queued_image_update_microtask_callback<'s>(
             encoded,
         }) => {
             let completion = runtime.complete_pending_image_load_local_response_if_matches(
-                handle,
-                sequence,
-                descriptor,
-                encoded,
+                handle, sequence, descriptor, encoded,
             );
             queue_image_load_terminal_followup_if_ready(
                 runtime_ptr,

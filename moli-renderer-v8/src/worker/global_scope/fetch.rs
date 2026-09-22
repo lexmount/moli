@@ -192,7 +192,7 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
     let local_response = local_url_response_with_blob_entry(
         &resolved_url,
         &method,
-        &headers,
+        &headers.to_byte_strings(),
         blob_url_entry.as_ref(),
     );
     tokio::task::spawn_local(async move {

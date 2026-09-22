@@ -2820,13 +2820,13 @@ document.addEventListener('securitypolicyviolation', e => {
             internal_id: registered.0,
             request_url: request_url.clone(),
             request_method: "GET".to_owned(),
-            request_headers: Vec::new(),
+            request_headers: Default::default(),
             request_body: None,
             response_status_text: Some("OK".to_owned()),
             skip_fetch_security_validation: true,
             response_filter: None,
             network_error_text: None,
-            result: Ok(redirected_fetch_response(&request_url, final_url)),
+            result: Ok(redirected_fetch_response(&request_url, final_url)).into(),
         })
         .unwrap();
         drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm);
