@@ -1586,6 +1586,19 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {
     );
     assert_close(baselines[0], more.y + more.height);
     assert_close(baselines[1], more.y + more.height);
+
+    // Extra block-end padding moves the text-backed peers by the same amount
+    // while leaving the clipped inline-block's top edge fixed.
+    let fallback_news = rect(&fallback, RED);
+    let fallback_hao = rect(&fallback, GREEN);
+    styles
+        .primary
+        .insert(5, nav_item_style(BLUE, 29.0, Overflow::Hidden));
+    let deeper_fallback = render(&source, &mut styles, 300, 100);
+    assert_close(rect(&deeper_fallback, RED).y, fallback_news.y + 10.0);
+    assert_close(rect(&deeper_fallback, GREEN).y, fallback_hao.y + 10.0);
+    assert_close(rect(&deeper_fallback, BLUE).y, more.y);
+    assert_close(rect(&deeper_fallback, BLUE).height, more.height + 10.0);
 }
 
 #[test]
