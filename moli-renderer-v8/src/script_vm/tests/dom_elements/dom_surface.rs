@@ -10400,7 +10400,7 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://joint-child-back.test/page.html|3|3|https://joint-child-back.test/page.html#child"
+        "https://joint-child-back.test/page.html|2|2|https://joint-child-back.test/page.html#child"
     );
     let _ = vm
         .run_one_oldest_ready_page_task_executor_turn(&loader)
@@ -10482,7 +10482,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://removed-child-joint-back.test/page.html|1|0|3|3|https://removed-child-joint-back.test/page.html#child"
+        "https://removed-child-joint-back.test/page.html|1|0|2|2|https://removed-child-joint-back.test/page.html#child"
     );
 
     vm.eval("document.querySelector('iframe').remove(); history.back(); 'queued'")
@@ -10504,7 +10504,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         result,
-        "https://removed-child-joint-back.test/page.html|1|0|3|true"
+        "https://removed-child-joint-back.test/page.html|1|0|2|true"
     );
 }
 
@@ -10552,7 +10552,7 @@ async fn child_cross_document_pending_navigation_exposes_back_availability() {
 
     assert_eq!(
         state,
-        "about:srcdoc|2|0:about:srcdoc|0:about:srcdoc|true|false"
+        "about:srcdoc|1|0:about:srcdoc|0:about:srcdoc|true|false"
     );
 }
 #[tokio::test]

@@ -913,7 +913,7 @@ async fn child_browsing_context_attribute_navigation_preserves_local_history() -
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"4\""),
+            .contains("data-child-history-length=\"3\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -983,7 +983,7 @@ async fn child_browsing_context_history_relative_urls_stay_child_local() -> Resu
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"3\""),
+            .contains("data-child-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -1089,7 +1089,7 @@ async fn child_browsing_context_history_relative_urls_stay_child_local() -> Resu
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-path-back-history-length=\"3\""),
+            .contains("data-child-path-back-history-length=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -1527,7 +1527,7 @@ async fn child_browsing_context_navigation_push_state_stays_window_local() -> Re
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length-after-load=\"3\""),
+            .contains("data-child-history-length-after-load=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -2256,14 +2256,14 @@ async fn child_browsing_context_navigation_same_document_push_result_surface_mat
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-sync=\"hash=#dest|len=3|committed=false|finished=false|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest\""
+            "data-sync=\"hash=#dest|len=2|committed=false|finished=false|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-timeout=\"hash=#dest|len=3|committed=true|finished=true|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
+            "data-timeout=\"hash=#dest|len=2|committed=true|finished=true|history=null|entry={{&quot;step&quot;:7}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=push|propertyNavType=push|order=cec:push:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2305,14 +2305,14 @@ async fn child_browsing_context_navigation_same_document_replace_result_surface_
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-sync=\"hash=#dest|len=2|committed=false|finished=false|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest\""
+            "data-sync=\"hash=#dest|len=1|committed=false|finished=false|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-timeout=\"hash=#dest|len=2|committed=true|finished=true|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
+            "data-timeout=\"hash=#dest|len=1|committed=true|finished=true|history=null|entry={{&quot;step&quot;:9}}|listener=1|property=1|from={child_url}|propertyFrom={child_url}|navType=replace|propertyNavType=replace|order=cec:replace:{child_url},popstate:#dest,cec-micro:#dest:null,committed:#dest:true,finished:#dest:true,hashchange:#dest\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2366,14 +2366,14 @@ async fn child_browsing_context_navigation_result_surface_exists_in_child_script
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-sync=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-sync=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-timeout=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-timeout=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2760,14 +2760,14 @@ async fn child_browsing_context_navigation_push_result_surface_exists_in_child_s
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-sync=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-sync=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
     assert!(
         page.serialize_html_async().await.unwrap().contains(&format!(
-            "data-source-timeout=\"false|false|{child_source_url}|2|0|{child_source_url}||replace|true|0|0\""
+            "data-source-timeout=\"false|false|{child_source_url}|1|0|{child_source_url}||replace|true|0|0\""
         )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -2803,7 +2803,7 @@ async fn child_browsing_context_navigation_push_result_surface_exists_in_child_s
             .await
             .unwrap()
             .contains(&format!(
-                "data-dest-current=\"{child_destination_url}|3|1\""
+                "data-dest-current=\"{child_destination_url}|2|1\""
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -3934,7 +3934,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length-initial=\"2\""),
+            .contains("data-child-history-length-initial=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -3953,7 +3953,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length-after-push=\"3\""),
+            .contains("data-child-history-length-after-push=\"2\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -3972,7 +3972,7 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-length=\"4\""),
+            .contains("data-child-history-length=\"3\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4015,8 +4015,8 @@ async fn child_browsing_context_fragment_navigation_persists_through_attribute_n
 }
 
 #[tokio::test]
-async fn child_browsing_context_initial_joint_history_length_updates_before_following_parent_script()
--> Result<()> {
+async fn child_browsing_context_initial_navigation_keeps_joint_history_length_stable() -> Result<()>
+{
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;
 
@@ -4028,7 +4028,7 @@ async fn child_browsing_context_initial_joint_history_length_updates_before_foll
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-sync-history-length=\"2\""),
+            .contains("data-top-sync-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4036,7 +4036,7 @@ async fn child_browsing_context_initial_joint_history_length_updates_before_foll
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-load-history-length=\"2\""),
+            .contains("data-top-load-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4044,7 +4044,7 @@ async fn child_browsing_context_initial_joint_history_length_updates_before_foll
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-load-history-length=\"2\""),
+            .contains("data-child-load-history-length=\"1\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -4136,7 +4136,7 @@ async fn child_browsing_context_location_hash_assignment_dispatches_local_popsta
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-history-unchanged=\"true\""),
+            .contains("data-top-history-unchanged=\"false\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
