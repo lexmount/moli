@@ -391,7 +391,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         local_url_response_with_blob_entry(
             &prepared.resolved_url,
             &prepared.method,
-            &prepared.request_headers,
+            &prepared.request_headers.to_byte_strings(),
             prepared.blob_url_entry.as_ref(),
         )
         .map(|result| result.map_err(|error| error.into_message()))
@@ -600,7 +600,7 @@ fn send_synchronous_worker_xhr(
     let request_url = prepared.resolved_url.clone();
     let request_method = prepared.method.clone();
     let request_headers = prepared.request_headers.clone();
-    let preflight_headers = prepared.request_headers.clone();
+    let preflight_headers = prepared.request_headers.to_byte_strings();
     let request_body = request_body_text(&prepared.send_body);
     let timeout_document_url = prepared.document_url.clone();
     let timeout_request_url = request_url.clone();

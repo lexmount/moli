@@ -184,7 +184,7 @@ pub(super) fn xhr_send_callback<'s>(
     if let Some(result) = local_url_response_with_blob_entry(
         &prepared.resolved_url,
         &prepared.method,
-        &prepared.request_headers,
+        &prepared.request_headers.to_byte_strings(),
         prepared.blob_url_entry.as_ref(),
     ) {
         match result {

@@ -80,8 +80,8 @@ use self::response_type::{XmlHttpRequestResponseType, xhr_response_type};
 #[cfg(test)]
 pub(crate) use self::send::prepare_xhr_send_body;
 pub(crate) use self::send::{
-    PreparedXhrSendBody, capture_xhr_upload_listener_flag, dispatch_xhr_loadstart,
-    convert_xhr_send_body_from_args, xhr_author_request_headers,
+    PreparedXhrSendBody, capture_xhr_upload_listener_flag, convert_xhr_send_body_from_args,
+    dispatch_xhr_loadstart, xhr_author_request_headers,
 };
 pub(crate) use self::upload::apply_xhr_upload_event;
 
