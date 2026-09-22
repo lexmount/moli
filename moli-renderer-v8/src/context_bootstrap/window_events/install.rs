@@ -13,6 +13,16 @@ use crate::definitions::define_function_accessor_property;
 use crate::util::{get_private_value, set_private_value, v8str};
 use moli_webapi_declare::WebApiObject;
 
+#[derive(moli_webapi_declare::WebApiFunctionTemplate)]
+#[webapi(interface = crate::web_api_interfaces::Window)]
+struct SimpleWindowEventHandlerDeclaration {
+    #[webapi(accessor_property = "handler", data = true,
+        getter = crate::context_bootstrap::simple_event_target_handler_getter_callback,
+        setter = crate::context_bootstrap::simple_event_target_handler_setter_callback,
+        access_policy = crate::context_bootstrap::require_same_origin_window_receiver)]
+    handler: (),
+}
+
 pub(crate) fn install_simple_window_event_handlers<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
@@ -24,7 +34,39 @@ pub(crate) fn install_simple_window_event_handlers<'s>(
         .copied()
         .filter(|property| event_handler_property_is_exposed(scope, window, property))
         .collect();
-    super::super::install_simple_event_target_handlers(scope, window, &properties);
+    use moli_webapi_declare::WebApiFunctionTemplateDeclaration;
+    let getter_callback = SimpleWindowEventHandlerDeclaration::accessor_getter_callback("handler")
+        .expect("declared Window handler getter");
+    let setter_callback = SimpleWindowEventHandlerDeclaration::accessor_setter_callback("handler")
+        .expect("declared Window handler setter");
+    for name in properties {
+        let data = v8str(scope, name).into();
+        let getter = v8::Function::builder_raw(getter_callback)
+            .data(data)
+            .build(scope)
+            .expect("Window handler getter");
+        let setter = v8::Function::builder_raw(setter_callback)
+            .data(data)
+            .length(1)
+            .build(scope)
+            .expect("Window handler setter");
+        getter.set_name(
+            crate::util::v8_string(scope, &format!("get {name}")).expect("Window getter name"),
+        );
+        setter.set_name(
+            crate::util::v8_string(scope, &format!("set {name}")).expect("Window setter name"),
+        );
+        crate::definitions::define_get_set_property(
+            scope,
+            window,
+            v8str(scope, name).into(),
+            getter.into(),
+            setter.into(),
+            v8::PropertyAttribute::NONE,
+            name,
+        )
+        .expect("Window handler accessor");
+    }
 }
 
 // The listener registry is discarded when the lightweight Window navigates.
