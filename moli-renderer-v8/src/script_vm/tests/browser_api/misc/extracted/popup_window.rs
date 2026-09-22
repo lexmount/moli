@@ -3154,3 +3154,23 @@ async fn lightweight_popup_external_script_redirect_final_url_obeys_csp() {
         format!("{final_script_url}|script-src-elem|enforce|true||load:true")
     );
 }
+
+#[test]
+fn lightweight_blank_popup_documents_have_no_doctype() {
+    let mut vm = new_storage_test_vm("https://blank-popup-tree.test/");
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const popup = open('about:blank', 'blank-popup-tree');
+  const initial = popup.document.doctype === null;
+  open('about:blank?replacement', 'blank-popup-tree');
+  const replacement = popup.document.doctype === null;
+  popup.close();
+  return String(initial && replacement);
+})()
+"#,
+        )
+        .unwrap();
+    assert_eq!(result, "true");
+}
