@@ -1,0 +1,563 @@
+{
+  "removed_test_names": [
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/child_documents/loads.rs",
+      "name": "loaded_child_document_retains_exact_network_response_body",
+      "replacement": "loaded_child_document_retains_exact_network_response_and_transport_metadata"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/computed_size/sampling.rs",
+      "name": "computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh",
+      "replacement": "computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/grid_resolved_track_values.rs",
+      "name": "computed_style_serializes_used_grid_tracks_from_the_frozen_layout_tree",
+      "replacement": "computed_style_refreshes_dirty_used_grid_tracks_on_exact_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/rendering_update.rs",
+      "name": "geometry_batch_reuses_latest_tree_at_same_viewport_until_fresh_paint_replaces_it",
+      "replacement": "geometry_batch_refreshes_dirty_tree_on_demand_and_reuses_clean_tree"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/dom.rs",
+      "name": "inner_text_new_sources_wait_for_a_fresh_paint_layout",
+      "replacement": "inner_text_refreshes_new_sources_on_demand_without_waiting_for_paint"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/misc.rs",
+      "name": "geometry_getters_reuse_latest_layout_across_nodes_and_mutation",
+      "replacement": "geometry_getters_refresh_after_mutation_and_reuse_clean_layout"
+    }
+  ],
+  "added_test_count": 131,
+  "added_test_names": [
+    {
+      "file": "moli-bounded-buffer/src/tests.rs",
+      "name": "changing_limits_evicts_oversized_then_oldest_without_reordering_survivors"
+    },
+    {
+      "file": "moli-bounded-buffer/src/tests.rs",
+      "name": "retain_visits_once_preserves_fifo_and_releases_only_removed_charges"
+    },
+    {
+      "file": "moli-bounded-buffer/src/tests.rs",
+      "name": "shrinking_entry_limit_keeps_interleaved_survivors_in_fifo_order"
+    },
+    {
+      "file": "moli-cookie-import/src/sqlite.rs",
+      "name": "companion_paths_preserve_non_utf8_database_names"
+    },
+    {
+      "file": "moli-cookie-import/src/sqlite.rs",
+      "name": "snapshot_preserves_non_ascii_paths_when_finding_wal_files"
+    },
+    {
+      "file": "moli-dom/src/native/host/query_index.rs",
+      "name": "global_named_item_candidate_check_tracks_live_attributes_in_detached_trees"
+    },
+    {
+      "file": "moli-encoding/src/tests.rs",
+      "name": "json_text_document_defaults_to_utf8_across_every_chunk_split"
+    },
+    {
+      "file": "moli-encoding/src/tests.rs",
+      "name": "plain_text_document_honors_transport_charset"
+    },
+    {
+      "file": "moli-encoding/src/tests.rs",
+      "name": "plain_text_document_ignores_literal_encoding_declarations"
+    },
+    {
+      "file": "moli-encoding/src/tests.rs",
+      "name": "plain_text_document_retains_legacy_detection_without_a_charset"
+    },
+    {
+      "file": "moli-encoding/src/tests.rs",
+      "name": "text_document_bom_precedes_transport_charset"
+    },
+    {
+      "file": "moli-fetch/src/tests/support.rs",
+      "name": "scripted_server_does_not_consume_response_for_closed_unused_connection"
+    },
+    {
+      "file": "moli-fetch/src/tests/support.rs",
+      "name": "scripted_server_waits_for_request_on_nonblocking_accepted_socket"
+    },
+    {
+      "file": "moli-layout/src/inline.rs",
+      "name": "only_collapsed_spaces_are_marked_for_line_end_removal"
+    },
+    {
+      "file": "moli-layout/src/projection.rs",
+      "name": "split_block_relative_basis_keeps_preferred_ratio_and_stretch_provenance"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "collapsed_line_end_spaces_do_not_create_horizontal_scrollbar_after_feedback"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "collapsed_space_before_atomic_inline_keeps_its_range_geometry"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "inline_scroll_overflow_keeps_unbreakable_text_and_nbsp"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "local_scrollbar_feedback_invalidates_only_the_changed_subtree_and_ancestor_path"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_avatar_flex_and_title_inline_both_keep_nonempty_geometry"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_block_continuation_keeps_its_middle_fragment"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_does_not_union_out_of_flow_descendants"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_escaped_margins_keep_middle_flow_bounds"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_large_float_between_blocks_does_not_expand_middle_fragments"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_metadata_survives_discarded_table_children"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_middle_fragment_ignores_child_relative_insets"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_middle_fragment_preserves_child_flow_and_margin_collapse"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_nested_and_transformed_continuations_keep_source_geometry"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_percentage_block_height_uses_nonanonymous_containing_block"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_relative_basis_tracks_clamped_and_ratio_sized_parents"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "split_inline_two_block_runs_keep_content_fragment_order"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "name": "viewport_scrollbar_feedback_relayouts_nested_absolute_descendants"
+    },
+    {
+      "file": "moli-parser/src/html.rs",
+      "name": "html_document_still_parses_markup_and_entities"
+    },
+    {
+      "file": "moli-parser/src/html.rs",
+      "name": "text_document_stream_preserves_literal_markup_and_leading_newline"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_click_mousedown_navigation_does_not_activate_successor"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_click_pointer_focus_and_interactability_controls"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_click_respects_dom_first_and_real_layout_policies"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_click_uses_top_level_pointer_coordinates_inside_offset_frame"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_document_mime_is_shared_by_main_and_child_documents"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_enter_inserts_newline_and_submits_through_both_key_routes"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_frame_click_rejects_ancestor_overlays_without_dispatch"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "name": "webdriver_classic_frame_target_click_is_invariant_under_neutral_frame_wrapping"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/webdriver_bidi.rs",
+      "name": "webdriver_classic_click_errors_use_existing_bidi_input_error_mapping"
+    },
+    {
+      "file": "moli-protocol/src/conn/runtime_load.rs",
+      "name": "provisional_body_failure_does_not_infer_cancellation_from_error_text"
+    },
+    {
+      "file": "moli-protocol/src/conn/runtime_load.rs",
+      "name": "provisional_body_failure_preserves_typed_source_and_context"
+    },
+    {
+      "file": "moli-protocol/src/conn/runtime_load.rs",
+      "name": "response_capture_survives_ordinary_renderer_body_retirement"
+    },
+    {
+      "file": "moli-protocol/src/conn/state/page_slot.rs",
+      "name": "navigation_cancellation_preserves_completion_token_and_is_target_local"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests.rs",
+      "name": "dispatch_key_press_acknowledges_real_link_navigation"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests.rs",
+      "name": "dispatch_keydown_still_rejects_while_navigation_is_pending"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests.rs",
+      "name": "dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests.rs",
+      "name": "dispatch_keyup_without_document_reports_no_document_loaded"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests/keyboard_events.rs",
+      "name": "cdp_canceled_raw_keydown_suppresses_only_its_following_char_phase"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/agent.rs",
+      "name": "durable_response_body_default_navigation_still_clears_and_budget_shrink_releases_payloads"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/agent.rs",
+      "name": "durable_response_body_revocation_does_not_evict_other_sessions_below_budget"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/agent.rs",
+      "name": "durable_response_body_store_bounds_payload_metadata_and_zero_byte_entries"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/agent.rs",
+      "name": "durable_response_body_store_navigation_preserves_only_existing_opted_claims"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/tests.rs",
+      "name": "aborted_navigation_preserves_document_without_changing_other_failure_policies"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/tests.rs",
+      "name": "observed_request_headers_do_not_restore_a_referrer_removed_by_transport_policy"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/tests.rs",
+      "name": "redirect_request_preserves_post_body_when_transport_preserves_method"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/tests.rs",
+      "name": "transportless_https_upgrade_attributes_wire_headers_to_upgraded_request"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/tests.rs",
+      "name": "truncated_observation_journal_falls_back_instead_of_guessing_redirect_alignment"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/output_queue.rs",
+      "name": "staged_cookie_report_does_not_suppress_observed_transport_headers"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/redirect_request.rs",
+      "name": "redirect_status_method_matrix_matches_fetch_semantics"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/redirect_request.rs",
+      "name": "redirected_get_does_not_recover_original_post_on_later_307"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/tests/response_body.rs",
+      "name": "durable_response_body_disable_detach_close_and_other_target_do_not_leak"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/tests/response_body.rs",
+      "name": "durable_response_body_requires_explicit_positive_total_budget"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/tests/response_body.rs",
+      "name": "durable_response_body_survives_navigation_only_for_opted_session"
+    },
+    {
+      "file": "moli-protocol/src/domains/page.rs",
+      "name": "child_document_network_reports_actual_redirect_methods_and_request_headers"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/navigation.rs",
+      "name": "stop_loading_after_commit_cancels_transport_without_replacing_partial_document"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/navigation.rs",
+      "name": "stop_loading_before_response_preserves_document_and_allows_next_navigation"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/navigation.rs",
+      "name": "stop_loading_cancels_inflight_unpaused_navigation_transport"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/navigation.rs",
+      "name": "stop_loading_during_http_error_body_preserves_document_and_allows_next_navigation"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/navigation.rs",
+      "name": "stop_loading_during_xml_body_preserves_document_and_allows_next_navigation"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/load_event_gate.rs",
+      "name": "retirement_discards_cancelled_leases"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/load_event_gate.rs",
+      "name": "stop_cancels_only_outstanding_exact_leases_without_reopening_load"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/store_tests.rs",
+      "name": "stopped_style_lease_settlement_is_exact_and_does_not_reopen_lifecycle"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/child_documents/loads.rs",
+      "name": "loaded_child_document_retains_exact_network_response_and_transport_metadata"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/computed_size/sampling.rs",
+      "name": "computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/grid_resolved_track_values.rs",
+      "name": "computed_style_refreshes_dirty_used_grid_tracks_on_exact_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/rendering_update.rs",
+      "name": "geometry_batch_refreshes_dirty_tree_on_demand_and_reuses_clean_tree"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/rendering_update.rs",
+      "name": "interactive_geometry_refreshes_after_dom_insertion_without_screenshot"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/rendering_update.rs",
+      "name": "viewport_scrollbar_feedback_relayouts_text_bearing_absolute_descendant"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/stylesheet_task.rs",
+      "name": "connected_style_event_queued_before_stop_settles_without_reopening_load"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/stylesheet_task.rs",
+      "name": "stopped_document_style_event_cannot_settle_replacement_document"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming.rs",
+      "name": "response_document_dispatch_distinguishes_text_from_html_and_xml"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming.rs",
+      "name": "text_document_charset_is_visible_to_document_start_before_body_arrives"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming.rs",
+      "name": "text_document_does_not_preload_literal_script_tags"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming_input.rs",
+      "name": "external_body_transfer_is_cancelled_only_by_explicit_stop"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/protocol_output/transport_memory.rs",
+      "name": "network_observation_journal_charge_includes_methods_and_headers"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/tests.rs",
+      "name": "mouse_input_completion_preserves_standalone_and_child_navigation_scope"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/tests.rs",
+      "name": "mouse_input_completion_publishes_handler_navigation_once"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/tests/open_streaming.rs",
+      "name": "explicit_stop_retires_open_parser_and_preserves_committed_partial_document"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_elements/dom_surface.rs",
+      "name": "geometry_refreshes_attribute_selectors_and_cssom_on_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_elements/dom_surface.rs",
+      "name": "geometry_refreshes_inserted_and_existing_nodes_on_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_elements/dom_surface.rs",
+      "name": "geometry_refreshes_pseudo_class_inputs_on_demand"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_elements/dom_surface.rs",
+      "name": "geometry_reuses_clean_layout_after_detached_subtree_mutations"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_elements/dom_surface.rs",
+      "name": "offset_parent_refreshes_a_connected_insertion_before_any_other_geometry_read"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/computed_style.rs",
+      "name": "replacing_document_root_replaces_retained_root_font_state"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/computed_style.rs",
+      "name": "root_font_relative_units_follow_each_documents_live_root_style"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/computed_style.rs",
+      "name": "root_font_relative_units_survive_viewport_device_rebuilds"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/dom.rs",
+      "name": "inner_text_refreshes_new_sources_on_demand_without_waiting_for_paint"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "canceled_raw_keydown_suppresses_only_its_following_implicit_submit_char_phase"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "canceling_an_implicit_submit_event_prevents_navigation"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "canceling_keydown_or_keypress_prevents_implicit_submission"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "disabled_default_submit_button_suppresses_implicit_submission"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "enter_does_not_implicitly_submit_multiple_blocking_inputs_without_a_submit_button"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "enter_implicitly_clicks_the_default_submit_button"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "enter_implicitly_submits_single_search_input_without_a_submit_button"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "external_form_owned_submit_button_participates_in_document_tree_order"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "image_input_is_the_default_submit_button_and_serializes_click_coordinates"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "implicit_submission_runs_constraint_validation"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "raw_keydown_waits_for_the_character_phase_before_implicit_submission"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "name": "textarea_enter_inserts_one_newline_during_the_character_phase_without_submitting"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/event_activation.rs",
+      "name": "canceled_script_click_keeps_focus_and_rolls_back_activation"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/event_activation.rs",
+      "name": "pointer_release_does_not_reapply_canceled_mouse_focus"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/event_activation.rs",
+      "name": "script_control_click_preserves_focus_and_pending_text_commit"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/event_activation.rs",
+      "name": "script_label_activation_keeps_its_independent_control_focus_rule"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_candidates_do_not_cache_custom_element_eligibility"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_candidates_include_detached_shadow_and_child_documents"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_detached_document_and_adopted_wrappers"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_index_misses_become_hits_and_preserve_past_names"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_keeps_native_overrides_descriptors_and_index_boundaries"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_misses_do_not_enumerate_or_traverse_controls"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_preserves_identity_and_live_properties_across_document_scopes"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "name": "form_named_lookup_uncontested_own_properties_do_not_invoke_accessors_during_queries"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/misc.rs",
+      "name": "adopted_stylesheet_geometry_refreshes_across_script_turns_without_rendering"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/misc.rs",
+      "name": "geometry_getters_refresh_after_mutation_and_reuse_clean_layout"
+    },
+    {
+      "file": "moli-web-mime/src/tests.rs",
+      "name": "document_text_classification_excludes_html_and_xml"
+    },
+    {
+      "file": "moli/src/telemetry.rs",
+      "name": "broken_diagnostic_writer_does_not_panic"
+    },
+    {
+      "file": "moli/tests/fetch_cli.rs",
+      "name": "cli_uncaught_script_error_is_logged_to_writable_stderr"
+    },
+    {
+      "file": "moli/tests/fetch_cli.rs",
+      "name": "cli_uncaught_script_error_survives_broken_stderr_pipe"
+    }
+  ],
+  "reviewed_removed_without_replacement": [],
+  "scope": "Rust test-function name audit of original source PR; reviewed all six renamed/reworked tests. Does not substitute for assertion review or runtime verification."
+}

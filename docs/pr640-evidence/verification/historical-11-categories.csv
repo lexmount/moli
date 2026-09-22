@@ -1,0 +1,12 @@
+category_id,reported_category,historical_1_1_9_failure_count,case_ids,planned_pr,scope
+1,目标元素布局面积为零,18,29;108;156;163;196;374;389;399;415;418;441;448;506;585;590;658;666;714,PR-1,historical failure acceptance
+2,版块链接宽度为零,6,66;404;595;620;640;645,PR-1,historical failure acceptance
+3,零宽链接改变可见元素序号,2,314;349,PR-1,historical failure acceptance
+4,用户建议项的几何状态未更新,1,576,PR-1,historical failure acceptance
+5,配置向导的几何状态未更新,1,547,PR-1,historical failure acceptance
+6,按键与导航生命周期冲突,2,274;465,PR-2,historical failure acceptance
+7,禁用控件的就绪竞态,0,,,regression observation only; no claimed historical fix
+8,Enter 未产生搜索提交,1,731,PR-2,historical failure acceptance
+9,正文请求传输超时,0,,,regression observation only; no claimed historical fix
+10,网络记录缺少验收所需 Referer,2,339;676,PR-3,historical failure acceptance
+11,JSON 页面缺少预期文本节点,1,784,PR-4,historical failure acceptance

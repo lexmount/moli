@@ -1,0 +1,14 @@
+{
+  "command": "node --test .github/scripts/*.test.cjs",
+  "exit_code": 0,
+  "tests": 13,
+  "passed": 13,
+  "source_files_sha256": {
+    ".github/scripts/render-ci-regression-comment.test.cjs": "da5fa7701aec14d071ea4ed99b0d5494f36860dde434bf35cee59491c9e9d940",
+    ".github/scripts/unpack-ci-release.test.cjs": "b9851e2496c6df5dd5d7d7f490064296bf872cf589f453ce12f0603af00e2036",
+    ".github/scripts/wait-for-workflow-artifact.test.cjs": "fabe6eba191cbe69a73207cb765295be5fed76d225d1ec6c858a230c652ede94",
+    ".github/scripts/unpack-ci-release.sh": "e8d83cfe8d031c68ab5a5708f8679fe39f08b13230d2e1b53493358cf0d24672",
+    ".github/actions/use-ci-release/action.yml": "093c5e33c6a2f32f03c8268b40b7c6ed415fd887fb23760b4204b617eb00f34a"
+  },
+  "log_sha256": "acd235d4ca2e7265e837c7bb52badbe41e0d9484c7e52c84b50206f23601482b"
+}
