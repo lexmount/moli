@@ -1569,6 +1569,9 @@ define_svg_animated_number_accessors!(
 #[derive(WebApiFunctionTemplate)]
 #[webapi(interface = web_api_interfaces::SVGElement, enumerable, receiver)]
 struct SvgElementPrototypeAccessorsDeclaration {
+    #[webapi(accessor_property = "className", getter = svg_element_class_name_getter)]
+    class_name: (),
+
     #[webapi(
         accessor_property = "ownerSVGElement",
         getter = svg_element_owner_svg_element_getter
