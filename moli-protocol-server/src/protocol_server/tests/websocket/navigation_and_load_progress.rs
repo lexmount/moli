@@ -842,6 +842,23 @@ async fn websocket_cdp_renderer_navigation_replaces_pending_response_without_cli
         ["about:blank", source_url.as_str(), replacement_url.as_str()]
     );
     assert_eq!(history["result"]["currentIndex"], json!(2));
+    let renderer_history = cdp_runtime_evaluate_string(
+        &mut socket,
+        &session.session_id,
+        8,
+        r#"
+            JSON.stringify({
+                current: navigation.currentEntry.url,
+                entries: navigation.entries().map(entry => entry.url),
+            })
+        "#,
+    )
+    .await;
+    let renderer_history: serde_json::Value = serde_json::from_str(&renderer_history).unwrap();
+    assert_eq!(renderer_history["current"], replacement_url);
+    let renderer_entries = renderer_history["entries"].as_array().unwrap();
+    assert!(renderer_entries.contains(&json!(replacement_url)));
+    assert!(!renderer_entries.contains(&json!(format!("http://{fixture_addr}/hang"))));
 
     let _ = socket.close(None).await;
     abort_test_cdp_server(protocol_server).await;
