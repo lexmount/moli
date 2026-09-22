@@ -19,6 +19,7 @@ pub fn init(log_filter: &str) {
         .with_env_filter(filter)
         .with_target(false)
         .with_writer(std::io::stderr)
+        .log_internal_errors(false)
         .try_init();
 }
 
@@ -106,5 +107,32 @@ mod tests {
         let output = writer.output();
         assert!(output.contains("fallback-info"));
         assert!(!output.contains("dependency-warning"));
+    }
+
+    #[test]
+    fn broken_diagnostic_writer_does_not_panic() {
+        const CHILD: &str = "MOLI_TEST_BROKEN_DIAGNOSTIC_SINK";
+        if std::env::var_os(CHILD).is_some() {
+            super::init("error");
+            tracing::error!("the diagnostic receiver has already exited");
+            return;
+        }
+        let (reader, writer) = std::io::pipe().unwrap();
+        drop(reader);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "telemetry::tests::broken_diagnostic_writer_does_not_panic",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(writer)
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "logging to a closed diagnostic pipe terminated the process: {status}"
+        );
     }
 }
