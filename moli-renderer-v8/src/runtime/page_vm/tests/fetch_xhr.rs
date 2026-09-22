@@ -3605,6 +3605,12 @@ fn spawn_repeated_synchronous_xhr_server(
                     }
                     Err(error) => panic!("accept repeated synchronous XHR: {error}"),
                 };
+                // macOS can inherit O_NONBLOCK from the listening socket.
+                // This fixture reads the complete request synchronously; the
+                // socket timeout alone does not turn WouldBlock into a wait.
+                stream
+                    .set_nonblocking(false)
+                    .expect("make accepted synchronous XHR stream blocking");
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .expect("bound synchronous XHR request read");
