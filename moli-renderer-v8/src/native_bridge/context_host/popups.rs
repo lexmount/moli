@@ -1347,6 +1347,39 @@ impl JsContextHost {
             .map(|record| v8::Local::new(scope, &record.window_proxy))
     }
 
+    pub(crate) fn lightweight_popup_event_handler_property_value<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        property_name: &str,
+    ) -> Option<v8::Local<'s, v8::Value>> {
+        let window = self.lightweight_popup_window(scope, popup_id)?;
+        Some(get_private_value(scope, window, property_name)
+            .filter(|value| value.is_object())
+            .unwrap_or_else(|| v8::null(scope).into()))
+    }
+
+    pub(crate) fn set_lightweight_popup_event_handler_property<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+        property_name: &str,
+        handler: Option<v8::Local<'s, v8::Object>>,
+    ) {
+        let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
+            return;
+        };
+        if !is_window_event_handler_property(property_name) {
+            return;
+        };
+        let value = handler
+            .map(v8::Local::<v8::Value>::from)
+            .unwrap_or_else(|| v8::null(scope).into());
+        crate::context_bootstrap::simple_object_event_set_handler(
+            scope, window, property_name.strip_prefix("on").expect("Window event handler"), property_name, value,
+        );
+    }
+
     pub(in crate::native_bridge::context_host) fn lightweight_popup_opener_endpoint(
         &self,
         popup_id: u64,
