@@ -505,6 +505,9 @@ pub(crate) struct DocumentRecord {
     pub(crate) url: Url,
     pub(crate) base_url: Url,
     pub(crate) creation_kind: DocumentCreationKind,
+    // document.open() clears initial about:blank without initializing the
+    // Navigation API. Only a committed navigation enables its entry list.
+    pub(crate) has_committed_navigation: bool,
     pub(crate) lifecycle: DocumentLifecycleState,
     pub(crate) lifecycle_progress: DocumentLifecycleRecord,
     pub(crate) active_requests: BTreeMap<FrameRequestId, FrameRequestRecord>,

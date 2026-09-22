@@ -2359,6 +2359,87 @@ fn initial_empty_same_origin_commit_reuses_local_window_exactly_once() {
 }
 
 #[test]
+fn stale_document_open_completion_preserves_reentrant_initial_empty_state() {
+    let mut store = FrameOwnerStore::default();
+    let child_handle = handle(355);
+    let document_handle = handle(356);
+    store.ensure_child_frame(
+        child_handle,
+        "open-reentry".to_owned(),
+        Some("main".to_owned()),
+    );
+    store
+        .initialize_child_frame_document(
+            child_handle,
+            document_handle,
+            url("about:blank"),
+            url("https://open-reentry.test/"),
+            "https://open-reentry.test".to_owned(),
+            None,
+            RequestCredentialsMode::SameOrigin,
+            policy_container(),
+            policy_context(),
+        )
+        .unwrap();
+    let initial = store
+        .current_child_document_task_owner(child_handle)
+        .unwrap();
+    let first = store
+        .plan_child_document_open_replacement(
+            child_handle,
+            document_handle,
+            url("about:blank"),
+            url("https://open-reentry.test/"),
+        )
+        .unwrap();
+    let first = store
+        .commit_child_document_open_replacement(first)
+        .current_owner()
+        .unwrap();
+    let reentrant = store
+        .plan_child_document_open_replacement(
+            child_handle,
+            document_handle,
+            url("about:blank"),
+            url("https://open-reentry.test/"),
+        )
+        .unwrap();
+    let reentrant = store
+        .commit_child_document_open_replacement(reentrant)
+        .current_owner()
+        .unwrap();
+    assert_eq!(initial.local_window_id, first.local_window_id);
+    assert_eq!(first.local_window_id, reentrant.local_window_id);
+    assert_ne!(first.document_id, reentrant.document_id);
+
+    store.finish_child_document_open_replacement(child_handle, first);
+    assert!(
+        store
+            .current_child_document_creation_kind(child_handle)
+            .unwrap()
+            .is_initial_empty(),
+        "a stale completion must not clear the reentrant document before its history update"
+    );
+    store.finish_child_document_open_replacement(child_handle, reentrant);
+    assert!(
+        !store
+            .current_child_document_creation_kind(child_handle)
+            .unwrap()
+            .is_initial_empty()
+    );
+    assert_eq!(
+        store.child_document_local_window_transition_for_commit(
+            child_handle,
+            Some(reentrant),
+            true,
+            &policy_container(),
+        ),
+        FrameDocumentLocalWindowTransition::ReplaceLocalWindow,
+        "the next same-origin navigation must not reuse the opened Document's Window"
+    );
+}
+
+#[test]
 fn suppressed_initial_empty_load_is_terminal_for_child_lifecycle() {
     let mut store = FrameOwnerStore::default();
     let child_handle = handle(354);

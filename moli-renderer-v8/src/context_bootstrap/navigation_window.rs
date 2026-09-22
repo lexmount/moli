@@ -221,8 +221,20 @@ pub(super) fn navigation_document_has_disabled_entries<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    navigation_document_has_opaque_origin(scope, owner)
-        || navigation_document_is_initial_empty(scope, owner)
+    if navigation_document_has_opaque_origin(scope, owner) {
+        return true;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    // document.open() ends initial about:blank Window reuse, but the existing
+    // Navigation object stays uninitialized until a navigation commits.
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return !host.lightweight_popup_has_committed_navigation(popup_id);
+    }
+    child_browsing_context_handle_for_runtime_owner(scope, owner)
+        .is_some_and(|handle| !host.child_has_committed_navigation(handle))
 }
 
 pub(super) fn navigation_document_has_opaque_origin<'s>(

@@ -280,6 +280,23 @@ async fn child_document_replacement_closes_old_broadcast_channels() {
         "#,
     )
     .expect("replacement child BroadcastChannel should evaluate");
+    // The exposed replacement Window can accept a channel before its realm
+    // turn. Advance earlier child work through the Page executor: lifecycle
+    // tasks share the DOM-manipulation FIFO with BroadcastChannel deliveries.
+    for _ in 0..5 {
+        let Some(turn) = vm.run_next_child_frame_semantic_turn().await else {
+            break;
+        };
+        assert!(
+            matches!(
+                turn,
+                ChildFrameSemanticTurnKind::RealmMaterialization
+                    | ChildFrameSemanticTurnKind::DocumentLifecycle
+                    | ChildFrameSemanticTurnKind::HostLoad
+            ),
+            "replacement child should only have realm and lifecycle work before delivery: {turn:?}"
+        );
+    }
     apply_page_broadcast_channel_deliveries(&mut vm).await;
     assert_eq!(
         vm.eval("__childReplacementBroadcastEvents.join('|')")
