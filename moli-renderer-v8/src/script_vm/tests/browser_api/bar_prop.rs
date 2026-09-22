@@ -96,9 +96,11 @@ fn bar_props_follow_child_window_lifetime() {
     assert_eq!(result, "ok");
 }
 
-#[test]
-fn bar_props_follow_popup_features_and_close() {
-    let mut vm = new_storage_page_task_executor_test_vm("https://barprop.test/popup");
+#[tokio::test]
+async fn bar_props_follow_popup_features_and_close() {
+    let loader = static_http_loader([]);
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://barprop.test/popup", &loader);
     let result = vm.eval(r#"
 (() => {
   const names = ['locationbar', 'menubar', 'personalbar', 'scrollbars', 'statusbar', 'toolbar'];
@@ -116,10 +118,24 @@ fn bar_props_follow_popup_features_and_close() {
     results.push(names.every((name, index) => popup[name] === bars[index]),
       bars.every(bar => bar.visible === visible));
     popup.close();
-    results.push(popup.closed, bars.every(bar => bar.visible === false));
+    results.push(bars.every(bar => bar.visible === visible));
   }
+  globalThis.barPopup = window.open('about:blank');
+  globalThis.closingBar = barPopup.locationbar;
+  globalThis.barPagehide = 'pending';
+  barPopup.onpagehide = () => { barPagehide = closingBar.visible; };
+  barPopup.close();
+  results.push(closingBar.visible);
   return results.every(Boolean) ? 'ok' : JSON.stringify(results);
 })()
 "#).unwrap();
     assert_eq!(result, "ok");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(barPagehide === true && closingBar.visible === false)",
+        "true",
+        "popup BarProp close",
+    )
+    .await;
 }
