@@ -1,4 +1,3 @@
-use super::location_runtime::urls_equal_ignoring_fragment;
 use super::navigation_entry::{history_index, navigation_entry_public_token};
 use super::navigation_serialize::{
     apply_current_document_referrer_policy_to_entry_snapshots, serialize_history_entries,
@@ -122,10 +121,8 @@ pub(super) fn history_entry_seed_for_traversal<'s>(
     );
     let mut candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
 
-    if urls_equal_ignoring_fragment(&candidate.current_url, &candidate.target_url) {
-        return None;
-    }
-
+    // The candidate already compares Document identities. Distinct Documents
+    // can have identical URLs, including URLs that differ only in fragment.
     super::session_history::capture_for_navigation(scope, owner, &mut candidate.seed);
     Some((candidate.target_url, candidate.seed))
 }
