@@ -50,8 +50,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlsplit, urlunsplit
 
-from .pipes import WptPipeError, parse_pipe_commands
-
 from .any_js import (
     ANY_JS_DEDICATED_WORKER_GLOBAL,
     ANY_JS_WINDOW_GLOBAL,
@@ -120,11 +118,6 @@ FETCH_RANGE_RESOURCE_PATHS = {
     "/fetch/range/resources/long-wav.py",
     "/fetch/range/resources/stash-take.py",
 }
-
-NAVIGATION_SECOND_VISIT_PATH = (
-    "/navigation-api/navigation-methods/return-value/resources/"
-    "204-205-download-on-second-visit.py"
-)
 FETCH_PREFLIGHT_RESOURCE_PATHS = {
     "/fetch/api/resources/preflight.py",
     "/fetch/api/resources/clean-stash.py",
@@ -1686,8 +1679,6 @@ def _make_handler(
                 path = unquote(urlsplit(getattr(self, "path", "")).path)
                 if path == COMMON_ECHO_PATH:
                     return self._serve_common_echo_resource
-                if path == NAVIGATION_SECOND_VISIT_PATH:
-                    return self._serve_navigation_second_visit
                 if path == FETCH_EMPTY_LOCATION_PATH:
                     return self._serve_empty_location_resource
                 if path == NAVIGATION_SECOND_VISIT_PATH:
@@ -3212,37 +3203,6 @@ def _make_handler(
                 self._send_bytes(None, b"", emit_body=emit_body, extra_headers=headers)
             except (KeyError, ValueError, TypeError):
                 self.send_error(500)
-
-        def _serve_navigation_second_visit(self) -> None:
-            if not self._consume_request_body():
-                return
-            params = parse_qs(urlsplit(self.path).query, keep_blank_values=True, encoding="latin-1")
-            stash_path = NAVIGATION_SECOND_VISIT_PATH.rsplit("/", 1)[0] + "/"
-            status, content_type, body = 400, None, b""
-            headers: list[tuple[str, str]] = []
-            cache_control = None
-            try:
-                key = params["id"][0]
-                if self.command == "POST":
-                    fetch_stash.put(key, params["action"][0], path=stash_path)
-                    status = 204
-                elif self.command == "GET":
-                    action = fetch_stash.take(key, path=stash_path)
-                    if action is None:
-                        status, content_type, body = 200, "text/html", b"initial page"
-                        cache_control = "no-store"
-                    elif action in ("204", "205"):
-                        status = int(action)
-                    elif action == "download":
-                        status, content_type, body = 200, "text/plain", b"some text to download"
-                        headers.append(("Content-Disposition", "attachment"))
-            except (KeyError, ValueError):
-                self.send_error(500)
-                return
-            self._send_bytes(
-                content_type, body, emit_body=self.command != "HEAD",
-                status_code=status, extra_headers=headers, cache_control=cache_control,
-            )
 
         def _serve_fetch_range_resource(
             self, path: str, query: str, *, emit_body: bool
