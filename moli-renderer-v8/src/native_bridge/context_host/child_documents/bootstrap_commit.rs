@@ -32,7 +32,7 @@ impl JsContextHost {
                 self.dispatch_frame_navigation_csp_violation_event_best_effort(
                     scope, handle, &violation,
                 );
-                self.cancel_child_document_navigation_after_csp_block(handle, navigation_load);
+                self.cancel_child_document_navigation_before_load(handle, navigation_load);
                 crate::context_bootstrap::finish_joint_history_without_document_commit(
                     scope,
                     self,
@@ -40,6 +40,16 @@ impl JsContextHost {
                 );
                 return Some(ChildDocumentCommitResult::ready(None));
             }
+        }
+        if self.child_document_navigation_would_recurse(handle, &bootstrap, initiator) {
+            self.cancel_child_document_navigation_before_load(handle, navigation_load);
+            self.sync_existing_child_browsing_context_window_state(scope, handle);
+            crate::context_bootstrap::finish_joint_history_without_document_commit(
+                scope,
+                self,
+                crate::native_bridge::OwnerDispatchScope::Child(handle),
+            );
+            return Some(ChildDocumentCommitResult::ready(None));
         }
         self.cancel_child_meta_refresh_navigation(handle);
         let cached_snapshot =
@@ -191,7 +201,7 @@ impl JsContextHost {
         Some(snapshot)
     }
 
-    fn cancel_child_document_navigation_after_csp_block(
+    fn cancel_child_document_navigation_before_load(
         &mut self,
         handle: DomHandle,
         navigation_load: FrameDocumentNavigationLoadBinding,

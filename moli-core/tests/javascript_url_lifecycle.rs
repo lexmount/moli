@@ -21,7 +21,8 @@ async fn child_navigation_lifecycle(via: &str, kind: &str, depth: usize) -> Resu
               const frame = owner.document.createElement('iframe');
               const loaded = new Promise(resolve => frame.onload = resolve);
               frame.src = '/compat/child-dynamic-markup-document?markup=' +
-                encodeURIComponent('<!doctype html><body>original');
+                encodeURIComponent('<!doctype html><body>original') +
+                '&frame=' + encodeURIComponent(label);
               owner.document.body.append(frame);
               await loaded;
               const win = frame.contentWindow;
