@@ -180,6 +180,7 @@ impl PreparedRendererNavigation {
                     navigation.request_body(),
                     navigation.request_headers(),
                     navigation.browser_navigation_kind(),
+                    navigation.navigation_history().cloned(),
                     navigation.web_mcp_invocation(),
                     Some(match navigation.browser_navigation_kind() {
                         moli_fetch::BrowserNavigationRequestKind::Reload => {
