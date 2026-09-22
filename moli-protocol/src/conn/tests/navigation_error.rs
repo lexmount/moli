@@ -570,6 +570,7 @@ pub(super) fn navigation_fixture() -> (
         auxiliary_document_response: None,
         redirect_chain: Vec::new(),
         redirect_headers: None,
+        navigation_history: None,
         navigate_id: Some(1),
         owner: CommandOwnerScope::for_session("SID-1"),
         result_projection: NavigationResultProjection::Cdp(json!({
