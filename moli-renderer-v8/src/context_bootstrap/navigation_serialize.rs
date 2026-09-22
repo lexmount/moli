@@ -1,6 +1,7 @@
 use super::navigation_activation::navigation_activation_value;
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_document_id,
+    navigation_entry_id_value, navigation_entry_initial_index, navigation_entry_key_value,
     navigation_entry_referrer_policy_value, navigation_entry_url_value,
 };
 use super::navigation_entry_state::{
@@ -91,15 +92,11 @@ pub(super) fn serialize_navigation_entry_object<'s>(
     entry: v8::Local<'s, v8::Object>,
     history_entries: &[NavigationHistorySerializedEntry],
 ) -> NavigationHistorySerializedEntry {
-    let id = get_own_static_property(scope, entry, "id")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+    let id = navigation_entry_id_value(scope, entry)
         .filter(|value| !value.is_empty())
         .map(NavigationHistoryEntryId::from_serialized)
         .unwrap_or_else(NavigationHistoryEntryId::allocate);
-    let key = get_own_static_property(scope, entry, "key")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+    let key = navigation_entry_key_value(scope, entry)
         .filter(|value| !value.is_empty())
         .map(NavigationHistoryEntryKey::from_serialized)
         .unwrap_or_else(NavigationHistoryEntryKey::allocate);
@@ -118,11 +115,7 @@ pub(super) fn serialize_navigation_entry_object<'s>(
         .and_then(|value| v8::json::stringify(scope, value))
         .map(|value| value.to_rust_string_lossy(scope))
         .filter(|value| value != "null");
-    let entry_index = get_own_static_property(scope, entry, "index")
-        .and_then(|value| value.integer_value(scope))
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
-        .unwrap_or(0);
+    let entry_index = navigation_entry_initial_index(scope, entry).unwrap_or(0);
     let document_id = navigation_entry_document_id(scope, entry)
         .map(NavigationHistoryDocumentId::from_serialized)
         .unwrap_or_else(NavigationHistoryDocumentId::allocate);
@@ -216,20 +209,14 @@ pub(super) fn serialize_history_entries<'s>(
             .and_then(|value| v8::json::stringify(scope, value))
             .map(|value| value.to_rust_string_lossy(scope))
             .filter(|value| value != "null");
-        let entry_index = get_own_static_property(scope, entry, "index")
-            .and_then(|value| value.integer_value(scope))
-            .filter(|value| *value >= 0)
-            .map(|value| value as u32)
-            .unwrap_or(index);
-        let id = get_own_static_property(scope, entry, "id")
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
+        // The public index is relative to the current contiguous same-origin
+        // region, and is -1 outside it. It cannot identify a session-history slot.
+        let entry_index = navigation_entry_initial_index(scope, entry).unwrap_or(index);
+        let id = navigation_entry_id_value(scope, entry)
             .filter(|value| !value.is_empty())
             .map(NavigationHistoryEntryId::from_serialized)
             .unwrap_or_else(NavigationHistoryEntryId::allocate);
-        let key = get_own_static_property(scope, entry, "key")
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
+        let key = navigation_entry_key_value(scope, entry)
             .filter(|value| !value.is_empty())
             .map(NavigationHistoryEntryKey::from_serialized)
             .unwrap_or_else(NavigationHistoryEntryKey::allocate);

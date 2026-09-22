@@ -1,4 +1,3 @@
-use super::location_runtime::is_same_document_fragment_navigation;
 use super::navigation_activation::bind_navigation_entry_runtime_owner;
 use super::navigation_entry::{
     create_navigation_entry, history_index, set_navigation_entry_document_id,
@@ -125,9 +124,7 @@ pub(super) fn history_entry_seed_for_traversal<'s>(
     );
     let candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
 
-    if is_same_document_fragment_navigation(Some(&candidate.current_url), &candidate.target_url) {
-        return None;
-    }
-
+    // The candidate already compares Document identities. Distinct Documents
+    // can have identical URLs, including URLs that differ only in fragment.
     Some((candidate.target_url, candidate.seed))
 }

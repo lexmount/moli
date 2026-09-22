@@ -4,13 +4,12 @@ use super::location_history_storage::{
     NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_ENTRY_DOCUMENT_ID_SLOT,
     NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
 };
-use super::location_runtime::urls_refer_to_same_document;
 use super::navigation_activation::set_navigation_current_entry;
 use super::navigation_entry_state::navigation_entry_state_snapshot;
 use super::navigation_projection::visible_navigation_index_for_entry;
 use super::navigation_window::{
     navigation_document_is_active, runtime_window_owner, window_history_for_holder,
-    window_location_for_holder, window_navigation_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
@@ -446,28 +445,9 @@ fn navigation_entry_same_document_getter<'s>(
         return;
     }
     let owner = runtime_window_owner(scope, args.this());
-    if let Some(current_entry) = navigation_current_entry(scope, owner)
-        && navigation_entries_share_document(scope, current_entry, args.this())
-    {
-        rv.set_bool(true);
-        return;
-    }
-    let Some(current_location) = window_location_for_holder(scope, owner) else {
-        rv.set_bool(false);
-        return;
-    };
-    let Some(current_href) = super::location_runtime::location_href_slot(scope, current_location)
-    else {
-        rv.set_bool(false);
-        return;
-    };
-    let Some(entry_href) =
-        navigation_entry_stored_string(scope, args.this(), NAVIGATION_ENTRY_URL_SLOT)
-    else {
-        rv.set_bool(false);
-        return;
-    };
-    rv.set_bool(urls_refer_to_same_document(&current_href, &entry_href));
+    let same_document = navigation_current_entry(scope, owner)
+        .is_some_and(|current| navigation_entries_share_document(scope, current, args.this()));
+    rv.set_bool(same_document);
 }
 
 fn navigation_entry_index_getter<'s>(

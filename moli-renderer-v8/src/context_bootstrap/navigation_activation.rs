@@ -2,8 +2,8 @@ use super::location_history_storage::{
     NAVIGATION_ACTIVATION_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_TRANSITION_SLOT,
 };
 use super::navigation_entry::{
-    create_navigation_entry, history_entries, navigation_entry_public_token,
-    set_navigation_entry_document_id,
+    create_navigation_entry, history_entries, navigation_entry_id_value,
+    navigation_entry_key_value, navigation_entry_public_token, set_navigation_entry_document_id,
 };
 use super::navigation_lifecycle::enqueue_navigation_lifecycle_microtask;
 use super::navigation_result::suppress_unhandled_rejection;
@@ -106,12 +106,8 @@ fn navigation_entry_matches_activation_snapshot<'s>(
     entry: v8::Local<'s, v8::Object>,
     snapshot: &NavigationHistorySerializedEntry,
 ) -> bool {
-    let current_id = get_own_static_property(scope, entry, "id")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
-    let current_key = get_own_static_property(scope, entry, "key")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
+    let current_id = navigation_entry_id_value(scope, entry);
+    let current_key = navigation_entry_key_value(scope, entry);
     let snapshot_id = navigation_entry_public_token(&snapshot.id);
     let snapshot_key = navigation_entry_public_token(&snapshot.key);
     current_id.as_deref() == Some(snapshot_id.as_str())
