@@ -27,7 +27,7 @@ fn node_scroll_position_value<'s>(
         let metrics = observable_element_metrics(
             unsafe { &*runtime_ptr },
             handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
+            moli_layout::LayoutFlushReason::DomGeometry,
         )?;
         return Ok(metrics
             .map(|metrics| {
@@ -63,25 +63,21 @@ fn node_scroll_position_setter_for_object<'s>(
     }
     let runtime = unsafe { &mut *runtime_ptr };
     let (minimum, maximum) = if runtime.layout_policy().uses_real_layout() {
-        observable_element_metrics(
-            runtime,
-            handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
-        .map(|metrics| {
-            if horizontal {
-                (
-                    f64::from(metrics.minimum_scroll_offset.x),
-                    f64::from(metrics.maximum_scroll_offset.x),
-                )
-            } else {
-                (
-                    f64::from(metrics.minimum_scroll_offset.y),
-                    f64::from(metrics.maximum_scroll_offset.y),
-                )
-            }
-        })
-        .unwrap_or((0.0, 0.0))
+        observable_element_metrics(runtime, handle, moli_layout::LayoutFlushReason::DomGeometry)?
+            .map(|metrics| {
+                if horizontal {
+                    (
+                        f64::from(metrics.minimum_scroll_offset.x),
+                        f64::from(metrics.maximum_scroll_offset.x),
+                    )
+                } else {
+                    (
+                        f64::from(metrics.minimum_scroll_offset.y),
+                        f64::from(metrics.maximum_scroll_offset.y),
+                    )
+                }
+            })
+            .unwrap_or((0.0, 0.0))
     } else {
         // Mock intentionally preserves the old synthetic geometry behavior:
         // non-negative scroll values are stored even without real overflow.
@@ -234,7 +230,7 @@ fn scroll_node_to<'s>(
     let metrics = observable_element_metrics(
         unsafe { &*runtime_ptr },
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     )?;
     let Some(metrics) = metrics else {
         return Ok(());
@@ -276,7 +272,7 @@ fn node_box_metric_from_object<'s>(
         let metrics = observable_element_metrics(
             unsafe { &*runtime_ptr },
             handle,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
+            moli_layout::LayoutFlushReason::DomGeometry,
         )?;
         return Ok(metrics
             .as_ref()
@@ -565,7 +561,7 @@ pub(in crate::native_bridge) fn node_offset_parent_getter_function<'s>(
     let metrics = match observable_element_metrics(
         runtime,
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     ) {
         Ok(metrics) => metrics,
         Err(error) => {

@@ -1704,7 +1704,7 @@ fn image_submitter_coordinate(
     let rect = observable_bounding_client_rect(
         runtime,
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        moli_layout::LayoutFlushReason::DomGeometry,
     )?;
     Ok((
         image_submitter_coordinate_component(client_x - rect.left, rect.width),
