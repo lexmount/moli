@@ -1716,6 +1716,7 @@ fn materialized_navigation_test_state(
         request_body_bytes: None,
         request_headers: Vec::new().into(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+        navigation_history: None,
         timestamp: 0.0,
         source_document_security: Default::default(),
     }

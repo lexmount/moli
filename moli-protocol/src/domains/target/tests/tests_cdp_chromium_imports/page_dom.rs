@@ -471,3 +471,206 @@ async fn rust_cdp_chromium_import_create_isolated_world_reports_context() {
         "isolated"
     );
 }
+
+// Session history must survive destruction of the old top-level renderer,
+// including visits to the same URL with a different Document and entry state.
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_history_restores_structured_state_and_entry_identity_before_scripts() {
+    let fixture = SmokeFixtureServer::start().await;
+    let other = SmokeFixtureServer::start().await;
+    for cross_origin in [false, true] {
+        let mut ctx = TestContext::new_with_target_discovery(false);
+        let attached = attached_smoke_session(&mut ctx, 211_000).await;
+        let first_url = fixture.url("/plain?first#start");
+        let middle_url = if cross_origin {
+            other.url("/plain?middle")
+        } else {
+            fixture.url("/plain?middle")
+        };
+        ctx.process_async(json!({
+            "id": 211_004, "method": "Page.addScriptToEvaluateOnNewDocument",
+            "sessionId": attached.session_id,
+            "params": {"source": "globalThis.restoredBeforeScripts = history.state;"}
+        }))
+        .await;
+        let preload = take_response_by_id(&mut ctx, 211_004);
+        assert!(preload.get("error").is_none(), "{preload}");
+        navigate_and_take_response(&mut ctx, &attached.session_id, 211_005, first_url.clone())
+            .await;
+        let original = evaluate_string(
+            &mut ctx,
+            &attached.session_id,
+            211_006,
+            r#"
+            (() => {
+              if (navigation.activation.from !== null) throw new Error('initial Document exposed as activation.from');
+              const state = {map: new Map([['bytes', new Uint8Array([7, 9])]])};
+              state.self = state;
+              history.replaceState(state, '');
+              navigation.updateCurrentEntry({state: new Set(['first'])});
+              return JSON.stringify([navigation.currentEntry.id, navigation.currentEntry.key]);
+            })()
+        "#,
+        )
+        .await;
+        navigate_and_take_response(&mut ctx, &attached.session_id, 211_007, middle_url.clone())
+            .await;
+        navigate_and_take_response(&mut ctx, &attached.session_id, 211_008, first_url.clone())
+            .await;
+        evaluate_string(
+            &mut ctx,
+            &attached.session_id,
+            211_009,
+            "history.replaceState('last', ''); globalThis.lastDocument = true; 'ok'",
+        )
+        .await;
+        ctx.process_async(json!({"id": 211_010, "method": "Page.getNavigationHistory", "sessionId": attached.session_id})).await;
+        let history = take_response_by_id(&mut ctx, 211_010);
+        let first_id = history["result"]["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["url"] == first_url)
+            .unwrap()["id"]
+            .clone();
+        ctx.process_async(json!({"id": 211_011, "method": "Page.navigateToHistoryEntry", "sessionId": attached.session_id,
+            "params": {"entryId": first_id}})).await;
+        ctx.expect_result(211_011, json!({}), Some(&attached.session_id));
+        let restored = evaluate_string(&mut ctx, &attached.session_id, 211_012, r#"
+            JSON.stringify({
+                identity: [navigation.currentEntry.id, navigation.currentEntry.key],
+                state: history.state === history.state.self && history.state.map instanceof Map &&
+                       history.state.map.get('bytes') instanceof Uint8Array && history.state.map.get('bytes')[1] === 9,
+                beforeScripts: restoredBeforeScripts.self === restoredBeforeScripts && restoredBeforeScripts.map.get('bytes')[0] === 7,
+                navigationState: navigation.currentEntry.getState() instanceof Set && navigation.currentEntry.getState().has('first'),
+                replacedDocument: !globalThis.lastDocument,
+                type: navigation.activation.navigationType,
+                from: navigation.activation.from?.url ?? null,
+                urls: navigation.entries().map(entry => entry.url)
+            })
+        "#).await;
+        let restored: serde_json::Value = serde_json::from_str(&restored).unwrap();
+        assert_eq!(
+            restored["identity"],
+            serde_json::from_str::<serde_json::Value>(&original).unwrap()
+        );
+        for field in [
+            "state",
+            "beforeScripts",
+            "navigationState",
+            "replacedDocument",
+        ] {
+            assert_eq!(restored[field], true, "{field}: {restored}");
+        }
+        assert_eq!(restored["type"], "traverse");
+        if cross_origin {
+            assert_eq!(restored["from"], serde_json::Value::Null);
+            assert_eq!(restored["urls"], json!([first_url]));
+        } else {
+            assert_eq!(restored["from"], first_url);
+            assert_eq!(restored["urls"], json!([first_url, middle_url, first_url]));
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn top_level_history_uses_committed_source_updates_after_navigation_is_requested() {
+    let fixture = SmokeFixtureServer::start().await;
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    let attached = attached_smoke_session(&mut ctx, 212_000).await;
+    let first_url = fixture.url("/plain?source");
+    let fragment_url = format!("{first_url}#state");
+    let second_url = fixture.url("/plain?destination");
+    ctx.process_async(
+        json!({"id": 212_004, "method": "Page.enable", "sessionId": attached.session_id}),
+    )
+    .await;
+    ctx.expect_result(212_004, json!({}), Some(&attached.session_id));
+    ctx.process_async(json!({
+        "id": 212_010, "method": "Page.setLifecycleEventsEnabled", "sessionId": attached.session_id,
+        "params": {"enabled": true}
+    }))
+    .await;
+    ctx.expect_result(212_010, json!({}), Some(&attached.session_id));
+    let first_navigation =
+        navigate_and_take_response(&mut ctx, &attached.session_id, 212_005, first_url.clone())
+            .await;
+    let first_loader = first_navigation["result"]["loaderId"].as_str().unwrap();
+    // Location assignment before load completion replaces the current entry.
+    // This fixture needs a push from a completely loaded source Document.
+    ctx.wait_for_scheduler_message("source Document load", |message| {
+        message["method"] == "Page.lifecycleEvent"
+            && message["sessionId"] == attached.session_id
+            && message["params"]["loaderId"] == first_loader
+            && message["params"]["name"] == "load"
+    })
+    .await;
+    let fragment_entries = evaluate_string(
+        &mut ctx,
+        &attached.session_id,
+        212_006,
+        r#"
+        history.replaceState('first', '');
+        history.pushState('before', '', '#state');
+        JSON.stringify(navigation.entries().map(entry => [entry.url, entry.index]))
+    "#,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&fragment_entries).unwrap(),
+        json!([[first_url, 0], [fragment_url, 1]])
+    );
+    let original = evaluate_string(
+        &mut ctx,
+        &attached.session_id,
+        212_007,
+        format!(
+            r#"
+        location.href = {};
+        history.replaceState('late', '');
+        navigation.updateCurrentEntry({{state: 'nav-late'}});
+        JSON.stringify([navigation.currentEntry.id, navigation.currentEntry.key])
+    "#,
+            serde_json::to_string(&second_url).unwrap()
+        ),
+    )
+    .await;
+    ctx.wait_for_scheduler_message("destination Document commit", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["sessionId"] == attached.session_id
+            && message["params"]["frame"]["url"] == second_url
+    })
+    .await;
+    evaluate_string(
+        &mut ctx,
+        &attached.session_id,
+        212_008,
+        "history.back(); 'scheduled'",
+    )
+    .await;
+    ctx.wait_for_scheduler_message("source Document traversal", |message| {
+        message["method"] == "Page.frameNavigated"
+            && message["sessionId"] == attached.session_id
+            && message["params"]["frame"]["url"] == fragment_url
+    })
+    .await;
+    let restored = evaluate_string(
+        &mut ctx,
+        &attached.session_id,
+        212_009,
+        r#"
+        JSON.stringify({state: history.state, navstate: navigation.currentEntry.getState(),
+            identity: [navigation.currentEntry.id, navigation.currentEntry.key],
+            urls: navigation.entries().map(entry => entry.url),
+            type: navigation.activation.navigationType})
+    "#,
+    )
+    .await;
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&restored).unwrap(),
+        json!({
+            "state": "late", "navstate": "nav-late", "identity": serde_json::from_str::<serde_json::Value>(&original).unwrap(),
+            "urls": [first_url, fragment_url, second_url], "type": "traverse"
+        })
+    );
+}

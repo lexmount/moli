@@ -34,26 +34,29 @@ fn capture_navigation_entry_seed_for_holder<'s>(
     })
 }
 
-pub(super) fn sync_child_navigation_entry_seed_from_owner<'s>(
+pub(super) fn sync_navigation_entry_seed_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    sync_child_navigation_entry_seed_from_owner_with_document_url(scope, owner, true);
+    sync_navigation_entry_seed_from_owner_with_document_url(scope, owner, true);
 }
 
 pub(super) fn sync_child_pending_navigation_entry_seed_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    sync_child_navigation_entry_seed_from_owner_with_document_url(scope, owner, false);
+    sync_navigation_entry_seed_from_owner_with_document_url(scope, owner, false);
 }
 
-fn sync_child_navigation_entry_seed_from_owner_with_document_url<'s>(
+fn sync_navigation_entry_seed_from_owner_with_document_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     sync_document_url: bool,
 ) {
     if runtime_window_is_global(scope, owner) {
+        if sync_document_url {
+            publish_top_level_navigation_history(scope, owner);
+        }
         return;
     }
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
@@ -71,6 +74,44 @@ fn sync_child_navigation_entry_seed_from_owner_with_document_url<'s>(
     {
         host.sync_child_browsing_context_document_url(scope, handle);
     }
+}
+
+pub(super) fn publish_top_level_navigation_history<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) {
+    if !runtime_window_is_global(scope, owner) {
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_for_navigation_seed_owner(scope, owner) else {
+        return;
+    };
+    let host = unsafe { &*host_ptr };
+    // Child and isolated worlds share a host, but cannot publish root history.
+    if let Some(context) = host.page_default_context(scope)
+        && !owner.strict_equals(context.global(scope).into())
+    {
+        return;
+    }
+    let Some(history) = window_history_for_holder(scope, owner) else {
+        return;
+    };
+    let mut entries = serialize_history_entries(scope, history);
+    let current_index = history_index(scope, history);
+    apply_current_document_referrer_policy_to_entry_snapshots(
+        scope,
+        owner,
+        current_index,
+        &mut entries,
+    );
+    host.top_level_navigation_history()
+        .publish(NavigationHistoryEntrySeed {
+            entries,
+            current_index,
+            // Activation belongs to the navigation operation, not the source
+            // history. Reading public activation properties could invoke JS here.
+            activation: None,
+        });
 }
 
 fn context_host_ptr_for_navigation_seed_owner(

@@ -4,7 +4,7 @@ use super::navigation_entry::{
     set_history_entries, set_history_length,
 };
 use super::navigation_events::dispatch_navigation_entry_dispose;
-use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
+use super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::navigation_window::{
     runtime_top_window_owner, runtime_window_dispatch_scope, runtime_window_owner,
     window_history_for_holder,
@@ -598,7 +598,7 @@ fn prune_runtime_entries<'s>(
             let _ = next.set_index(scope, index, entry.into());
         }
         set_history_entries(scope, history, next);
-        sync_child_navigation_entry_seed_from_owner(scope, window);
+        sync_navigation_entry_seed_from_owner(scope, window);
     }
     for entry in disposed {
         dispatch_navigation_entry_dispose(scope, entry);

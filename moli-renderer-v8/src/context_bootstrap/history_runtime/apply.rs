@@ -13,7 +13,7 @@ use super::super::navigation_events::{
 };
 use super::super::navigation_mutation::sync_same_document_navigation_commit;
 use super::super::navigation_result::perform_navigation_scroll_if_needed;
-use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
+use super::super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
     window_location_for_holder, window_navigation_for_holder, window_task_target_for_runtime_owner,
@@ -114,7 +114,7 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
     let resolved_entry = navigation_current_entry(scope, owner)
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::undefined(scope).into());
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
+    sync_navigation_entry_seed_from_owner(scope, owner);
     sync_same_document_navigation_commit(
         scope,
         owner,

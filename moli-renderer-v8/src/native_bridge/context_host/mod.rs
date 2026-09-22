@@ -1043,6 +1043,7 @@ pub(crate) struct JsContextHost {
     /// accessors are invalid, so callbacks use this scope to avoid probing them.
     active_inspector_dispatch: bool,
     pending_top_level_navigation: Option<PendingTopLevelNavigation>,
+    top_level_navigation_history: crate::runtime::RendererNavigationHistory,
     ordinary_page_turn_navigation_handoff_active: bool,
     pub(super) next_navigation_attempt_id: u64,
     pub(super) active_navigation_attempts: HashMap<u64, &'static str>,

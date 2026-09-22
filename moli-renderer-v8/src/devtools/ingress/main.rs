@@ -791,6 +791,7 @@ mod tests {
     fn page_state() -> Arc<RendererPageState> {
         let url = url::Url::parse("about:blank").expect("test URL");
         Arc::new(RendererPageState {
+            navigation_history: Default::default(),
             requested_url: url.clone(),
             navigation_initiator_url: None,
             navigation_redirected: false,

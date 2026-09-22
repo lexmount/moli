@@ -94,6 +94,10 @@ pub(crate) enum PendingTopLevelNavigation {
 }
 
 impl JsContextHost {
+    pub(crate) fn top_level_navigation_history(&self) -> crate::runtime::RendererNavigationHistory {
+        self.top_level_navigation_history.clone()
+    }
+
     pub(crate) fn form_navigation_history_mutation(
         &self,
         source_document: Option<DomHandle>,

@@ -180,9 +180,18 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
+    pub(crate) navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
 }
 
 impl TargetNavigationLoadInputs {
+    pub(crate) fn with_navigation_history(
+        mut self,
+        history: Option<moli_core::RendererNavigationHistoryRequest>,
+    ) -> Self {
+        self.navigation_history = history;
+        self
+    }
+
     pub(crate) fn with_main_document_commit_seed(
         mut self,
         seed: RendererMainDocumentCommitSeed,
@@ -337,6 +346,7 @@ impl TargetNavigationLoadInputs {
                 .subresource_interception_config(),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
+            navigation_history: None,
         }
     }
 
@@ -402,6 +412,7 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: (false, None),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
+            navigation_history: None,
         }
     }
 
@@ -2310,6 +2321,45 @@ impl CdpConnection {
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.target_session_owner_navigation_history_snapshot_for_owner(&owner)
+    }
+
+    pub(crate) fn renderer_navigation_history_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<moli_core::RendererNavigationHistory> {
+        Some(
+            self.target_session_owner_ref_for_owner(owner)?
+                .target()
+                .loaded_page()?
+                .navigation_history(),
+        )
+    }
+
+    pub(crate) fn renderer_navigation_request_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        url: &Url,
+        reload: bool,
+        requested: Option<moli_core::RendererNavigationHistoryRequest>,
+    ) -> Option<moli_core::RendererNavigationHistoryRequest> {
+        let target = self.target_session_owner_ref_for_owner(owner)?.target();
+        let request = requested.or_else(|| {
+            target
+                .owner_state
+                .navigation_history_state
+                .renderer_navigation_request(
+                    &target.loaded_page()?.navigation_history(),
+                    url,
+                    reload,
+                )
+        })?;
+        Some(
+            if target.owner_state.is_on_initial_empty_document() == Some(true) {
+                request.with_initial_empty_source()
+            } else {
+                request
+            },
+        )
     }
 
     pub(crate) fn target_session_owner_navigation_history_snapshot_for_owner(

@@ -24,7 +24,7 @@ use super::navigation_result::{
     navigation_rejected_value_result, navigation_result_with_pending_commit,
     queue_same_document_navigation_finished, suppress_unhandled_rejection,
 };
-use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
+use super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::navigation_window::{
     navigation_document_base_url, navigation_document_has_opaque_origin, runtime_window_is_global,
     runtime_window_owner, should_dispatch_hash_change, window_history_for_holder,

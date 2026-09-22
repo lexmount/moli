@@ -2376,6 +2376,7 @@ mod tests {
             navigation: NavigationDispatchState {
                 redirect_chain: Vec::new(),
                 redirect_headers: None,
+                navigation_history: None,
                 navigate_id: Some(1),
                 owner: owner_session_id
                     .map(crate::conn::CommandOwnerScope::for_session)

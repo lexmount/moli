@@ -777,10 +777,12 @@ fn set_reload_current_entry_state<'s>(
     else {
         return;
     };
-    if history_entry.strict_equals(current_entry.into()) {
-        return;
+    if !history_entry.strict_equals(current_entry.into()) {
+        set_navigation_entry_state(scope, history_entry, state);
     }
-    set_navigation_entry_state(scope, history_entry, state);
+    crate::context_bootstrap::navigation_serialize::sync_navigation_entry_seed_from_owner(
+        scope, owner,
+    );
 }
 
 const PRECOMMIT_COMMIT_OWNER_SLOT: &str = "__lmPrecommitCommitOwner";
@@ -1936,5 +1938,5 @@ pub(in crate::context_bootstrap) fn navigation_update_current_entry_callback<'s>
     }
 
     dispatch_navigation_currententrychange(scope, navigation, Some(previous_entry), None);
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
+    sync_navigation_entry_seed_from_owner(scope, owner);
 }

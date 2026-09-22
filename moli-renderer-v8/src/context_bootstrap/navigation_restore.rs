@@ -125,4 +125,5 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
         current_entry,
         entry_seed.activation.as_ref(),
     );
+    super::navigation_serialize::publish_top_level_navigation_history(scope, owner);
 }

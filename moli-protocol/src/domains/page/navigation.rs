@@ -1717,18 +1717,21 @@ fn resolve_devtools_history_traversal_destination(
     let target_entry = entries.get(target_index).ok_or_else(|| {
         DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
     })?;
-    let same_document_delta = (current_entry.document_sequence_number.is_some()
-        && current_entry.document_sequence_number == target_entry.document_sequence_number)
-        .then(|| {
-            let current_index = i64::try_from(current_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?;
-            let target_index = i64::try_from(target_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?;
-            Ok::<_, DevToolsError>(target_index - current_index)
-        })
-        .transpose()?;
+    let delta = i64::try_from(target_index)
+        .ok()
+        .zip(i64::try_from(current_index).ok())
+        .map(|(target, current)| target - current)
+        .ok_or_else(|| {
+            DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
+        })?;
+    let same_document = conn
+        .renderer_navigation_history_for_owner(owner)
+        .and_then(|history| history.traversal_is_same_document(delta))
+        .unwrap_or(
+            current_entry.document_sequence_number.is_some()
+                && current_entry.document_sequence_number == target_entry.document_sequence_number,
+        );
+    let same_document_delta = same_document.then_some(delta);
     Ok(ResolvedDevToolsHistoryTraversal::Entry {
         entry_id: target_entry.id,
         url: target_entry.url.clone(),
@@ -2050,7 +2053,41 @@ pub(super) fn start_session_owner_navigation_from_renderer(
     request_body: Option<&[u8]>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
 ) -> NavigateCommandStart {
+    if let Some(history) = &navigation_history {
+        match history.navigation_type() {
+            Some("replace" | "reload") => {
+                conn.mark_next_navigation_history_replace_current_for_owner(owner);
+            }
+            Some("traverse") => {
+                let Some(delta) = history.traversal_delta() else {
+                    return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+                        -32000,
+                        "Missing history traversal source",
+                    ));
+                };
+                match resolve_devtools_history_traversal_destination(
+                    conn,
+                    owner,
+                    &DevToolsHistoryTraversalDestination::Delta(delta),
+                ) {
+                    Ok(ResolvedDevToolsHistoryTraversal::Entry { entry_id, .. }) => {
+                        conn.mark_next_navigation_history_traverse_to_entry_for_owner(
+                            owner, entry_id,
+                        );
+                    }
+                    _ => {
+                        return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+                            -32000,
+                            "History traversal destination was removed",
+                        ));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     let session_id = owner.session_id();
     let reloaded_after_crash_session_ids = reloaded_after_crash_session_ids(conn, owner);
     let result_payload = cdp_navigate_result_payload(
@@ -2059,7 +2096,8 @@ pub(super) fn start_session_owner_navigation_from_renderer(
         None,
         url,
     );
-    let start = if request_method.eq_ignore_ascii_case("GET")
+    let start = if navigation_history.is_none()
+        && request_method.eq_ignore_ascii_case("GET")
         && session_owner_navigation_is_same_document_fragment(conn, owner, url)
     {
         // A renderer-owned top-level navigation follows the same fragment
@@ -2101,6 +2139,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
                 }
             },
             NavigationStartInitiator::Renderer,
+            navigation_history,
         )
     };
     clear_crash_state_for_renderer_navigation(conn, start, owner, &reloaded_after_crash_session_ids)
@@ -2650,6 +2689,7 @@ fn start_navigate_to_url_command_with_background_policy(
         allow_background_navigation,
         request_load_policy,
         initiator,
+        None,
     )
 }
 
@@ -2674,6 +2714,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     allow_background_navigation: bool,
     request_load_policy: NavigationRequestLoadPolicy,
     initiator: NavigationStartInitiator,
+    navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
 ) -> NavigateCommandStart {
     let command_session_id = owner.session_id();
     let mut out = Vec::new();
@@ -2722,9 +2763,16 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         .as_ref()
         .map(|preflight| preflight.inherited_secure_context_type.clone())
         .unwrap_or_else(|| "Secure".to_owned());
+    let navigation_history = conn.renderer_navigation_request_for_owner(
+        owner,
+        &requested_url,
+        request_load_policy == NavigationRequestLoadPolicy::Reload,
+        navigation_history,
+    );
     let mut navigation_state = NavigationDispatchState {
         redirect_chain: Vec::new(),
         redirect_headers: None,
+        navigation_history,
         navigate_id: command_id,
         owner: owner.clone(),
         result_projection,

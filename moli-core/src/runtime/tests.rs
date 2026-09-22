@@ -4497,6 +4497,7 @@ async fn renderer_owner_remove_unknown_page_keeps_never_tracked_state() -> Resul
             vm_creation_id: 0,
             view_generation: 0,
             page_state: std::sync::Arc::new(crate::renderer::RendererPageState {
+                navigation_history: Default::default(),
                 requested_url: Url::parse("https://example.com/requested")?,
                 navigation_initiator_url: None,
                 navigation_redirected: false,
