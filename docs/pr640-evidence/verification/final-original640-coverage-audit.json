@@ -1,0 +1,3082 @@
+{
+  "source": {
+    "base": "373edf56dde0975f92a59d1c80f14d354a59094c",
+    "head": "ad0df2276d10e8f933f0216c30199229c6146b2e",
+    "files": 148
+  },
+  "final": {
+    "main": "2793b2407fc7805afcb531e94fc02da4ac7bf33d",
+    "combined_commit": "ed844e7cf8c2f1f7d79a6215936c6055b1eb3b65",
+    "tree": "6fe6dd8f43edca8585379cd23b957057d902f0f1",
+    "registry_snapshot": [
+      {
+        "group": "engineering",
+        "branch": "codex/pr640-reliability-final",
+        "commit": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
+        "base": "2793b2407fc7805afcb531e94fc02da4ac7bf33d",
+        "replaces_url": "https://github.com/lexmount/moli/pull/725",
+        "previous_branch": "codex/browser-engineering-reliability",
+        "staging_commit": "a37f971f44b825e6519d3e373293935bc2b1e4bb",
+        "url": "https://github.com/lexmount/moli/pull/734",
+        "base_branch": "main"
+      },
+      {
+        "group": "layout",
+        "branch": "codex/pr640-layout-final",
+        "commit": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+        "base": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
+        "patch_sha256": "b625f0e2ad05726100a3346bf9d42d531703c2bba250d10e304ae28f5c135898",
+        "replaces_url": "https://github.com/lexmount/moli/pull/726",
+        "previous_branch": "codex/layout-geometry-visibility",
+        "staging_commit": "48d78ac639a3d5e1738342a6876225f9988cefe3",
+        "url": "https://github.com/lexmount/moli/pull/735",
+        "base_branch": "codex/pr640-reliability-final"
+      },
+      {
+        "group": "input",
+        "branch": "codex/pr640-input-final",
+        "commit": "fa1c36ef558cde8751883bff174dac7417395220",
+        "base": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+        "patch_sha256": "e19777242804cb6e01da79fe190862026a0a8efee69444e16c253587571a81c2",
+        "previous_commit": "1fb7c73f7af5e2fb1db25d6e2af353693c29806f",
+        "dependency": "layout",
+        "patch_id": "d8f9cf8821b10de8b6bb341047a3348a40160f7b",
+        "replaces_url": "https://github.com/lexmount/moli/pull/727",
+        "previous_branch": "codex/input-activation-lifecycle",
+        "staging_commit": "d81c7cfb5b8478b7ccb07c81c14580c5cf5a61a1",
+        "url": "https://github.com/lexmount/moli/pull/736",
+        "base_branch": "codex/pr640-layout-final"
+      },
+      {
+        "group": "network",
+        "branch": "codex/pr640-network-final",
+        "commit": "db091f6976d3742a669b64c85360d4dfd3e41ca6",
+        "base": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+        "patch_sha256": "1582e2b7ea19f88135622d5677d1dd214c95a6904b62ae78aa3ae3ddec0784ea",
+        "replaces_url": "https://github.com/lexmount/moli/pull/728",
+        "previous_branch": "codex/network-response-evidence",
+        "staging_commit": "f886d8db1e2212738bd869f99545a319fe9fd420",
+        "url": "https://github.com/lexmount/moli/pull/737",
+        "base_branch": "codex/pr640-layout-final"
+      },
+      {
+        "group": "stop",
+        "branch": "codex/pr640-stop-loading-final",
+        "commit": "b43a213dc6b68a314dadcdf36d3b5fb4dc8d8d3b",
+        "base": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
+        "patch_sha256": "ed788837138a252b6fa06763219b7f50fae2084e38c963f0e9676c62abfff025",
+        "replaces_url": "https://github.com/lexmount/moli/pull/730",
+        "previous_branch": "codex/navigation-stop-loading",
+        "staging_commit": "ca0e5246e2024f7caf5d2b3b82784de4f379700f",
+        "url": "https://github.com/lexmount/moli/pull/738",
+        "base_branch": "codex/pr640-reliability-final"
+      },
+      {
+        "group": "forms",
+        "branch": "codex/pr640-forms-final",
+        "commit": "7919ed092465dd2e8c288201bde5aa7d7f71ad2c",
+        "base": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
+        "patch_sha256": "6ced76d6fc072cc3d4e69d2ff5f43335093d79b2ab9497f185a2f67c1cf36acd",
+        "replaces_url": "https://github.com/lexmount/moli/pull/732",
+        "previous_branch": "codex/form-named-properties",
+        "staging_commit": "192d1580d9e7963f980d327f0b20295c0aedfc37",
+        "url": "https://github.com/lexmount/moli/pull/739",
+        "base_branch": "codex/pr640-reliability-final"
+      },
+      {
+        "group": "text",
+        "branch": "codex/pr640-text-final",
+        "commit": "ca2a8d39572644de1211e3aba30d239abf0ffb17",
+        "base": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
+        "patch_sha256": "ead8f6d58528020d692e4602368c2359a0231c66f92524a7add14e8b12ef5136",
+        "replaces_url": "https://github.com/lexmount/moli/pull/729",
+        "previous_branch": "codex/text-document-parsing",
+        "staging_commit": "58a3430e367615413e3aca5df3bfc4b4467b880b",
+        "integration_fix": "Shares literal text initialization for live/projection paths; preserves no-doctype and NoQuirks.",
+        "url": "https://github.com/lexmount/moli/pull/740",
+        "base_branch": "codex/pr640-reliability-final"
+      }
+    ]
+  },
+  "method": "Three-way merge original PR head with current main (common ancestor373edf56); compare expected tree against fixed combined tree, then inspect every deviation and original added/renamed test coverage. No direct different-main diff is used as omission evidence.",
+  "expected_rebased_original_tree": "93fb606f528ec918a4ba2c458918955f138ba8e4",
+  "merge_exit_code": 0,
+  "counts": {
+    "original_files_owned": 148,
+    "unowned": 0,
+    "original_whole_file_identical": 137,
+    "original_patch_files_exact_on_current_main": 142,
+    "post_split_additional_files": 2,
+    "text_compatibility_files": 6,
+    "full_tree_deviation_files": 8,
+    "main_changes_since_72413280": 49,
+    "main_changes_since_original_base": 141
+  },
+  "whole_tree_deviations": [
+    "moli-parser/src/html.rs",
+    "moli-parser/src/session.rs",
+    "moli-protocol-server/src/protocol_server/tests/classic.rs",
+    "moli-protocol/src/domains/network/tests/mod.rs",
+    "moli-protocol/src/domains/network/tests/redirect_wire.rs",
+    "moli-renderer-v8/src/dom_parser.rs",
+    "moli-renderer-v8/src/native_bridge/context_host/child_documents/commit.rs",
+    "moli-renderer-v8/src/native_bridge/context_host/child_documents/live_parser.rs"
+  ],
+  "extra_network_test_files": [
+    "moli-protocol/src/domains/network/tests/mod.rs",
+    "moli-protocol/src/domains/network/tests/redirect_wire.rs"
+  ],
+  "text_compatibility_files": [
+    "moli-parser/src/html.rs",
+    "moli-parser/src/session.rs",
+    "moli-protocol-server/src/protocol_server/tests/classic.rs",
+    "moli-renderer-v8/src/dom_parser.rs",
+    "moli-renderer-v8/src/native_bridge/context_host/child_documents/commit.rs",
+    "moli-renderer-v8/src/native_bridge/context_host/child_documents/live_parser.rs"
+  ],
+  "tests": {
+    "original_added_test_count": 131,
+    "missing_original_added_tests": [],
+    "renamed_tests": [
+      {
+        "file": "moli-renderer-v8/src/native_bridge/context_host/child_documents/loads.rs",
+        "name": "loaded_child_document_retains_exact_network_response_body",
+        "replacement": "loaded_child_document_retains_exact_network_response_and_transport_metadata"
+      },
+      {
+        "file": "moli-renderer-v8/src/runtime/page_vm/tests/computed_size/sampling.rs",
+        "name": "computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh",
+        "replacement": "computed_size_grid_sampling_refreshes_dirty_geometry_on_first_demand"
+      },
+      {
+        "file": "moli-renderer-v8/src/runtime/page_vm/tests/grid_resolved_track_values.rs",
+        "name": "computed_style_serializes_used_grid_tracks_from_the_frozen_layout_tree",
+        "replacement": "computed_style_refreshes_dirty_used_grid_tracks_on_exact_demand"
+      },
+      {
+        "file": "moli-renderer-v8/src/runtime/page_vm/tests/rendering_update.rs",
+        "name": "geometry_batch_reuses_latest_tree_at_same_viewport_until_fresh_paint_replaces_it",
+        "replacement": "geometry_batch_refreshes_dirty_tree_on_demand_and_reuses_clean_tree"
+      },
+      {
+        "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/dom.rs",
+        "name": "inner_text_new_sources_wait_for_a_fresh_paint_layout",
+        "replacement": "inner_text_refreshes_new_sources_on_demand_without_waiting_for_paint"
+      },
+      {
+        "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/misc.rs",
+        "name": "geometry_getters_reuse_latest_layout_across_nodes_and_mutation",
+        "replacement": "geometry_getters_refresh_after_mutation_and_reuse_clean_layout"
+      }
+    ],
+    "all_six_replacements_present": true
+  },
+  "shared_file_key_hunks": {
+    "moli-layout/tests/phase5_output_contract.rs": "engineering: fixed Ahem/forced overflow fixture foundation; layout: fragment and clean/dirty geometry contract additions. Combined file equals original ad0 byte-for-byte.",
+    "moli-renderer-v8/src/native_bridge/context_host/host_environment.rs": "layout: mutation/resource/media/focus dirty invalidation; stop: ?settled enum diagnostics. Combined file equals original ad0.",
+    "moli-renderer-v8/src/native_bridge/element/activation/default_action.rs": "layout: image submitter DomGeometry flush; input: focus_before_dispatch and activation paths; main: input[type=button] popover activation retained.",
+    "moli-protocol-server/src/protocol_server/tests/classic.rs": "input: DOM click/frame/navigation tests; text: main/child MIME test; compatibility: expand CR/NUL/MIME-vs-extension/structure assertions without deleting any original case.",
+    "moli-renderer-v8/src/native_bridge/element.rs": "input: activation helper wiring; forms: lookup counters/property-handler wiring; main: URL quirks and SVG fetchPriority retained.",
+    "moli-renderer-v8/src/native_bridge/element/forms.rs": "input: keyboard submission helper import; forms: detached receiver import cleanup.",
+    "moli-renderer-v8/src/runtime/owner_local_store/mod.rs": "input: publish pending location navigation after input reply; stop: retire pending main parser before StopDocumentLifecycle dispatch.",
+    "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs": "input: input/default activation/submission scenarios; forms: lookup and detached/adopted scenarios. Whole file equals original.",
+    "moli-protocol/src/conn/state/runtime_slot.rs": "network: durable response body forwarding; stop: inflight navigation cancellation forwarding.",
+    "moli-protocol/src/domains/network/main_document_progress/mod.rs": "network: redirect-hop journal/request method/header and child metadata; stop: NET_ERR_ABORTED preserves committed document.",
+    "moli-protocol/src/domains/network/main_document_progress/tests.rs": "network: hop/journal tests; stop: abort/document preservation policy tests.",
+    "moli-renderer-v8/src/native_bridge/context_host/child_documents/loads.rs": "network: raw response/journal/redirect retention; text: MIME-specific decoder. Whole file equals original.",
+    "moli-renderer-v8/src/live_document_parser.rs": "text: main/live finite text parser constructors; stop: Stopped reason.",
+    "moli-renderer-v8/src/runtime/phase_one/state.rs": "text: new_text/is_text_document; stop: into_stopped_page_vm.",
+    "moli-renderer-v8/src/runtime/phase_one/streaming.rs": "text: parser/decoder dispatch and preload suppression; stop: exact transfer cancellation handle. Whole file equals original."
+  },
+  "files": [
+    {
+      "file": ".github/actions/use-ci-release/action.yml",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -13,6 +13,21 @@ runs:"
+      ],
+      "original_blob_sha256": "093c5e33c6a2f32f03c8268b40b7c6ed415fd887fb23760b4204b617eb00f34a",
+      "combined_blob_sha256": "093c5e33c6a2f32f03c8268b40b7c6ed415fd887fb23760b4204b617eb00f34a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": ".github/scripts/unpack-ci-release.sh",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -16,6 +16,9 @@ esac"
+      ],
+      "original_blob_sha256": "e8d83cfe8d031c68ab5a5708f8679fe39f08b13230d2e1b53493358cf0d24672",
+      "combined_blob_sha256": "e8d83cfe8d031c68ab5a5708f8679fe39f08b13230d2e1b53493358cf0d24672",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": ".github/scripts/unpack-ci-release.test.cjs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -0,0 +1,60 @@"
+      ],
+      "original_blob_sha256": "b9851e2496c6df5dd5d7d7f490064296bf872cf589f453ce12f0603af00e2036",
+      "combined_blob_sha256": "b9851e2496c6df5dd5d7d7f490064296bf872cf589f453ce12f0603af00e2036",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "README.md",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -249,7 +249,9 @@ Layout is an on-demand snapshot rather than continuously maintained state. The"
+      ],
+      "original_blob_sha256": "3eaf91acff2c1394ad438a2198821fa0c84c4fcd12f373201bc27801ec978087",
+      "combined_blob_sha256": "3eaf91acff2c1394ad438a2198821fa0c84c4fcd12f373201bc27801ec978087",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "docs/README.de.md",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -195,7 +195,7 @@ Rechenintensive Browser-Operationen sind in Moli standardmäßig deaktiviert und"
+      ],
+      "original_blob_sha256": "5795437becd3c6e1d4a14d02f715159ea8febd0e5306e22283a5d5afc95704c5",
+      "combined_blob_sha256": "5795437becd3c6e1d4a14d02f715159ea8febd0e5306e22283a5d5afc95704c5",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "docs/README.es.md",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -196,7 +196,7 @@ En Moli, las operaciones caras del navegador hay que activarlas explícitamente:"
+      ],
+      "original_blob_sha256": "41bb8288bb2056ded379b90f163881be3734c4008b0b87b842d10d4edb69f8ae",
+      "combined_blob_sha256": "41bb8288bb2056ded379b90f163881be3734c4008b0b87b842d10d4edb69f8ae",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "docs/README.fr.md",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -196,7 +196,7 @@ Dans Moli, les opérations coûteuses du navigateur ne sont jamais activées par"
+      ],
+      "original_blob_sha256": "7da14f68757be727744dca964ef42667a316fd441261c30ae0e962e5a07ba458",
+      "combined_blob_sha256": "7da14f68757be727744dca964ef42667a316fd441261c30ae0e962e5a07ba458",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "docs/README.ja.md",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -194,7 +194,7 @@ Moli では、処理負荷の高い機能は明示的に有効にした場合だ"
+      ],
+      "original_blob_sha256": "f147614d423b02ea92228baa882ce6316c67ed70847f026f38f8f6671524d707",
+      "combined_blob_sha256": "f147614d423b02ea92228baa882ce6316c67ed70847f026f38f8f6671524d707",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "docs/README.zh-CN.md",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -194,7 +194,7 @@ Moli 是 Lexmount 旗下的开源无头浏览器；Lexmount Browser 则是围绕"
+      ],
+      "original_blob_sha256": "e26cead2cae15614a66302760ed7194b6d883328a5ed1c3a91a79a604fbf9603",
+      "combined_blob_sha256": "e26cead2cae15614a66302760ed7194b6d883328a5ed1c3a91a79a604fbf9603",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-bounded-buffer/src/buffer.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -66,6 +66,21 @@ where",
+        "@@ -151,12 +166,43 @@ where"
+      ],
+      "original_blob_sha256": "43a227e18c1e32871c3cfb4f1a99c882b2054027e9ddcce4e85447aa29dd5762",
+      "combined_blob_sha256": "43a227e18c1e32871c3cfb4f1a99c882b2054027e9ddcce4e85447aa29dd5762",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-bounded-buffer/src/tests.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,5 +1,44 @@",
+        "@@ -115,3 +154,37 @@ fn remove_and_clear_return_all_byte_charges() {"
+      ],
+      "original_blob_sha256": "6f6b7176b26912ec913f7a915df39d5dd2b3408b9a746b296d59260f7523d5f0",
+      "combined_blob_sha256": "6f6b7176b26912ec913f7a915df39d5dd2b3408b9a746b296d59260f7523d5f0",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-cdp-smoke/moli_cdp_smoke/groups/dom_input.py",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -9,6 +9,7 @@ from playwright.async_api import Error as PlaywrightError, expect",
+        "@@ -192,7 +193,11 @@ async def run_dom_input_group(state: SmokeState) -> None:",
+        "@@ -976,10 +981,10 @@ async def run_keyboard_editing_workflows(state: SmokeState) -> None:",
+        "@@ -992,8 +997,10 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:",
+        "@@ -1045,8 +1052,8 @@ async def run_keypress_dispatch_workflow(state: SmokeState) -> None:"
+      ],
+      "original_blob_sha256": "8df9676fcf14d4bd3fb74b037430d36d975a8a2745628f945770e2d762b2522c",
+      "combined_blob_sha256": "8df9676fcf14d4bd3fb74b037430d36d975a8a2745628f945770e2d762b2522c",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-cookie-import/src/sqlite.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,4 +1,8 @@",
+        "@@ -20,8 +24,7 @@ impl SqliteSnapshot {",
+        "@@ -47,6 +50,12 @@ impl SqliteSnapshot {",
+        "@@ -56,10 +65,33 @@ mod tests {",
+        "@@ -68,7 +100,11 @@ mod tests {",
+        "@@ -76,6 +112,15 @@ mod tests {"
+      ],
+      "original_blob_sha256": "00650e1583551ced9f15778bd5ca1a1268f2aa1ff4208616655b62773fc016a1",
+      "combined_blob_sha256": "00650e1583551ced9f15778bd5ca1a1268f2aa1ff4208616655b62773fc016a1",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-curl/src/proxy.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -519,7 +519,10 @@ mod tests {",
+        "@@ -576,7 +579,23 @@ mod tests {"
+      ],
+      "original_blob_sha256": "b045f3b56e82da8b1bc59a6d2680fda87ac9defb370a95d90dfbe7b98e47effc",
+      "combined_blob_sha256": "b045f3b56e82da8b1bc59a6d2680fda87ac9defb370a95d90dfbe7b98e47effc",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-dom/src/native/host/document.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -810,6 +810,32 @@ impl DomHost {"
+      ],
+      "original_blob_sha256": "75fa2fd5d114c7c193f0d3ce6cfb90a63e5c90dea7deb68711667bd18ccd192b",
+      "combined_blob_sha256": "75fa2fd5d114c7c193f0d3ce6cfb90a63e5c90dea7deb68711667bd18ccd192b",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-dom/src/native/host/query_index.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -518,6 +518,29 @@ mod tests {"
+      ],
+      "original_blob_sha256": "6c706482f537449b4cc3eef720392e3a52e1cb5727b479a9e0085f578b4b69af",
+      "combined_blob_sha256": "6c706482f537449b4cc3eef720392e3a52e1cb5727b479a9e0085f578b4b69af",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-encoding/src/document.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -47,9 +47,26 @@ pub struct HtmlDocumentStreamingDecoder {",
+        "@@ -88,6 +105,7 @@ impl HtmlDocumentStreamingDecoder {",
+        "@@ -97,6 +115,7 @@ impl HtmlDocumentStreamingDecoder {",
+        "@@ -149,6 +168,12 @@ impl HtmlDocumentStreamingDecoder {"
+      ],
+      "original_blob_sha256": "7d8bba6a2e4cfca7ca7fb502bd134e4e447d9b8123d262abc1d07099c2d36732",
+      "combined_blob_sha256": "7d8bba6a2e4cfca7ca7fb502bd134e4e447d9b8123d262abc1d07099c2d36732",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-encoding/src/tests.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -24,6 +24,102 @@ fn unexpected_legacy_encoding_detector("
+      ],
+      "original_blob_sha256": "dd007819c027609d17ea8c0d0118e0c698d71d6465712241105ed48ed6f16b5c",
+      "combined_blob_sha256": "dd007819c027609d17ea8c0d0118e0c698d71d6465712241105ed48ed6f16b5c",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-fetch/src/lib.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -68,7 +68,8 @@ pub use request::{"
+      ],
+      "original_blob_sha256": "1c4cb8a35eaa7100e202453da23fb903208a7e2dcb47874f03991f4e720e68c2",
+      "combined_blob_sha256": "1c4cb8a35eaa7100e202453da23fb903208a7e2dcb47874f03991f4e720e68c2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-fetch/src/network_fetch_result.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -14,6 +14,7 @@ const MAX_OBSERVED_HEADER_BLOCK_BYTES: usize = 256 * 1024;",
+        "@@ -22,6 +23,16 @@ pub struct NetworkRequestObservation {",
+        "@@ -31,12 +42,17 @@ impl NetworkRequestObservation {",
+        "@@ -338,6 +354,14 @@ fn parse_request_header_block(data: &[u8]) -> Vec<(String, String)> {",
+        "@@ -648,7 +672,7 @@ mod tests {",
+        "@@ -662,6 +686,7 @@ mod tests {",
+        "@@ -676,6 +701,13 @@ mod tests {"
+      ],
+      "original_blob_sha256": "9d9f2d1d5bd25b629348ccd54bec53bd39882b4a7e8d1f7b40d04160340a11b1",
+      "combined_blob_sha256": "9d9f2d1d5bd25b629348ccd54bec53bd39882b4a7e8d1f7b40d04160340a11b1",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-fetch/src/request.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1122,12 +1122,14 @@ impl Request {"
+      ],
+      "original_blob_sha256": "10b4b41b0c81cc570b8d379d68db391ee59c43e3841a6c391cb4e818308aa89f",
+      "combined_blob_sha256": "10b4b41b0c81cc570b8d379d68db391ee59c43e3841a6c391cb4e818308aa89f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-fetch/src/tests/support.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1003,14 +1003,85 @@ impl ScriptedHttpServer {"
+      ],
+      "original_blob_sha256": "39e9b866219c021b1ae61ecd0d697ebd6af8694fa48af43c6c011df7d82a279f",
+      "combined_blob_sha256": "39e9b866219c021b1ae61ecd0d697ebd6af8694fa48af43c6c011df7d82a279f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/builder.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -622,6 +622,9 @@ where",
+        "@@ -632,11 +635,24 @@ where",
+        "@@ -644,6 +660,9 @@ where"
+      ],
+      "original_blob_sha256": "f0fb19ce9d2c70f2791930008fd4b17a48c8721629a12e24479f6b5bb67d926e",
+      "combined_blob_sha256": "f0fb19ce9d2c70f2791930008fd4b17a48c8721629a12e24479f6b5bb67d926e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/inline.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -35,6 +35,16 @@ pub(crate) fn relative_atomic_inset_offset(",
+        "@@ -89,6 +99,9 @@ pub(crate) struct InlineTextUnit {",
+        "@@ -436,13 +449,57 @@ pub(crate) fn build_inline_fragments(",
+        "@@ -453,6 +510,14 @@ pub(crate) fn build_inline_fragments(",
+        "@@ -477,6 +542,9 @@ pub(crate) fn build_inline_fragments(",
+        "@@ -2248,6 +2316,7 @@ impl InlineNormalizer {",
+        "@@ -2349,6 +2418,7 @@ impl InlineNormalizer {",
+        "@@ -2737,6 +2807,40 @@ mod tests {"
+      ],
+      "original_blob_sha256": "7cccb6de5a3c74ae96d23c1ce411a194d6aaebb7acff663bf35f8fb4ba0de93a",
+      "combined_blob_sha256": "7cccb6de5a3c74ae96d23c1ce411a194d6aaebb7acff663bf35f8fb4ba0de93a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/layout_tree/pass_result.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -25,6 +25,7 @@ pub enum LayoutFlushReason {"
+      ],
+      "original_blob_sha256": "fe4351785195b3059a1b583dbb3934f593b16fadc190aa1eca2fccc80d3040c1",
+      "combined_blob_sha256": "fe4351785195b3059a1b583dbb3934f593b16fadc190aa1eca2fccc80d3040c1",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/pass.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -314,11 +314,13 @@ where"
+      ],
+      "original_blob_sha256": "aca783159fac1fde3fa404a2007235473ea877e3d80d03b55a65cd6264a5ad37",
+      "combined_blob_sha256": "aca783159fac1fde3fa404a2007235473ea877e3d80d03b55a65cd6264a5ad37",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/projection.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,6 +1,6 @@",
+        "@@ -53,6 +53,7 @@ where",
+        "@@ -750,6 +751,150 @@ where",
+        "@@ -1320,12 +1465,32 @@ where",
+        "@@ -1355,10 +1520,86 @@ where"
+      ],
+      "original_blob_sha256": "39fafab8d07afb6162c4a24c9d118677c05299a9bcb7eac3b3d8a76959f4025a",
+      "combined_blob_sha256": "39fafab8d07afb6162c4a24c9d118677c05299a9bcb7eac3b3d8a76959f4025a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/taffy_tree.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -78,9 +78,14 @@ impl PreparedWorldLayout {",
+        "@@ -97,15 +102,21 @@ impl PreparedWorldLayout {",
+        "@@ -113,13 +124,22 @@ impl PreparedWorldLayout {",
+        "@@ -1621,6 +1641,14 @@ where",
+        "@@ -1780,6 +1808,13 @@ where",
+        "@@ -2833,7 +2868,11 @@ where"
+      ],
+      "original_blob_sha256": "e3f132ccf2726578d267e86edb3b3933a56d5ff20bf803291ca9508beea13a19",
+      "combined_blob_sha256": "e3f132ccf2726578d267e86edb3b3933a56d5ff20bf803291ca9508beea13a19",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/src/world.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -593,6 +593,14 @@ impl<N> LayoutBox<N> {",
+        "@@ -602,6 +610,9 @@ where",
+        "@@ -627,6 +638,9 @@ where",
+        "@@ -905,6 +919,30 @@ where"
+      ],
+      "original_blob_sha256": "f9424ed560510d1c9f66ad52bd514a00297751117fffe54d3d6f7130ac491669",
+      "combined_blob_sha256": "f9424ed560510d1c9f66ad52bd514a00297751117fffe54d3d6f7130ac491669",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/tests/phase4_layout_contract.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1564,9 +1564,44 @@ fn inline_blocks_use_their_internal_last_line_baseline_and_overflow_fallback() {"
+      ],
+      "original_blob_sha256": "7080745d6e2e5c228a554bacdec0118e4c5b29f2d07b4d5e35205e674464af0b",
+      "combined_blob_sha256": "7080745d6e2e5c228a554bacdec0118e4c5b29f2d07b4d5e35205e674464af0b",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-layout/tests/phase5_output_contract.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        },
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -4,11 +4,11 @@ use moli_layout::{",
+        "@@ -91,7 +91,7 @@ impl LayoutSource for Source {",
+        "@@ -748,8 +748,8 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {",
+        "@@ -766,13 +766,235 @@ fn auto_scrollbar_feedback_reveals_the_perpendicular_axis() {",
+        "@@ -796,13 +1018,31 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {",
+        "@@ -820,8 +1060,89 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {",
+        "@@ -2355,6 +2676,49 @@ fn inline_output_preserves_line_text_and_utf16_source_fragments() {",
+        "@@ -2630,6 +2994,583 @@ fn caret_query_uses_parley_cluster_sides_and_inline_direction() {",
+        "@@ -2658,9 +3599,13 @@ fn split_inline_continuations_remain_mapped_to_the_originating_element() {"
+      ],
+      "original_blob_sha256": "0581e55797891944d49ccb778ace87fbb2e74b2852f8eb501730c0b6eb4d292a",
+      "combined_blob_sha256": "0581e55797891944d49ccb778ace87fbb2e74b2852f8eb501730c0b6eb4d292a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-page-types/src/lib.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -3283,6 +3283,14 @@ pub struct ChildFrameDocumentNetworkSnapshot {"
+      ],
+      "original_blob_sha256": "bbfcb843015ffbacb69aee85b662749125ea3662e1f2cd3e1e6b1acd2085a0b1",
+      "combined_blob_sha256": "97efe95d78ea24319a4cba3e744ab78b236e47640ff50acf522685d6ff50e3c7",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-parser/src/html.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -27,7 +27,7 @@ use super::live_target::{",
+        "@@ -438,6 +438,47 @@ impl HtmlParser {",
+        "@@ -551,6 +592,17 @@ impl Default for ParserInputQueue {",
+        "@@ -1843,6 +1895,45 @@ mod tests {"
+      ],
+      "original_blob_sha256": "03e501e7e4fa4c49a8b0c83b05ccb6f843323bba26b33f7541409c1e51776cb6",
+      "combined_blob_sha256": "6166207e2be79423c252d8003a6a8274458b9574b921876cdaaf6c55a81006c4",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": false,
+      "coverage": "text_compatibility_rewrite"
+    },
+    {
+      "file": "moli-parser/src/session.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -167,6 +167,16 @@ impl TokenSink for EmbedderPausingTreeBuilder {",
+        "@@ -352,10 +362,10 @@ fn feed_with_definitive_encoding("
+      ],
+      "original_blob_sha256": "94abfafc65809c461ece98651dbcb9849b1fbd9772552aeb0c22f515442151d0",
+      "combined_blob_sha256": "b8654f7fad008311c00379517dc229442263bb8d43b4aa03724a616e389f6b9e",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": false,
+      "coverage": "text_compatibility_rewrite"
+    },
+    {
+      "file": "moli-parser/src/stream.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -429,11 +429,25 @@ pub(crate) fn prepare_parser_script_handoff_for_static_document("
+      ],
+      "original_blob_sha256": "d92889f58796f6841d4a11367bc6f508eaffb00ae210a19ae5c05b721d634d9d",
+      "combined_blob_sha256": "d92889f58796f6841d4a11367bc6f508eaffb00ae210a19ae5c05b721d634d9d",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/tests/classic.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        },
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -3,6 +3,99 @@ use axum::http::{HeaderMap, header};",
+        "@@ -11129,6 +11222,84 @@ async fn webdriver_classic_execute_async_honors_script_timeout() {",
+        "@@ -11137,7 +11308,7 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {",
+        "@@ -11175,12 +11346,18 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {",
+        "@@ -11190,6 +11367,414 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {",
+        "@@ -11532,6 +12117,14 @@ async fn webdriver_classic_option_click_updates_select_state_ported_from_seleniu",
+        "@@ -12012,6 +12605,71 @@ async fn webdriver_classic_option_click_edges_ported_from_chromium_wpt() {"
+      ],
+      "original_blob_sha256": "1dc0ab2b422eabd818be4d7627fa69a342cdfd28ae22e2e711cffdfebac4d924",
+      "combined_blob_sha256": "4d9da62c23878da3952a43ff9196c072ff6c0dfd4625ed620bb226bb0d3ca7ae",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": false,
+      "coverage": "text_compatibility_rewrite"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/webdriver_bidi.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2977,6 +2977,7 @@ fn bidi_response_from_classic_input_error(id: u64, error: ClassicError) -> serde",
+        "@@ -3236,6 +3237,29 @@ mod tests {"
+      ],
+      "original_blob_sha256": "340a5d0062f34a4cfad0443a0a79b1dabf5b0975f69cf16e980da3359f2e31d7",
+      "combined_blob_sha256": "340a5d0062f34a4cfad0443a0a79b1dabf5b0975f69cf16e980da3359f2e31d7",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/webdriver_classic.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -16,17 +16,18 @@ use moli_html_input_type::InputType;",
+        "@@ -35,18 +36,19 @@ use moli_protocol_webdriver_classic::{",
+        "@@ -4430,10 +4432,11 @@ pub(super) async fn webdriver_classic_send_keys_to_element(",
+        "@@ -4515,6 +4518,158 @@ async fn webdriver_classic_prepare_text_control_for_send_keys(",
+        "@@ -4532,18 +4687,98 @@ async fn webdriver_classic_activate_element_by_handle(",
+        "@@ -4588,7 +4823,20 @@ async fn webdriver_classic_activate_element_by_handle("
+      ],
+      "original_blob_sha256": "f50ca2aaf9816fd498c37c6825a529df6c45e623417ca61a44ec9e91caa14a25",
+      "combined_blob_sha256": "f50ca2aaf9816fd498c37c6825a529df6c45e623417ca61a44ec9e91caa14a25",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/webdriver_classic/helpers.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -59,7 +59,8 @@ fn classic_error_status(code: ClassicErrorCode) -> StatusCode {"
+      ],
+      "original_blob_sha256": "d04ce73122f6d90009a92b9ada73df53f6bdecc0b0eb184790f18965ce32d7a2",
+      "combined_blob_sha256": "d04ce73122f6d90009a92b9ada73df53f6bdecc0b0eb184790f18965ce32d7a2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-server/src/protocol_server/webdriver_classic/state.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -519,24 +519,6 @@ impl ClassicSessionRuntimeHandle {"
+      ],
+      "original_blob_sha256": "5fc1505a35be3c3ff4fdc81b2c26595a2da44a25feaa4f2c44fa60952685a48e",
+      "combined_blob_sha256": "5fc1505a35be3c3ff4fdc81b2c26595a2da44a25feaa4f2c44fa60952685a48e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-webdriver-classic/src/actions.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -164,10 +164,18 @@ enum ClassicActionCancel {",
+        "@@ -186,7 +194,7 @@ pub fn element_click_input_commands(",
+        "@@ -1633,7 +1641,9 @@ fn webdriver_key_for_action_character(character: char) -> ClassicWebDriverKey {"
+      ],
+      "original_blob_sha256": "927b86b6906ad423cf2f3f7ce62383f77efaeecffcfe522a5f70979edee30288",
+      "combined_blob_sha256": "927b86b6906ad423cf2f3f7ce62383f77efaeecffcfe522a5f70979edee30288",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-webdriver-classic/src/commands/elements.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -737,11 +737,63 @@ pub fn clear_element_command(",
+        "@@ -755,6 +807,19 @@ pub fn element_click_command(",
+        "@@ -779,7 +844,7 @@ pub fn element_click_command("
+      ],
+      "original_blob_sha256": "2dc46c198f67902e9a63e923857d7674791d27e662ae0401e6b79f041851c56d",
+      "combined_blob_sha256": "2dc46c198f67902e9a63e923857d7674791d27e662ae0401e6b79f041851c56d",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-webdriver-classic/src/commands/mod.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -21,7 +21,7 @@ pub use elements::{"
+      ],
+      "original_blob_sha256": "e6e7530d93438ae9d263c8ac48bcfc81c97319f8fe4811f0b60ba60f13eee852",
+      "combined_blob_sha256": "e6e7530d93438ae9d263c8ac48bcfc81c97319f8fe4811f0b60ba60f13eee852",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-webdriver-classic/src/lib.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -49,14 +49,14 @@ pub use commands::{"
+      ],
+      "original_blob_sha256": "0b180c46aa07736843de9da84c5ef183491a455b61def6974967196e164befaf",
+      "combined_blob_sha256": "0b180c46aa07736843de9da84c5ef183491a455b61def6974967196e164befaf",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-webdriver-classic/src/tests.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1519,11 +1519,11 @@ fn maps_element_click_to_shared_dom_geometry_and_input_commands() {",
+        "@@ -3223,6 +3223,10 @@ fn maps_alert_commands_to_shared_page_dialog_commands() {"
+      ],
+      "original_blob_sha256": "5775f189f369ca0f153cdafd119757b6d3ad56df0fc7ac47f5710b4383e676c4",
+      "combined_blob_sha256": "5775f189f369ca0f153cdafd119757b6d3ad56df0fc7ac47f5710b4383e676c4",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol-webdriver-classic/src/types.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -21,6 +21,7 @@ pub enum ClassicErrorCode {",
+        "@@ -49,6 +50,7 @@ impl ClassicErrorCode {"
+      ],
+      "original_blob_sha256": "7eedb51358af1d4378fc6cf0ea81b6be773e3cd67b4ffbfe097c8785a4e6599f",
+      "combined_blob_sha256": "7eedb51358af1d4378fc6cf0ea81b6be773e3cd67b4ffbfe097c8785a4e6599f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/conn/browser_context/network_owner.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -134,6 +134,14 @@ impl TargetNetworkListenerOwnerMut<'_> {"
+      ],
+      "original_blob_sha256": "402b0eb65249ddf910f10212b2785f76dedda58df214d77f9480e0c24d120d07",
+      "combined_blob_sha256": "402b0eb65249ddf910f10212b2785f76dedda58df214d77f9480e0c24d120d07",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/conn/devtools_command.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -324,6 +324,7 @@ impl CdpConnection {"
+      ],
+      "original_blob_sha256": "65fbdccbe7db1a1e3e5671a9d8d8647e7715cb0edb9ccf41cd741a70931207fc",
+      "combined_blob_sha256": "65fbdccbe7db1a1e3e5671a9d8d8647e7715cb0edb9ccf41cd741a70931207fc",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/conn/page_state/fetch_state.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -302,7 +302,7 @@ impl PageTargetHost {"
+      ],
+      "original_blob_sha256": "a6982aebce356b00ab59795506332ec67218c2de52de5cbd09c2f82eb9e508f2",
+      "combined_blob_sha256": "a6982aebce356b00ab59795506332ec67218c2de52de5cbd09c2f82eb9e508f2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/conn/runtime_load.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -592,16 +592,30 @@ async fn first_nonempty_response_body_chunk(",
+        "@@ -959,6 +973,14 @@ impl BackgroundNavigationLoadJob {",
+        "@@ -1355,9 +1377,12 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(",
+        "@@ -1392,10 +1417,9 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(",
+        "@@ -1471,7 +1495,8 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(",
+        "@@ -1694,7 +1719,8 @@ impl CdpConnection {",
+        "@@ -4019,6 +4045,77 @@ mod tests {"
+      ],
+      "original_blob_sha256": "c192dcdf4f25ac365ee7bcfd7f9fae016763e45ad9a596c431172862b2810c5b",
+      "combined_blob_sha256": "c192dcdf4f25ac365ee7bcfd7f9fae016763e45ad9a596c431172862b2810c5b",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/conn/state/page_slot.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -722,6 +722,14 @@ impl TargetPageSlot {",
+        "@@ -1580,6 +1588,31 @@ mod pending_renderer_page_tests {"
+      ],
+      "original_blob_sha256": "6326e230b00036196b7fc9097135cb8dbef63488ccc7bdbaa84d822a05e1b201",
+      "combined_blob_sha256": "6326e230b00036196b7fc9097135cb8dbef63488ccc7bdbaa84d822a05e1b201",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/conn/state/runtime_slot.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        },
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -574,6 +574,10 @@ impl TargetRuntimeSlot {",
+        "@@ -1133,6 +1137,19 @@ impl TargetRuntimeSlot {"
+      ],
+      "original_blob_sha256": "67c2b62b3bd8580e081951784dfc933cfe83e8c11f1cac25ea7b5c7007a6889b",
+      "combined_blob_sha256": "67c2b62b3bd8580e081951784dfc933cfe83e8c11f1cac25ea7b5c7007a6889b",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/dom/resolve.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -5842,6 +5842,7 @@ fn devtools_dom_command_context(",
+        "@@ -6000,15 +6001,12 @@ async fn execute_devtools_dom_command_for_owner("
+      ],
+      "original_blob_sha256": "ec29b072a22d1a208d924fbb13f1392e3f9cd296f9c9f23f9df7dae300a4adc7",
+      "combined_blob_sha256": "ec29b072a22d1a208d924fbb13f1392e3f9cd296f9c9f23f9df7dae300a4adc7",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/dom/tests/geometry.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1389,9 +1389,9 @@ async fn scroll_into_view_if_needed_accepts_element_node() {",
+        "@@ -1544,9 +1544,9 @@ async fn scroll_into_view_if_needed_supports_object_id() {",
+        "@@ -1624,11 +1624,22 @@ async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_content",
+        "@@ -1636,9 +1647,9 @@ async fn scroll_into_view_if_needed_uses_first_rendered_child_of_display_content",
+        "@@ -1793,7 +1804,7 @@ async fn scroll_into_view_if_needed_observes_live_style_change_before_scrolling("
+      ],
+      "original_blob_sha256": "9fb0e7312527c2e64f92b50b96463d44795e1963ecee0f698e4a524a1bf55d2a",
+      "combined_blob_sha256": "9fb0e7312527c2e64f92b50b96463d44795e1963ecee0f698e4a524a1bf55d2a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/emulation/tests.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -573,7 +573,9 @@ async fn admitted_idle_override_is_visible_to_concurrent_same_site_navigation()",
+        "@@ -644,7 +646,9 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {",
+        "@@ -2219,7 +2223,7 @@ async fn emulation_async_dispatch_updates_live_page_user_agent_and_xhr_header()",
+        "@@ -2711,9 +2715,9 @@ async fn locale_override_updates_intl_without_mutating_language_surfaces() {",
+        "@@ -2767,9 +2771,9 @@ async fn bidi_user_context_locale_composes_with_user_agent_on_all_identity_surfa"
+      ],
+      "original_blob_sha256": "07e6058a2f7c5e01ba3ab4f721aada5b8942c7ff2b0d60a690d561722cd39f49",
+      "combined_blob_sha256": "07e6058a2f7c5e01ba3ab4f721aada5b8942c7ff2b0d60a690d561722cd39f49",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/input.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -7,8 +7,8 @@ use crate::devtools_runtime::{",
+        "@@ -571,7 +571,23 @@ fn start_pending_input_command(",
+        "@@ -582,8 +598,7 @@ fn start_pending_input_command(",
+        "@@ -977,11 +992,14 @@ fn start_devtools_dispatch_key_event_command(",
+        "@@ -1002,6 +1020,17 @@ fn start_page_input_command(",
+        "@@ -1014,10 +1043,13 @@ fn start_page_input_command("
+      ],
+      "original_blob_sha256": "638566d442dab3087cb623b348d8a0689aae06efb11c45331100a9b3cf6d2114",
+      "combined_blob_sha256": "638566d442dab3087cb623b348d8a0689aae06efb11c45331100a9b3cf6d2114",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1577,6 +1577,151 @@ async fn dispatch_key_event_can_complete_through_pending_command_dispatch() {",
+        "@@ -2129,7 +2274,7 @@ async fn dispatch_key_event_enter_inserts_newline_in_textarea() {",
+        "@@ -2149,6 +2294,29 @@ async fn dispatch_key_event_enter_inserts_newline_in_textarea() {",
+        "@@ -2162,7 +2330,7 @@ async fn dispatch_key_event_enter_inserts_newline_in_textarea() {"
+      ],
+      "original_blob_sha256": "ddf3ffd2bbdf555af05cddbce65b3053ec8f1994212e4a56e961d57f702fee7e",
+      "combined_blob_sha256": "ddf3ffd2bbdf555af05cddbce65b3053ec8f1994212e4a56e961d57f702fee7e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/input/tests/keyboard_events.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -133,6 +133,54 @@ async fn cdp_combined_keydown_honors_each_cancellation_boundary() {"
+      ],
+      "original_blob_sha256": "3d1728cc3c5a27204f5d53e42ff6b68e9888d329cdd3391044d3c95dddc52159",
+      "combined_blob_sha256": "3d1728cc3c5a27204f5d53e42ff6b68e9888d329cdd3391044d3c95dddc52159",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -44,6 +44,7 @@ mod load_resource;",
+        "@@ -504,6 +505,14 @@ fn start_set_network_domain_enabled_command(",
+        "@@ -516,6 +525,10 @@ fn start_set_network_domain_enabled_command("
+      ],
+      "original_blob_sha256": "112f348c385764485e77579c10ffaf27a2429a6cc07bae50cde51d3bf8ec409c",
+      "combined_blob_sha256": "112f348c385764485e77579c10ffaf27a2429a6cc07bae50cde51d3bf8ec409c",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/agent.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,4 +1,4 @@",
+        "@@ -15,6 +15,8 @@ use super::{",
+        "@@ -705,6 +707,24 @@ impl TargetNetworkAgentState {",
+        "@@ -1336,6 +1356,9 @@ struct CapturedResponseBodyStore {",
+        "@@ -1352,9 +1375,136 @@ impl CapturedResponseBodyStore {",
+        "@@ -1380,6 +1530,7 @@ impl CapturedResponseBodyStore {",
+        "@@ -1402,6 +1553,7 @@ impl CapturedResponseBodyStore {",
+        "@@ -1416,6 +1568,7 @@ impl CapturedResponseBodyStore {",
+        "@@ -1424,6 +1577,7 @@ impl CapturedResponseBodyStore {",
+        "@@ -1434,6 +1588,7 @@ impl CapturedResponseBodyStore {",
+        "@@ -1444,6 +1599,7 @@ impl CapturedResponseBodyStore {",
+        "@@ -1463,6 +1619,8 @@ impl CapturedResponseBodyStore {",
+        "@@ -1476,23 +1634,13 @@ impl CapturedResponseBodyStore {",
+        "@@ -1959,6 +2107,145 @@ mod tests {"
+      ],
+      "original_blob_sha256": "2f7b9a324587ccea46c84ca044a26a2db60580501af0c9704a2bc15e0c18497e",
+      "combined_blob_sha256": "2f7b9a324587ccea46c84ca044a26a2db60580501af0c9704a2bc15e0c18497e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/backlog.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -24,6 +24,7 @@ use super::output_queue::{",
+        "@@ -261,6 +262,7 @@ fn emit_complete_subresource_network_delivery_record(",
+        "@@ -286,7 +288,13 @@ fn emit_complete_subresource_network_delivery_record(",
+        "@@ -297,9 +305,9 @@ fn emit_complete_subresource_network_delivery_record(",
+        "@@ -312,6 +320,7 @@ fn emit_complete_subresource_network_delivery_record(",
+        "@@ -453,6 +462,10 @@ fn emit_staged_subresource_request_started(",
+        "@@ -502,7 +515,13 @@ fn emit_staged_subresource_response_started(",
+        "@@ -513,9 +532,9 @@ fn emit_staged_subresource_response_started(",
+        "@@ -528,6 +547,7 @@ fn emit_staged_subresource_response_started("
+      ],
+      "original_blob_sha256": "0ba4cd492c62a8425414785db5454dc26ca8056cfdb45a86b3cf42fdea07c2a5",
+      "combined_blob_sha256": "0ba4cd492c62a8425414785db5454dc26ca8056cfdb45a86b3cf42fdea07c2a5",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/events.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -279,6 +279,7 @@ pub(crate) fn emit_request_will_be_sent(",
+        "@@ -343,7 +344,7 @@ pub(crate) fn emit_request_will_be_sent(",
+        "@@ -1536,6 +1537,7 @@ mod tests {"
+      ],
+      "original_blob_sha256": "b2b4d678c3cf74e6b6c686164da767159aa644c058587ad19e0fe39fd0c71b0d",
+      "combined_blob_sha256": "b2b4d678c3cf74e6b6c686164da767159aa644c058587ad19e0fe39fd0c71b0d",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/mod.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        },
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -350,17 +350,26 @@ fn materialize_navigation_load_outcome(",
+        "@@ -611,7 +620,7 @@ impl MainDocumentBodyProgressSource {",
+        "@@ -704,7 +713,7 @@ impl MainDocumentBodyProgressSource {",
+        "@@ -721,6 +730,7 @@ impl MainDocumentBodyProgressSource {",
+        "@@ -759,7 +769,7 @@ impl MainDocumentBodyProgressSource {",
+        "@@ -944,6 +954,7 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -967,6 +978,7 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -984,13 +996,15 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1003,7 +1017,7 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1012,15 +1026,27 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1037,10 +1063,12 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1061,7 +1089,7 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1075,14 +1103,13 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1093,7 +1120,7 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1111,15 +1138,15 @@ impl MainDocumentLiveNetworkProgressSource {",
+        "@@ -1354,32 +1381,85 @@ pub(crate) fn emit_child_document_navigation_network_background_events(",
+        "@@ -1634,7 +1714,12 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1645,7 +1730,7 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1653,9 +1738,21 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1664,7 +1761,7 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1681,9 +1778,11 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1705,7 +1804,7 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1719,11 +1818,12 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1740,7 +1840,7 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1762,7 +1862,7 @@ impl CompletedMainDocumentProgressContext {",
+        "@@ -1907,62 +2007,107 @@ fn request_extra_info_event("
+      ],
+      "original_blob_sha256": "6d23e0dc572ee2a2deff9cb280d72b165eed3193519cba5d774ff2790ff779f0",
+      "combined_blob_sha256": "6d23e0dc572ee2a2deff9cb280d72b165eed3193519cba5d774ff2790ff779f0",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/main_document_progress/tests.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        },
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -4,7 +4,8 @@ use moli_cookie_jar::{",
+        "@@ -18,6 +19,24 @@ use super::gate::{",
+        "@@ -48,6 +67,22 @@ fn observation_journal(",
+        "@@ -419,25 +454,36 @@ fn live_progress_source_serializes_through_progress_emissions() {",
+        "@@ -447,7 +493,7 @@ fn live_progress_source_serializes_through_progress_emissions() {",
+        "@@ -475,6 +521,11 @@ fn live_progress_source_serializes_through_progress_emissions() {",
+        "@@ -546,6 +597,135 @@ fn live_progress_source_serializes_through_progress_emissions() {",
+        "@@ -773,19 +953,46 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {",
+        "@@ -826,6 +1033,11 @@ fn completed_body_http_redirect_emits_correlated_no_cookie_extra_info() {",
+        "@@ -931,7 +1143,14 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro",
+        "@@ -995,6 +1214,69 @@ fn critical_client_hint_restart_keeps_discarded_response_extra_info_separate_fro"
+      ],
+      "original_blob_sha256": "a96364c4908a060f3cb442f01f7a8806b0569ffaa8f8d62a4bb5767c85139d51",
+      "combined_blob_sha256": "a96364c4908a060f3cb442f01f7a8806b0569ffaa8f8d62a4bb5767c85139d51",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/output_queue.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2976,17 +2976,18 @@ impl TargetNetworkOutputQueue {",
+        "@@ -3686,6 +3687,60 @@ mod tests {"
+      ],
+      "original_blob_sha256": "cf4654716052040b1b8d6e55470a2547ecf4f4f34837fa1c67b631b039453fac",
+      "combined_blob_sha256": "cf4654716052040b1b8d6e55470a2547ecf4f4f34837fa1c67b631b039453fac",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/redirect_request.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -0,0 +1,101 @@"
+      ],
+      "original_blob_sha256": "3c2521219ec723b266911bf10e1b4a6859e42165c9a0869f298e0fbf7c8688ad",
+      "combined_blob_sha256": "3c2521219ec723b266911bf10e1b4a6859e42165c9a0869f298e0fbf7c8688ad",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/settings.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -13,6 +13,35 @@ struct SetBlockedUrlsParams {"
+      ],
+      "original_blob_sha256": "32d5ea82e47d640149699e68d2089ae9ed09fa5bbdbc048cfbb5044638b4d36e",
+      "combined_blob_sha256": "32d5ea82e47d640149699e68d2089ae9ed09fa5bbdbc048cfbb5044638b4d36e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/network/tests/response_body.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -15,6 +15,168 @@ use crate::domains::network::{"
+      ],
+      "original_blob_sha256": "a251a56e39a7cb9acd64df801d5e8af963bef10e479eed292f3e3321e0173211",
+      "combined_blob_sha256": "a251a56e39a7cb9acd64df801d5e8af963bef10e479eed292f3e3321e0173211",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/page.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -4121,6 +4121,8 @@ mod producer_tests {",
+        "@@ -4259,6 +4261,8 @@ mod producer_tests {",
+        "@@ -4367,6 +4371,8 @@ mod producer_tests {",
+        "@@ -4408,6 +4414,110 @@ mod producer_tests {"
+      ],
+      "original_blob_sha256": "1b4ef0d7ea71ceb288256da24c714b2b472fe4a3d452f22edc7d5e24b28a786d",
+      "combined_blob_sha256": "1b4ef0d7ea71ceb288256da24c714b2b472fe4a3d452f22edc7d5e24b28a786d",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/termination.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -395,11 +395,13 @@ pub(super) async fn complete_stop_loading_command_dispatch("
+      ],
+      "original_blob_sha256": "96d123c74abbe8bceaebdafd7fe795c4aae74b3adb8cb5a0bc4fdcde0a2c14f5",
+      "combined_blob_sha256": "96d123c74abbe8bceaebdafd7fe795c4aae74b3adb8cb5a0bc4fdcde0a2c14f5",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/lifecycle.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2391,11 +2391,15 @@ async fn network_navigations_use_unique_document_loader_ids() {",
+        "@@ -2474,11 +2478,15 @@ async fn navigations_without_network_domain_still_use_unique_loader_ids() {"
+      ],
+      "original_blob_sha256": "45e006712ad515ab713a83be353901a5ffa28f0cef72f41b27084156363014b4",
+      "combined_blob_sha256": "45e006712ad515ab713a83be353901a5ffa28f0cef72f41b27084156363014b4",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/navigation.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -5464,6 +5464,373 @@ async fn stop_loading_aborts_paused_request_stage_navigation() {"
+      ],
+      "original_blob_sha256": "fdb91bb94189b3b9748312eaf054da492c2903b9b8f057e657ff91256881ea23",
+      "combined_blob_sha256": "fdb91bb94189b3b9748312eaf054da492c2903b9b8f057e657ff91256881ea23",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/page/tests/runtime.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1269,20 +1269,22 @@ async fn runtime_evaluate_child_history_back_emits_child_frame_navigation_and_li"
+      ],
+      "original_blob_sha256": "dacf8af0f59e3286837b1b51d72fd0282051d58bb29756dc2960e51b2fbccc51",
+      "combined_blob_sha256": "dacf8af0f59e3286837b1b51d72fd0282051d58bb29756dc2960e51b2fbccc51",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/target/tests/tests_background_staging.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -3037,9 +3037,9 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat",
+        "@@ -3204,7 +3204,9 @@ async fn same_context_background_session_can_clear_its_own_locale_before_activat"
+      ],
+      "original_blob_sha256": "d5009b7f54a25d83b631a0cebed460a45f8d2c0a3890e4b27b545258b7ec6ba1",
+      "combined_blob_sha256": "d5009b7f54a25d83b631a0cebed460a45f8d2c0a3890e4b27b545258b7ec6ba1",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-protocol/src/domains/target/worker_target.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -765,6 +765,7 @@ fn register_dedicated_worker_target(",
+        "@@ -3369,6 +3370,7 @@ fn emit_service_worker_fetch_diagnostic_events("
+      ],
+      "original_blob_sha256": "274de2e856584216e00219492fa147682b17683faec54d615a943b4cea09ddfa",
+      "combined_blob_sha256": "274de2e856584216e00219492fa147682b17683faec54d615a943b4cea09ddfa",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/document_runtime/mutation_commands.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1826,7 +1826,7 @@ pub(super) fn finish_runtime_mutation_effects("
+      ],
+      "original_blob_sha256": "3347af7de1733c616285f9560c4361cb85bb77a8f923073a61525ea3e51edc5f",
+      "combined_blob_sha256": "3347af7de1733c616285f9560c4361cb85bb77a8f923073a61525ea3e51edc5f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/dom_parser.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -366,7 +366,11 @@ pub(crate) fn preserve_decoded_bom_only_browsing_context_body<'a>("
+      ],
+      "original_blob_sha256": "662cedaa9e0f81b39b653d5a2f2d5b9f2bc2590bc274f88250e45b9968ba42bc",
+      "combined_blob_sha256": "d805e4c0f3d7c7274be010510438c04792c72f39fa4c054fdf3d48bc79268e37",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": false,
+      "coverage": "text_compatibility_rewrite"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -78,7 +78,8 @@ pub(crate) use lifecycle_tasks::{"
+      ],
+      "original_blob_sha256": "ae1e6b6b5fc6f2d246d14c3a9a2aefedcf213c4a01275e6f2c03a1c12f629079",
+      "combined_blob_sha256": "ae1e6b6b5fc6f2d246d14c3a9a2aefedcf213c4a01275e6f2c03a1c12f629079",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/lifecycle_blockers.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -94,6 +94,11 @@ impl DocumentLifecycleBlockers {"
+      ],
+      "original_blob_sha256": "276865925b169842adf012698f801ee40e84033f5c0ac6225bed82e9f72d43db",
+      "combined_blob_sha256": "276865925b169842adf012698f801ee40e84033f5c0ac6225bed82e9f72d43db",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/lifecycle_tasks.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -81,6 +81,13 @@ impl MainDocumentScriptLoadDelayLease {"
+      ],
+      "original_blob_sha256": "b95159e67b8542c51b86b988d8db51148b2173070c315f6f5b2804d75b72cc6f",
+      "combined_blob_sha256": "b95159e67b8542c51b86b988d8db51148b2173070c315f6f5b2804d75b72cc6f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/load_event_gate.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -12,6 +12,7 @@ use super::records::{DocumentLoadDelayReason, DocumentLoadDelayTokenId};",
+        "@@ -19,6 +20,9 @@ pub(super) enum DocumentLoadGateRelease {",
+        "@@ -33,7 +37,10 @@ impl DocumentLoadGate {",
+        "@@ -49,7 +56,9 @@ impl DocumentLoadGate {",
+        "@@ -61,23 +70,34 @@ impl DocumentLoadGate {",
+        "@@ -96,6 +116,67 @@ impl DocumentLoadGate {"
+      ],
+      "original_blob_sha256": "d541ad474a41fec58bbab0a8e8a58a13fdb00a2d98fdb18446eacb3886c8d7a5",
+      "combined_blob_sha256": "d541ad474a41fec58bbab0a8e8a58a13fdb00a2d98fdb18446eacb3886c8d7a5",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/records.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -760,7 +760,7 @@ impl DocumentLifecycleRecord {"
+      ],
+      "original_blob_sha256": "e75a02a53e0ce7015f155d5a0212e7c819be305d9505a2175a051a8ee453c20e",
+      "combined_blob_sha256": "e75a02a53e0ce7015f155d5a0212e7c819be305d9505a2175a051a8ee453c20e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/store.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -10,7 +10,8 @@ use super::lifecycle_tasks::{",
+        "@@ -2675,6 +2676,9 @@ impl FrameOwnerStore {",
+        "@@ -2723,18 +2727,29 @@ impl FrameOwnerStore {"
+      ],
+      "original_blob_sha256": "7980993d8b601a12f92246cf235695578594b1c9c045df266e889a8834f0f61b",
+      "combined_blob_sha256": "7980993d8b601a12f92246cf235695578594b1c9c045df266e889a8834f0f61b",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/frame_owner_model/store_tests.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -698,9 +698,13 @@ fn main_style_load_event_binding_delays_complete_until_event_settlement() {",
+        "@@ -742,6 +746,57 @@ fn main_modulepreload_owner_never_allocates_a_load_event_delay() {",
+        "@@ -774,8 +829,9 @@ fn main_style_load_event_binding_cannot_settle_replacement_document() {"
+      ],
+      "original_blob_sha256": "42d175a5b899435fb7e811efc0b69f1e07527597e2f6aeb307bafa11d142df14",
+      "combined_blob_sha256": "42d175a5b899435fb7e811efc0b69f1e07527597e2f6aeb307bafa11d142df14",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/live_document_parser.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        },
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -225,6 +225,7 @@ pub(crate) struct ParserResumePermit {",
+        "@@ -716,6 +717,14 @@ impl DocumentParserSession {",
+        "@@ -728,6 +737,21 @@ impl DocumentParserSession {"
+      ],
+      "original_blob_sha256": "5a0b903b3593c668dd00f11da6e4dfe6d54cf11d71c05162051a45db8a469122",
+      "combined_blob_sha256": "5a0b903b3593c668dd00f11da6e4dfe6d54cf11d71c05162051a45db8a469122",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/child_documents/commit.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -231,6 +231,7 @@ impl JsContextHost {"
+      ],
+      "original_blob_sha256": "3687bfa5ac6378838d667b4a29c93fffa59c23e8847bc8cbcf20131db6fd5c39",
+      "combined_blob_sha256": "3687bfa5ac6378838d667b4a29c93fffa59c23e8847bc8cbcf20131db6fd5c39",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": false,
+      "coverage": "text_compatibility_rewrite"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/child_documents/live_parser.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1687,6 +1687,7 @@ impl JsContextHost {",
+        "@@ -1695,6 +1696,13 @@ impl JsContextHost {"
+      ],
+      "original_blob_sha256": "c3c05357525d8508288ac6ededbcca6f03b7ba65b1362f2b8f1308ac0932726c",
+      "combined_blob_sha256": "c3c05357525d8508288ac6ededbcca6f03b7ba65b1362f2b8f1308ac0932726c",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": false,
+      "coverage": "text_compatibility_rewrite"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/child_documents/loads.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        },
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -21,7 +21,8 @@ use crate::{",
+        "@@ -229,20 +230,24 @@ impl JsContextHost {",
+        "@@ -737,7 +742,8 @@ fn child_document_load_outcome_from_response(",
+        "@@ -757,12 +763,29 @@ fn child_document_load_outcome_from_response(",
+        "@@ -774,6 +797,8 @@ fn child_document_load_outcome_from_response(",
+        "@@ -832,20 +857,45 @@ mod tests {",
+        "@@ -861,6 +911,8 @@ mod tests {"
+      ],
+      "original_blob_sha256": "2b4cc7a088a46680567b602cf589502d63c8f01cf4c2f4c5bc7e0c6d4f5ab586",
+      "combined_blob_sha256": "2b4cc7a088a46680567b602cf589502d63c8f01cf4c2f4c5bc7e0c6d4f5ab586",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/host_environment.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        },
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -14,9 +14,9 @@ use crate::{",
+        "@@ -309,7 +309,7 @@ impl JsContextHost {",
+        "@@ -355,11 +355,13 @@ impl JsContextHost {",
+        "@@ -383,7 +385,7 @@ impl JsContextHost {",
+        "@@ -795,6 +797,7 @@ impl JsContextHost {",
+        "@@ -808,11 +811,27 @@ impl JsContextHost {",
+        "@@ -872,6 +891,7 @@ impl JsContextHost {",
+        "@@ -1042,6 +1062,7 @@ impl JsContextHost {",
+        "@@ -1055,7 +1076,7 @@ impl JsContextHost {",
+        "@@ -1069,7 +1090,7 @@ impl JsContextHost {",
+        "@@ -1094,7 +1115,7 @@ impl JsContextHost {",
+        "@@ -1116,19 +1137,24 @@ impl JsContextHost {",
+        "@@ -1265,7 +1291,7 @@ impl JsContextHost {",
+        "@@ -1289,13 +1315,16 @@ impl JsContextHost {",
+        "@@ -1864,6 +1893,14 @@ impl JsContextHost {",
+        "@@ -1882,6 +1919,14 @@ impl JsContextHost {",
+        "@@ -1901,6 +1946,14 @@ impl JsContextHost {",
+        "@@ -1920,6 +1973,12 @@ impl JsContextHost {",
+        "@@ -1986,6 +2045,9 @@ impl JsContextHost {",
+        "@@ -2227,8 +2289,8 @@ impl JsContextHost {",
+        "@@ -2242,14 +2304,18 @@ impl JsContextHost {",
+        "@@ -2548,15 +2614,27 @@ impl JsContextHost {"
+      ],
+      "original_blob_sha256": "634417148dcf03c5b49abf9053fd4140de1b9a9d0ec4369813c1b93a2eee77a7",
+      "combined_blob_sha256": "634417148dcf03c5b49abf9053fd4140de1b9a9d0ec4369813c1b93a2eee77a7",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/image_resources/mod.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -420,6 +420,7 @@ impl super::JsContextHost {",
+        "@@ -567,6 +568,9 @@ impl super::JsContextHost {"
+      ],
+      "original_blob_sha256": "aca48e84b3c1f815bf3227e92d33bbb580705b01a5ef46d7cf780bcb0403eba1",
+      "combined_blob_sha256": "112a9561081f515bb1ac298a4f5cffef760de16bd20b88446c2203ff4f74ab5a",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/layout.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -367,12 +367,23 @@ impl JsContextHost {",
+        "@@ -541,6 +552,14 @@ impl JsContextHost {"
+      ],
+      "original_blob_sha256": "ce266ffe78b3ee453b7720441b13576ee46da12af42ff5bf5c231429025622df",
+      "combined_blob_sha256": "ce266ffe78b3ee453b7720441b13576ee46da12af42ff5bf5c231429025622df",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/layout_snapshot.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -23,9 +23,9 @@ struct LatestFrozenLayout {"
+      ],
+      "original_blob_sha256": "c245ba91ce47fc70ca1c2581dbafc9317d00be4ec4d6005abdfc4026ec998900",
+      "combined_blob_sha256": "c245ba91ce47fc70ca1c2581dbafc9317d00be4ec4d6005abdfc4026ec998900",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/layout_state.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -43,6 +43,7 @@ pub(super) struct DocumentLayoutState {",
+        "@@ -135,6 +136,17 @@ impl DocumentLayoutState {",
+        "@@ -233,15 +245,24 @@ impl DocumentLayoutState {",
+        "@@ -249,6 +270,9 @@ impl DocumentLayoutState {"
+      ],
+      "original_blob_sha256": "24a865f57ac97a8d7ed36a091bd45d974de3c30df192be7668b1745ff0d9c6ac",
+      "combined_blob_sha256": "24a865f57ac97a8d7ed36a091bd45d974de3c30df192be7668b1745ff0d9c6ac",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/context_host/main_document_lifecycle.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -6,6 +6,7 @@ use crate::frame_owner_model::{",
+        "@@ -210,7 +211,7 @@ impl JsContextHost {"
+      ],
+      "original_blob_sha256": "e65c72836e312eefb0250ce2a9d7eb0c66dad1bbb42ea9ed7a7a5d5a36b059c6",
+      "combined_blob_sha256": "e65c72836e312eefb0250ce2a9d7eb0c66dad1bbb42ea9ed7a7a5d5a36b059c6",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/document/detached_objects/builders/elements.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -487,9 +487,16 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>("
+      ],
+      "original_blob_sha256": "fc5025edbe2a3eb6332a52d33a8dea7c4165d72307d7ad7f5560e1cea2c0c0e3",
+      "combined_blob_sha256": "fc5025edbe2a3eb6332a52d33a8dea7c4165d72307d7ad7f5560e1cea2c0c0e3",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        },
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -34,6 +34,32 @@ mod event_handlers;",
+        "@@ -62,6 +88,7 @@ use trusted_types::{",
+        "@@ -124,6 +151,7 @@ pub(crate) use activation::{",
+        "@@ -306,7 +334,7 @@ pub(super) use forms::{",
+        "@@ -644,7 +672,8 @@ use stylesheets::{"
+      ],
+      "original_blob_sha256": "6d52f486c78bfeca16ba961c32bd583232ff2109fa1a6a0e7d3fd30e05f807ef",
+      "combined_blob_sha256": "0e652e9af32cb9e1b29be94c03777dfb09504b2fc94bb2752cc6bf251c1f8d89",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/activation/default_action.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        },
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -754,6 +754,7 @@ fn click_handle_internal(",
+        "@@ -764,7 +765,8 @@ fn click_handle_internal(",
+        "@@ -954,6 +956,9 @@ fn click_handle_internal(",
+        "@@ -1117,6 +1122,7 @@ pub(crate) fn activate_handle_via_click(",
+        "@@ -1142,6 +1148,59 @@ pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(",
+        "@@ -1165,6 +1224,7 @@ pub(crate) fn activate_handle_via_synthetic_click(",
+        "@@ -1391,6 +1451,7 @@ fn perform_click_default_action(",
+        "@@ -1695,7 +1756,7 @@ fn image_submitter_coordinate("
+      ],
+      "original_blob_sha256": "639668def049427d10e498d9d71a05f7a339e9f7c7bc7f1b4546f295aeb2fa72",
+      "combined_blob_sha256": "8f68dd9b06a6504d137819a359e3cd94af8d9c0b6443f467dec72c6a1a6c002d",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/activation/mod.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -5,6 +5,7 @@ mod targets;"
+      ],
+      "original_blob_sha256": "1e1fecae75559899a6522d3285ccbfd295e48d644392261ad8f3b924fe28584f",
+      "combined_blob_sha256": "1e1fecae75559899a6522d3285ccbfd295e48d644392261ad8f3b924fe28584f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/focus.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -117,11 +117,7 @@ fn element_is_scrollable(runtime: &JsContextHost, handle: DomHandle) -> bool {"
+      ],
+      "original_blob_sha256": "c3ee710ea9f89bed03fecb1b914e18aa4766970a0930319b473e93128f6112d3",
+      "combined_blob_sha256": "c3ee710ea9f89bed03fecb1b914e18aa4766970a0930319b473e93128f6112d3",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/forms.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        },
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -18,7 +18,7 @@ use super::super::{",
+        "@@ -224,9 +224,10 @@ pub(in crate::native_bridge) use self::simple_controls::{"
+      ],
+      "original_blob_sha256": "17a1ab8ed6135b234e7fb19b5bd598188d86ff49bed4a2272e2ce4bcd65902f2",
+      "combined_blob_sha256": "17a1ab8ed6135b234e7fb19b5bd598188d86ff49bed4a2272e2ce4bcd65902f2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/forms/form_element.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -358,6 +358,8 @@ fn collect_form_control_elements_from(",
+        "@@ -542,13 +544,14 @@ pub(in crate::native_bridge) fn form_target_setter_function<'s>(",
+        "@@ -585,33 +588,32 @@ pub(in crate::native_bridge) fn form_named_getter(",
+        "@@ -644,24 +646,22 @@ pub(in crate::native_bridge) fn form_named_descriptor(",
+        "@@ -671,13 +671,14 @@ pub(in crate::native_bridge) fn form_named_descriptor(",
+        "@@ -697,14 +698,15 @@ pub(in crate::native_bridge) fn form_named_deleter(",
+        "@@ -732,30 +734,15 @@ fn object_has_expando_named_property(",
+        "@@ -801,13 +788,14 @@ fn form_has_named_item_or_past_name(",
+        "@@ -827,13 +815,14 @@ pub(in crate::native_bridge) fn form_indexed_getter(",
+        "@@ -852,14 +841,15 @@ pub(in crate::native_bridge) fn form_indexed_query(",
+        "@@ -870,13 +860,14 @@ pub(in crate::native_bridge) fn form_indexed_setter(",
+        "@@ -900,13 +891,14 @@ pub(in crate::native_bridge) fn form_indexed_descriptor(",
+        "@@ -917,12 +909,15 @@ pub(in crate::native_bridge) fn form_indexed_deleter(",
+        "@@ -933,14 +928,15 @@ pub(in crate::native_bridge) fn form_indexed_enumerator(",
+        "@@ -951,13 +947,14 @@ pub(in crate::native_bridge) fn form_indexed_definer(",
+        "@@ -984,6 +981,12 @@ fn form_named_item_matches("
+      ],
+      "original_blob_sha256": "4fb7b9a2ee6bf81a0e6e00835e91054ddb541ef285240c6158665de0082cb3c9",
+      "combined_blob_sha256": "4fb7b9a2ee6bf81a0e6e00835e91054ddb541ef285240c6158665de0082cb3c9",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/forms/submission.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -78,7 +78,7 @@ fn wrap_handle_object<'s>("
+      ],
+      "original_blob_sha256": "0e024b5b5f3e1540e0ca6cb8676d984fca73a93079f99a9dd90823449290aec9",
+      "combined_blob_sha256": "0e024b5b5f3e1540e0ca6cb8676d984fca73a93079f99a9dd90823449290aec9",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/geometry/metrics.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -27,7 +27,7 @@ fn node_scroll_position_value<'s>(",
+        "@@ -63,25 +63,21 @@ fn node_scroll_position_setter_for_object<'s>(",
+        "@@ -234,7 +230,7 @@ fn scroll_node_to<'s>(",
+        "@@ -276,7 +272,7 @@ fn node_box_metric_from_object<'s>(",
+        "@@ -565,7 +561,7 @@ pub(in crate::native_bridge) fn node_offset_parent_getter_function<'s>("
+      ],
+      "original_blob_sha256": "d5be83c9a239c2e88aa98daa694ab4906462687d9f4f2ab58b18d89d3691ee18",
+      "combined_blob_sha256": "d5be83c9a239c2e88aa98daa694ab4906462687d9f4f2ab58b18d89d3691ee18",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/geometry/rects.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -60,7 +60,7 @@ pub(in crate::native_bridge) fn node_get_bounding_client_rect_callback(",
+        "@@ -92,7 +92,7 @@ pub(in crate::native_bridge) fn node_get_client_rects_callback("
+      ],
+      "original_blob_sha256": "68efb699d43e4dd89a1a36961fb06f71b6f4f7809381649f60ccb2bf842dec01",
+      "combined_blob_sha256": "68efb699d43e4dd89a1a36961fb06f71b6f4f7809381649f60ccb2bf842dec01",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/geometry/scroll.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -208,7 +208,7 @@ pub(crate) fn perform_wheel_scroll_default_action(",
+        "@@ -217,11 +217,9 @@ pub(crate) fn perform_wheel_scroll_default_action("
+      ],
+      "original_blob_sha256": "79db933e4f0fac4800b4750149b76a53c1eed41cbdd267b387681aa5fe747c43",
+      "combined_blob_sha256": "79db933e4f0fac4800b4750149b76a53c1eed41cbdd267b387681aa5fe747c43",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/geometry/scroll_into_view.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -121,7 +121,7 @@ fn scroll_node_into_view_with_params(",
+        "@@ -282,12 +282,10 @@ fn perform_bubbling_scroll_into_view(",
+        "@@ -300,7 +298,7 @@ fn perform_bubbling_scroll_into_view("
+      ],
+      "original_blob_sha256": "a794b6f94199e4f4595092f31cc6e27f7fdcd1f2f4d9350049a60e5b43578b8e",
+      "combined_blob_sha256": "a794b6f94199e4f4595092f31cc6e27f7fdcd1f2f4d9350049a60e5b43578b8e",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/template_install.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -7,6 +7,7 @@ mod accessors_structural;"
+      ],
+      "original_blob_sha256": "40c538a700839ab5048a604643f71b3480afd4edfe0ce80236b1fda413ce13be",
+      "combined_blob_sha256": "40c538a700839ab5048a604643f71b3480afd4edfe0ce80236b1fda413ce13be",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/template_install/accessors_forms.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -5,6 +5,7 @@ mod input;"
+      ],
+      "original_blob_sha256": "2d083f46189530919494a64835fe0613785ec4a2a43747fe264d050560c0f108",
+      "combined_blob_sha256": "2d083f46189530919494a64835fe0613785ec4a2a43747fe264d050560c0f108",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/native_bridge/element/template_install/accessors_forms/controls.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -6,13 +6,13 @@ use crate::native_bridge::element::forms::{",
+        "@@ -29,9 +29,8 @@ pub(super) fn install_form_control_template_accessors<'s, 'i>("
+      ],
+      "original_blob_sha256": "db90ff2b51cd85ab3fd7b7ea7f2f7a0676f3c4df2057db6b856ace0adc42ba31",
+      "combined_blob_sha256": "db90ff2b51cd85ab3fd7b7ea7f2f7a0676f3c4df2057db6b856ace0adc42ba31",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/network/navigation/loader.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -244,6 +244,43 @@ impl NavigationResourceLoader {"
+      ],
+      "original_blob_sha256": "c58cac08c328ca29261b5dc2a65cfb7ee87730711ad2767f8327c9f32d587d17",
+      "combined_blob_sha256": "c58cac08c328ca29261b5dc2a65cfb7ee87730711ad2767f8327c9f32d587d17",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/page_task_queue/stylesheet_task.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -327,6 +327,9 @@ pub(crate) enum PageConnectedStyleLoadDelayEffect {"
+      ],
+      "original_blob_sha256": "d13ecccbda9d2e705f94271bb3919b7ad0e2e4b17bd2874efd24feedee34d45a",
+      "combined_blob_sha256": "d13ecccbda9d2e705f94271bb3919b7ad0e2e4b17bd2874efd24feedee34d45a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/owner_local_store/entry.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -714,6 +714,25 @@ impl LivePageEntry {"
+      ],
+      "original_blob_sha256": "8c87573f79d4cb78a41f44d93d2c53f66c8468787a959cef2fc1546e12903fc9",
+      "combined_blob_sha256": "8c87573f79d4cb78a41f44d93d2c53f66c8468787a959cef2fc1546e12903fc9",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/owner_local_store/mod.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        },
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2563,13 +2563,16 @@ impl RendererOwnerLocalStore {",
+        "@@ -2595,6 +2598,15 @@ impl RendererOwnerLocalStore {"
+      ],
+      "original_blob_sha256": "e5b6d3fb6f05bc3304b93e0b7071f7ea1303ebb100491556b74ab5a25f04047d",
+      "combined_blob_sha256": "e5b6d3fb6f05bc3304b93e0b7071f7ea1303ebb100491556b74ab5a25f04047d",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/child_document_completion.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -732,6 +732,8 @@ pub(super) fn stale_loaded_completion("
+      ],
+      "original_blob_sha256": "6be01f61b31d2144aecdb2fea9b783da02f12c1666586f3a53e5bf981ae2fbb9",
+      "combined_blob_sha256": "6be01f61b31d2144aecdb2fea9b783da02f12c1666586f3a53e5bf981ae2fbb9",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/computed_size/sampling.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -72,7 +72,7 @@ async fn computed_size_held_getters_observe_grid_sampling_without_dom_mutation()",
+        "@@ -106,6 +106,12 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh(",
+        "@@ -116,13 +122,33 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh(",
+        "@@ -132,7 +158,7 @@ async fn computed_size_grid_sampling_reuses_old_geometry_until_explicit_refresh("
+      ],
+      "original_blob_sha256": "307fccd04ef6ebfc4d773a50c6b43cb2f9e36cfd8ccdc423ee8a28ec9df0d96a",
+      "combined_blob_sha256": "307fccd04ef6ebfc4d773a50c6b43cb2f9e36cfd8ccdc423ee8a28ec9df0d96a",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/fetch_xhr.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -3605,6 +3605,12 @@ fn spawn_repeated_synchronous_xhr_server("
+      ],
+      "original_blob_sha256": "98a85091d06316c951b0a18eae4468b7a652cb9d2d622f0f1c30fc4f9c8bef00",
+      "combined_blob_sha256": "f2dacf0cbdde0f6bf5ff2b9fa1f17af79a2a6b0d64fd9a29831b643b25d62c0b",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/grid_resolved_track_values.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,7 +1,7 @@",
+        "@@ -89,20 +89,82 @@ vertical:getComputedStyle(document.getElementById('vertical')).gridTemplateColum"
+      ],
+      "original_blob_sha256": "e4a6cb96d084d6fd80d548a41e623d924e9beaab7ddcf3c97501f4e1e045d5dc",
+      "combined_blob_sha256": "e4a6cb96d084d6fd80d548a41e623d924e9beaab7ddcf3c97501f4e1e045d5dc",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/rendering_update.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -11,6 +11,74 @@ use crate::page_task_queue::{",
+        "@@ -116,7 +184,49 @@ getComputedStyle(document.getElementById('fallback')).display",
+        "@@ -229,10 +339,18 @@ document.body.innerHTML = '<div id=\"target\"></div><div id=\"pass-through\"></div><",
+        "@@ -240,24 +358,23 @@ document.body.innerHTML = '<div id=\"target\"></div><div id=\"pass-through\"></div><",
+        "@@ -269,10 +386,10 @@ document.body.innerHTML = '<div id=\"target\"></div><div id=\"pass-through\"></div><",
+        "@@ -293,6 +410,20 @@ document.body.innerHTML = '<div id=\"target\"></div><div id=\"pass-through\"></div><",
+        "@@ -303,10 +434,10 @@ document.body.innerHTML = '<div id=\"target\"></div><div id=\"pass-through\"></div><",
+        "@@ -371,23 +502,83 @@ document.body.innerHTML = '<div id=target></div>';",
+        "@@ -398,14 +589,14 @@ document.body.innerHTML = '<div id=target></div>';",
+        "@@ -423,14 +614,14 @@ document.body.innerHTML = '<div id=target></div>';"
+      ],
+      "original_blob_sha256": "d0e488f8750f9cfbfcd4a36d5e6982e37fcbca1b8885a6e9178a0cd5b8197c2f",
+      "combined_blob_sha256": "d0e488f8750f9cfbfcd4a36d5e6982e37fcbca1b8885a6e9178a0cd5b8197c2f",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/page_vm/tests/stylesheet_task.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -42,6 +42,106 @@ fn take_next_link_element_event_task_for_test("
+      ],
+      "original_blob_sha256": "be925c10c305784b4615d82edfccc950ee1c745992dfb8ea4fe29768dddb9fc2",
+      "combined_blob_sha256": "be925c10c305784b4615d82edfccc950ee1c745992dfb8ea4fe29768dddb9fc2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/bootstrap.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -25,6 +25,7 @@ impl ConcurrentParseTimeRuntime {",
+        "@@ -34,6 +35,7 @@ impl ConcurrentParseTimeRuntime {"
+      ],
+      "original_blob_sha256": "6ffcece34ff0f3a6e636fef686fb15c7c836d0ce3ca6b2d532197593e2601359",
+      "combined_blob_sha256": "6ffcece34ff0f3a6e636fef686fb15c7c836d0ce3ca6b2d532197593e2601359",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/pending_residence.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -69,6 +69,14 @@ pub(in crate::runtime) enum PendingPhaseOneResidence {"
+      ],
+      "original_blob_sha256": "e02b19404d370a40996a3bf3a853c5c7ac78e08e83203c0aff7ed757fefd5fc4",
+      "combined_blob_sha256": "e02b19404d370a40996a3bf3a853c5c7ac78e08e83203c0aff7ed757fefd5fc4",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/state.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        },
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -11,6 +11,7 @@ pub(super) struct ParseTimeDriverState {",
+        "@@ -32,6 +33,24 @@ impl ParseTimeDriverState {",
+        "@@ -45,6 +64,7 @@ impl ParseTimeDriverState {",
+        "@@ -199,6 +219,12 @@ impl ConcurrentParseTimeRuntime {"
+      ],
+      "original_blob_sha256": "a47cfa5ba030d93776f6a05579fd8bf74977193e750ffb5e2feed85e77d6ce0c",
+      "combined_blob_sha256": "a47cfa5ba030d93776f6a05579fd8bf74977193e750ffb5e2feed85e77d6ce0c",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        },
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -94,10 +94,8 @@ impl ConcurrentParseTimeRuntime {",
+        "@@ -124,11 +122,6 @@ impl ConcurrentParseTimeRuntime {",
+        "@@ -332,10 +325,7 @@ impl ConcurrentParseTimeRuntime {",
+        "@@ -362,11 +352,6 @@ impl ConcurrentParseTimeRuntime {",
+        "@@ -451,6 +436,10 @@ impl ConcurrentParseTimeRuntime {",
+        "@@ -491,6 +480,7 @@ pub struct ExternalRawDocumentBodyStream {",
+        "@@ -517,6 +507,7 @@ impl ExternalRawDocumentBodyStream {",
+        "@@ -529,9 +520,21 @@ impl ExternalRawDocumentBodyStream {",
+        "@@ -556,6 +559,13 @@ pub(super) enum RawDocumentBodySource {",
+        "@@ -607,6 +617,9 @@ fn scan_prebootstrap_html_chunk_into_state(",
+        "@@ -617,6 +630,41 @@ fn scan_prebootstrap_html_chunk_into_state(",
+        "@@ -908,6 +956,105 @@ mod tests {"
+      ],
+      "original_blob_sha256": "d62d9df7b8dea9b51ea375a2bd2441b0f3ed228d27e170b5928fc784003dd3ce",
+      "combined_blob_sha256": "d62d9df7b8dea9b51ea375a2bd2441b0f3ed228d27e170b5928fc784003dd3ce",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming_input.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -41,6 +41,7 @@ impl StreamingDocumentInputSender {",
+        "@@ -49,6 +50,7 @@ impl StreamingDocumentInputSource {",
+        "@@ -82,7 +84,20 @@ impl StreamingDocumentInputSource {",
+        "@@ -275,6 +290,45 @@ mod tests {"
+      ],
+      "original_blob_sha256": "dc85413fe1a74fef1af25aab7506e1a247067ee175e0ec5650957b99b9fabf66",
+      "combined_blob_sha256": "dc85413fe1a74fef1af25aab7506e1a247067ee175e0ec5650957b99b9fabf66",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/phase_one/streaming_residence.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -28,6 +28,12 @@ pub(in crate::runtime) struct PendingStreamingPhaseOneContinuation {"
+      ],
+      "original_blob_sha256": "b782df4e40b23f47d464821e111fdf718a098592cde66ee6c617e6b0124956f0",
+      "combined_blob_sha256": "b782df4e40b23f47d464821e111fdf718a098592cde66ee6c617e6b0124956f0",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/protocol_output/transport_memory.rs",
+      "owners": [
+        {
+          "group": "network",
+          "pr": "https://github.com/lexmount/moli/pull/737"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -254,6 +254,45 @@ fn child_frame_document_network_charge(",
+        "@@ -263,6 +302,66 @@ fn child_frame_document_network_charge(",
+        "@@ -487,3 +586,37 @@ fn navigation_response_transport_charge_bytes("
+      ],
+      "original_blob_sha256": "9bf7585f9af2a79e6e471787bb7ceb82e5e7c4e508aad1e997a5b89ac79ca5ef",
+      "combined_blob_sha256": "9bf7585f9af2a79e6e471787bb7ceb82e5e7c4e508aad1e997a5b89ac79ca5ef",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/tests.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1127,6 +1127,284 @@ async fn capture_screenshot_for_renderer_page("
+      ],
+      "original_blob_sha256": "a1ed804b5520823e8bd2ac463cb559fb746a5ac1b458936bca0abc24909c884c",
+      "combined_blob_sha256": "a1ed804b5520823e8bd2ac463cb559fb746a5ac1b458936bca0abc24909c884c",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/runtime/tests/open_streaming.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -21,6 +21,77 @@ struct OpenStreamingPage {",
+        "@@ -160,6 +231,14 @@ async fn assert_open_stream_work_executes_before_eof(html: &str, work_label: &st",
+        "@@ -170,6 +249,10 @@ impl OpenStreamingPage {"
+      ],
+      "original_blob_sha256": "d29acae09d6442a500c59c64d6612ae687b3e101784571a061545afafe422d83",
+      "combined_blob_sha256": "d29acae09d6442a500c59c64d6612ae687b3e101784571a061545afafe422d83",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -956,6 +956,7 @@ pub(super) struct ScriptVm {",
+        "@@ -2359,6 +2360,7 @@ impl ScriptVmDefaultWorldBootstrap {"
+      ],
+      "original_blob_sha256": "d79d9691eafb76a67186e5f2009ca2aeb9fb5ab3d11568be618d23f85699fde1",
+      "combined_blob_sha256": "d79d9691eafb76a67186e5f2009ca2aeb9fb5ab3d11568be618d23f85699fde1",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/input_dispatch.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,4 +1,5 @@",
+        "@@ -16,7 +17,8 @@ use crate::dom::{",
+        "@@ -24,12 +26,13 @@ use crate::native_bridge::element::{",
+        "@@ -82,6 +85,80 @@ fn can_suppress_compat_mouse_event(event_name: &str) -> bool {",
+        "@@ -1004,7 +1081,7 @@ impl ScriptVm {",
+        "@@ -1802,6 +1879,14 @@ impl ScriptVm {",
+        "@@ -1819,6 +1904,7 @@ impl ScriptVm {",
+        "@@ -1836,6 +1922,9 @@ impl ScriptVm {",
+        "@@ -1876,6 +1965,41 @@ impl ScriptVm {",
+        "@@ -1929,30 +2053,6 @@ impl ScriptVm {",
+        "@@ -2215,6 +2315,9 @@ impl ScriptVm {"
+      ],
+      "original_blob_sha256": "3203a47ae6693e4d9af7a62089af7285f6ccb58d2e304d39353b0821489e41d9",
+      "combined_blob_sha256": "3203a47ae6693e4d9af7a62089af7285f6ccb58d2e304d39353b0821489e41d9",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/stylesheet_page_tasks.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,4 +1,5 @@",
+        "@@ -115,7 +116,7 @@ impl ScriptVm {",
+        "@@ -124,7 +125,9 @@ impl ScriptVm {"
+      ],
+      "original_blob_sha256": "2ed7dc8dc8182d61d6e9424f2a02aced33a84e47122dba7d3fa82054086adfd0",
+      "combined_blob_sha256": "2ed7dc8dc8182d61d6e9424f2a02aced33a84e47122dba7d3fa82054086adfd0",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_elements/dom_surface.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,5 +1,296 @@"
+      ],
+      "original_blob_sha256": "b83e15b2ff49d55ea3227e5e0b516e41932fb33bf1638e2648709227e5cbaa21",
+      "combined_blob_sha256": "b83e15b2ff49d55ea3227e5e0b516e41932fb33bf1638e2648709227e5cbaa21",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/computed_style.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2,6 +2,191 @@ use super::*;"
+      ],
+      "original_blob_sha256": "867a79b5063abfe5469929a3f69d585cb2376efaee70f2ce5ffa3a1f1142698f",
+      "combined_blob_sha256": "f4aad62832fb33355cb96e657a9be7e84db71c28e262bd55fd08f34a4f4cd438",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/dom.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -8591,8 +8591,11 @@ for (let index = 0; index < 128; index++) {",
+        "@@ -8637,7 +8640,7 @@ for (let index = 0; index < 128; index++) {",
+        "@@ -8659,31 +8662,42 @@ fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {"
+      ],
+      "original_blob_sha256": "0d31c78a7dea29f9ce988f49f2b71be7dc21daeac569212bc40ec811d311c7c7",
+      "combined_blob_sha256": "0d31c78a7dea29f9ce988f49f2b71be7dc21daeac569212bc40ec811d311c7c7",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        },
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2,6 +2,7 @@ use super::*;",
+        "@@ -4754,6 +4755,461 @@ fn submit_button_click_queues_pending_top_level_location_navigation() {"
+      ],
+      "original_blob_sha256": "873aabc524c77fe2a1cdb382a37d7e601829ba87ccd4f24ad08e8e883dd58cdf",
+      "combined_blob_sha256": "873aabc524c77fe2a1cdb382a37d7e601829ba87ccd4f24ad08e8e883dd58cdf",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/event_activation.rs",
+      "owners": [
+        {
+          "group": "input",
+          "pr": "https://github.com/lexmount/moli/pull/736"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,5 +1,176 @@"
+      ],
+      "original_blob_sha256": "699c66bab50ba2857658eb15084f80b446001dd820ead1a5eb8a6560cf62b798",
+      "combined_blob_sha256": "699c66bab50ba2857658eb15084f80b446001dd820ead1a5eb8a6560cf62b798",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/forms/named_lookup.rs",
+      "owners": [
+        {
+          "group": "forms",
+          "pr": "https://github.com/lexmount/moli/pull/739"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -0,0 +1,301 @@"
+      ],
+      "original_blob_sha256": "3589420354d21f81f56c926dd0341642e0bc6dc3093b385008b77b4b291567b1",
+      "combined_blob_sha256": "3589420354d21f81f56c926dd0341642e0bc6dc3093b385008b77b4b291567b1",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/script_vm/tests/dom_xhr/misc.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1398,7 +1398,84 @@ body.setHTMLUnsafe(`",
+        "@@ -1447,18 +1524,21 @@ fn geometry_getters_reuse_latest_layout_across_nodes_and_mutation() {"
+      ],
+      "original_blob_sha256": "0a20d4bbbdd56e9e463bcc4f545260e8edd8b6dfaaecc4c471cedb7fd6b01a68",
+      "combined_blob_sha256": "8a65f5dab824e5646a38bd062f8d18dcf1db0e089368fd14f619c6e6a8b61eb4",
+      "original_whole_file_equal": false,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/style_engine/computed.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -4,6 +4,7 @@ use dom::ElementState as StyloElementState;",
+        "@@ -49,6 +50,7 @@ use super::{",
+        "@@ -928,12 +930,13 @@ fn resolve_element_styles(",
+        "@@ -949,6 +952,14 @@ fn resolve_element_styles(",
+        "@@ -970,6 +981,9 @@ fn resolve_element_styles(",
+        "@@ -983,7 +997,7 @@ fn materialize_ancestor_styles_for_resolution<E>(",
+        "@@ -1010,6 +1024,7 @@ where",
+        "@@ -1028,6 +1043,14 @@ where",
+        "@@ -1040,7 +1063,7 @@ where"
+      ],
+      "original_blob_sha256": "e8d892788d965b3dde71f3896f320b560e247191cf53f7330e6a6abc37ef0607",
+      "combined_blob_sha256": "e8d892788d965b3dde71f3896f320b560e247191cf53f7330e6a6abc37ef0607",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/style_engine/retained.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -2,7 +2,9 @@ use std::collections::HashSet;",
+        "@@ -165,6 +167,7 @@ pub(super) fn build_retained_style_system(",
+        "@@ -383,6 +386,9 @@ fn update_document_scope(",
+        "@@ -437,6 +443,32 @@ fn update_document_scope("
+      ],
+      "original_blob_sha256": "1f1946ba56f9a3f030c590ef7bd35a833004031b89d88deb18acb1de5218a977",
+      "combined_blob_sha256": "1f1946ba56f9a3f030c590ef7bd35a833004031b89d88deb18acb1de5218a977",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/style_engine/state.rs",
+      "owners": [
+        {
+          "group": "layout",
+          "pr": "https://github.com/lexmount/moli/pull/735"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -6,6 +6,7 @@ use std::{",
+        "@@ -31,6 +32,11 @@ pub(super) struct RetainedStyleSystem {"
+      ],
+      "original_blob_sha256": "c62a80209dddf46f5aeb5d23923d33334d305e88c369d7c7ac31a514e60f0ed7",
+      "combined_blob_sha256": "c62a80209dddf46f5aeb5d23923d33334d305e88c369d7c7ac31a514e60f0ed7",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-renderer-v8/src/stylesheet_runtime/connected.rs",
+      "owners": [
+        {
+          "group": "stop",
+          "pr": "https://github.com/lexmount/moli/pull/738"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -550,11 +550,11 @@ impl DocumentRuntime {"
+      ],
+      "original_blob_sha256": "25f274d33f7c050645fa85c84146387c03dfcd3ab1a18d23cd9ea779d79541df",
+      "combined_blob_sha256": "25f274d33f7c050645fa85c84146387c03dfcd3ab1a18d23cd9ea779d79541df",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-web-mime/src/classification.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -51,6 +51,14 @@ pub fn is_text_mime_essence(input: &str) -> bool {"
+      ],
+      "original_blob_sha256": "ec515c3ed151e1c33196ca2e04e4cf52a25c916bfd7797b2f5ee4470e08b61f6",
+      "combined_blob_sha256": "ec515c3ed151e1c33196ca2e04e4cf52a25c916bfd7797b2f5ee4470e08b61f6",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-web-mime/src/lib.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -14,9 +14,9 @@ pub use classification::{"
+      ],
+      "original_blob_sha256": "944d8cf519321b10b599acd4344560102d1bc9a0a0280ced2505a703ed4769c2",
+      "combined_blob_sha256": "944d8cf519321b10b599acd4344560102d1bc9a0a0280ced2505a703ed4769c2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli-web-mime/src/tests.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -648,3 +648,25 @@ fn script_like_mime_type_block_matches_fetch_response_rule() {"
+      ],
+      "original_blob_sha256": "22f27d7f0da03c74eb9c2c2b7991bfbb736eab0939abda26aab4f48665431a56",
+      "combined_blob_sha256": "22f27d7f0da03c74eb9c2c2b7991bfbb736eab0939abda26aab4f48665431a56",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli/src/fetch_dump/tests.rs",
+      "owners": [
+        {
+          "group": "text",
+          "pr": "https://github.com/lexmount/moli/pull/740"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1,7 +1,7 @@",
+        "@@ -36,7 +36,7 @@ async fn load_page_with_config("
+      ],
+      "original_blob_sha256": "73c4e2938a1a9175e512de8513c6d99725acf5bd4c161a750ce304273f213cf2",
+      "combined_blob_sha256": "73c4e2938a1a9175e512de8513c6d99725acf5bd4c161a750ce304273f213cf2",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli/src/telemetry.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -19,6 +19,7 @@ pub fn init(log_filter: &str) {",
+        "@@ -107,4 +108,31 @@ mod tests {"
+      ],
+      "original_blob_sha256": "207121fff07dcaa0727da0c9fcf28d7bcd6b639f17af2f88512be06569b3a547",
+      "combined_blob_sha256": "207121fff07dcaa0727da0c9fcf28d7bcd6b639f17af2f88512be06569b3a547",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    },
+    {
+      "file": "moli/tests/fetch_cli.rs",
+      "owners": [
+        {
+          "group": "engineering",
+          "pr": "https://github.com/lexmount/moli/pull/734"
+        }
+      ],
+      "original_hunk_headers": [
+        "@@ -1315,6 +1315,73 @@ fn cli_dump_html_keeps_uncaught_script_errors_out_of_stdout() -> Result<()> {"
+      ],
+      "original_blob_sha256": "654ef5a527047b99b43c4ef7b06046b6df41a534619ed0e130be9fcdd50b3d79",
+      "combined_blob_sha256": "654ef5a527047b99b43c4ef7b06046b6df41a534619ed0e130be9fcdd50b3d79",
+      "original_whole_file_equal": true,
+      "rebased_original_whole_file_equal": true,
+      "coverage": "original_patch_preserved_exactly_on_current_main"
+    }
+  ],
+  "conclusion": "No omitted original640 file or unexplained hunk found. Exact preservation after rebase except the enumerated six text compatibility files; two added network-test files are supplemental. No tests/builds/site calls were performed in this read-only content audit."
+}
