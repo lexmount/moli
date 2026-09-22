@@ -58,6 +58,54 @@ fn clipboard_input_state(vm: &mut ScriptVm) -> serde_json::Value {
 }
 
 #[test]
+fn clipboard_shortcuts_replace_style_only_when_writing_new_contents() {
+    for (key, listener, text, style) in [
+        ("c", "", "🦊", "unspecified"),
+        ("x", "", "🦊", "unspecified"),
+        ("v", "", "seed", "attachment"),
+        (
+            "c",
+            "control.addEventListener('copy', e => {e.clipboardData.setData('text/plain', 'author');e.preventDefault()})",
+            "author",
+            "unspecified",
+        ),
+        (
+            "x",
+            "control.addEventListener('cut', e => {e.clipboardData.setData('text/plain', 'author');e.preventDefault()})",
+            "author",
+            "unspecified",
+        ),
+        (
+            "c",
+            "control.addEventListener('copy', e => e.preventDefault())",
+            "seed",
+            "attachment",
+        ),
+    ] {
+        let mut vm = clipboard_input_vm("input");
+        vm.eval("navigator.clipboard.write([new ClipboardItem({'text/plain': 'seed'}, {presentationStyle: 'attachment'})])")
+            .unwrap();
+        vm.eval(listener).unwrap();
+        clipboard_key(&mut vm, key);
+        assert_eq!(
+            clipboard_input_state(&mut vm)["clipboard"],
+            text,
+            "{key}: {listener}"
+        );
+        vm.eval("navigator.clipboard.read().then(([item]) => globalThis.clipboardStyle = item.presentationStyle)")
+            .unwrap();
+        assert_eq!(
+            vm.eval("clipboardStyle").unwrap(),
+            style,
+            "{key}: {listener}"
+        );
+        if key == "v" {
+            assert_eq!(vm.eval("control.value").unwrap(), "AseedBC");
+        }
+    }
+}
+
+#[test]
 fn clipboard_shortcuts_copy_cut_and_paste_utf16_text_control_selections() {
     for tag in ["input", "textarea"] {
         let mut vm = clipboard_input_vm(tag);
