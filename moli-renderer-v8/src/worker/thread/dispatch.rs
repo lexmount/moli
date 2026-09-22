@@ -1006,7 +1006,9 @@ fn invoke_worker_listener<'s>(
         return Ok(());
     };
     let arguments = [event.into()];
-    let invocation = listener.invocation(target.into(), &arguments, Some(event));
+    let Some(invocation) = listener.invocation(target.into(), &arguments, Some(event)) else {
+        return Ok(());
+    };
     match CallbackInvoker::invoke(
         scope,
         "event listener",
