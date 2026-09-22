@@ -1481,16 +1481,11 @@ impl RendererOwnerLocalStore {
                 .expect("phase-one admission requires a resident continuation");
             pending.phase_one_restore_requirement()
         };
-        let streaming_input_ready = entry.pending_phase_one_navigation_has_ready_streaming_input();
         let page_turn_is_runnable = !bound::page_ready_descriptor_snapshot(entry, task_sources)
             .eligible
             .is_empty();
 
-        PhaseOneResidenceAdmission::after_stable_restore(
-            restore_requirement,
-            page_turn_is_runnable,
-            streaming_input_ready,
-        )
+        PhaseOneResidenceAdmission::after_stable_restore(restore_requirement, page_turn_is_runnable)
     }
 
     fn page_turn_readiness_after_restore(

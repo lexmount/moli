@@ -3,6 +3,40 @@
 The frozen comparison below covers `d743043ab7`. Historical results and failures
 remain unchanged; they do not validate later source changes.
 
+## Parser restore publication race, 2026-09-23
+
+The frozen `32b2658f3e` webfetch run exposed a renderer abort at Hupu. Raw
+body input is stored before its Networking continuation is published; a
+concurrent Page restore can observe that gap. The old assertion incorrectly
+required both stores to become visible atomically. Its producer and assertion
+files are byte-identical to pinned main, but the original main corpus did not
+abort. The failed candidate run is retained, not reclassified as site failure.
+
+A deterministic receiver-waker regression reproduces the exact assertion
+inside the real sender, without sleeps or production test hooks. Restore now
+uses the existing scheduler descriptor snapshot. The raw-input readiness
+parameter and five forwarding/read methods are deleted; the producer retains
+its subsequent wake. The regression checks the waiting decision, owner wake,
+runnable continuation and exact body. Two synthetic tests of the old assumption
+are replaced by this interleaving test.
+
+Root fmt and strict workspace Clippy pass, as do 258 focused tests and full
+nextest: 19,496 passed, 13 configured skips, no retries, run
+`47423a12-e8a8-4bb4-8f0f-6710f9862dfa`. The 90 retained expected panic records
+match the previous source; only the deleted invalid-invariant panic is absent.
+The ordinary release SHA256 is
+`466a05e58e7ca2aa379a4d2a20cd22b0ab396c0dc3e885e3c55e63826ffd7c08`.
+It passes 48 CDP groups / 536 scenarios, 165 WebDriver cases, shared-page
+lifecycle from all three frontends and both exact 32 × 4 MiB network probes.
+
+The first CDP run had one popup-event timeout at its unchanged five-second
+deadline. Three isolated repetitions pass on both parent and candidate; the
+subsequent complete CDP run passes without source changes. This bounded check
+does not establish the timeout's cause. All original failures, source hashes,
+control runs and release evidence are in `target/smoke/parser-input-restore.x7e3l47w/`.
+The complete comparison for this source is still pending; earlier source
+measurements below are not substituted for it.
+
 ## Deferred-load deletion, 2026-09-23
 
 The obsolete deferred main-document load family is removed as one change:

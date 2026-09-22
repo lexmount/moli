@@ -57,13 +57,13 @@ impl PhaseOneResidenceAdmission {
     /// Decide the one-shot wake needed after the stable residence is visible.
     ///
     /// `page_turn_is_runnable` is derived from the complete production
-    /// descriptor snapshot and does not dequeue work. Buffered streaming input
-    /// whose continuation is already resident must be scheduler-runnable here;
-    /// closed-input Page work may still be waiting for its producer.
+    /// descriptor snapshot and does not dequeue work. Input publication and
+    /// continuation publication are separate producer steps: buffered input may
+    /// be visible before its runnable descriptor. That producer still owns the
+    /// subsequent wake, so admission must not infer readiness from raw input.
     pub(in crate::runtime) fn after_stable_restore(
         requirement: PhaseOneRestoreRequirement,
         page_turn_is_runnable: bool,
-        streaming_input_ready: bool,
     ) -> Self {
         if requirement == PhaseOneRestoreRequirement::ParserBlockingSourceLoad {
             return Self::ParserBlockingSourceLoad;
@@ -71,10 +71,6 @@ impl PhaseOneResidenceAdmission {
         if page_turn_is_runnable {
             return Self::ReadyPageTurn;
         }
-        assert!(
-            !streaming_input_ready,
-            "buffered streaming input must retain a runnable production parser continuation"
-        );
         Self::WaitingForProducer
     }
 }
@@ -88,7 +84,6 @@ mod tests {
         let admission = PhaseOneResidenceAdmission::after_stable_restore(
             PhaseOneRestoreRequirement::PageWork,
             true,
-            false,
         );
 
         assert_eq!(admission, PhaseOneResidenceAdmission::ReadyPageTurn);
@@ -99,40 +94,15 @@ mod tests {
         let admission = PhaseOneResidenceAdmission::after_stable_restore(
             PhaseOneRestoreRequirement::Producer,
             true,
-            false,
         );
 
         assert_eq!(admission, PhaseOneResidenceAdmission::ReadyPageTurn);
-    }
-
-    #[test]
-    fn buffered_input_is_readmitted_through_its_networking_continuation() {
-        let admission = PhaseOneResidenceAdmission::after_stable_restore(
-            PhaseOneRestoreRequirement::Producer,
-            true,
-            true,
-        );
-
-        assert_eq!(admission, PhaseOneResidenceAdmission::ReadyPageTurn);
-    }
-
-    #[test]
-    #[should_panic(
-        expected = "buffered streaming input must retain a runnable production parser continuation"
-    )]
-    fn buffered_input_without_its_networking_continuation_breaks_the_wake_invariant() {
-        let _ = PhaseOneResidenceAdmission::after_stable_restore(
-            PhaseOneRestoreRequirement::Producer,
-            false,
-            true,
-        );
     }
 
     #[test]
     fn closed_input_page_producer_can_remain_pending_after_restore() {
         let admission = PhaseOneResidenceAdmission::after_stable_restore(
             PhaseOneRestoreRequirement::PageWork,
-            false,
             false,
         );
 

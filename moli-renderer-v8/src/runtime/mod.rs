@@ -672,10 +672,6 @@ impl PageVmPendingPhaseOneNavigation {
         self.residence.restore_requirement()
     }
 
-    pub(super) fn has_ready_streaming_input(&mut self) -> bool {
-        self.residence.has_ready_streaming_input()
-    }
-
     pub(super) fn attach_committed_response(&mut self) {
         self.metadata
             .attach_committed_response(self.residence.page_vm_mut());

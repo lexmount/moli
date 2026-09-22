@@ -85,10 +85,6 @@ impl StreamingDocumentInputSource {
         Self { rx }
     }
 
-    pub(super) fn has_ready_input(&mut self) -> bool {
-        !self.rx.is_empty()
-    }
-
     pub(super) fn try_next(&mut self) -> Result<Option<StreamingDocumentInputEvent>> {
         match self.rx.try_recv() {
             Ok(event) => Ok(Some(event)),
@@ -174,6 +170,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn body_input_can_be_visible_before_parser_continuation_publication() {
+        use crate::runtime::phase_one::{PhaseOneResidenceAdmission, PhaseOneRestoreRequirement};
+        use parking_lot::Mutex;
+        use std::{
+            sync::Arc,
+            task::{Context, Wake, Waker},
+        };
+
+        struct RestoreAtInputWake {
+            networking: Mutex<RendererPageNetworkingSource>,
+            admission: Mutex<Option<PhaseOneResidenceAdmission>>,
+        }
+        impl Wake for RestoreAtInputWake {
+            fn wake(self: Arc<Self>) {
+                // Tokio calls this after storing the body payload, while
+                // StreamingDocumentInputSender::send has not requested the
+                // parser continuation yet. Restore can observe this same gap.
+                let ready = self.networking.lock().has_ready_task();
+                *self.admission.lock() = Some(PhaseOneResidenceAdmission::after_stable_restore(
+                    PhaseOneRestoreRequirement::Producer,
+                    ready,
+                ));
+            }
+        }
+
+        let (networking, continuation, mut owner_wake) = continuation_fixture(97);
+        let restore = Arc::new(RestoreAtInputWake {
+            networking: Mutex::new(networking),
+            admission: Mutex::new(None),
+        });
+        let waker = Waker::from(restore.clone());
+        let (tx, rx) = mpsc::channel(STREAMING_DOCUMENT_INPUT_BUFFERED_EVENTS);
+        let sender = StreamingDocumentInputSender {
+            tx,
+            parser_continuation: continuation,
+        };
+        let mut source = StreamingDocumentInputSource { rx };
+        assert!(
+            source
+                .rx
+                .poll_recv(&mut Context::from_waker(&waker))
+                .is_pending()
+        );
+        assert!(
+            sender
+                .send(StreamingDocumentInputEvent::Chunks(vec![b"body".to_vec()]))
+                .await
+        );
+        assert_eq!(
+            *restore.admission.lock(),
+            Some(PhaseOneResidenceAdmission::WaitingForProducer)
+        );
+        owner_wake
+            .try_recv()
+            .expect("the subsequent continuation publication must wake the owner");
+        let (_, task) = restore
+            .networking
+            .lock()
+            .pop_front_task()
+            .expect("the parser continuation must remain runnable");
+        assert!(matches!(
+            task,
+            RendererPageNetworkingTask::MainParserContinuation(_)
+        ));
+        assert!(
+            matches!(source.try_next().unwrap(), Some(StreamingDocumentInputEvent::Chunks(chunks)) if chunks == [b"body".to_vec()])
+        );
+    }
+
+    #[tokio::test]
     async fn body_terminal_preserves_transport_error_and_context() {
         let (body_tx, completion_tx, _cancel_handle, raw_body) = pending_fetch_body();
         let (_networking, continuation, mut wake_rx) = continuation_fixture(96);
@@ -236,7 +302,7 @@ mod tests {
             chunk_wake.source_for_test(),
             crate::page_task_queue::RendererOwnerWakeSource::NetworkingTask
         );
-        assert!(source.has_ready_input());
+        assert!(!source.rx.is_empty());
         let (_, task) = networking
             .pop_front_task()
             .expect("body payload should queue one parser continuation");
