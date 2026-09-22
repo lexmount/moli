@@ -96,7 +96,7 @@ window.__loadedUrlReady = () => {
     __loadedUrlResults.push([mode,same,d === w.document,d.URL === expected,
       d.documentURI === expected,d.baseURI === expected,w.location.href === expected,
       w.history.state === state,w.history.length === length,
-      d.body.textContent]);
+      d.body && d.body.textContent]);
     d.close();
   }
 };
@@ -123,7 +123,7 @@ for (const mode of ['open','borrowed','write','writeln']) {
     vm.eval("__loadedUrlReady()").unwrap();
     assert_eq!(
         vm.eval("JSON.stringify(__loadedUrlResults)").unwrap(),
-        r#"[["open",true,true,true,true,true,true,true,true,""],["borrowed",true,true,true,true,true,true,true,true,""],["write",true,true,true,true,true,true,true,true,"replacement"],["writeln",true,true,true,true,true,true,true,true,"replacement\n"]]"#
+        r#"[["open",true,true,true,true,true,true,true,true,null],["borrowed",true,true,true,true,true,true,true,true,null],["write",true,true,true,true,true,true,true,true,"replacement"],["writeln",true,true,true,true,true,true,true,true,"replacement\n"]]"#
     );
     vm.eval("__loadedUrlPopups.forEach(([,w]) => w.close())")
         .unwrap();
