@@ -142,7 +142,8 @@ for file in [root / owner, *(root / 'moli-core/src/browser/owner').glob('*.rs')]
     if count:
         file.write_text(text.replace('.send(Box::new(move |browser| {', '.send(crate::browser::owner::BrowserLocalOperation::new(move |browser| {'))
         local_sends += count
-assert local_sends == 11, local_sends
+# Includes the native evaluation helper under cfg(test).
+assert local_sends == 12, local_sends
 
 commit = 'moli-core/src/browser/owner/navigation.rs'
 replace(commit, '        let commit = self\n', '        let commit_started = std::time::Instant::now();\n        let commit = self\n')

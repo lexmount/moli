@@ -1,4 +1,125 @@
-# Browser owner acceptance measurements, 2026-09-16
+# Browser owner acceptance measurements
+
+The fresh frozen comparison below supersedes earlier measurements for the
+current branch. Historical results and failures remain unchanged afterward.
+
+## Frozen comparison after rebase, 2026-09-23
+
+The measured candidate contains twenty cohesive commits on main
+`8e7be5c3fb144189335de3a61731f3e4717b6bcb`, ending at
+`30721b1a21f53eb0c0e1cf3b8d9ad09d16860a37`. All twenty patches, authors and
+messages survived the final rebase unchanged. The resulting source passed fmt,
+strict workspace Clippy and final nextest **19,530 passed / 13 configured skips**.
+
+| Release | Ordinary binary SHA-256 | Instrumented binary SHA-256 |
+| --- | --- | --- |
+| Main | `30f15ef58a873e0f80de36f027e002946841537747e6e1c969251bad6724cf5d` | `19de5b6b7ed64455f02f7c7e0db81e0b70f05944e5a3d7a598cf98eea12347ab` |
+| Candidate | `0ba8bc2f71df4e593532a0b00cb5d012005f2f212200aa9d59e2b3f8699cc8e2` | `5288bfb61eee02fde41a831ac21af87fad471f1b525b80b2b53761f6a871fe6e` |
+
+Compiler, release profile, link options, dependency versions/checksums and V8
+archive bytes match. Cargo.lock differs only in workspace dependency ownership.
+Build targets are isolated and use default Cargo parallelism. Instrumentation
+lives in disposable checkouts; ordinary binaries contain no measurement code.
+The instrumenter now recognizes the twelfth local enqueue site introduced by
+main's test-support native evaluation helper; existing enqueue sites are unchanged.
+
+Fresh candidate release validation passes **48 CDP groups / 536 scenarios**,
+**165 WebDriver cases**, and shared-page lifecycle probes with each of CDP,
+BiDi and Classic initiating closure. The latter preserve one physical document
+across disconnect/reconnect and check all frontends' teardown semantics.
+
+Full Lexbench at harness `3f1580a20922fc3f339b5fc279d9bbdb06d5d194` ran all
+**1,928 tasks**, seed 20260922, k=1, jobs=8, with the same task IDs and deadlines.
+Both revisions have exactly the same per-task statuses: **1,555 passed,
+371 failed, 1 unsupported and 1 driver error**. The driver error is the same
+download-checksum timeout on both. Neither complete run has a crash. This is
+an independent Moli comparison, not a full-roster leaderboard. Both host reports
+flag swap activity, so their 654-second durations do not certify small timing
+differences.
+
+Two interrupted setup attempts remain preserved separately: an inherited HTTP
+proxy broke loopback discovery, then adapter `python3` selected the system
+interpreter. The complete runs add loopback NO_PROXY and activate the existing
+pinned harness venv. No tasks, assertions, dependencies or deadlines changed.
+Global preflight still reports a missing ChromeDriver; Moli's selected Selenium
+adapter uses native WebDriver and does not require that bridge. All selected
+driver/toolchain checks passed.
+
+Full webfetch ran all **259 addresses × four modes** on both ordinary pins,
+one attempt, 30-second timeout and parallelism 20. Both runners exit 1 for
+failed sites. Counts below include every raw row, including the runner's
+excluded failures (79 addresses on main, 80 on candidate):
+
+| Mode | Main passes / 259 | Candidate passes / 259 |
+| --- | ---: | ---: |
+| moli | 87 | 85 |
+| moli-cdp | 84 | 82 |
+| moli-full | 85 | 85 |
+| moli-full-cdp | 82 | 81 |
+
+Fifteen pass/fail changes cover seven addresses. They include CAPTCHA/403,
+network-error and timeout outcomes; totals alone cannot attribute these to the
+refactor. Neither revision's captured failure stderr contains a Rust panic.
+Slack passes all four modes on both revisions in this complete run. The raw
+rows and exact differences are preserved in `webfetch-comparison.json`.
+
+Three balanced local rounds use the unchanged four-page workload: 8 warmup and
+100 measured navigations, 256 history reads, then Worker log bursts of
+512/1,536/2,048/4,096/4,096 eight-KiB records. All twelve ordinary/instrumented
+probes recorded zero swap-in/out. Navigation prefixes completed on every run:
+
+| Release | Navigation-command medians (ms) | Frame-event medians (ms) |
+| --- | --- | --- |
+| Main | 1.741 / 1.672 / 1.516 | 9.610 / 9.932 / 9.504 |
+| Candidate | 2.694 / 3.062 / 3.055 | 9.681 / 10.465 / 9.457 |
+
+The command-latency regression remains open. Candidate instrumented command
+medians are 3.443/2.750/3.289 ms; observer overhead is variable. Those runs match
+all 108 native commits with their exact projection sequences. They record
+18,717–18,884 external owner operations, median queue wait 5.1–8.0 microseconds,
+observed waiting depth at most 1, commit medians 9.7–15.0 microseconds and first
+projection-lag medians 0.66–1.29 ms. Main has no equivalent independent owner
+queue/fence. Queue statistics include instrumentation, warmup and setup, and
+sampled depth is not an unsampled high-water guarantee.
+
+A separate operation-count release (`5a1c27b839beb5329c01aea453660d8144a7c39cb241b2ce4104e82310d6dc9b`)
+passes the same workload and counts **18,689** synchronous calls before Worker
+output. A diagnostic control with 12 rather than 108 total navigations keeps
+the same 256 history reads and output workload, passes, and counts **3,345**.
+The additional 96 navigations account for 15,344 calls, including 2,400 selected
+WebContents reads, 2,190 navigation snapshots, 1,536 commit snapshots and 1,419
+document-handle reads. This identifies repeated native reads for follow-up;
+it does not assign the measured latency gap to any one call site. The full
+per-operation comparison is `operation-count-comparison.json`.
+
+All six candidate probes pass the full burst workload with exactly 312 ordered
+tail records and 256 subsequent live records. Estimated retained Worker journal
+bytes stay near 10 MiB from 4,096 through 12,288 records and become zero on owner
+close. Ordinary candidate process PSS at 12,288 records is 135.79–148.88 MiB;
+after Worker GC it is 118.69–125.08 MiB, and after owner close 69.52–70.35 MiB.
+Process residency is not constant merely because the journal is bounded.
+
+Main ordinary probes fail **3/3** during Runtime.enable history replay, after
+their measured navigations and pre-replay GC snapshot. Its instrumented probes
+pass **3/3** and replay all 12,288 retained records. That changed outcome is an
+observer effect; it cannot replace the ordinary failures. Allocation traces
+count successful Rust allocations/reallocations, exclude C++/V8 and measure
+cumulative requested bytes, not live memory.
+
+For example, the first instrumented round's final two 4,096-record batches
+request 683.35/899.41 MiB on main and 608.63/600.93 MiB on candidate. Enabling
+history replay requests 1,442.06/31.80 MiB respectively, but replays different
+amounts of retained history (12,288 versus 312 records); this is a retention
+policy comparison, not equivalent replay throughput.
+
+Authoritative raw evidence, including interrupted attempts and failures, is in
+`target/smoke/final-acceptance-8e7be5-675ixprn/`: `pins.json`,
+`acceptance-manifest.json`, `local-summary.json`, `lexbench-comparison.json`,
+per-probe wire/server logs and saved instrumentation patches. The preceding
+root checks and history verification are in `target/smoke/rebase-refresh-y1ce43fu/`.
+These are local artifacts; this report preserves their compact conclusions.
+
+## Historical measurements beginning 2026-09-16
 
 Acceptance remains open. The original frozen candidate below exposed a
 ServiceWorker fallback panic, growing output history and slower local navigation
