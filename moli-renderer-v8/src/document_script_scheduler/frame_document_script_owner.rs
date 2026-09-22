@@ -107,10 +107,10 @@ mod tests {
     use crate::document_runtime::DomHandle;
     use crate::document_script_scheduler::DocumentScriptExecutionOutcome;
     use crate::frame_owner_model::{
-        DocumentId, FrameDocumentDynamicClassicScriptExecutionAction,
+        DocumentId, FrameDocumentExternalClassicScriptExecutionAction,
         FrameDocumentScriptExecutionWork, FrameDocumentTaskOwner, FrameId, FrameRealmId,
         FrameSchedulerLaneId, FrameScriptJob, FrameScriptJobKind, FrameScriptSource, LocalWindowId,
-        PendingChildDynamicDocumentScript,
+        PendingChildExternalClassicDocumentScript,
     };
     use moli_fetch::RequestCredentialsMode;
 
@@ -171,7 +171,6 @@ mod tests {
             work: FrameDocumentScriptExecutionWork,
         ) -> Self::ExecuteFuture<'_> {
             self.events.push(match work {
-                FrameDocumentScriptExecutionWork::DynamicClassic(_) => "dynamic-classic",
                 FrameDocumentScriptExecutionWork::ExternalClassic(_) => "external-classic",
                 FrameDocumentScriptExecutionWork::JavascriptUrl(_) => "javascript-url",
                 FrameDocumentScriptExecutionWork::ModuleScript(_) => "module-script",
@@ -208,7 +207,7 @@ mod tests {
         }
     }
 
-    fn dynamic_classic_work() -> FrameDocumentScriptExecutionWork {
+    fn external_classic_work() -> FrameDocumentScriptExecutionWork {
         let script_url = url::Url::parse("https://frame-document-script-owner.test/dynamic.js")
             .expect("dynamic script URL should parse");
         let owner = FrameDocumentTaskOwner::new(
@@ -216,21 +215,23 @@ mod tests {
             LocalWindowId(10),
             DocumentId(20),
         );
-        let pending = PendingChildDynamicDocumentScript {
+        let pending = PendingChildExternalClassicDocumentScript {
             child_handle: DomHandle::new(1),
             owner,
             realm_id: Some(FrameRealmId(30)),
             script_handle: DomHandle::new(40),
-            source: "globalThis.__dynamic = true;".to_owned(),
-            script_nonce: None,
-            script_integrity: None,
+            load_delay:
+                crate::frame_owner_model::ChildDocumentAsyncClassicScriptLoadDelay::AlreadyUnblocked,
+            source_result: Ok("globalThis.__dynamic = true;".to_owned()),
+            script_url: script_url.clone(),
+            script_base_url: script_url.clone(),
         };
         let job = FrameScriptJob {
             frame_id: FrameId("dynamic-frame".to_owned()),
             local_window_id: owner.local_window_id,
             document_id: owner.document_id,
             current_script: Some(DomHandle::new(40)),
-            kind: FrameScriptJobKind::DynamicClassic,
+            kind: FrameScriptJobKind::ExternalClassic,
             source: FrameScriptSource::SourceText("globalThis.__dynamic = true;".to_owned()),
             script_url: script_url.clone(),
             base_url: script_url,
@@ -239,10 +240,12 @@ mod tests {
             credentials_mode: RequestCredentialsMode::SameOrigin,
             referrer_policy: None,
         };
-        FrameDocumentScriptExecutionWork::dynamic_classic(
-            FrameDocumentDynamicClassicScriptExecutionAction::new(
+        FrameDocumentScriptExecutionWork::external_classic(
+            FrameDocumentExternalClassicScriptExecutionAction::new(
                 pending.execution_target(FrameRealmId(30)),
-                job,
+                crate::frame_owner_model::FrameDocumentExternalClassicScriptExecution::ScriptJob(
+                    Box::new(job),
+                ),
             ),
         )
     }
@@ -250,7 +253,7 @@ mod tests {
     #[tokio::test]
     async fn started_frame_document_script_execution_runs_work_and_reports_followup() {
         let hooks = FakeFrameDocumentScriptHooks {
-            prepared_work: Some(dynamic_classic_work()),
+            prepared_work: Some(external_classic_work()),
             ..Default::default()
         };
         let mut owner = FrameDocumentScriptExecutionOwner::new(hooks);
@@ -261,7 +264,7 @@ mod tests {
             .expect("frame document script owner should run ready work");
 
         assert_eq!(outcome, DocumentScriptExecutionOutcome::Progressed);
-        assert_eq!(owner.hooks.events, ["prepare", "dynamic-classic"]);
+        assert_eq!(owner.hooks.events, ["prepare", "external-classic"]);
         assert_eq!(
             owner.hooks.execution_followups,
             [FakeExecutionFollowup { attempted: true }]
@@ -294,7 +297,7 @@ mod tests {
     #[tokio::test]
     async fn frame_document_script_execution_error_stops_before_outcome_mapping() {
         let hooks = FakeFrameDocumentScriptHooks {
-            prepared_work: Some(dynamic_classic_work()),
+            prepared_work: Some(external_classic_work()),
             fail_execution: true,
             ..Default::default()
         };
@@ -306,7 +309,7 @@ mod tests {
             .expect_err("frame document script owner should propagate execution failures");
 
         assert_eq!(error.to_string(), "frame document script execution failed");
-        assert_eq!(owner.hooks.events, ["prepare", "dynamic-classic"]);
+        assert_eq!(owner.hooks.events, ["prepare", "external-classic"]);
         assert!(owner.hooks.execution_followups.is_empty());
         assert!(owner.hooks.dropped_followups.is_empty());
     }

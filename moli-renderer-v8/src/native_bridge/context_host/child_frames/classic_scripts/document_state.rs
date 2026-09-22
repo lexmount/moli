@@ -2,7 +2,9 @@ use crate::document_runtime::DomHandle;
 
 #[derive(Debug, Clone, Default)]
 pub(in crate::native_bridge::context_host) struct ChildClassicScriptDocumentState {
-    current_script_stack: Vec<DomHandle>,
+    // Capture currentScript at execution entry. Adoption or a move into a
+    // shadow tree during execution must not change the active value.
+    current_script_stack: Vec<Option<DomHandle>>,
     // Counts nested synchronous parser-blocking execution scopes for this
     // exact Document, including load/error completion dispatched before parser
     // resume. Parser-inserted ownership, deferred-script execution, DOM
@@ -40,11 +42,11 @@ impl ChildClassicScriptDocumentState {
         self.parser_script_nesting_level > 0
     }
 
-    pub(super) fn push_current_script(&mut self, script_handle: DomHandle) {
+    pub(super) fn push_current_script(&mut self, script_handle: Option<DomHandle>) {
         self.current_script_stack.push(script_handle);
     }
 
-    pub(super) fn pop_current_script(&mut self, script_handle: DomHandle) {
+    pub(super) fn pop_current_script(&mut self, script_handle: Option<DomHandle>) {
         if self.current_script_stack.last().copied() == Some(script_handle) {
             self.current_script_stack.pop();
             return;
@@ -57,6 +59,6 @@ impl ChildClassicScriptDocumentState {
     }
 
     pub(super) fn current_script(&self) -> Option<DomHandle> {
-        self.current_script_stack.last().copied()
+        self.current_script_stack.last().copied().flatten()
     }
 }

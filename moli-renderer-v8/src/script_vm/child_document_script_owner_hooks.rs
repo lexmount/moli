@@ -14,7 +14,7 @@ use crate::{
         FrameDocumentClassicScriptReadyTarget, FrameDocumentClassicScriptSourceFailureTarget,
         FrameDocumentClassicSourceFailureReportApplication, FrameDocumentJavascriptUrlCompletion,
         FrameDocumentJavascriptUrlPostExecutionApplication, FrameDocumentScriptElementEventKind,
-        FrameDocumentTaskOwner, FrameRealmId, FrameScriptJob, PendingChildDynamicDocumentScript,
+        FrameDocumentTaskOwner, FrameRealmId, FrameScriptJob,
         PendingChildExternalClassicDocumentScript, PendingChildJavascriptUrlDocumentScript,
     },
     native_bridge::JsContextHost,
@@ -257,17 +257,6 @@ impl<'vm> ChildDocumentScriptOwnerHooks<'vm> {
     ) {
         ChildDocumentScriptSchedulerOwner::new(self.vm)
             .notify_parser_classic_next_owner_action(work)
-    }
-
-    pub(in crate::script_vm) fn child_dynamic_classic_script_execution_action_for_owner(
-        &mut self,
-        work: &PendingChildDynamicDocumentScript,
-        realm_id: FrameRealmId,
-    ) -> Option<crate::frame_owner_model::FrameDocumentDynamicClassicScriptExecutionAction> {
-        self.vm
-            ._context_host
-            .borrow()
-            .child_dynamic_classic_script_execution_action_for_owner(work, realm_id)
     }
 
     pub(in crate::script_vm) fn child_external_classic_script_execution_action_for_owner(

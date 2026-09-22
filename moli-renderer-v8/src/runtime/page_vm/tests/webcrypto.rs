@@ -7,7 +7,7 @@ use crate::page_task_queue::{
 };
 
 #[tokio::test(flavor = "current_thread")]
-async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_on_detach() {
+async fn child_inline_script_registers_webcrypto_to_child_window_and_retires_on_detach() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
         let loader = page_vm.request_client.clone();
@@ -51,13 +51,13 @@ async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_o
         )
         .await;
         assert!(
-            page_vm
+            !page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::ChildDocumentScriptReady,
                     &loader,
                 )
                 .await?,
-            "child WebCrypto registration must execute from the complete selected script task"
+            "child WebCrypto registration must already have run synchronously"
         );
 
         let child_handle = page_vm
@@ -84,7 +84,7 @@ async fn selected_child_script_registers_webcrypto_to_child_window_and_retires_o
         Ok::<_, anyhow::Error>(())
     })
     .await
-    .expect("child WebCrypto owner should be tested through a complete selected script task");
+    .expect("child WebCrypto ownership should survive deferred realm registration");
 }
 
 #[test]

@@ -10755,12 +10755,11 @@ async fn page_vm_realm_materialization_created_ready_work_enters_document_script
 }
 
 #[tokio::test]
-async fn child_dynamic_inline_script_runs_on_document_script_ready_source() {
-    let (events_before_script_ready, script_ready_source, events_after_script_ready, next_source) =
-        run_page_vm_async_test(async move {
-            let mut page_vm = test_page_vm();
-            page_vm.vm_mut().eval(
-                r#"
+async fn child_dynamic_inline_script_runs_synchronously_without_document_script_ready_work() {
+    let (immediate_events, settled_events, next_source) = run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm();
+        page_vm.vm_mut().eval(
+            r#"
 (() => {
   globalThis.__childDynamicReadySourceEvents = [];
   const root = document.documentElement || document.appendChild(document.createElement("html"));
@@ -10775,54 +10774,37 @@ async fn child_dynamic_inline_script_runs_on_document_script_ready_source() {
     );
   `;
   frame.contentDocument.body.appendChild(script);
+  __childDynamicReadySourceEvents.push("returned");
 })()
 "#,
-            )?;
-
-            let events_before_script_ready = page_vm
-                .vm_mut()
-                .eval("__childDynamicReadySourceEvents.join('|')")?;
-            run_expected_child_realm_materialization_for_wait(
-                &mut page_vm,
-                "dynamic child inline-script realm",
-            )
+        )?;
+        let immediate_events = page_vm
+            .vm_mut()
+            .eval("__childDynamicReadySourceEvents.join('|')")?;
+        run_expected_child_realm_materialization_for_wait(
+            &mut page_vm,
+            "dynamic child inline-script realm",
+        )
+        .await;
+        let next_source = page_vm
+            .run_next_child_frame_task_source_for_semantic_test()
             .await;
-            let script_ready_source = page_vm
-                .run_next_child_frame_task_source_for_semantic_test()
-                .await;
-            let events_after_script_ready = page_vm
-                .vm_mut()
-                .eval("__childDynamicReadySourceEvents.join('|')")?;
-            let next_source = page_vm
-                .run_next_child_frame_task_source_for_semantic_test()
-                .await;
-
-            Ok::<_, anyhow::Error>((
-                events_before_script_ready,
-                script_ready_source,
-                events_after_script_ready,
-                next_source,
-            ))
-        })
-        .await
-        .expect("child dynamic inline script source test should run");
+        let settled_events = page_vm
+            .vm_mut()
+            .eval("__childDynamicReadySourceEvents.join('|')")?;
+        Ok::<_, anyhow::Error>((immediate_events, settled_events, next_source))
+    })
+    .await
+    .expect("child dynamic inline script source test should run");
 
     assert_eq!(
-        events_before_script_ready, "frame-load",
-        "the initial about:blank load must dispatch synchronously when the frame is connected"
+        immediate_events, "frame-load|dynamic:script|returned",
+        "both initial about:blank load and dynamic inline execution are synchronous"
     );
-    assert_eq!(
-        script_ready_source,
-        Some(ChildFrameSemanticTurnKind::DocumentScriptReady),
-        "dynamic child inline script should run from the document-script ready source"
-    );
-    assert_eq!(
-        events_after_script_ready, "frame-load|dynamic:script",
-        "DocumentScriptReady should execute the dynamic child script after the synchronous initial load"
-    );
+    assert_eq!(settled_events, immediate_events);
     assert_eq!(
         next_source, None,
-        "synchronous initial about:blank delivery must leave no HostLoad source"
+        "inline execution must leave no DocumentScriptReady or HostLoad task"
     );
 }
 
