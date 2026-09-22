@@ -1,0 +1,427 @@
+{
+  "schema": "postsave-readiness-local-controls/1",
+  "scope": "Real HTTP redirect/deferred parsing and Chrome/layout Moli. Notification markup is synthetic and selector comes only from original successful main text, not a claimed Magento CSS class. No business save or retry.",
+  "selector": "main:has-text(\"You saved the product.\")",
+  "document_predicate_sha256": "cb215f3179b037b3819ca72f1c899b3f6ba0e6cfec202d49608371d119c941bd",
+  "script_sha256": "076dca23ec1973a33091c98b9f5caa19970062076fc594c626523107ca5e3383",
+  "layout_build": {
+    "source_commit": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+    "base_commit": "2e9c28529fb45a22d01b1888d1e0d314cd9dc068",
+    "publication_branch": "codex/pr640-layout-final",
+    "replaces_pr_url": "https://github.com/lexmount/moli/pull/726",
+    "group": "layout",
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "--release",
+      "-p",
+      "moli"
+    ],
+    "sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+    "version": "moli 1.1.9",
+    "build_env": {
+      "CARGO_INCREMENTAL": "0",
+      "CARGO_BUILD_JOBS": "2"
+    },
+    "frozen_at_unix": 1790054983.660506,
+    "full_rust_gates": "PR CI; not claimed as locally repeated"
+  },
+  "business_post_count": 0,
+  "passed": 16,
+  "total": 16,
+  "results": [
+    {
+      "engine": "chromium",
+      "scenario": "delayed-headers",
+      "expected_ready": true,
+      "passed": true,
+      "initial": {
+        "path": "/initial/delayed-headers",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/delayed-headers",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 223
+      },
+      "error": null,
+      "final": {
+        "path": "/saved/delayed-headers",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "redirect",
+      "expected_ready": true,
+      "passed": true,
+      "initial": {
+        "path": "/initial/redirect",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/redirect",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 225
+      },
+      "error": null,
+      "final": {
+        "path": "/saved/redirect",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "marker-before-dcl",
+      "expected_ready": true,
+      "passed": true,
+      "initial": {
+        "path": "/initial/marker-before-dcl",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/marker-before-dcl",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 218
+      },
+      "error": null,
+      "final": {
+        "path": "/saved/marker-before-dcl",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "never-navigates",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/never-navigates",
+        "main": true
+      },
+      "at_marker": null,
+      "events": [],
+      "result": null,
+      "error": "Page.wait_for_selector: Timeout 850ms exceeded.",
+      "final": {
+        "path": "/initial/never-navigates",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "missing-marker",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/missing-marker",
+        "main": true
+      },
+      "at_marker": null,
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": null,
+      "error": "Page.wait_for_selector: Timeout 850ms exceeded.",
+      "final": {
+        "path": "/saved/missing-marker",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "wrong-target",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/wrong-target",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/wrong/wrong-target",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit"
+      ],
+      "result": null,
+      "error": "Page.evaluate: Error: Wrong target document",
+      "final": {
+        "path": "/wrong/wrong-target",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "stale-old-marker",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/stale-old-marker",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/initial/stale-old-marker",
+        "readyState": "complete",
+        "initialized": false
+      },
+      "events": [],
+      "result": null,
+      "error": "Page.evaluate: Error: Wrong target document",
+      "final": {
+        "path": "/initial/stale-old-marker",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "chromium",
+      "scenario": "lifecycle-timeout",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/lifecycle-timeout",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/lifecycle-timeout",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit"
+      ],
+      "result": null,
+      "error": "Page.evaluate: Error: Target document readiness timed out",
+      "final": {
+        "path": "/saved/lifecycle-timeout",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "delayed-headers",
+      "expected_ready": true,
+      "passed": true,
+      "initial": {
+        "path": "/initial/delayed-headers",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/delayed-headers",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 195
+      },
+      "error": null,
+      "final": {
+        "path": "/saved/delayed-headers",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "redirect",
+      "expected_ready": true,
+      "passed": true,
+      "initial": {
+        "path": "/initial/redirect",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/redirect",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 220
+      },
+      "error": null,
+      "final": {
+        "path": "/saved/redirect",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "marker-before-dcl",
+      "expected_ready": true,
+      "passed": true,
+      "initial": {
+        "path": "/initial/marker-before-dcl",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/marker-before-dcl",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": {
+        "ready": true,
+        "document_lifecycle": "observed DOMContentLoaded",
+        "wait_ms": 215
+      },
+      "error": null,
+      "final": {
+        "path": "/saved/marker-before-dcl",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "never-navigates",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/never-navigates",
+        "main": true
+      },
+      "at_marker": null,
+      "events": [],
+      "result": null,
+      "error": "Page.wait_for_selector: Timeout 850ms exceeded.",
+      "final": {
+        "path": "/initial/never-navigates",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "missing-marker",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/missing-marker",
+        "main": true
+      },
+      "at_marker": null,
+      "events": [
+        "commit",
+        "DCL"
+      ],
+      "result": null,
+      "error": "Page.wait_for_selector: Timeout 850ms exceeded.",
+      "final": {
+        "path": "/saved/missing-marker",
+        "initialized": true
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "wrong-target",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/wrong-target",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/wrong/wrong-target",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit"
+      ],
+      "result": null,
+      "error": "Page.evaluate: Error: Wrong target document",
+      "final": {
+        "path": "/wrong/wrong-target",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "stale-old-marker",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/stale-old-marker",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/initial/stale-old-marker",
+        "readyState": "complete",
+        "initialized": false
+      },
+      "events": [],
+      "result": null,
+      "error": "Page.evaluate: Error: Wrong target document",
+      "final": {
+        "path": "/initial/stale-old-marker",
+        "initialized": false
+      }
+    },
+    {
+      "engine": "layout-b0f237b0",
+      "scenario": "lifecycle-timeout",
+      "expected_ready": false,
+      "passed": true,
+      "initial": {
+        "path": "/initial/lifecycle-timeout",
+        "main": true
+      },
+      "at_marker": {
+        "path": "/saved/lifecycle-timeout",
+        "readyState": "interactive",
+        "initialized": false
+      },
+      "events": [
+        "commit"
+      ],
+      "result": null,
+      "error": "Page.evaluate: Error: Target document readiness timed out",
+      "final": {
+        "path": "/saved/lifecycle-timeout",
+        "initialized": false
+      }
+    }
+  ]
+}

@@ -21,7 +21,7 @@ Review：正常日志是否保留？测试是否仍验证真实请求、几何�
 HEAD：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`  
 直接 base：`2793b2407fc7805afcb531e94fc02da4ac7bf33d`（main）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 5 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
 ## [735 · 几何与按需布局](https://github.com/lexmount/moli/pull/735)
 
@@ -36,7 +36,7 @@ Review：DOM、样式、字体和视口是否完整使快照失效？干净读�
 HEAD：`b0f237b0955784c12a22bdda3996f52a8610f4cd`  
 直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 2 项未完成、0 项失败。
 
 ## [736 · 输入与默认激活](https://github.com/lexmount/moli/pull/736)
 
@@ -51,7 +51,7 @@ Review：preventDefault、遮挡和跨 frame 是否保持语义？是否只处�
 HEAD：`fa1c36ef558cde8751883bff174dac7417395220`  
 直接 base：`b0f237b0955784c12a22bdda3996f52a8610f4cd`（codex/pr640-layout-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 5 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 4 项未完成、0 项失败。
 
 ## [737 · 网络观察与响应证据](https://github.com/lexmount/moli/pull/737)
 
@@ -96,7 +96,7 @@ Review：改名、归属变更与跨文档收养是否立即生效？getter、�
 HEAD：`7919ed092465dd2e8c288201bde5aa7d7f71ad2c`  
 直接 base：`2e9c28529fb45a22d01b1888d1e0d314cd9dc068`（codex/pr640-reliability-final）
 
-Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 2 项未完成、0 项失败。
+Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 0 项未完成、0 项失败。
 
 ## [740 · 文本响应解析](https://github.com/lexmount/moli/pull/740)
 
@@ -171,6 +171,12 @@ Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 
 
 内容覆盖不等于35题全部通过，原合同失败结果保留。
 
+## 独立验收总表
+
+35 个历史任务均有对应 PR 自身二进制的真实通过证据：布局27题为v3轮26题与v4单独547，输入4/4、网络3/3、文本1/1。布局不是单轮27/27；原始及实验失败记录仍独立保留。
+
+[35题逐项来源总表](evidence/final-declared-acceptance.json)
+
 ## 合入与版本证据
 
 按 734 → 735 → 736 → 737 → 738 → 739 → 740 合入。父 PR 线性合入后，仅重放子 PR 自身直接 base → HEAD 增量到最新 main，再复核 diff、提交身份与 CI。保留原始 PR、分支和已测试提交证据；旧二进制结果不能直接换成新 HEAD 标签。
@@ -193,7 +199,7 @@ Format：SUCCESS；Clippy：SUCCESS；Nextest：SUCCESS。全部检查中仍有 
 
 ## 验收合同
 
-最终验收采用原执行器已有的只读就绪前提；原动作、评分与二进制保持不变。该合同的布局验收尚未完成，原合同 26/27 保留。 已放弃的全局等待实验：20/27 通过；其新增 5 秒等待预算造成额外超时，不用于最终验收。原始失败记录保留。 已放弃实验的完整审计
+布局27题各有同一 b0f237b0 二进制的真实通过证据：v3完整运行26题通过、547保存后读取失败；仅547新增只读前提并在v4全新单题运行通过。其余26题的输入与二进制未变。这是26+1逐题证据，不能称为v4单轮27/27。原合同26/27和全局等待实验20/27均保留。 27题逐项来源审计 v3完整轮26/27失败记录
 
 组合版本 ed844e7c 的 localhost HTTP + CDP 场景 3/3 通过：文本 DOM 与原始网络正文、停止后新导航、解析器退役后继续捕获响应。该结果属于七分区组合，不能代替各 PR 或 35 题成绩。 组合场景证据
 

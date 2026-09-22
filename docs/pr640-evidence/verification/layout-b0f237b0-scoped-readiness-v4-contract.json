@@ -1,0 +1,102 @@
+{
+  "schema": "layout-task-specific-readiness-followup/4",
+  "method_id": "split640-layout-b0f237b0-scoped-readiness-v4-547-only",
+  "source_commit": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+  "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+  "layout_scope_ids": [
+    29,
+    66,
+    108,
+    156,
+    163,
+    196,
+    314,
+    349,
+    374,
+    389,
+    399,
+    404,
+    415,
+    418,
+    441,
+    448,
+    506,
+    547,
+    576,
+    585,
+    590,
+    620,
+    640,
+    645,
+    658,
+    666,
+    714
+  ],
+  "execution_task_ids": [
+    547
+  ],
+  "reused_task_ids": [
+    29,
+    66,
+    108,
+    156,
+    163,
+    196,
+    314,
+    349,
+    374,
+    389,
+    399,
+    404,
+    415,
+    418,
+    441,
+    448,
+    506,
+    576,
+    585,
+    590,
+    620,
+    640,
+    645,
+    658,
+    666,
+    714
+  ],
+  "v3_pins": {
+    "manifest": {
+      "path": "/tmp/moli-split640/layout-b0f237b0-scoped-readiness-v3-inputs.json",
+      "sha256": "5f0a77b532b1ff83bdc373258648826e5b6bafa4e9f0a6becbe07b609b8afd1a"
+    },
+    "contract": {
+      "path": "/tmp/moli-split640/layout-b0f237b0-scoped-readiness-v3-contract.json",
+      "sha256": "b320699c11a3a9e204e8a7254166d6d9eee6f4e8b058c44af26f9d339df3853d"
+    },
+    "qualification": {
+      "path": "/tmp/moli-split640/layout-b0f237b0-scoped-readiness-v3-qualification.json",
+      "sha256": "808f861a729424147363fb933c146220794a83d4a924948786533220f9a447cb"
+    },
+    "receipt": {
+      "path": "/tmp/moli-split640/layout-b0f237b0-scoped-readiness-v3-targeted/receipt.json",
+      "sha256": "bebb2889101d92b4685ddf118e9c682a6a92e5155037457abe0191443188a3d8"
+    },
+    "audit": {
+      "path": "/tmp/moli-split640/layout-b0f237b0-scoped-readiness-v3-public-audit.json",
+      "sha256": "5cc8f6851aba47a48cb29b89cca8db59aca66ea255509a587c52ac8af50a6f0e"
+    },
+    "auditor": {
+      "path": "/tmp/moli-split640/audit-layout-readiness-v3-acceptance.py",
+      "sha256": "72473e8e237a58d49e6af6c32aaa5405c7629f0ebae865e9a0a69ec95ea90fcc"
+    }
+  },
+  "addition_binding": {
+    "path": "/tmp/moli-split640/layout-readiness-v4-547-additions.json",
+    "sha256": "6de8869faeaa6fc7e60927546e077b788b5e3ea8d0a3d09ece7d24e27f8836d6"
+  },
+  "manifest_sha256": "7d81cd4ca45bc746af827be97ecb5dfd9211fbd0be06f86df2ed085cc043d85e",
+  "allowed_changes": [
+    "method_id",
+    "tasks[task_id=547].readiness.append(before_action=17)"
+  ],
+  "policy": "26 task passes from complete v3; task547 from separately reset v4 follow-up. Never v4 27/27 single run."
+}

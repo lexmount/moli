@@ -1,0 +1,62 @@
+{
+  "schema": "layout-added-readiness-qualification/4",
+  "status": "qualified_read_only_actual_and_local_controls",
+  "source_commit": "b0f237b0955784c12a22bdda3996f52a8610f4cd",
+  "binary_sha256": "9c5543148e78d49676230e79b1baed7da31ea7655a843df3b07515f13f241f92",
+  "manifest_sha256": "7d81cd4ca45bc746af827be97ecb5dfd9211fbd0be06f86df2ed085cc043d85e",
+  "contract_sha256": "7c89f6abf3b768f6f29faf259d5637492633efc0dd14b76a47ff6ac43035e129",
+  "qualification_scope": "Read-only premise qualification from actual initial-page negatives, exact redirect target GET observations, existing real successful step17 text, and 16 localhost navigation/lifecycle controls. The new combined guards have not yet passed a fresh website business Save; only the upcoming547 run can establish that.",
+  "actual_new_business_acceptance": false,
+  "local_passed": 16,
+  "local_total": 16,
+  "evidence_bindings": [
+    {
+      "path": "/tmp/moli-split640/layout-readiness-document.js",
+      "sha256": "cb215f3179b037b3819ca72f1c899b3f6ba0e6cfec202d49608371d119c941bd"
+    },
+    {
+      "path": "/tmp/moli-split640/layout-readiness-postsave-local-test.py",
+      "sha256": "076dca23ec1973a33091c98b9f5caa19970062076fc594c626523107ca5e3383"
+    },
+    {
+      "path": "/tmp/moli-split640/layout-readiness-postsave-local-results.json",
+      "sha256": "55be9295f81d15bd45be371afec27a7fba534575a8813fa571b7f72a734d25e9"
+    },
+    {
+      "path": "/tmp/moli-split640/case547-initial-no-success-chromium.json",
+      "sha256": "1523584001747fe217e53b28d739d08437ee59c394a292c2e47681da58b18cc3"
+    },
+    {
+      "path": "/tmp/moli-split640/case547-initial-no-success-moli.json",
+      "sha256": "c09b79a8a6ee72d7a56527833530f06993e0d7eb59b8647954fa47adcc231e37"
+    },
+    {
+      "path": "/tmp/moli-split640/case547-postsave-chromium.json",
+      "sha256": "4aa83e8a0a1abee1f4d9f0a55771a1fe5fc1ef8ea32208aeb0b2a8e8af14edc7"
+    },
+    {
+      "path": "/tmp/moli-split640/case547-postsave-moli.json",
+      "sha256": "a52de43116ea3aaf7b080674d1c71f810380b6038fbb5bbb0cb3567603e3fa75"
+    },
+    {
+      "path": "/tmp/moli-split640/case547-save-location-comparison.json",
+      "sha256": "1d6903a01eebdd28602c38efc6d5ac96d07081173a4a15dbd6808576647e2e35"
+    },
+    {
+      "path": "/tmp/moli-split640/layout-b0f237b0-targeted/task-547/trace.json",
+      "sha256": "dafb9da14127dfb8fabe16b3b2b45a8516b74dde08a2462fa18fa0cfc51337d9"
+    },
+    {
+      "path": "/tmp/moli-split640/layout-readiness-postsave-metadata.json",
+      "sha256": "6bbaedf094fd2cf391c2d719c6599e9d032c259903616dbd5765dfd0fd0f6996"
+    },
+    {
+      "path": "/tmp/moli-split640/layout-readiness-v4-547-additions-provenance.json",
+      "sha256": "73f7c76d56c07a250b7560203356574b20d81095dc026831e64d47bdf23902dc"
+    },
+    {
+      "path": "/tmp/moli-split640/layout-readiness-v4-547-additions.json",
+      "sha256": "6de8869faeaa6fc7e60927546e077b788b5e3ea8d0a3d09ece7d24e27f8836d6"
+    }
+  ]
+}
