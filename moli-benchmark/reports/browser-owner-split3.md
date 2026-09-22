@@ -3,6 +3,110 @@
 The fresh frozen comparison below supersedes earlier measurements for the
 current branch. Historical results and failures remain unchanged afterward.
 
+## Final frozen acceptance, 2026-09-23
+
+The final source is `d743043ab71e6274df4f946ac0ee390fe298d2d8`, compared with
+fixed main `8e7be5c3fb144189335de3a61731f3e4717b6bcb`. The ordinary release is
+the `1807a359…` pin below. Default measurement instrumentation produces
+`d3c3c48ee4142b2d4475eb57a84058fa33b005a8f541b683b612b940e5723f16`;
+it is kept separate from ordinary timings and from the detailed diagnostics.
+Compiler, V8 archive, profile, parameters and all original assertions remain
+pinned. Production contains no measurement instrumentation.
+
+Three balanced rounds repeat the unchanged four-page workload. Each includes
+eight warmups, 100 measured navigations, four batches of 64 concurrent history
+queries, and the original Worker bursts. Ordinary medians are:
+
+| Measurement | Main, rounds 1 / 2 / 3 | Final, rounds 1 / 2 / 3 |
+| --- | --- | --- |
+| Navigation command (ms) | 1.762 / 1.783 / 1.877 | 2.275 / 2.210 / 2.145 |
+| Frame event (ms) | 11.124 / 9.895 / 10.308 | 9.853 / 10.413 / 10.483 |
+| Concurrent history command (ms) | 1.347 / 1.354 / 1.323 | 2.059 / 2.364 / 3.031 |
+
+The command cost is higher than main; this is not a claim of performance
+parity. Three of twelve host reports record 2/12/66 swapped-in pages, and none
+record swap-out. Small frame-event differences do not establish a speedup.
+Candidate instrumented command medians are 2.305/2.209/1.994 ms and are not used
+in place of ordinary results.
+
+A separate diagnostic matches command intervals and synchronous owner calls
+by clock and caller thread. Each of twelve navigation starts performs fourteen
+native operations, covering navigation retention/state, request policy,
+admission/decisions, current Document and cookie observations, and crash state.
+Their median combined caller duration is **183.439 us out of 240.142 us** for
+command dispatch. This includes queueing, execution and wakeup. The ordinary
+trace also localizes the extra time to dispatch and ordered output completion.
+History uses exactly one native history snapshot per command (256/256), median
+11.489 us. Independent ordinary traces show history dispatch at 10 us main /
+21 us candidate and receive-to-completion at 21/41 us; the 64 concurrent commands
+accumulate this per-command cost. These measurements explain the remaining
+latency cost of the independent owner and ordered publication in this workload.
+
+Diagnostic binary:
+`3c69fa563e01b4d413125d823e96e41b7e7e6f8580b783d638e0ac937fa7c0dd`.
+History intervals align existing UTC logs to the same-clock Page markers;
+calibration spread is 2.705 us. The diagnostic is for attribution, not a faster
+replacement benchmark or a production optimization.
+
+Default instrumentation records 10,925/10,763/10,480 external owner calls across
+setup, warmups, navigation and history, down from the earlier 18,717–18,884.
+Queue-wait medians are 6.534/6.509/6.319 us, with observed waiting depth at most
+2/4/1. All 108 native commits match their exact projections in each round,
+without duplicate sequences or transport refusal. Commit medians are
+18.902/16.094/21.394 us; first-projection lag medians are 1.128/1.367/1.000 ms.
+
+All six candidate ordinary/instrumented runs pass the exact 312-record retained
+tail and 256 live records. Retained Worker output is 10,484,448 estimated bytes,
+then zero after owner closure. Ordinary PSS at 12,288 records is
+141.51–146.22 MiB, after explicit GC 114.70–120.42 MiB, and after closure
+70.35–70.59 MiB. Main retains all 12,288 records and uses 904.83–930.35 MiB at the
+same workload snapshot; one ordinary main round disconnects during replay.
+That failure is preserved. Allocation snapshots include observer allocations
+and exclude C++/V8; raw cumulative/delta counts remain in each trace summary.
+
+Complete final Lexbench executes all 1,928 tasks with the pinned harness,
+seed and deadlines. The **1,555 passing task IDs match main exactly**.
+Candidate has 372 failures and one unsupported case; main has 371 failures,
+one unsupported case and one driver error. The sole status difference is the
+already-failing download-checksum case: main's download timeout escapes the
+driver, while candidate returns a click timeout to its checker. Neither passes.
+No Rust panic is captured. Host telemetry flags swap activity, so total runtime
+is not used to certify small performance differences.
+
+Full final webfetch retains all **259 addresses × four modes**, one attempt,
+30-second deadlines and parallelism 20. Main passes 338/1,036 and final passes
+329/1,036. Seventeen status changes cover eight addresses:
+
+| Mode | Fixed main passes / 259 | Final passes / 259 |
+| --- | ---: | ---: |
+| moli | 87 | 83 |
+| moli-cdp | 84 | 82 |
+| moli-full | 85 | 83 |
+| moli-full-cdp | 82 | 81 |
+
+A single matched control pair includes every changed address and the original
+eight-address concurrent workload: ten addresses × four modes, with identical
+pins and parameters. Both pass 18/40. GitHub and Expreview time out in all four
+modes on **both** revisions, including main's response-header/body waits. The
+two remaining control status differences are an actual Cloudflare challenge
+returned to candidate and a main-only post-DCL timeout at White House. Slack
+passes every mode in the full runs, the matched controls and all three earlier
+candidate concurrent rounds. No Rust panic is captured. These controls
+identify the observed site variability; they do not turn failed full-run rows
+into passes or establish exact external-site parity.
+
+The functional/source checks are listed below. The unchanged ownership audit
+continues to cover the final model; the follow-ups remove redundant reads and
+keep the existing lifecycle/publication authorities. Source patches, complete
+results and failures remain in `target/smoke/native-throughput.txjx99ee/`, with
+`final-local-summary.json`, `command-cost-summary.json`, and the final external
+comparisons as entry points.
+
+This completes the planned frozen comparison and attribution. The remaining
+command latency cost and the baseline/external failures above are explicit
+limits of the result; functional acceptance is not a claim that every external
+site passes or that all performance metrics equal main.
+
 ## Native Network throughput, 2026-09-23
 
 The `7be1fd9b8c` release disconnects on a local burst of **32 concurrent 4 MiB
@@ -55,8 +159,8 @@ pre-EOF cancellation and preservation of the received prefix.
 All sources, failed attempts, binary pins, wire records and traces are retained
 in `target/smoke/native-throughput.txjx99ee/`. The six-file Rust patch SHA-256 is
 `cd87907978ab91d5b7af9d5f70cf4e5a9498417e836921322f96c14de81f71d2`.
-This closes the reproduced Network throughput failure. The fresh comparison
-with main's command latency remains the final performance gate.
+This closes the reproduced Network throughput failure. The final comparison
+and command-cost attribution are recorded above.
 
 ## Navigation observation and admission reads, 2026-09-23
 
