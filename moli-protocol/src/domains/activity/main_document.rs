@@ -939,6 +939,7 @@ mod tests {
             auxiliary_document_response: None,
             redirect_chain: Vec::new(),
             redirect_headers: None,
+            navigation_history: None,
             navigate_id: Some(77),
             owner: CommandOwnerScope::for_session("SID-nav"),
             result_projection: NavigationResultProjection::Cdp(
