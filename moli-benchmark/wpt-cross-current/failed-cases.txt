@@ -3261,7 +3261,6 @@ xhr/setrequestheader-allow-whitespace-in-value.htm
 xhr/setrequestheader-bogus-name.htm
 xhr/setrequestheader-bogus-value.htm
 xhr/setrequestheader-case-insensitive.htm
-xhr/setrequestheader-content-type.htm
 xhr/setrequestheader-header-allowed.htm
 xhr/setrequestheader-header-forbidden.htm
 xhr/status-async.htm
