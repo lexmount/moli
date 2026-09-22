@@ -1,0 +1,57 @@
+[
+  {
+    "group": "engineering",
+    "url": "https://github.com/lexmount/moli/pull/725",
+    "branch": "codex/browser-engineering-reliability",
+    "commit": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "base": "7241328085c8fdf0e18cbd6a2ef4d0eec878efb5"
+  },
+  {
+    "group": "layout",
+    "url": "https://github.com/lexmount/moli/pull/726",
+    "branch": "codex/layout-geometry-visibility",
+    "commit": "63242ebdfbe7926cc85b774a91db05572d9f9c94",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "patch_sha256": "b625f0e2ad05726100a3346bf9d42d531703c2bba250d10e304ae28f5c135898"
+  },
+  {
+    "group": "input",
+    "url": "https://github.com/lexmount/moli/pull/727",
+    "branch": "codex/input-activation-lifecycle",
+    "commit": "1fb7c73f7af5e2fb1db25d6e2af353693c29806f",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "patch_sha256": "e19777242804cb6e01da79fe190862026a0a8efee69444e16c253587571a81c2"
+  },
+  {
+    "group": "network",
+    "url": "https://github.com/lexmount/moli/pull/728",
+    "branch": "codex/network-response-evidence",
+    "commit": "ad2d10832ef45ca1b9cd3f817d3222eaa5d26a17",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "patch_sha256": "1582e2b7ea19f88135622d5677d1dd214c95a6904b62ae78aa3ae3ddec0784ea"
+  },
+  {
+    "group": "text",
+    "url": "https://github.com/lexmount/moli/pull/729",
+    "branch": "codex/text-document-parsing",
+    "commit": "05c84841a571984efcd02e97a6b555add0b2b9f4",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "patch_sha256": "ead8f6d58528020d692e4602368c2359a0231c66f92524a7add14e8b12ef5136"
+  },
+  {
+    "group": "stop",
+    "url": "https://github.com/lexmount/moli/pull/730",
+    "branch": "codex/navigation-stop-loading",
+    "commit": "df82a86bc3cccc00015597c18713a3939b84e9e3",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "patch_sha256": "ed788837138a252b6fa06763219b7f50fae2084e38c963f0e9676c62abfff025"
+  },
+  {
+    "group": "forms",
+    "url": "https://github.com/lexmount/moli/pull/732",
+    "branch": "codex/form-named-properties",
+    "commit": "47a9d9cf3564ca8540179034d0d300dc7caafb0e",
+    "base": "f13e9f427ebd14e6f68f36d6f7df5add29e85ac1",
+    "patch_sha256": "6ced76d6fc072cc3d4e69d2ff5f43335093d79b2ab9497f185a2f67c1cf36acd"
+  }
+]
