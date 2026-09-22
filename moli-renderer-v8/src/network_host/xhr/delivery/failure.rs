@@ -16,6 +16,21 @@ pub(crate) fn apply_xhr_streaming_failure(
 }
 
 pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local<'_, v8::Object>) {
+    apply_xhr_request_error(scope, xhr, "error");
+}
+
+pub(crate) fn apply_xhr_document_abort(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+) {
+    apply_xhr_request_error(scope, xhr, "abort");
+}
+
+fn apply_xhr_request_error(
+    scope: &mut v8::PinScope<'_, '_>,
+    xhr: v8::Local<'_, v8::Object>,
+    event: &str,
+) {
     super::clear_xhr_request_timers(scope, xhr);
     clear_xhr_active_request(scope, xhr);
     if xhr_is_aborted(scope, xhr) {
@@ -31,14 +46,14 @@ pub(crate) fn apply_xhr_failure(scope: &mut v8::PinScope<'_, '_>, xhr: v8::Local
     {
         return;
     }
-    dispatch_xhr_upload_error_if_in_progress(scope, xhr, "error");
+    dispatch_xhr_upload_error_if_in_progress(scope, xhr, event);
     if scope.is_execution_terminating()
         || xhr_is_aborted(scope, xhr)
         || xhr_open_generation_changed(scope, xhr, open_generation)
     {
         return;
     }
-    xhr_dispatch_progress_event(scope, xhr, "error", 0.0, 0.0);
+    xhr_dispatch_progress_event(scope, xhr, event, 0.0, 0.0);
     if scope.is_execution_terminating() {
         return;
     }

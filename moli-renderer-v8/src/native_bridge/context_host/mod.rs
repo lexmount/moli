@@ -1154,6 +1154,7 @@ pub(crate) struct PageScriptHost {
     page_network_policy: crate::network::PageNetworkPolicy,
     active_subresource_requests: usize,
     pending_subresource_fetches: HashMap<u64, PendingSubresourceFetchState>,
+    pending_window_request_aborts: HashMap<u64, crate::types::PendingWindowRequestAbort>,
     pending_subresource_auths: HashMap<u64, PendingSubresourceAuthState>,
     pending_subresource_responses: HashMap<u64, PendingSubresourceResponseState>,
     pending_websocket_responses: HashMap<u64, PendingWebSocketResponseState>,
