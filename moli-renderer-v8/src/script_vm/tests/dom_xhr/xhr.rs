@@ -3358,3 +3358,164 @@ async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
         Some("Basic YWxpY2U6c2VjcmV0")
     );
 }
+
+#[test]
+fn xhr_response_documents_keep_distinct_source_modification_times() {
+    let environment = moli_v8_platform::ProcessEnvironmentOwner::default();
+    for streaming in [false, true] {
+        for (mime, response_type) in [
+            ("application/xml", ""),
+            ("application/xml", "document"),
+            ("text/html", "document"),
+        ] {
+            let mut vm = new_storage_test_vm("https://xhr-document-modified.test/");
+            vm.document_runtime
+                .set_document_source_last_modified(Some(5_025_000.0));
+            environment.set_timezone(Some("UTC")).unwrap();
+            vm.set_fetch_subresource_interception(
+                true,
+                Some(crate::types::SubresourceResourceType::Xhr),
+            );
+            vm.eval(
+                r#"
+            globalThis.__modifiedXhr = new XMLHttpRequest();
+            globalThis.__responseDocuments = [];
+            __modifiedXhr.onload = () => __responseDocuments.push(__modifiedXhr.responseXML);
+        "#,
+            )
+            .unwrap();
+            for (header, expected) in [
+                (
+                    Some("Sun, 06 Nov 1994 08:49:37 GMT"),
+                    Some("11/06/1994 08:49:37"),
+                ),
+                (
+                    Some("Thu, 01 Jan 1970 00:00:00 GMT"),
+                    Some("01/01/1970 00:00:00"),
+                ),
+                (Some("not a date"), None),
+                (None, None),
+            ] {
+                vm.eval(&format!(
+                    r#"
+                __modifiedXhr.open('GET', '/response');
+                __modifiedXhr.responseType = '{response_type}';
+                __modifiedXhr.send();
+            "#
+                ))
+                .unwrap();
+                let pending = vm.take_pending_subresource_fetch_infos();
+                assert_eq!(pending.len(), 1);
+                let request = &pending[0];
+                let mut headers = vec![("Content-Type".to_owned(), mime.to_owned())];
+                if let Some(header) = header {
+                    headers.push(("lAsT-mOdIfIeD".to_owned(), header.to_owned()));
+                }
+                let head = moli_fetch::ResponseHead {
+                    final_url: request.url.clone(),
+                    status: 200,
+                    headers,
+                    request_cookie_report: None,
+                    cookie_set_reports: Vec::new(),
+                    redirected: false,
+                    redirect_chain: Vec::new(),
+                    from_cache: false,
+                    negotiated_http_version: None,
+                };
+                if streaming {
+                    let body_source_id = crate::network_host::new_network_body_source_id();
+                    vm.start_streaming_async_subresource_fetch(
+                        crate::types::AsyncSubresourceStreamingStarted {
+                            internal_id: request.internal_id,
+                            request_url: request.url.clone(),
+                            request_method: "GET".to_owned(),
+                            request_headers: Default::default(),
+                            request_body: None,
+                            skip_fetch_security_validation: false,
+                            response_filter: None,
+                            body_source_id,
+                            head,
+                            network_request_headers: None,
+                        },
+                    )
+                    .unwrap();
+                    for chunk in [
+                        b"<html><body>".as_slice(),
+                        b"response</body></html>".as_slice(),
+                    ] {
+                        vm.append_streaming_async_subresource_fetch_chunk(
+                            body_source_id,
+                            chunk.to_vec(),
+                        );
+                        assert_eq!(
+                            vm.eval("__modifiedXhr.responseXML === null").unwrap(),
+                            "true"
+                        );
+                    }
+                    vm.finish_streaming_async_subresource_fetch(
+                        request.internal_id,
+                        body_source_id,
+                        Ok(()),
+                    )
+                    .unwrap();
+                } else {
+                    vm.complete_async_subresource_fetch(
+                        crate::types::AsyncSubresourceFetchCompletion {
+                            internal_id: request.internal_id,
+                            request_url: request.url.clone(),
+                            request_method: "GET".to_owned(),
+                            request_headers: Default::default(),
+                            request_body: None,
+                            skip_fetch_security_validation: false,
+                            response_filter: None,
+                            response_status_text: None,
+                            network_error_text: None,
+                            result: Ok(
+                                crate::protocol_types::NavigationResponse::from_head_and_body(
+                                    head,
+                                    "<html><body>response</body></html>".to_owned(),
+                                    b"<html><body>response</body></html>".to_vec(),
+                                ),
+                            )
+                            .into(),
+                        },
+                    )
+                    .unwrap();
+                }
+                if let Some(expected) = expected {
+                    assert_eq!(
+                        vm.eval("__modifiedXhr.responseXML.lastModified").unwrap(),
+                        expected
+                    );
+                } else {
+                    assert_eq!(vm.eval(r#"(() => {
+                    const doc = __modifiedXhr.responseXML;
+                    const match = /^(\d\d)\/(\d\d)\/(\d{4}) (\d\d):(\d\d):(\d\d)$/.exec(doc.lastModified);
+                    const time = Date.UTC(+match[3], +match[1] - 1, +match[2], +match[4], +match[5], +match[6]);
+                    return Math.abs(Date.now() - time) < 5000;
+                })()"#).unwrap(), "true", "mime={mime}, response_type={response_type}, header={header:?}");
+                }
+            }
+            assert_eq!(
+                vm.eval(
+                    r#"(() => {
+            const [first, second, third, fourth] = __responseDocuments;
+            __modifiedXhr.abort();
+            first.documentElement.remove();
+            return JSON.stringify([
+                first.lastModified, second.lastModified,
+                document.lastModified, first !== second && third !== fourth
+            ]);
+        })()"#
+                )
+                .unwrap(),
+                r#"["11/06/1994 08:49:37","01/01/1970 00:00:00","01/01/1970 01:23:45",true]"#
+            );
+            environment.set_timezone(Some("Asia/Shanghai")).unwrap();
+            assert_eq!(
+                vm.eval("__responseDocuments[0].lastModified").unwrap(),
+                "11/06/1994 16:49:37"
+            );
+        }
+    }
+}

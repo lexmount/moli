@@ -223,8 +223,12 @@ fn apply_xhr_response_body(
         XmlHttpRequestResponseType::Document => {
             let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
                 .unwrap_or_else(|| "text/html".to_owned());
-            let document =
-                parse_xhr_response_document(scope, body_text.as_deref().unwrap_or(""), Some(&mime));
+            let document = parse_xhr_response_document(
+                scope,
+                body_text.as_deref().unwrap_or(""),
+                Some(&mime),
+                &head.headers,
+            );
             set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             document
         }
@@ -283,7 +287,8 @@ fn apply_xhr_response_text(
         XmlHttpRequestResponseType::Document => {
             let mime = xhr_response_mime_essence(scope, xhr, &head.headers)
                 .unwrap_or_else(|| "text/html".to_owned());
-            let document = parse_xhr_response_document(scope, &body_text, Some(&mime));
+            let document =
+                parse_xhr_response_document(scope, &body_text, Some(&mime), &head.headers);
             set_xhr_state_value(scope, xhr, XHR_RESPONSE_XML_SLOT, document);
             document
         }
@@ -597,22 +602,38 @@ fn parse_default_xhr_response_xml<'s>(
     body_text: &str,
 ) -> v8::Local<'s, v8::Value> {
     let mime = xhr_response_mime_essence(scope, xhr, headers);
-    parse_xhr_response_document(scope, body_text, mime.as_deref())
+    parse_xhr_response_document(scope, body_text, mime.as_deref(), headers)
 }
 
 fn parse_xhr_response_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     body_text: &str,
     mime: Option<&str>,
+    headers: &[(String, String)],
 ) -> v8::Local<'s, v8::Value> {
     let Some(mime) =
         mime.filter(|mime| is_html_document_mime(mime) || is_dom_parser_xml_mime(mime))
     else {
         return v8::null(scope).into();
     };
-    dom_parser::parse_detached_document_from_string(scope, body_text, mime)
-        .map(|value| value.into())
-        .unwrap_or_else(|| v8::null(scope).into())
+    let Some(document) = dom_parser::parse_detached_document_from_string(scope, body_text, mime)
+    else {
+        return v8::null(scope).into();
+    };
+    let Ok((runtime_ptr, document_handle)) =
+        crate::native_bridge::node_runtime_and_handle_from_object_or_detached(scope, document)
+    else {
+        return v8::null(scope).into();
+    };
+    // Response metadata belongs to this Document, independently of the
+    // requesting Document and any later reuse of the XHR object.
+    unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_document_source_last_modified_for_handle(
+            document_handle,
+            crate::document_last_modified::document_last_modified_from_headers(headers),
+        );
+    document.into()
 }
 
 fn xhr_response_blob_mime_type(
