@@ -239,6 +239,7 @@ impl JsContextHost {
             parser_base_url,
             source.as_ref(),
             is_xml_document,
+            snapshot.content_type.as_deref(),
         );
         Some(ChildDocumentInstallResult {
             initial_classic_ready_work: parser_start.initial_classic_ready_work,
