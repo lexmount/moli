@@ -784,6 +784,25 @@ where
                     for fragment in self.owner_paint_fragments[index].clone() {
                         self.assign_fragment_paint_metadata(fragment, self.content_clips[index]);
                     }
+                    // An atomic inline-level box (a replaced element, form
+                    // control, or inline-block wrapper consumed by its owner
+                    // IFC) is painted and hit-tested as line content, in front
+                    // of the enclosing inline boxes' fragments. Promote its own
+                    // box fragment to this contents phase so a point inside the
+                    // atomic's box resolves to the atomic rather than to an
+                    // inline ancestor (e.g. a wrapping `<label>`). `paint_order`
+                    // is consumed only by hit testing, never by painting, so
+                    // this does not alter rendering. Use the outer (background)
+                    // clip: the atomic's own box spans its full border box, so
+                    // it must not be constrained by the box's internal content
+                    // clip, or edge points (e.g. a caret at an input's left
+                    // border) fall through to the enclosing inline.
+                    if self.world.boxes[index].inline_context_owner.is_some()
+                        && !self.world.boxes[index].inline_flattened
+                        && let Some(direct) = self.direct_fragments[index]
+                    {
+                        self.assign_fragment_paint_metadata(direct, self.background_clips[index]);
+                    }
                 }
                 PaintOrderEvent::BoxOutline(id) => {
                     let index = id.index();

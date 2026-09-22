@@ -1333,6 +1333,84 @@ async fn get_node_for_location_uses_real_layout_hit_testing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn get_node_for_location_hits_atomic_input_in_front_of_wrapping_label() {
+    let mut ctx = TestContext::new();
+    load_bc(&mut ctx, "BID-A");
+    navigate_to_data_html_async(
+        &mut ctx,
+        1,
+        "<!doctype html><html><body><form><p><label>Customer name: <input name=custname></label></p></form></body></html>",
+    )
+    .await;
+
+    let input_backend = renderer_backend_node_id_for_live_expression(
+        &mut ctx,
+        2,
+        3,
+        "document.querySelector('input')",
+    )
+    .await;
+    let label_backend = renderer_backend_node_id_for_live_expression(
+        &mut ctx,
+        4,
+        5,
+        "document.querySelector('label')",
+    )
+    .await;
+
+    ctx.process_async(json!({
+        "id": 6,
+        "method": "DOM.getContentQuads",
+        "params": { "backendNodeId": input_backend }
+    }))
+    .await;
+    let quad = take_response_by_id(&mut ctx, 6)["result"]["quads"][0]
+        .as_array()
+        .expect("the input has one content quad")
+        .clone();
+    let x1 = quad[0].as_f64().unwrap_or_default();
+    let y1 = quad[1].as_f64().unwrap_or_default();
+    let x2 = quad[4].as_f64().unwrap_or_default();
+    let y2 = quad[5].as_f64().unwrap_or_default();
+    assert!(
+        x2 > x1 && y2 > y1 + 2.0,
+        "the input box must be non-trivially sized for the baseline repro, got x {x1}..{x2}, y {y1}..{y2}"
+    );
+
+    let cx = ((x1 + x2) / 2.0).round() as i64;
+    let mid_y = ((y1 + y2) / 2.0).round() as i64;
+    let mut id = 10;
+    for y in [(y1 + 1.0).round() as i64, mid_y, (y2 - 1.0).round() as i64] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "DOM.getNodeForLocation",
+            "params": { "x": cx, "y": y }
+        }))
+        .await;
+        let hit = take_response_by_id(&mut ctx, id);
+        assert_eq!(
+            hit["result"]["backendNodeId"],
+            json!(input_backend),
+            "a point inside the input box at y={y} must hit the input, not the wrapping label"
+        );
+        id += 1;
+    }
+
+    ctx.process_async(json!({
+        "id": id,
+        "method": "DOM.getNodeForLocation",
+        "params": { "x": (x1 - 4.0).max(0.0).round() as i64, "y": mid_y }
+    }))
+    .await;
+    let hit = take_response_by_id(&mut ctx, id);
+    assert_eq!(
+        hit["result"]["backendNodeId"],
+        json!(label_backend),
+        "a point over the label text to the left of the input must still hit the wrapping label"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn get_node_for_location_mock_policy_uses_compatibility_geometry() {
     let mut ctx = TestContext::new_with_layout_policy(LayoutPolicy::Mock);
     load_bc(&mut ctx, "BID-A");
