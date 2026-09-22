@@ -294,7 +294,7 @@ pub(crate) fn build_detached_document_object_from_dom_host<'s>(
     parsed: DomHost,
 ) -> Option<v8::Local<'s, v8::Object>> {
     build_detached_document_object_from_dom_host_with_content_type(
-        scope, kind, parsed, None, None, false,
+        scope, kind, parsed, None, None, false, None,
     )
 }
 
@@ -305,6 +305,7 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     content_type: Option<&str>,
     character_set: Option<&str>,
     preserve_parser_frames: bool,
+    inherited_meta_policies: Option<&[String]>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = detached_document_url(&parsed);
     let quirks_mode = parsed.dom().document()?.quirks_mode();
@@ -313,6 +314,14 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     let character_set = character_set.unwrap_or(parsed.dom().document()?.character_set());
     let allow_declarative_shadow_roots = parsed.dom().document()?.allow_declarative_shadow_roots();
     let document = new_detached_document_shell(scope, kind, content_type, url, scripting_enabled)?;
+    if let Some(policies) = inherited_meta_policies {
+        let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
+        let document_handle = detached_native_handle(scope, document)?;
+        // Importing the parsed tree can deliver its own meta policies. Seed
+        // inherited policies first so both sets retain their delivery order.
+        unsafe { &*runtime_ptr }
+            .initialize_inherited_meta_content_security_policies(document_handle, policies);
+    }
     set_detached_document_parse_metadata(
         scope,
         document,
