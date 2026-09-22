@@ -504,6 +504,7 @@ pub(super) struct LightweightPopupBrowsingContextRecord {
     opener_sandbox_policy: Option<DocumentSandboxPolicy>,
     lifecycle: LightweightPopupLifecycle,
     is_closing: bool,
+    is_popup: bool,
     navigation_id: LightweightPopupNavigationId,
 }
 
@@ -1068,9 +1069,16 @@ impl JsContextHost {
                     session_storage_store,
                 })),
                 is_closing: false,
+                is_popup: false,
                 navigation_id: LightweightPopupNavigationId::new(1),
             },
         );
+        crate::context_bootstrap::install_window_bar_props(
+            scope,
+            window,
+            Some((popup_id, initial_local_window_id)),
+        )
+        .ok()?;
         self.register_committed_document_resource_loader(
             crate::network::context::DocumentFetchContext::new(
                 super::WindowDocumentOwner::LightweightPopup(initial_document_owner),
@@ -1713,6 +1721,17 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn set_lightweight_popup_is_popup(&mut self, popup_id: u64, is_popup: bool) {
+        if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+            record.is_popup = is_popup;
+        }
+    }
+
+    pub(crate) fn lightweight_popup_bar_props_visible(&self, popup_id: u64) -> bool {
+        self.lightweight_popup_record(popup_id)
+            .is_some_and(|record| record.is_live() && !record.is_popup)
+    }
+
     pub(crate) fn lightweight_popup_is_open(&self, popup_id: u64) -> bool {
         self.lightweight_popup_record(popup_id)
             .is_some_and(LightweightPopupBrowsingContextRecord::is_open)
@@ -2168,6 +2187,13 @@ impl JsContextHost {
             }
         };
         if changed_document {
+            if let Err(error) = crate::context_bootstrap::install_window_bar_props(
+                scope,
+                window,
+                Some((popup_id, current_local_window_id)),
+            ) {
+                tracing::warn!(%error, "failed to initialize popup BarProp objects");
+            }
             clear_lightweight_popup_window_document_event_state(scope, window);
         }
         if let Some(retired_document_handle) = transition.retired_document_handle {

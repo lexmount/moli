@@ -551,7 +551,7 @@ fn document_fullscreen_enabled_lenient_setter<'s>(
 ) {
 }
 
-fn define_replaceable_window_property(
+pub(in crate::context_bootstrap) fn define_replaceable_window_property(
     scope: &mut v8::PinScope<'_, '_>,
     receiver: v8::Local<'_, v8::Object>,
     name: &'static str,
@@ -2098,6 +2098,7 @@ fn install_window_runtime_state<'s>(
     install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
     install_public_window_surface_accessors(scope, global)?;
+    super::install_window_bar_props(scope, global, None)?;
 
     Ok(())
 }
