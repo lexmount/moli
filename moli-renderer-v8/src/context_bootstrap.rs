@@ -150,7 +150,9 @@ pub(crate) use location_navigation::{
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser,
 };
-pub(crate) use navigation_cancellation::inform_about_canceled_navigation_for_window;
+pub(crate) use navigation_cancellation::{
+    inform_about_canceled_navigation_for_window, stop_navigation_for_window_and_descendants,
+};
 pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data;
 pub(crate) use navigation_events::{
     construct_original_hash_change_event, dispatch_beforeunload_for_runtime_owner,

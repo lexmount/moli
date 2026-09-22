@@ -492,7 +492,7 @@ impl DomHost {
                     return None;
                 }
                 self.dom.create_node(
-                    super::NodeData::Document(document.clone()),
+                    super::NodeData::Document(Box::new(document.clone_for_new_document())),
                     None,
                     false,
                     false,

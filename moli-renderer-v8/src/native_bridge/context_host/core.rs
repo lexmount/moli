@@ -452,6 +452,7 @@ impl JsContextHost {
             active_subresource_requests: 0,
             next_pending_subresource_fetch_id: 0,
             pending_subresource_fetches: HashMap::new(),
+            pending_window_request_aborts: HashMap::new(),
             pending_subresource_auths: HashMap::new(),
             pending_subresource_responses: HashMap::new(),
             pending_websocket_responses: HashMap::new(),

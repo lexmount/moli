@@ -1098,6 +1098,7 @@ pub(crate) struct JsContextHost {
     active_subresource_requests: usize,
     next_pending_subresource_fetch_id: u64,
     pending_subresource_fetches: HashMap<u64, PendingSubresourceFetchState>,
+    pending_window_request_aborts: HashMap<u64, crate::types::PendingWindowRequestAbort>,
     pending_subresource_auths: HashMap<u64, PendingSubresourceAuthState>,
     pending_subresource_responses: HashMap<u64, PendingSubresourceResponseState>,
     pending_websocket_responses: HashMap<u64, PendingWebSocketResponseState>,

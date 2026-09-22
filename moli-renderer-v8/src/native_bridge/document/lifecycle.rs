@@ -17,7 +17,7 @@ use crate::{
     context_bootstrap::WINDOW_EVENT_HANDLER_PROPERTIES,
     custom_elements,
     document_runtime::{DomHandle, EventTargetHandle},
-    dom::native::{DocumentReadyState, NativeDom, NodeData},
+    dom::native::{DocumentReadyState, NativeDom, Node, NodeData},
     parser::HtmlParser,
     util::{
         call_object_method, node_wrapper_from_handle, utf16_next_scalar_boundary,
@@ -129,6 +129,15 @@ fn node_document_write_or_writeln_callback<'s>(
             11,
             "The object is in an invalid state.",
         );
+        return;
+    }
+    if unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_document)
+        .is_some_and(|document| document.active_parser_was_aborted())
+    {
+        rv.set_undefined();
         return;
     }
     if unsafe { &*runtime_ptr }
@@ -288,6 +297,15 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             return;
         }
         if unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+            rv.set(args.this().into());
+            return;
+        }
+        if unsafe { &*runtime_ptr }
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.active_parser_was_aborted())
+        {
             rv.set(args.this().into());
             return;
         }

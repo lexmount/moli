@@ -1574,6 +1574,9 @@ impl JsContextHost {
         use crate::types::AsyncSubresourceFetchEventTarget;
 
         match target {
+            AsyncSubresourceFetchEventTarget::DocumentAbort { internal_id } => self
+                .pending_window_request_aborts
+                .contains_key(&internal_id),
             AsyncSubresourceFetchEventTarget::Upload { internal_id } => {
                 self.pending_xhr_for_upload(internal_id).is_some()
             }
@@ -2072,6 +2075,7 @@ impl JsContextHost {
         if !matches!(
             &pending.continuation,
             PendingSubresourceContinuation::EventSource(_)
+                | PendingSubresourceContinuation::Fetch(_)
                 | PendingSubresourceContinuation::Xhr { .. }
         ) {
             return;
@@ -2105,6 +2109,7 @@ impl JsContextHost {
         if !matches!(
             &pending.pending.continuation,
             PendingSubresourceContinuation::EventSource(_)
+                | PendingSubresourceContinuation::Fetch(_)
                 | PendingSubresourceContinuation::Xhr { .. }
         ) {
             return;
@@ -2157,6 +2162,7 @@ impl JsContextHost {
         if !matches!(
             &streaming.pending.continuation,
             PendingSubresourceContinuation::EventSource(_)
+                | PendingSubresourceContinuation::Fetch(_)
                 | PendingSubresourceContinuation::Xhr { .. }
         ) {
             return;
@@ -2205,6 +2211,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn abort_subresource_fetch(&mut self, internal_id: u64) -> bool {
+        if self
+            .pending_window_request_aborts
+            .remove(&internal_id)
+            .is_some()
+        {
+            return true;
+        }
         if let Some(pending) = self.pending_subresource_fetches.remove(&internal_id) {
             #[cfg(test)]
             self.pending_subresource_fetch_infos
@@ -2297,6 +2310,76 @@ impl JsContextHost {
                     .values()
                     .map(|state| &state.pending),
             )
+    }
+
+    /// Stop the captured Document's requests while retaining their Window-bound
+    /// terminal delivery. document.open() keeps that Window and its XHR objects.
+    pub(crate) fn abort_window_requests_for_document(
+        &mut self,
+        owner: crate::native_bridge::WindowDocumentOwner,
+    ) {
+        use crate::types::{PendingWindowRequestAbort, WindowRequestAbortContinuation};
+
+        let Some(loader) = self.document_resource_loader_for_window_owner(owner) else {
+            return;
+        };
+        let registry_id = loader.load_diagnostics().registry_id;
+        let requests = self
+            .subresource_fetch_states()
+            .filter(|pending| pending.load.registry_id() == registry_id)
+            .map(|pending| {
+                let internal_id = pending.info.internal_id;
+                let delivery =
+                    pending
+                        .execution_context
+                        .window_realm_binding()
+                        .and_then(|binding| {
+                            let continuation = match &pending.continuation {
+                                PendingSubresourceContinuation::Fetch(fetch) => {
+                                    WindowRequestAbortContinuation::Fetch {
+                                        resolver: fetch.resolver().cloned(),
+                                        body_source: self
+                                            .streaming_subresource_fetches
+                                            .get(&internal_id)
+                                            .map(|stream| stream.body_source_id),
+                                    }
+                                }
+                                PendingSubresourceContinuation::Xhr { xhr, .. } => {
+                                    WindowRequestAbortContinuation::Xhr(xhr.clone())
+                                }
+                                _ => return None,
+                            };
+                            Some(PendingWindowRequestAbort {
+                                binding: binding.clone(),
+                                continuation,
+                            })
+                        });
+                (internal_id, delivery)
+            })
+            .collect::<Vec<_>>();
+        // Cancel every captured transport before any terminal task can invoke
+        // author callbacks and create replacement requests.
+        for (internal_id, delivery) in requests {
+            let _ = self
+                .browser_context_runtime
+                .abort_service_worker_fetch(internal_id);
+            if self.abort_subresource_fetch(internal_id)
+                && let Some(delivery) = delivery
+            {
+                self.pending_window_request_aborts
+                    .insert(internal_id, delivery);
+                let _ = self.resource_completion_tx.send_async_subresource_event(
+                    crate::types::AsyncSubresourceFetchEvent::DocumentAbort { internal_id },
+                );
+            }
+        }
+    }
+
+    pub(crate) fn take_pending_window_request_abort(
+        &mut self,
+        internal_id: u64,
+    ) -> Option<crate::types::PendingWindowRequestAbort> {
+        self.pending_window_request_aborts.remove(&internal_id)
     }
 
     /// Retires JS/DOM consumers selected by one exact resource authority.
