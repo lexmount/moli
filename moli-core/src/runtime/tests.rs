@@ -98,6 +98,7 @@ async fn raw_document_body_materialization_uses_the_fetch_deadline() -> Result<(
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
+            preload_state: Default::default(),
         },
         body_rx,
         cancel_handle.clone(),
@@ -4934,6 +4935,7 @@ async fn renderer_owner_remove_unknown_page_keeps_never_tracked_state() -> Resul
             view_generation: 0,
             page_state: std::sync::Arc::new(crate::renderer::RendererPageState {
                 snapshot_revision: Default::default(),
+                navigation_history: Default::default(),
                 requested_url: Url::parse("https://example.com/requested")?,
                 navigation_initiator_url: None,
                 navigation_redirected: false,

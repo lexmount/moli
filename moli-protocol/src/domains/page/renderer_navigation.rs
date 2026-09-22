@@ -36,6 +36,7 @@ pub(crate) struct PreparedRendererNavigation {
 }
 
 enum RendererNavigationWork {
+    BeforeUnload(Box<super::navigation::PendingBeforeUnloadNavigationCommand>),
     InitialDocument {
         waiter: crate::conn::InitialDocumentPageBuildWaiter,
         admission: crate::conn::CommandWaitLifetime,
@@ -223,6 +224,7 @@ impl PreparedRendererNavigation {
                     navigation.request_body(),
                     navigation.request_headers(),
                     navigation.browser_navigation_kind(),
+                    navigation.navigation_history().cloned(),
                     navigation.web_mcp_invocation(),
                     Some(match navigation.browser_navigation_kind() {
                         moli_fetch::BrowserNavigationRequestKind::Reload => {
@@ -255,7 +257,7 @@ impl PreparedRendererNavigation {
         Some(Self::prepare(conn, owner, step))
     }
 
-    pub(super) fn prepare(
+    pub(crate) fn prepare(
         conn: &mut CdpConnection,
         owner: CommandOwnerScope,
         step: PageCommandTaskStep,
@@ -265,6 +267,9 @@ impl PreparedRendererNavigation {
         let work = match step {
             PageCommandTaskStep::Complete(plan) => RendererNavigationWork::Complete(plan),
             PageCommandTaskStep::Pending(pending) => match *pending.kind {
+                PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
+                    RendererNavigationWork::BeforeUnload(pending)
+                }
                 PendingPageCommandKind::Navigate(pending) => {
                     source = Some(RendererNavigationSource::new(
                         conn,
@@ -336,77 +341,98 @@ impl PreparedRendererNavigation {
     }
 
     pub(crate) async fn run(
-        self,
+        mut self,
         driver: &mut ProtocolWorkflowDriver,
         context: &mut CommandWorkflowContext,
     ) -> Result<()> {
-        retain_background(context, self.prefix);
-        match self.work {
-            RendererNavigationWork::InitialDocument {
-                waiter,
-                admission,
-                action,
-            } => {
-                let adopted = tokio::select! {
-                    biased;
-                    () = admission.wait_revoked() => false,
-                    result = waiter.wait() => result.is_ok(),
-                };
-                if adopted
-                    && let Some(prepared) = driver.with_state(move |state| {
-                        state.resume_initial_document_navigation(*action, admission)
-                    })?
-                {
-                    Box::pin(prepared.run(driver, context)).await?;
+        // Waiting phases transfer to newly admitted work without retaining
+        // another complete navigation execution frame on the polling stack.
+        loop {
+            retain_background(context, self.prefix);
+            match self.work {
+                RendererNavigationWork::InitialDocument {
+                    waiter,
+                    admission,
+                    action,
+                } => {
+                    let adopted = tokio::select! {
+                        biased;
+                        () = admission.wait_revoked() => false,
+                        result = waiter.wait() => result.is_ok(),
+                    };
+                    if adopted
+                        && let Some(prepared) = driver.with_state(move |state| {
+                            state.resume_initial_document_navigation(*action, admission)
+                        })?
+                    {
+                        self = prepared;
+                        continue;
+                    }
+                }
+                RendererNavigationWork::Complete(plan) => retain_background(context, plan),
+                RendererNavigationWork::BeforeUnload(pending) => {
+                    let completed = pending.wait().await;
+                    let prepared = context.with_state(driver, move |state, context| {
+                        state.prepare_before_unload_navigation(completed, context)
+                    })?;
+                    let step = prepared
+                        .run(driver, context, super::NavigationCommandOutput::Background)
+                        .await?;
+                    let owner = self.owner;
+                    let prepared = context.with_state(driver, move |state, _context| {
+                        state.prepare_renderer_navigation_step(owner, step)
+                    })?;
+                    self = prepared;
+                    continue;
+                }
+
+                RendererNavigationWork::Load(job) => {
+                    let (response, _) = job.run(None).await;
+                    self.source
+                        .expect("load retains its original navigation")
+                        .finish_response(response, driver, context)
+                        .await?;
+                }
+                RendererNavigationWork::Request(request) => {
+                    let mut source = self
+                        .source
+                        .expect("request retains its original navigation");
+                    let response = match request.prepare(driver).await {
+                        PreparedFetchNavigationResponse::Captured(response) => match *response {
+                            Ok(response) => response.run().await,
+                            Err(error) => Err(error),
+                        },
+                        PreparedFetchNavigationResponse::Streaming(response) => match *response {
+                            Ok(response) => response.run(None).await,
+                            Err(error) => Err(error),
+                        },
+                        PreparedFetchNavigationResponse::Result(response) => response,
+                        PreparedFetchNavigationResponse::Transferred(plan) => {
+                            retain_background(context, plan);
+                            source.disarm();
+                            return Ok(());
+                        }
+                        PreparedFetchNavigationResponse::Superseded => {
+                            Err(moli_fetch::FetchCancelled.into())
+                        }
+                    };
+                    source.finish_response(response, driver, context).await?;
+                }
+                RendererNavigationWork::SameDocument { pending, binding } => {
+                    let completed = pending.wait().await?;
+                    let navigated = completed
+                        .bool_reply_value()
+                        .context(RendererNavigationError::UnexpectedSameDocumentReply)?;
+                    context.with_state(driver, move |state, context| {
+                        state.finish_renderer_same_document_navigation(
+                            self.owner, binding, completed, context,
+                        )
+                    })??;
+                    anyhow::ensure!(navigated, RendererNavigationError::NotSameDocument);
                 }
             }
-            RendererNavigationWork::Complete(plan) => retain_background(context, plan),
-            RendererNavigationWork::Load(job) => {
-                let (response, _) = job.run(None).await;
-                self.source
-                    .expect("load retains its original navigation")
-                    .finish_response(response, driver, context)
-                    .await?;
-            }
-            RendererNavigationWork::Request(request) => {
-                let mut source = self
-                    .source
-                    .expect("request retains its original navigation");
-                let response = match request.prepare(driver).await {
-                    PreparedFetchNavigationResponse::Captured(response) => match *response {
-                        Ok(response) => response.run().await,
-                        Err(error) => Err(error),
-                    },
-                    PreparedFetchNavigationResponse::Streaming(response) => match *response {
-                        Ok(response) => response.run(None).await,
-                        Err(error) => Err(error),
-                    },
-                    PreparedFetchNavigationResponse::Result(response) => response,
-                    PreparedFetchNavigationResponse::Transferred(plan) => {
-                        retain_background(context, plan);
-                        source.disarm();
-                        return Ok(());
-                    }
-                    PreparedFetchNavigationResponse::Superseded => {
-                        Err(moli_fetch::FetchCancelled.into())
-                    }
-                };
-                source.finish_response(response, driver, context).await?;
-            }
-            RendererNavigationWork::SameDocument { pending, binding } => {
-                let completed = pending.wait().await?;
-                let navigated = completed
-                    .bool_reply_value()
-                    .context(RendererNavigationError::UnexpectedSameDocumentReply)?;
-                context.with_state(driver, move |state, context| {
-                    state.finish_renderer_same_document_navigation(
-                        self.owner, binding, completed, context,
-                    )
-                })??;
-                anyhow::ensure!(navigated, RendererNavigationError::NotSameDocument);
-            }
+            break Ok(());
         }
-        Ok(())
     }
 }
 

@@ -77,8 +77,9 @@ mod main_document_commit;
 pub(crate) mod native;
 mod navigation;
 pub(crate) use navigation::{
-    AutomationNavigationResult, CompletedContinueNavigationWithoutRequestPauseCommand,
-    CompletedNavigateLoadCommand, emit_navigation_started_for_session_owner,
+    AutomationNavigationResult, BeforeUnloadNavigationStep, CompletedBeforeUnloadNavigationCommand,
+    CompletedContinueNavigationWithoutRequestPauseCommand, CompletedNavigateLoadCommand,
+    PreparedBeforeUnloadNavigation, emit_navigation_started_for_session_owner,
     prepare_automation_navigation, superseded_intercepted_navigation_events,
 };
 mod output;
@@ -179,6 +180,7 @@ enum PendingPageCommandKind {
         waiter: crate::conn::InitialDocumentPageBuildWaiter,
         host: crate::conn::ProtocolPageHostScope,
     },
+    BeforeUnloadNavigation(Box<navigation::PendingBeforeUnloadNavigationCommand>),
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -248,6 +250,7 @@ enum CompletedPageCommandKind {
         result: Result<()>,
         host: crate::conn::ProtocolPageHostScope,
     },
+    BeforeUnloadNavigation(Box<navigation::CompletedBeforeUnloadNavigationCommand>),
     BringToFront {
         route: CdpSessionRoute,
     },
@@ -343,7 +346,7 @@ impl CompletedPageCommandKind {
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
             // completion handler records the fence only after rejecting a stale completion,
             // so an abandoned stream cannot become the predecessor of the final response.
-            | Self::CreateIsolatedWorld(_) => None,
+            | Self::CreateIsolatedWorld(_)  | Self :: BeforeUnloadNavigation (_) => None,
         }
     }
 }
@@ -373,6 +376,9 @@ impl PendingPageCommandDispatch {
                     _ = host.wait_for_binding_retirement() => Err(crate::conn::NoDocumentLoaded.into()),
                 };
                 CompletedPageCommandKind::Enable { result, host }
+            }
+            PendingPageCommandKind::BeforeUnloadNavigation(pending) => {
+                CompletedPageCommandKind::BeforeUnloadNavigation(Box::new(pending.wait().await))
             }
             PendingPageCommandKind::BringToFront { route } => {
                 CompletedPageCommandKind::BringToFront { route }
@@ -1243,6 +1249,7 @@ pub(in crate::domains) fn prepare_renderer_navigation_request(
     request_body: Option<&bytes::Bytes>,
     request_headers: &[(String, String)],
     browser_navigation_kind: moli_fetch::BrowserNavigationRequestKind,
+    navigation_history: Option<moli_core::RendererNavigationHistoryRequest>,
     web_mcp_invocation: Option<moli_page_types::RendererWebMcpNavigation>,
     auxiliary_navigation: Option<moli_core::page::RendererAuxiliaryNavigationKind>,
     document_response: Option<moli_core::page::RendererAuxiliaryDocumentResponse>,
@@ -1257,6 +1264,7 @@ pub(in crate::domains) fn prepare_renderer_navigation_request(
         request_body,
         request_headers,
         browser_navigation_kind,
+        navigation_history,
         web_mcp_invocation,
         auxiliary_navigation,
         document_response,

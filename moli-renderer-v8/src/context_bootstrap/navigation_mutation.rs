@@ -18,8 +18,7 @@ use super::navigation_events::{
 };
 use super::navigation_serialize::{
     serialize_history_entries, serialize_navigation_entry_object,
-    sync_child_navigation_entry_seed_from_owner,
-    sync_child_pending_navigation_entry_seed_from_owner,
+    sync_child_pending_navigation_entry_seed_from_owner, sync_navigation_entry_seed_from_owner,
 };
 use super::navigation_window::{
     runtime_window_is_global, window_history_for_holder, window_location_for_holder,

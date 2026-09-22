@@ -47,6 +47,7 @@ pub struct RendererPageState {
     pub document_isolate_identity: usize,
     pub dedicated_worker_running_worker_isolate_count: usize,
     pub performance_metric_snapshot: RendererPerformanceMetricSnapshot,
+    pub navigation_history: RendererNavigationHistory,
 }
 
 impl RendererPageState {
@@ -88,6 +89,7 @@ impl RendererPageState {
             dedicated_worker_running_worker_isolate_count: state_capture
                 .dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot: state_capture.performance_metric_snapshot,
+            navigation_history: state_capture.navigation_history,
         })
     }
 
