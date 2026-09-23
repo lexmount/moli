@@ -1294,6 +1294,7 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     moli_fetch::ResponseBody::materialized_bytes(br#"<html xmlns="http://www.w3.org/1999/xhtml"><head><base href="../assets/" /></head><body><a id="link" href="child">link</a></body></html>"#.to_vec()),
@@ -1413,6 +1414,7 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
                         redirected: false,
                         redirect_chain: Vec::new(),
                         from_cache: false,
+                        cache_state: Default::default(),
                         negotiated_http_version: None,
                     },
                     network_request_headers: None,
@@ -1531,6 +1533,7 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             };
             if streaming {
