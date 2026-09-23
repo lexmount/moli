@@ -539,6 +539,20 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             return Ok(owner_step_progress_after_current_document_stop(page_vm));
         }
         match self.parser_session.suspension_cause() {
+            Some(ParserSuspensionCause::ParserClassicStylesheets { .. })
+                if page_vm
+                    .vm()
+                    .document_runtime
+                    .has_pending_document_write_stylesheet_blocked_script() =>
+            {
+                // A document.write() insertion owns this suspension and its
+                // script. Its stylesheet completion is admitted on the Page
+                // lane; the main parser runner has no pending script to resume.
+                return Ok(suspend_parser_for_stylesheet_page_task(
+                    owner,
+                    pending_parsing_blocking_wait,
+                ));
+            }
             Some(ParserSuspensionCause::ParserCreatedStylesheet { .. }) => {
                 if !page_vm
                     .vm()
@@ -1623,7 +1637,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                             break ParserStepAdvanceOutcome::StoppedCurrentDocument;
                         }
                         ScriptHandoffOutcome::NoNavigation => {
-                            if let Some(outcome) = self.document_write_suspension_step_outcome() {
+                            if let Some(outcome) =
+                                self.document_write_suspension_step_outcome(page_vm)
+                            {
                                 break outcome;
                             }
                         }
@@ -1743,7 +1759,9 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                             break ParserStepAdvanceOutcome::StoppedCurrentDocument;
                         }
                         ScriptHandoffOutcome::NoNavigation => {
-                            if let Some(outcome) = self.document_write_suspension_step_outcome() {
+                            if let Some(outcome) =
+                                self.document_write_suspension_step_outcome(page_vm)
+                            {
                                 break outcome;
                             }
                         }
@@ -1767,8 +1785,19 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         Ok(outcome)
     }
 
-    fn document_write_suspension_step_outcome(&self) -> Option<ParserStepAdvanceOutcome> {
+    fn document_write_suspension_step_outcome(
+        &self,
+        page_vm: &PageVm,
+    ) -> Option<ParserStepAdvanceOutcome> {
         match self.parser_session.suspension_cause() {
+            Some(ParserSuspensionCause::ParserClassicStylesheets { .. })
+                if page_vm
+                    .vm()
+                    .document_runtime
+                    .has_pending_document_write_stylesheet_blocked_script() =>
+            {
+                Some(ParserStepAdvanceOutcome::BlockedOnStylesheetParserPause)
+            }
             Some(ParserSuspensionCause::ParserCreatedStylesheet { .. }) => {
                 Some(ParserStepAdvanceOutcome::BlockedOnStylesheetParserPause)
             }
