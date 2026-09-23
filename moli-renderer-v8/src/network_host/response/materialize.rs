@@ -443,7 +443,13 @@ fn build_fetch_response_object_head<'s>(
     FetchResponseInternalUrlDeclaration::new(head.final_url.to_string())
         .initialize(scope, obj)
         .expect("Fetch Response internal URL declaration should initialize");
-    set_filtered_response_internal_head(scope, obj, head.status, head.status_text(), &moli_fetch::headers_to_byte_strings(&head.headers));
+    set_filtered_response_internal_head(
+        scope,
+        obj,
+        head.status,
+        head.status_text(),
+        &moli_fetch::headers_to_byte_strings(&head.headers),
+    );
     let header_entries = if filtered_response_exposes_headers(filter) {
         match filter_override {
             Some(crate::types::AsyncSubresourceFetchResponseFilter::Cors(names)) => head
@@ -461,7 +467,10 @@ fn build_fetch_response_object_head<'s>(
     } else {
         Vec::new()
     };
-    let headers = filter_headers_for_guard(&moli_fetch::headers_to_byte_strings(&header_entries), HeadersGuard::Response);
+    let headers = filter_headers_for_guard(
+        &moli_fetch::headers_to_byte_strings(&header_entries),
+        HeadersGuard::Response,
+    );
     let headers_obj =
         build_headers_object_with_state(scope, &headers, HeadersGuard::Response, true);
     set_response_slot_value(scope, obj, RESPONSE_HEADERS_SLOT, headers_obj.into());
@@ -713,7 +722,7 @@ fn materialize_response_head_for_purpose<'s>(
         }
         if headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("vary")
-                && value
+                && moli_fetch::decode_header_value(value)
                     .split(',')
                     .any(|field| field.trim_matches([' ', '\t']) == "*")
         }) {
