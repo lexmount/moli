@@ -30,6 +30,15 @@ pub(in crate::context_bootstrap) fn font_face_set_check_callback<'s>(
         return;
     };
     let _ = &parsed.text;
+    if !font_load_query_is_valid(&parsed.font) {
+        let error = new_dom_exception_value(
+            scope,
+            "The provided font shorthand is invalid.",
+            "SyntaxError",
+        );
+        scope.throw_exception(error);
+        return;
+    }
     let faces = font_face_set_matching_faces_array(scope, args.this(), &parsed.font);
     let loaded = faces.is_none_or(|faces| {
         (0..faces.length()).all(|index| {
@@ -53,7 +62,7 @@ pub(in crate::context_bootstrap) fn font_face_set_load_callback<'s>(
         return;
     };
     let _ = &parsed.text;
-    if font_load_query_contains_css_wide_keyword(&parsed.font) {
+    if !font_load_query_is_valid(&parsed.font) {
         rv.set(
             make_rejected_dom_exception_promise(
                 scope,

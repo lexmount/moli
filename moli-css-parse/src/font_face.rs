@@ -9,8 +9,8 @@ pub fn font_load_query_contains_css_wide_keyword(query: &str) -> bool {
     let mut input = Parser::new(&mut input);
     while let Ok(token) = input.next() {
         match token {
-            Token::Ident(value) | Token::QuotedString(value)
-                if is_css_wide_keyword(value.as_ref()) =>
+            Token::Ident(value)
+                if is_css_wide_keyword(value.as_ref()) || value.eq_ignore_ascii_case("default") =>
             {
                 return true;
             }
@@ -18,6 +18,33 @@ pub fn font_load_query_contains_css_wide_keyword(query: &str) -> bool {
         }
     }
     false
+}
+
+/// FontFaceSet queries use the font shorthand grammar, without cascade or
+/// custom-property substitution. Keep parsing shared with CSS declarations.
+pub fn font_load_query_is_valid(query: &str) -> bool {
+    // Servo's Stylo configuration does not parse system fonts. Their entire
+    // shorthand syntax is one of these six identifiers; use CSS tokens so
+    // escapes, comments and case folding work without accepting trailing input.
+    let mut input = ParserInput::new(query);
+    let mut parser = Parser::new(&mut input);
+    if let Ok(name) = parser.expect_ident_cloned()
+        && matches!(
+            name.to_ascii_lowercase().as_str(),
+            "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
+        )
+        && parser.is_exhausted()
+    {
+        return true;
+    }
+    if font_load_query_contains_css_wide_keyword(query) {
+        return false;
+    }
+    let mut block = crate::CssDeclarationBlock::default();
+    let projection = block.set_property_with_projection("font", query, false);
+    projection.set_result != crate::CssSetResult::ParseError
+        && !projection.has_unresolved_value
+        && !block.is_empty()
 }
 
 pub fn font_load_query_family(query: &str) -> Option<String> {
@@ -51,8 +78,8 @@ fn is_css_wide_keyword(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        font_load_query_contains_css_wide_keyword, font_load_query_family, normalize_font_face_src,
-        parse_font_faces,
+        font_load_query_contains_css_wide_keyword, font_load_query_family,
+        font_load_query_is_valid, normalize_font_face_src, parse_font_faces,
     };
 
     #[test]
@@ -103,6 +130,77 @@ mod tests {
             normalize_font_face_src("url(http://foo/bar/font.ttf)").as_deref(),
             Some(r#"url("http://foo/bar/font.ttf")"#)
         );
+    }
+
+    #[test]
+    fn font_load_query_validates_the_complete_shorthand_without_substitution() {
+        for query in [
+            "",
+            "inherit",
+            "default",
+            "12px inherit",
+            "12px default",
+            r#""inherit""#,
+            "12px",
+            "serif",
+            "12px serif; color: red",
+            "-1px serif",
+            "var(--x) serif",
+            "var(--x, 10px) serif",
+            "env(size) serif",
+            "12px serif !important",
+            "12px serif,",
+            "caption garbage",
+            r#""caption""#,
+        ] {
+            assert!(!font_load_query_is_valid(query), "{query}");
+        }
+        for query in [
+            "12px serif",
+            r#"12px "inherit""#,
+            r#"12px "default""#,
+            r#"italic 700 16px/1.2 "A B", serif"#,
+            "calc(1em + 2px) serif",
+            "caption",
+            "ICON",
+            "menu",
+            "message-box",
+            "small-caption",
+            "status-bar",
+            r"c\61 ption",
+            "caption/**/",
+            "normal normal normal normal 12px serif",
+        ] {
+            assert!(font_load_query_is_valid(query), "{query}");
+        }
+    }
+
+    #[test]
+    fn font_load_query_distinguishes_reserved_identifiers_from_quoted_families() {
+        for keyword in [
+            "inherit",
+            "initial",
+            "unset",
+            "default",
+            "revert",
+            "revert-layer",
+        ] {
+            for query in [keyword.to_owned(), format!("medium {keyword}")] {
+                assert!(font_load_query_contains_css_wide_keyword(&query), "{query}");
+            }
+            for query in [format!("12px \"{keyword}\""), format!("12px '{keyword}'")] {
+                assert!(
+                    !font_load_query_contains_css_wide_keyword(&query),
+                    "{query}"
+                );
+            }
+        }
+        assert!(font_load_query_contains_css_wide_keyword(
+            r"12px \64 efault"
+        ));
+        assert!(!font_load_query_contains_css_wide_keyword(
+            r#"12px "\69 nherit""#
+        ));
     }
 
     #[test]

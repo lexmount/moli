@@ -1,6 +1,6 @@
 use super::font_face::{ensure_font_face_loaded_promise, font_face_status, start_font_face_load};
 use super::query::{
-    font_face_set_matching_faces_array, font_load_query_contains_css_wide_keyword,
+    font_face_set_matching_faces_array, font_load_query_is_valid,
     make_rejected_dom_exception_promise,
 };
 use super::storage::{
