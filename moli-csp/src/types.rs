@@ -5,6 +5,7 @@ pub enum ContentSecurityPolicyResourceKind {
     DocumentBase,
     DocumentConnect,
     DocumentFrame,
+    DocumentFont,
     DocumentImage,
     DocumentManifest,
     DocumentMedia,

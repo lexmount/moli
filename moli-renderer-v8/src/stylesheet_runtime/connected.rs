@@ -222,6 +222,34 @@ impl ConnectedStyleOwnerKind {
 }
 
 impl DocumentRuntime {
+    pub(crate) fn prime_parser_preload_link(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        link: DomHandle,
+        check: DocumentContentSecurityPolicyCheck,
+    ) {
+        // Ineligible preload hints never enter Fetch, so they must not emit
+        // CSP violations or link errors either.
+        if !self.link_has_matching_resource_attributes(link, host_ptr) {
+            return;
+        }
+        self.apply_preload_link_csp_check(scope, host_ptr, link, check);
+        for prepared in self.prepare_connected_style_load_handles(&[link], true) {
+            let Some(admission) = unsafe { &mut *host_ptr }
+                .commit_connected_style_load_event_plan(prepared.event_plan())
+            else {
+                continue;
+            };
+            let mut result =
+                self.apply_prepared_connected_style_load(prepared, None, admission, host_ptr);
+            let completed = result.take_completed_stylesheet_clients();
+            self.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed);
+            self.pending_connected_style_load_prime_result
+                .extend(result);
+        }
+    }
+
     pub(crate) fn prepare_initial_connected_style_loads(
         &mut self,
     ) -> Vec<PreparedConnectedStyleLoad> {
@@ -765,6 +793,25 @@ impl DocumentRuntime {
         self.prime_pending_connected_style_loads_for_owner(std::ptr::null_mut())
     }
 
+    fn link_has_matching_resource_attributes(
+        &self,
+        handle: DomHandle,
+        host_ptr: *mut JsContextHost,
+    ) -> bool {
+        self.dom_host
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_none_or(|element| {
+                !element.is_html_element("link")
+                    || (link_rel_starts_resource_load(element)
+                        && preload_link_media_matches(
+                            element,
+                            self.dom_host.owner_document_handle(handle),
+                            host_ptr,
+                        ))
+            })
+    }
+
     fn prime_connected_style_load_handle(
         &mut self,
         handle: DomHandle,
@@ -782,20 +829,7 @@ impl DocumentRuntime {
             self.invalidate_stylesheet_owner_operations(handle);
             return result;
         }
-        if self
-            .dom_host
-            .node(handle)
-            .and_then(Node::as_element)
-            .is_some_and(|element| {
-                element.is_html_element("link")
-                    && (!link_rel_starts_resource_load(element)
-                        || !preload_link_media_matches(
-                            element,
-                            self.dom_host.owner_document_handle(handle),
-                            host_ptr,
-                        ))
-            })
-        {
+        if !self.link_has_matching_resource_attributes(handle, host_ptr) {
             self.settle_connected_style_load_admission(
                 host_ptr,
                 event_admission,

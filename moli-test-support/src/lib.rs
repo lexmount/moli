@@ -31,6 +31,7 @@ struct FixtureRuntimeState {
     alternate_stylesheet_probe_executed: Arc<FixtureEvent>,
     runtime_owned_async_script_executed: Arc<FixtureEvent>,
     dynamic_preparation_context_replaced: Arc<FixtureEvent>,
+    preload_request_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Default)]

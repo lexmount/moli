@@ -149,6 +149,19 @@ impl ScriptVm {
                         "promoted Document-owned modulepreload work after exact-realm materialization"
                     );
                 }
+                let preload_realm = self
+                    ._context_host
+                    .borrow()
+                    .connected_style_document_realm(owner);
+                if let Some(realm) = preload_realm {
+                    self.with_frame_realm_scope(realm, |scope, host_ptr| {
+                        unsafe { &mut *host_ptr }
+                            .promote_child_parser_preloads_after_realm_materialization(
+                                scope, handle, owner,
+                            );
+                        Ok(())
+                    })?;
+                }
                 Ok(ChildRealmMaterializationApplication::Materialized(activity))
             }
             Err(error) => {
@@ -190,7 +203,9 @@ impl ScriptVm {
         let mut host = self._context_host.borrow_mut();
         let discarded_script_work =
             host.retire_child_document_script_ready_tasks_for_owner(target.document_owner());
-        discarded_script_work != 0
+        let discarded_preloads = host
+            .discard_child_parser_preloads(target.child_handle(), Some(target.document_owner()));
+        discarded_script_work != 0 || discarded_preloads != 0
     }
 
     /// Run one real typed materialization body in low-level ScriptVm semantic
