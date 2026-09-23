@@ -305,7 +305,8 @@ impl CdpConnection {
                 crate::domains::network::execute_devtools_network_command(self, command),
                 Vec::new(),
             ),
-            command @ (DevToolsCommand::DispatchMouseEvent(_)
+            command @ (DevToolsCommand::ElementClick(_)
+            | DevToolsCommand::DispatchMouseEvent(_)
             | DevToolsCommand::DispatchKeyEvent(_)
             | DevToolsCommand::DispatchTouchEvent(_)
             | DevToolsCommand::DispatchDragEvent(_)

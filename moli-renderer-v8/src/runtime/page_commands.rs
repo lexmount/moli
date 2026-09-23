@@ -74,6 +74,13 @@ impl PageVm {
                 .vm_mut()
                 .navigate_top_level_same_document_from_browser(&url)
                 .map(RendererPageReply::Bool),
+            RendererPageCommand::DispatchPreparedElementClick(click) => {
+                let mut outcome = self.vm_mut().dispatch_prepared_element_click(click);
+                if let Ok(outcome) = &mut outcome {
+                    self.bind_input_dispatch_file_chooser_backend_node_id(outcome);
+                }
+                Ok(RendererPageReply::ElementClickDispatch(outcome))
+            }
             RendererPageCommand::DispatchMouseEventAtPoint {
                 x,
                 y,
@@ -1259,6 +1266,14 @@ impl PageVm {
                         &object_id,
                     )?,
                 ))
+            }
+            RendererInspectorPageCommand::PrepareElementClick { object_id } => {
+                let handle = self.vm_mut().live_node_handle_for_runtime_object_id(inspector_session_id, &object_id)?;
+                let preparation = match handle {
+                    Some(handle) => self.vm_mut().prepare_element_click(handle),
+                    None => Err(RendererElementClickError::StaleNode),
+                };
+                Ok(RendererPageReply::ElementClickPreparation(preparation))
             }
             RendererInspectorPageCommand::ScrollObjectNodeIntoViewIfNeeded { object_id, rect } => {
                 self.scroll_node_into_view_if_needed_for_object_id(

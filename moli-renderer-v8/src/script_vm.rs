@@ -704,6 +704,7 @@ mod dom_debugger;
 mod dom_inspector;
 pub(crate) use dom_inspector::{DomInspectorEdit, DomInspectorEditOutcome};
 mod drop_cleanup;
+mod element_click;
 mod element_toggle_event;
 mod eval_exec;
 mod file_entry_file_callback;

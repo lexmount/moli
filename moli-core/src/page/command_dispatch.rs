@@ -273,6 +273,8 @@ impl Page {
     pub(super) fn page_reply_kind(reply: &RendererPageReply) -> &'static str {
         match reply {
             RendererPageReply::RuntimeEvaluationResult(_) => "a runtime evaluation result reply",
+            RendererPageReply::ElementClickPreparation(_) => "an element click preparation reply",
+            RendererPageReply::ElementClickDispatch(_) => "an element click dispatch reply",
             RendererPageReply::Bool(_) => "a bool reply",
             RendererPageReply::OptionalBool(_) => "an optional bool reply",
             RendererPageReply::InputDispatchOutcome(_) => "an input dispatch outcome reply",

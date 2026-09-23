@@ -5,6 +5,23 @@ use crate::{
 };
 
 use super::super::JsContextHost;
+use super::{TextEditInputType, construct_input_event};
+
+/// The cancelable boundary before an editing default action. Callers must not
+/// mutate the value or selection until this returns true, and must re-read
+/// state that listeners may have changed.
+pub(crate) fn dispatch_beforeinput(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    input_type: TextEditInputType,
+    data: Option<&str>,
+) -> bool {
+    let Some(event) = construct_input_event(scope, "beforeinput", input_type, data) else {
+        return false;
+    };
+    dispatch_public_event(scope, runtime_ptr, target, event).allows_default()
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct NodePublicEventDispatchOutcome {

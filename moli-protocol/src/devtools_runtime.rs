@@ -269,6 +269,7 @@ pub enum DevToolsCommand {
     RemoveNode(DevToolsRemoveNodeCommand),
     AddPreloadScript(DevToolsAddPreloadScriptCommand),
     RemovePreloadScript(DevToolsRemovePreloadScriptCommand),
+    ElementClick(DevToolsElementClickCommand),
     DispatchMouseEvent(DevToolsDispatchMouseEventCommand),
     DispatchKeyEvent(DevToolsDispatchKeyEventCommand),
     DispatchTouchEvent(DevToolsDispatchTouchEventCommand),
@@ -355,6 +356,7 @@ impl DevToolsCommand {
             DevToolsCommand::RemoveNode(command) => &command.context,
             DevToolsCommand::AddPreloadScript(command) => &command.context,
             DevToolsCommand::RemovePreloadScript(command) => &command.context,
+            DevToolsCommand::ElementClick(command) => &command.context,
             DevToolsCommand::DispatchMouseEvent(command) => &command.context,
             DevToolsCommand::DispatchKeyEvent(command) => &command.context,
             DevToolsCommand::DispatchTouchEvent(command) => &command.context,
@@ -1030,6 +1032,18 @@ pub enum DevToolsDomObjectReferenceOperation {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct DevToolsElementClickCommand {
+    pub context: DevToolsCommandContext,
+    pub operation: DevToolsElementClickOperation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum DevToolsElementClickOperation {
+    Prepare { object_id: DevToolsRemoteHandleId },
+    Dispatch(moli_core::page::RendererPreparedPointerClick),
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct DevToolsDomObjectReferenceCommand {
     pub context: DevToolsCommandContext,
     pub object_id: DevToolsRemoteHandleId,
@@ -1367,6 +1381,13 @@ pub struct DevToolsFulfillInterceptedRequestCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DevToolsCommandResult {
+    ElementClickPreparation(
+        Result<
+            moli_core::page::RendererElementClickTarget,
+            moli_core::page::RendererElementClickError,
+        >,
+    ),
+    ElementClickDispatch(Result<(), moli_core::page::RendererElementClickError>),
     Empty,
     Navigate(DevToolsNavigateResult),
     TraverseHistory(DevToolsTraverseHistoryResult),

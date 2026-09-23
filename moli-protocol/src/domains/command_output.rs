@@ -1607,6 +1607,10 @@ fn blocked_intercepts_from_cdp_params(params: &Value) -> Vec<DevToolsNetworkInte
 
 fn cdp_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Value {
     match result {
+        DevToolsCommandResult::ElementClickPreparation(_)
+        | DevToolsCommandResult::ElementClickDispatch(_) => {
+            unreachable!("element click is an internal automation operation with no CDP method")
+        }
         DevToolsCommandResult::Empty | DevToolsCommandResult::TraverseHistory(_) => json!({}),
         DevToolsCommandResult::Navigate(result) => {
             let mut payload = json!({});

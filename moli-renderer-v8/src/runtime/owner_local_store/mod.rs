@@ -2600,16 +2600,16 @@ impl RendererOwnerLocalStore {
         // mousemove, focus, etc.). Publish that real pending navigation at this
         // input task's completion, not as a side effect of a later Runtime
         // command. Preserve the action-specific download/file-chooser result.
-        if let Ok(RendererPageReply::InputDispatchOutcome(outcome)) = &mut reply {
+        if let Ok(reply) = &mut reply
+            && let Some(outcome) = reply.input_dispatch_outcome_mut()
+        {
             outcome.triggered_top_level_navigation |=
                 entry.page_vm().vm().has_pending_location_navigation();
         }
         let input_triggered_top_level_navigation = reply.as_ref().is_ok_and(|reply| {
-            matches!(
-                reply,
-                RendererPageReply::InputDispatchOutcome(outcome)
-                    if outcome.triggered_top_level_navigation
-            )
+            reply
+                .input_dispatch_outcome()
+                .is_some_and(|outcome| outcome.triggered_top_level_navigation)
         });
         let should_delegate_location_navigation = replacement_lifecycle.is_ok()
             && runtime_command_completion.is_ok()

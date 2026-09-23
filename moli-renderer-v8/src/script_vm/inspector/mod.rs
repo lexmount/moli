@@ -20,8 +20,7 @@ use self::context_registry::DocumentInspectorContextGroupId;
 pub(in crate::script_vm) use self::context_registry::DocumentInspectorContextRegistrationId;
 use self::document_backend::DocumentInspectorBackendState;
 pub(super) use self::input_state::{
-    current_selection_range, current_selection_state, is_space_key, key_target_info,
-    option_is_disabled, radio_group_members,
+    current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
 };
 pub(in crate::script_vm) use self::outbound::InspectorOutbound;
 pub(super) use self::outbound::ScriptVmInspectorCommandTurnOutputScope;

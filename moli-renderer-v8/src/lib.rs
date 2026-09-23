@@ -315,6 +315,9 @@ pub use runtime::{
     RendererTouchPoint, RendererVisualStateToken, RendererWindowDocumentSource,
     RuntimeConsoleMessageSnapshot, renderer_output_transport_channel,
 };
+pub use runtime::{
+    RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
+};
 pub use service_worker_runtime::{
     SharedServiceWorkerResourceStore, new_shared_json_service_worker_resource_store,
     new_shared_service_worker_resource_store,

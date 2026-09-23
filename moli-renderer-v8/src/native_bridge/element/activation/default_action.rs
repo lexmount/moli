@@ -26,7 +26,7 @@ use super::super::{
     NodePublicEventDispatchOutcome, TextEditInputType, cache_input_files_from_selected_files,
     construct_click_event_with_detail_and_modifiers, construct_command_event,
     construct_input_event, construct_simple_event, contenteditable_editing_host,
-    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    dispatch_beforeinput, dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
     element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
     is_valid_submit_button, label_activation_control_handle, observable_bounding_client_rect,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
@@ -547,15 +547,13 @@ pub(crate) fn replace_contenteditable_selection(
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    let Some(before_input) = construct_input_event(
+    if !dispatch_beforeinput(
         scope,
-        "beforeinput",
+        runtime_ptr,
+        handle,
         input_type,
         input_type.data(replacement_text),
-    ) else {
-        return false;
-    };
-    if !dispatch_public_event(scope, runtime_ptr, handle, before_input).allows_default() {
+    ) {
         return false;
     }
     let inserted = if let Some(selection) = window_selection(scope) {
@@ -764,6 +762,12 @@ fn dispatch_click_event(
     Some(dispatch_public_event(scope, runtime_ptr, handle, event))
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ClickFocusBehavior {
+    Apply,
+    Preserve,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn click_handle_internal(
     scope: &mut v8::PinScope<'_, '_>,
@@ -776,7 +780,7 @@ fn click_handle_internal(
     click_detail: i32,
     modifiers: u8,
     user_initiated: bool,
-    focus_before_dispatch: bool,
+    focus_behavior: ClickFocusBehavior,
 ) -> RendererInputDispatchOutcome {
     let runtime = unsafe { &*runtime_ptr };
     if is_disabled_form_control(runtime, handle) {
@@ -787,7 +791,8 @@ fn click_handle_internal(
             pending_file_chooser: None,
         };
     }
-    if focus_before_dispatch && (user_initiated || synthetic_click_focuses_element(runtime, handle))
+    if focus_behavior == ClickFocusBehavior::Apply
+        && (user_initiated || synthetic_click_focuses_element(runtime, handle))
     {
         let focus_handle = if is_focusable(runtime, handle) {
             Some(handle)
@@ -980,7 +985,7 @@ fn click_handle_internal(
                             user_initiated,
                             // Label activation focuses its associated control,
                             // even when the initiating script click does not.
-                            true,
+                            ClickFocusBehavior::Apply,
                         );
                         pending_file_chooser = control_outcome.pending_file_chooser;
                         control_outcome.pending_download
@@ -1145,7 +1150,7 @@ pub(crate) fn activate_handle_via_click(
         0,
         0,
         true,
-        true,
+        ClickFocusBehavior::Apply,
     )
 }
 
@@ -1171,7 +1176,7 @@ pub(crate) fn activate_handle_via_click_with_detail_and_modifiers(
         click_detail,
         modifiers,
         true,
-        true,
+        ClickFocusBehavior::Apply,
     )
 }
 
@@ -1194,7 +1199,7 @@ pub(crate) fn activate_default_submit_button_via_keyboard(
         0,
         modifiers,
         true,
-        false,
+        ClickFocusBehavior::Preserve,
     )
 }
 
@@ -1223,7 +1228,7 @@ pub(crate) fn activate_handle_after_pointer_release(
         click_detail,
         modifiers,
         true,
-        false,
+        ClickFocusBehavior::Preserve,
     )
 }
 
@@ -1247,7 +1252,7 @@ pub(crate) fn activate_handle_via_synthetic_click(
         0,
         0,
         false,
-        false,
+        ClickFocusBehavior::Preserve,
     )
 }
 
@@ -1474,7 +1479,7 @@ fn perform_click_default_action(
             0,
             modifiers,
             user_initiated,
-            true,
+            ClickFocusBehavior::Apply,
         );
         return None;
     }

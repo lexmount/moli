@@ -7,8 +7,7 @@ use super::input_helpers::{
     MouseReleaseFollowUp, PendingMousePress, mouse_button_mask, single_changed_mouse_button,
 };
 use super::inspector::{
-    current_selection_range, current_selection_state, is_space_key, key_target_info,
-    option_is_disabled, radio_group_members,
+    current_selection_state, is_space_key, key_target_info, option_is_disabled, radio_group_members,
 };
 use super::{ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, ScriptVm};
 use crate::document_runtime::DomHandle;
@@ -17,23 +16,21 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    TextEditInputType, TouchEventPoint, activate_default_submit_button_via_keyboard,
-    activate_handle_after_pointer_release, activate_handle_via_click,
-    activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    construct_drag_event, construct_input_event, construct_keyboard_event,
+    TextEditInputType, TouchEventPoint, activate_handle_after_pointer_release,
+    activate_handle_via_click, activate_handle_via_click_with_detail_and_modifiers,
+    cache_input_files_from_selected_files, construct_drag_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, form_associated_form_owner,
-    form_data_control_elements, is_text_control, is_valid_submit_button, observable_input_hit_test,
-    observable_input_surface_hit_test, perform_auxiliary_link_default_action,
-    perform_drop_default_action, perform_mouse_focus_default_action,
+    contenteditable_editing_host, dispatch_public_event, is_text_control,
+    observable_input_hit_test, observable_input_surface_hit_test,
+    perform_auxiliary_link_default_action, perform_drop_default_action,
+    perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
     replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, submit_form_with_submit_event,
-    text_control_set_selection_range_internal,
+    select_contenteditable_contents, text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -84,80 +81,6 @@ fn can_suppress_compat_mouse_event(event_name: &str) -> bool {
 
 const MOUSE_POINTER_ID: i32 = 1;
 const TOUCH_POINTER_ID: i32 = 2;
-
-fn input_blocks_implicit_submission(
-    runtime: &crate::native_bridge::JsContextHost,
-    handle: DomHandle,
-) -> bool {
-    runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| {
-            element.is_html_input()
-                && matches!(
-                    element.input_type(),
-                    InputType::Text
-                        | InputType::Search
-                        | InputType::Tel
-                        | InputType::Url
-                        | InputType::Email
-                        | InputType::Password
-                        | InputType::Date
-                        | InputType::Month
-                        | InputType::Week
-                        | InputType::Time
-                        | InputType::DatetimeLocal
-                        | InputType::Number
-                )
-        })
-}
-
-fn perform_implicit_form_submission(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut crate::native_bridge::JsContextHost,
-    handle: DomHandle,
-    modifiers: u8,
-) -> RendererInputDispatchOutcome {
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(form_handle) = form_associated_form_owner(runtime, handle) else {
-        return input_dispatch_outcome(true);
-    };
-    // The form.elements collection excludes image inputs, but an image input
-    // is still a submit button for the implicit-submission default-button
-    // search. Use the complete form-data control traversal here.
-    let controls = form_data_control_elements(runtime, form_handle);
-    if let Some(default_button) = controls
-        .iter()
-        .copied()
-        .find(|candidate| is_valid_submit_button(runtime, *candidate))
-    {
-        return activate_default_submit_button_via_keyboard(
-            scope,
-            runtime_ptr,
-            default_button,
-            modifiers,
-        );
-    }
-    if controls
-        .iter()
-        .filter(|candidate| input_blocks_implicit_submission(runtime, **candidate))
-        .count()
-        > 1
-    {
-        return input_dispatch_outcome(true);
-    }
-
-    let had_pending_top_level_navigation = runtime.has_pending_location_navigation();
-    let _ = submit_form_with_submit_event(scope, runtime_ptr, form_handle, None, true);
-    RendererInputDispatchOutcome {
-        handled: true,
-        triggered_top_level_navigation: !had_pending_top_level_navigation
-            && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
-        pending_download: None,
-        pending_file_chooser: None,
-    }
-}
 
 struct PreparedMouseInputDispatch {
     button: i32,
@@ -1985,28 +1908,15 @@ impl ScriptVm {
                         TextEditInputType::InsertLineBreak,
                     )));
                 }
-                if input_blocks_implicit_submission(runtime, handle) && is_character_phase {
-                    // Enter's editing default action must remain cancelable before
-                    // activating a default submit button (and firing its click).
-                    let Some(before_input) = construct_input_event(
-                        scope,
-                        "beforeinput",
-                        TextEditInputType::InsertLineBreak,
-                        None,
-                    ) else {
-                        return Ok(input_dispatch_outcome(false));
-                    };
-                    if !dispatch_public_event(scope, runtime_ptr, handle, before_input)
-                        .allows_default()
-                    {
-                        return Ok(input_dispatch_outcome(false));
-                    }
-                    return Ok(perform_implicit_form_submission(
+                if is_character_phase
+                    && let Some(outcome) = perform_implicit_submission_from_control(
                         scope,
                         runtime_ptr,
                         handle,
                         modifiers,
-                    ));
+                    )
+                {
+                    return Ok(outcome);
                 }
                 if event_name == "keydown" && (target.is_button_like || target.is_anchor_like) {
                     return Ok(activate_handle_via_click_with_detail_and_modifiers(
@@ -2175,28 +2085,6 @@ impl ScriptVm {
             }
 
             if target.is_text_control && matches!(key_lower.as_str(), "backspace" | "delete") {
-                let value_units = utf16_units(&text_control_value(runtime, handle));
-                let (start, end) = current_selection_range(runtime, handle);
-                let start = utf16_scalar_boundary_at_or_after(&value_units, start as usize) as u32;
-                let end = utf16_scalar_boundary_at_or_after(&value_units, end as usize) as u32;
-                let (from, to) = if start != end {
-                    (start, end)
-                } else if key_lower == "backspace" {
-                    (
-                        utf16_previous_scalar_boundary(&value_units, start as usize) as u32,
-                        start,
-                    )
-                } else {
-                    (
-                        start,
-                        utf16_next_scalar_boundary(&value_units, start as usize) as u32,
-                    )
-                };
-                if from == to {
-                    return Ok(input_dispatch_outcome(true));
-                }
-                let _ =
-                    text_control_set_selection_range_internal(scope, runtime_ptr, handle, from, to);
                 return Ok(input_dispatch_outcome(replace_text_control_selection(
                     scope,
                     runtime_ptr,

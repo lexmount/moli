@@ -146,6 +146,24 @@ fn scroll_node_into_view_with_params(
     perform_bubbling_scroll_into_view(scope, runtime_ptr, target, geometry, params, 0).map(Some)
 }
 
+pub(crate) fn scroll_node_into_view_at_center(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Result<Option<bool>, moli_layout::LayoutError> {
+    scroll_node_into_view_with_params(
+        scope,
+        runtime_ptr,
+        handle,
+        None,
+        ScrollIntoViewParams {
+            horizontal: ScrollIntoViewAlignment::Center,
+            vertical: ScrollIntoViewAlignment::Center,
+            center_if_fully_hidden: false,
+        },
+    )
+}
+
 pub(crate) fn scroll_node_into_view_at_start(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,

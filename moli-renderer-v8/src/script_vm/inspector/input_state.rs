@@ -109,26 +109,6 @@ pub(in crate::script_vm) fn radio_group_members(
         .collect()
 }
 
-pub(in crate::script_vm) fn current_selection_range(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> (u32, u32) {
-    runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .map(|element| {
-            let start = element.selection_start();
-            let end = element.selection_end();
-            if start <= end {
-                (start, end)
-            } else {
-                (end, end)
-            }
-        })
-        .unwrap_or((0, 0))
-}
-
 pub(in crate::script_vm) fn current_selection_state(
     runtime: &JsContextHost,
     handle: DomHandle,

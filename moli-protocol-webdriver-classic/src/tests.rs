@@ -1485,10 +1485,11 @@ fn maps_element_clear_to_shared_dom_resolve_and_runtime_command() {
 }
 
 #[test]
-fn maps_element_click_to_shared_dom_geometry_and_input_commands() {
+fn maps_element_geometry_and_coordinate_input_commands() {
     let context = ClassicDevToolsCommandContext::with_target_id("classic-session-1", "TID-1");
 
-    let commands = element_click_prepare_commands(&context, "moli-node-23").expect("commands");
+    let commands =
+        element_geometry_prepare_commands(&context, DevToolsDomNodeReference::FrontendNodeId(23));
     assert_eq!(commands.len(), 2);
     let DevToolsCommand::ScrollIntoViewIfNeeded(scroll) = &commands[0] else {
         panic!("expected scroll command");
@@ -1536,10 +1537,6 @@ fn maps_element_click_to_shared_dom_geometry_and_input_commands() {
         assert_eq!(command.button, 0);
         assert_eq!(command.buttons, buttons);
     }
-
-    let invalid = element_click_prepare_commands(&context, "not-a-moli-node")
-        .expect_err("invalid element id should fail");
-    assert_eq!(invalid.code, ClassicErrorCode::NoSuchElement);
 }
 
 #[test]

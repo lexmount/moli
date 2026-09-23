@@ -6,8 +6,8 @@ use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
     DevToolsDispatchDragEventCommand, DevToolsDispatchKeyEventCommand,
     DevToolsDispatchMouseEventCommand, DevToolsDispatchTouchEventCommand, DevToolsDragData,
-    DevToolsDragDataItem, DevToolsDragEventType, DevToolsError, DevToolsErrorKind,
-    DevToolsKeyEventType, DevToolsMouseEventType, DevToolsPointerType,
+    DevToolsDragDataItem, DevToolsDragEventType, DevToolsElementClickOperation, DevToolsError,
+    DevToolsErrorKind, DevToolsKeyEventType, DevToolsMouseEventType, DevToolsPointerType,
     DevToolsSynthesizeTapGestureCommand, DevToolsTouchEventType, DevToolsTouchPoint,
 };
 use crate::domains::command_output::CommandOutputPlan;
@@ -15,7 +15,8 @@ use moli_core::page::{
     CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererCommandTurnCompletion,
     RendererDragData, RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
     RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-    RendererPointerEventProperties, RendererTouchPoint, decode_input_dispatch_outcome_completion,
+    RendererPointerEventProperties, RendererTouchPoint, decode_element_click_dispatch_completion,
+    decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
     decode_insert_text_completion,
 };
 use serde::Deserialize;
@@ -122,6 +123,8 @@ struct PendingInputCommandStartError {
 
 #[derive(Clone)]
 enum PendingInputCommandKind {
+    PrepareElementClick,
+    DispatchElementClick,
     DispatchMouseEvent,
     DispatchKeyEvent,
     DispatchTouchEvent,
@@ -242,7 +245,10 @@ impl PendingInputCommandKind {
         // Chromium's InputInjector owns replacement cleanup for the mouse and
         // key callback queues. Touch, drag, and IME commands have separate
         // completion protocols and must keep waiting for those terminals.
-        matches!(self, Self::DispatchMouseEvent | Self::DispatchKeyEvent)
+        matches!(
+            self,
+            Self::DispatchMouseEvent | Self::DispatchKeyEvent | Self::DispatchElementClick
+        )
     }
 }
 
@@ -565,6 +571,15 @@ fn start_input_command_dispatch_after_noop_checks(
     }
 }
 
+fn key_event_targets_outgoing_document(
+    conn: &CdpConnection,
+    owner: &CommandOwnerScope,
+    event_type: DevToolsKeyEventType,
+) -> bool {
+    event_type == DevToolsKeyEventType::KeyUp
+        && conn.has_pending_document_navigation_for_owner(owner)
+}
+
 fn start_pending_input_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -582,10 +597,9 @@ fn start_pending_input_command(
     // navigation before Playwright sends the matching keyup. Keep that
     // terminal event on the still-attached outgoing Page; every other key
     // event retains the normal cross-document navigation gate.
-    let targets_outgoing_document = conn.has_pending_document_navigation_for_owner(&owner)
-        && parsed_key_event
-            .as_ref()
-            .is_some_and(|parsed| parsed.event_type == DevToolsKeyEventType::KeyUp);
+    let targets_outgoing_document = parsed_key_event
+        .as_ref()
+        .is_some_and(|parsed| key_event_targets_outgoing_document(conn, &owner, parsed.event_type));
     if action.requires_document_access()
         && !targets_outgoing_document
         && let Err(message) = conn.ensure_document_accessible_for_owner(&owner)
@@ -930,6 +944,7 @@ fn devtools_input_command_route(
     command: &DevToolsCommand,
 ) -> Result<(Option<String>, Option<String>), DevToolsError> {
     let context = match command {
+        DevToolsCommand::ElementClick(command) => &command.context,
         DevToolsCommand::DispatchMouseEvent(command) => &command.context,
         DevToolsCommand::DispatchKeyEvent(command) => &command.context,
         DevToolsCommand::DispatchTouchEvent(command) => &command.context,
@@ -992,8 +1007,8 @@ fn start_devtools_dispatch_key_event_command(
     owner: &CommandOwnerScope,
     command: DevToolsDispatchKeyEventCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
-    let targets_outgoing_document = command.event_type == DevToolsKeyEventType::KeyUp
-        && conn.has_pending_document_navigation_for_owner(owner);
+    let targets_outgoing_document =
+        key_event_targets_outgoing_document(conn, owner, command.event_type);
     start_page_input_command_with_access(
         conn,
         command_id,
@@ -1269,7 +1284,11 @@ fn start_devtools_input_command_for_owner(
     command: DevToolsCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let coordinate_unsupported = match &command {
-        DevToolsCommand::DispatchMouseEvent(_) => Some(DISPATCH_MOUSE_EVENT_UNSUPPORTED_MESSAGE),
+        DevToolsCommand::ElementClick(crate::devtools_runtime::DevToolsElementClickCommand {
+            operation: DevToolsElementClickOperation::Dispatch(_),
+            ..
+        })
+        | DevToolsCommand::DispatchMouseEvent(_) => Some(DISPATCH_MOUSE_EVENT_UNSUPPORTED_MESSAGE),
         DevToolsCommand::DispatchTouchEvent(_) => Some(DISPATCH_TOUCH_EVENT_UNSUPPORTED_MESSAGE),
         DevToolsCommand::DispatchDragEvent(_) => Some(DISPATCH_DRAG_EVENT_UNSUPPORTED_MESSAGE),
         DevToolsCommand::SynthesizeTapGesture(_) => {
@@ -1286,6 +1305,27 @@ fn start_devtools_input_command_for_owner(
         }
     }
     match command {
+        DevToolsCommand::ElementClick(command) => match command.operation {
+            DevToolsElementClickOperation::Prepare { object_id } => start_page_input_command(
+                conn,
+                command_id,
+                owner,
+                PendingInputCommandKind::PrepareElementClick,
+                |page| {
+                    page.start_prepare_element_click(
+                        owner.session_id().map(str::to_owned),
+                        object_id.to_string(),
+                    )
+                },
+            ),
+            DevToolsElementClickOperation::Dispatch(click) => start_page_input_command(
+                conn,
+                command_id,
+                owner,
+                PendingInputCommandKind::DispatchElementClick,
+                |page| page.start_dispatch_prepared_element_click(click),
+            ),
+        },
         DevToolsCommand::DispatchMouseEvent(command) => {
             start_devtools_dispatch_mouse_event_command(conn, command_id, owner, command)
         }
@@ -1340,6 +1380,51 @@ async fn complete_pending_input_command(
     let mut side_effects = InputCommandSideEffects::default();
 
     let result = match completed.kind {
+        kind @ (PendingInputCommandKind::PrepareElementClick
+        | PendingInputCommandKind::DispatchElementClick) => {
+            match completed_page_command_result(completed_operation) {
+                Err(error) => Err(error),
+                Ok(result) => {
+                    let completion = settle_completed_input_page_command(
+                        conn,
+                        session_id,
+                        &owner,
+                        result,
+                        command_context,
+                    );
+                    if matches!(kind, PendingInputCommandKind::PrepareElementClick) {
+                        decode_element_click_preparation_completion(completion)
+                            .map(DevToolsCommandResult::ElementClickPreparation)
+                            .map_err(|error| {
+                                DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
+                            })
+                    } else {
+                        match decode_element_click_dispatch_completion(completion) {
+                            Err(error) => Err(DevToolsError::new(
+                                DevToolsErrorKind::Internal,
+                                error.to_string(),
+                            )),
+                            Ok(Err(error)) => {
+                                Ok(DevToolsCommandResult::ElementClickDispatch(Err(error)))
+                            }
+                            Ok(Ok(outcome)) => handle_input_dispatch_outcome_async(
+                                conn,
+                                &mut side_effects,
+                                session_id,
+                                &owner,
+                                outcome,
+                                command_context,
+                            )
+                            .await
+                            .map(|()| DevToolsCommandResult::ElementClickDispatch(Ok(())))
+                            .map_err(|error| {
+                                DevToolsError::new(DevToolsErrorKind::Internal, error)
+                            }),
+                        }
+                    }
+                }
+            }
+        }
         kind @ (PendingInputCommandKind::DispatchMouseEvent
         | PendingInputCommandKind::DispatchTouchEvent
         | PendingInputCommandKind::DispatchDragEvent
@@ -1366,7 +1451,10 @@ async fn complete_pending_input_command(
                 PendingInputCommandKind::DispatchTouchEvent
                 | PendingInputCommandKind::SynthesizeTapGesture => "touch event page command",
                 PendingInputCommandKind::DispatchDragEvent => "drag event page command",
-                PendingInputCommandKind::DispatchKeyEvent | PendingInputCommandKind::InsertText => {
+                PendingInputCommandKind::DispatchKeyEvent
+                | PendingInputCommandKind::InsertText
+                | PendingInputCommandKind::PrepareElementClick
+                | PendingInputCommandKind::DispatchElementClick => {
                     unreachable!()
                 }
             };

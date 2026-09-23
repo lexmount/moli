@@ -43,5 +43,6 @@ pub(crate) use scroll::{
     perform_wheel_scroll_default_action, queue_scroll_observable_effects,
 };
 pub(crate) use scroll_into_view::{
-    scroll_node_into_view_at_start, scroll_node_into_view_if_needed,
+    scroll_node_into_view_at_center, scroll_node_into_view_at_start,
+    scroll_node_into_view_if_needed,
 };

@@ -26,6 +26,11 @@ use std::{
 };
 use tokio::sync::oneshot;
 
+mod element_click;
+pub use element_click::{
+    RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
+};
+
 mod javascript_dialog;
 mod popup_activation;
 mod window_document_source;
@@ -420,7 +425,7 @@ pub struct RendererDragData {
     pub drag_operations_mask: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct RendererInputDispatchOutcome {
     pub handled: bool,
     pub triggered_top_level_navigation: bool,
@@ -4760,6 +4765,9 @@ pub(crate) enum RendererInspectorPageCommand {
     ComputedStylePropertiesForObjectId {
         object_id: String,
     },
+    PrepareElementClick {
+        object_id: String,
+    },
     ScrollObjectNodeIntoViewIfNeeded {
         object_id: String,
         rect: Option<moli_page_types::DomScrollIntoViewRect>,
@@ -4868,6 +4876,7 @@ pub enum RendererPageCommand {
     RefreshFullPageState,
     PageDiagnosticsSnapshot,
     HasPendingLocationNavigation,
+    DispatchPreparedElementClick(RendererPreparedPointerClick),
     DispatchMouseEventAtPoint {
         x: f64,
         y: f64,
@@ -5490,6 +5499,13 @@ impl RendererPageCommand {
         )
     }
 
+    pub fn prepare_element_click(inspector_session_id: Option<String>, object_id: String) -> Self {
+        Self::inspector_command(
+            inspector_session_id,
+            RendererInspectorPageCommand::PrepareElementClick { object_id },
+        )
+    }
+
     pub fn scroll_object_node_into_view_if_needed(
         inspector_session_id: Option<String>,
         object_id: String,
@@ -6100,6 +6116,8 @@ pub enum RendererCaptureScreencastFrameReply {
 }
 
 pub enum RendererPageReply {
+    ElementClickPreparation(Result<RendererElementClickTarget, RendererElementClickError>),
+    ElementClickDispatch(Result<RendererInputDispatchOutcome, RendererElementClickError>),
     RuntimeEvaluationResult(RendererRuntimeEvaluationResult),
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
     RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
@@ -6333,5 +6351,27 @@ impl RendererPageTable {
         self.entry(page_id)
             .filter(|entry| entry.is_active())
             .and_then(|entry| entry.in_flight_command_epoch)
+    }
+}
+
+impl RendererPageReply {
+    pub(crate) fn input_dispatch_outcome(&self) -> Option<&RendererInputDispatchOutcome> {
+        match self {
+            Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
+                Some(outcome)
+            }
+            _ => None,
+        }
+    }
+
+    pub(crate) fn input_dispatch_outcome_mut(
+        &mut self,
+    ) -> Option<&mut RendererInputDispatchOutcome> {
+        match self {
+            Self::InputDispatchOutcome(outcome) | Self::ElementClickDispatch(Ok(outcome)) => {
+                Some(outcome)
+            }
+            _ => None,
+        }
     }
 }

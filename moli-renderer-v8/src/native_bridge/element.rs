@@ -207,7 +207,8 @@ pub(crate) use events::{
     construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_submit_event, construct_toggle_event, construct_touch_event,
-    construct_touch_event_with_points, construct_wheel_event, dispatch_public_event,
+    construct_touch_event_with_points, construct_wheel_event, dispatch_beforeinput,
+    dispatch_public_event,
 };
 use events::{construct_click_event, construct_click_event_with_detail_and_modifiers};
 pub(crate) use focus::{
@@ -333,7 +334,7 @@ pub(crate) use forms::{
     cache_input_files_from_selected_files, form_control_is_effectively_disabled,
 };
 pub(crate) use forms::{
-    dispatch_text_control_event, is_text_control,
+    dispatch_text_control_event, is_text_control, perform_implicit_submission_from_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
@@ -397,7 +398,7 @@ pub(crate) use geometry::{
     observable_input_surface_hit_test, observable_scroll_adjusted_client_rect,
     observable_sources_with_fragments, perform_scrollbar_scroll_default_action,
     perform_wheel_scroll_default_action, queue_scroll_observable_effects,
-    scroll_node_into_view_at_start,
+    scroll_node_into_view_at_center, scroll_node_into_view_at_start,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,
@@ -7560,3 +7561,5 @@ pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_ha
     reflected_element_attribute_handle(runtime, owner, attribute)
         .and_then(|candidate| runtime.dom_host().resolve_reference_target_chain(candidate))
 }
+
+pub(crate) use geometry::observable_client_rects;

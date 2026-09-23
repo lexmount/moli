@@ -83,6 +83,9 @@ pub(crate) use self::script_preloads::{
 };
 
 pub use self::page_creation_progress::{RendererPageCreationPhase, RendererPageCreationProgress};
+pub use self::page_surface::{
+    RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
+};
 
 pub(crate) use self::browser_context_runtime::RendererOutputTransportSenderSlot;
 pub(in crate::runtime) use self::document_lifecycle_turn::PendingDocumentLifecycleTurn;

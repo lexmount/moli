@@ -1,10 +1,14 @@
 use super::*;
 use crate::blob;
 use crate::native_bridge::context_host::ChildBrowsingContextNavigationRequest;
-use crate::native_bridge::element::NodePublicEventDispatchOutcome;
 use crate::native_bridge::element::activation::{
     SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
 };
+use crate::native_bridge::element::{
+    NodePublicEventDispatchOutcome, TextEditInputType, activate_default_submit_button_via_keyboard,
+    dispatch_beforeinput,
+};
+use crate::runtime::RendererInputDispatchOutcome;
 use crate::util::{v8_string, v8str};
 use moli_dom::forms::normalize_form_submission_newlines;
 use moli_encoding::{
@@ -12,6 +16,119 @@ use moli_encoding::{
     is_charset_sentinel_name,
 };
 use url::Url;
+
+/// Runs the control's Enter default action, including its beforeinput gate.
+/// None means this target is not eligible; cancellation is a handled branch
+/// and must never fall through to ordinary character insertion.
+pub(crate) fn perform_implicit_submission_from_control(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    control: DomHandle,
+    modifiers: u8,
+) -> Option<RendererInputDispatchOutcome> {
+    if !input_blocks_implicit_submission(unsafe { &*runtime_ptr }, control) {
+        return None;
+    }
+    if !dispatch_beforeinput(
+        scope,
+        runtime_ptr,
+        control,
+        TextEditInputType::InsertLineBreak,
+        None,
+    ) {
+        return Some(RendererInputDispatchOutcome::default());
+    }
+    // beforeinput can change the control type, form owner, or document.
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_connected(control)
+        || !input_blocks_implicit_submission(runtime, control)
+    {
+        return Some(RendererInputDispatchOutcome::default());
+    }
+    Some(perform_implicit_form_submission(
+        scope,
+        runtime_ptr,
+        control,
+        modifiers,
+    ))
+}
+
+fn input_blocks_implicit_submission(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| {
+            element.is_html_input()
+                && matches!(
+                    element.input_type(),
+                    InputType::Text
+                        | InputType::Search
+                        | InputType::Tel
+                        | InputType::Url
+                        | InputType::Email
+                        | InputType::Password
+                        | InputType::Date
+                        | InputType::Month
+                        | InputType::Week
+                        | InputType::Time
+                        | InputType::DatetimeLocal
+                        | InputType::Number
+                )
+        })
+}
+
+fn perform_implicit_form_submission(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    modifiers: u8,
+) -> RendererInputDispatchOutcome {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(form_handle) = form_associated_form_owner(runtime, handle) else {
+        return RendererInputDispatchOutcome {
+            handled: true,
+            ..Default::default()
+        };
+    };
+    // The form.elements collection excludes image inputs, but an image input
+    // is still a submit button for the implicit-submission default-button
+    // search. Use the complete form-data control traversal here.
+    let controls = form_data_control_elements(runtime, form_handle);
+    if let Some(default_button) = controls
+        .iter()
+        .copied()
+        .find(|candidate| is_valid_submit_button(runtime, *candidate))
+    {
+        return activate_default_submit_button_via_keyboard(
+            scope,
+            runtime_ptr,
+            default_button,
+            modifiers,
+        );
+    }
+    if controls
+        .iter()
+        .filter(|candidate| input_blocks_implicit_submission(runtime, **candidate))
+        .count()
+        > 1
+    {
+        return RendererInputDispatchOutcome {
+            handled: true,
+            ..Default::default()
+        };
+    }
+
+    let had_pending_top_level_navigation = runtime.has_pending_location_navigation();
+    let _ = submit_form_with_submit_event(scope, runtime_ptr, form_handle, None, true);
+    RendererInputDispatchOutcome {
+        handled: true,
+        triggered_top_level_navigation: !had_pending_top_level_navigation
+            && unsafe { &*runtime_ptr }.has_pending_location_navigation(),
+        pending_download: None,
+        pending_file_chooser: None,
+    }
+}
 
 const FORM_SUBMISSION_MULTIPART_BOUNDARY_PREFIX: &str = "----MoliFormBoundary";
 

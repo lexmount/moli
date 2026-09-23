@@ -642,7 +642,7 @@ impl PageVm {
         Ok(outcome)
     }
 
-    fn bind_input_dispatch_file_chooser_backend_node_id(
+    pub(super) fn bind_input_dispatch_file_chooser_backend_node_id(
         &mut self,
         outcome: &mut RendererInputDispatchOutcome,
     ) {

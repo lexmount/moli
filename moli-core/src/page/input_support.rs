@@ -519,3 +519,39 @@ impl PageInputExt for Page {
         .await
     }
 }
+
+impl Page {
+    pub fn start_prepare_element_click(
+        &self,
+        inspector_session_id: Option<String>,
+        object_id: String,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::prepare_element_click(
+            inspector_session_id,
+            object_id,
+        ))
+    }
+
+    pub fn start_dispatch_prepared_element_click(
+        &self,
+        click: super::RendererPreparedPointerClick,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::DispatchPreparedElementClick(click))
+    }
+}
+
+#[doc(hidden)]
+pub fn decode_element_click_preparation_completion(
+    completion: RendererCommandTurnCompletion,
+) -> Result<Result<super::RendererElementClickTarget, super::RendererElementClickError>> {
+    expect_page_reply!(settled_input_reply(completion)?, "prepare element click", "element click preparation",
+        RendererPageReply::ElementClickPreparation(preparation) => Ok(preparation))
+}
+
+#[doc(hidden)]
+pub fn decode_element_click_dispatch_completion(
+    completion: RendererCommandTurnCompletion,
+) -> Result<Result<RendererInputDispatchOutcome, super::RendererElementClickError>> {
+    expect_page_reply!(settled_input_reply(completion)?, "dispatch element click", "element click dispatch",
+        RendererPageReply::ElementClickDispatch(outcome) => Ok(outcome))
+}

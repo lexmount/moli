@@ -17,7 +17,9 @@ pub(crate) use self::constructors::{
 pub(super) use self::constructors::{
     construct_click_event, construct_click_event_with_detail_and_modifiers,
 };
-pub(crate) use self::dispatch::{NodePublicEventDispatchOutcome, dispatch_public_event};
+pub(crate) use self::dispatch::{
+    NodePublicEventDispatchOutcome, dispatch_beforeinput, dispatch_public_event,
+};
 
 fn event_constructor<'s>(
     scope: &mut v8::PinScope<'s, '_>,

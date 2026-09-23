@@ -4866,16 +4866,13 @@ impl RendererOwnerHandle {
 
     fn merge_pending_download_into_reply(
         &self,
-        reply: RendererPageReply,
+        mut reply: RendererPageReply,
         download: RendererPendingDownloadActivation,
     ) -> RendererPageReply {
-        match reply {
-            RendererPageReply::InputDispatchOutcome(mut outcome) => {
-                outcome.pending_download = Some(download);
-                RendererPageReply::InputDispatchOutcome(outcome)
-            }
-            other => other,
+        if let Some(outcome) = reply.input_dispatch_outcome_mut() {
+            outcome.pending_download = Some(download);
         }
+        reply
     }
 
     async fn finish_live_page_navigation_completion(

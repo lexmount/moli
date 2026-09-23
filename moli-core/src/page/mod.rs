@@ -64,7 +64,9 @@ pub use dom_protocol_support::{
     RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id,
 };
 pub use input_support::{
-    PageInputExt, decode_input_dispatch_outcome_completion, decode_insert_text_completion,
+    PageInputExt, decode_element_click_dispatch_completion,
+    decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
+    decode_insert_text_completion,
 };
 pub use moli_page_types::DomScrollIntoViewRect;
 pub use moli_page_types::{
@@ -139,6 +141,9 @@ pub use moli_renderer_v8::{
     RendererAppManifestOrientation, RendererAppManifestProtocolHandler,
     RendererAppManifestQueryResult, RendererAppManifestRelatedApplication,
     RendererAppManifestShortcut, RendererPreparedAppManifestLoad,
+};
+pub use moli_renderer_v8::{
+    RendererElementClickError, RendererElementClickTarget, RendererPreparedPointerClick,
 };
 pub use navigation_diagnostics::{NavigationRedirect, NavigationResponse};
 pub use protocol_support::{

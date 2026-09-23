@@ -15120,6 +15120,7 @@ mod canvas_webgl;
 mod child_dynamic_inline_scripts;
 mod dom_elements;
 mod dom_xhr;
+mod element_click;
 mod http_fixture;
 mod indexed_db;
 mod inspector_unwrap;

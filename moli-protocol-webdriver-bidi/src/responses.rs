@@ -39,6 +39,17 @@ pub fn error_response(id: Option<u64>, code: BidiErrorCode, message: &str) -> Va
 }
 
 pub fn bidi_response_from_devtools_result(id: u64, result: DevToolsCommandResult) -> Value {
+    if matches!(
+        result,
+        DevToolsCommandResult::ElementClickPreparation(_)
+            | DevToolsCommandResult::ElementClickDispatch(_)
+    ) {
+        return error_response(
+            Some(id),
+            BidiErrorCode::UnsupportedOperation,
+            "element click results are internal to WebDriver Classic",
+        );
+    }
     if matches!(result, DevToolsCommandResult::GetNodeForLocation(_)) {
         return error_response(
             Some(id),
@@ -75,6 +86,10 @@ pub fn bidi_response_from_devtools_error(id: u64, error: DevToolsError) -> Value
 
 fn bidi_result_payload_from_devtools_result(result: DevToolsCommandResult) -> Value {
     match result {
+        DevToolsCommandResult::ElementClickPreparation(_)
+        | DevToolsCommandResult::ElementClickDispatch(_) => {
+            unreachable!("element click results have no WebDriver BiDi success projection")
+        }
         DevToolsCommandResult::Empty | DevToolsCommandResult::TraverseHistory(_) => json!({}),
         DevToolsCommandResult::Navigate(result) => json!({
             "navigation": result

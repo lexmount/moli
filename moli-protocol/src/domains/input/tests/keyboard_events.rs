@@ -410,3 +410,103 @@ async fn cdp_insert_text_does_not_manufacture_keyboard_events() {
         );
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_deletion_observes_live_selection_after_beforeinput_without_temporary_selection() {
+    // Chromium 145: beforeinput sees the original caret. An uncanceled edit
+    // uses listener changes; cancellation preserves them without a rollback.
+    for control in &CONTROLS[..2] {
+        for (effect, canceled_value, canceled_selection, backward, forward, editable) in [
+            ("", "abc", [1, 1], ("bc", [0, 0]), ("ac", [1, 1]), true),
+            (
+                "field.setSelectionRange(2,2)",
+                "abc",
+                [2, 2],
+                ("ac", [1, 1]),
+                ("ab", [2, 2]),
+                true,
+            ),
+            (
+                "field.setSelectionRange(0,2)",
+                "abc",
+                [0, 2],
+                ("c", [0, 0]),
+                ("c", [0, 0]),
+                true,
+            ),
+            (
+                "field.value='wxyz';field.setSelectionRange(2,2)",
+                "wxyz",
+                [2, 2],
+                ("wyz", [1, 1]),
+                ("wxz", [2, 2]),
+                true,
+            ),
+            (
+                "field.readOnly=true",
+                "abc",
+                [1, 1],
+                ("abc", [1, 1]),
+                ("abc", [1, 1]),
+                false,
+            ),
+            (
+                "field.remove()",
+                "abc",
+                [1, 1],
+                ("abc", [1, 1]),
+                ("abc", [1, 1]),
+                false,
+            ),
+        ] {
+            for (key, uncanceled) in [("Backspace", backward), ("Delete", forward)] {
+                for cancel in [false, true] {
+                    let mut ctx = keyboard_fixture(control).await;
+                    assert!(evaluate_bool(&mut ctx, &format!(r#"(() => {{
+                        const field = document.getElementById('field');
+                        window.__field = field; window.__selectionEvents = [];
+                        field.value='abc'; field.setSelectionRange(1,1);
+                        for (const type of ['beforeinput', 'input']) field.addEventListener(type, e => {{
+                            __selectionEvents.push([type,field.selectionStart,field.selectionEnd]);
+                            if(type === 'beforeinput') {{ {effect}; if({cancel}) e.preventDefault(); }}
+                        }});
+                        return true;
+                    }})()"#)).await);
+                    dispatch(&mut ctx, "rawKeyDown", key, key, "").await;
+                    let (value, selection) = if cancel {
+                        (canceled_value, canceled_selection)
+                    } else {
+                        uncanceled
+                    };
+                    let mut expected_events = vec![json!(["beforeinput", 1, 1])];
+                    if !cancel && editable {
+                        expected_events.push(json!(["input", selection[0], selection[1]]));
+                    }
+                    let actual: serde_json::Value = serde_json::from_str(&evaluate_string(&mut ctx,
+                        "JSON.stringify([__field.value,[__field.selectionStart,__field.selectionEnd],__selectionEvents])").await).unwrap();
+                    assert_eq!(
+                        actual,
+                        json!([value, selection, expected_events]),
+                        "{control} {key} {effect} cancel={cancel}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_deletion_at_text_boundary_still_dispatches_beforeinput_without_editing() {
+    for control in &CONTROLS[..2] {
+        for (key, caret) in [("Backspace", 0), ("Delete", 3)] {
+            let mut ctx = keyboard_fixture(control).await;
+            assert!(evaluate_bool(&mut ctx, &format!("(()=>{{const field=document.getElementById('field');field.value='abc';field.setSelectionRange({caret},{caret});return true}})()")).await);
+            dispatch(&mut ctx, "rawKeyDown", key, key, "").await;
+            assert_eq!(
+                events(&mut ctx).await,
+                json!(["keydown:field", "beforeinput:field"])
+            );
+            assert_eq!(field_value(&mut ctx).await, "abc");
+        }
+    }
+}

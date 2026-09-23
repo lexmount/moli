@@ -607,6 +607,7 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorPageCommand::OuterHtmlForObjectId { .. } => {
                 Some("OuterHtmlForObjectId")
             }
+            RendererInspectorPageCommand::PrepareElementClick { .. } => Some("PrepareElementClick"),
             RendererInspectorPageCommand::ScrollObjectNodeIntoViewIfNeeded { .. } => {
                 Some("ScrollObjectNodeIntoViewIfNeeded")
             }
