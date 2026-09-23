@@ -517,11 +517,22 @@ impl ScriptVm {
             let security_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
             let mut opaque_response_blocked = false;
             let result = result.and_then(|response| {
-                if matches!(pending.continuation, PendingSubresourceContinuation::FontFace(_))
-                    && !response.redirect_chain.is_empty()
-                    && !context_host.borrow_mut().font_request_allowed_by_csp(scope, pending.execution_context.dispatch_scope(), &pending.info.document_url, &response.final_url, crate::content_security_policy::ContentSecurityPolicyRedirectStatus::FollowedRedirect) {
-                    return Err("Font redirect blocked by Content Security Policy".to_owned());
+                if let PendingSubresourceContinuation::FontFace(font) = &pending.continuation
+                    && response.final_url != pending.info.url
+                    && !font.redirect_state.was_checked(&response.final_url) {
+                    let redirect_status = if response.redirect_chain.is_empty() {
+                        ContentSecurityPolicyRedirectStatus::NoRedirect
+                    } else { ContentSecurityPolicyRedirectStatus::FollowedRedirect };
+                    let (reports, enforced) = font.policy.check_url(&pending.info.document_url, &response.final_url, redirect_status).into_violations();
+                    let error = enforced.first().map(|violation| crate::document_runtime::document_content_security_policy_error_message(violation, "FontFace"));
+                    for mut violation in reports.into_iter().chain(enforced) {
+                        report_window_fetch_csp_redirect_violation(scope, &context_host, &font.report_context, &pending.info.url, &mut violation);
+                    }
+                    if let Some(error) = error {
+                        return Err(error);
+                    }
                 }
+
                 if !response.redirect_chain.is_empty()
                     && let Some(message) = document_connect_csp_redirect_failure_message(
                         scope,
@@ -787,7 +798,7 @@ impl ScriptVm {
                             ),
                         ),
                         PendingSubresourceContinuation::FontFace(face) => {
-                            let face = v8::Local::new(scope, face);
+                            let face = v8::Local::new(scope, &face.face);
                             let bytes = ((200..300).contains(&response_status) && !opaque_response_blocked)
                                 .then(|| observable_response.body_bytes());
                             crate::context_bootstrap::finish_font_face_url_load(scope, face, bytes);
@@ -931,7 +942,7 @@ impl ScriptVm {
                             Err(error_text.clone()),
                         ),
                         PendingSubresourceContinuation::FontFace(face) => {
-                            let face = v8::Local::new(scope, face);
+                            let face = v8::Local::new(scope, &face.face);
                             crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
                         }
                         PendingSubresourceContinuation::StylesheetSubresource {

@@ -132,11 +132,15 @@ impl PreparedSubresourceFetch {
     }
 
     pub(super) fn dispatch(
-        self,
+        mut self,
         host: &mut JsContextHost,
         internal_id: u64,
         service_worker_failure: &str,
     ) {
+        let redirect_check = host.window_fetch_redirect_check(internal_id);
+        if let Some(check) = redirect_check.clone() {
+            self.request = self.request.with_redirect_check(check);
+        }
         let loader = self.resource_loader.request_client().clone();
         let task_runner = self.resource_loader.task_runner();
         let info = self.pending_info;
@@ -147,7 +151,7 @@ impl PreparedSubresourceFetch {
                 .is_some()
         {
             let dispatch = ServiceWorkerFetchDispatch {
-                redirect_check: None,
+                redirect_check,
                 internal_id,
                 request: host.service_worker_fetch_request(
                     client_id,
