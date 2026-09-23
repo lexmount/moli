@@ -7,12 +7,6 @@ const DESTINATIONS: [&str; 5] = ["script", "image", "font", "track", "fetch"];
 
 fn preload_cases(origin: &str, cross: &str) -> serde_json::Value {
     let mut variants = network_cases(origin, cross).as_array().unwrap().clone();
-    // CORS request policy belongs to the loader. Exercise integrity on responses
-    // that are readable and on no-CORS fetches whose responses are opaque.
-    variants.retain(|variant| {
-        let name = variant["name"].as_str().unwrap();
-        !name.starts_with("cors-") && name != "cross-no-acao"
-    });
     variants.extend([
         serde_json::json!({"name":"stronger-mismatch", "src":format!("{origin}/script.js"),
             "integrity":format!("{INTEGRITY} sha512-AAAA"), "expected":"error"}),
@@ -24,14 +18,6 @@ fn preload_cases(origin: &str, cross: &str) -> serde_json::Value {
     let mut cases = Vec::new();
     for destination in DESTINATIONS {
         for variant in &variants {
-            if destination != "fetch"
-                && matches!(
-                    variant["name"].as_str(),
-                    Some("cross-no-cors" | "redirect-cross" | "redirect-home")
-                )
-            {
-                continue;
-            }
             let mut case = variant.clone();
             let name = format!("{destination}/{}", case["name"].as_str().unwrap());
             let mut url = url::Url::parse(case["src"].as_str().unwrap()).unwrap();
@@ -104,7 +90,7 @@ async fn assert_preloads(page: &mut Page, expression: &str, count: usize) -> Res
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn preload_integrity_checks_bytes_in_top_and_child_documents() -> Result<()> {
+async fn preload_integrity_checks_bytes_and_cors_in_top_and_child_documents() -> Result<()> {
     let servers = IntegrityServers::spawn().await?;
     let mut config = AppConfig::default();
     config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
@@ -124,15 +110,13 @@ async fn preload_integrity_checks_bytes_in_top_and_child_documents() -> Result<(
         &format!(
             r#"(async () => {{
                 const frame = document.createElement('iframe');
-                frame.src = '/page.html';
+                frame.src = '/preload-parser.html';
                 await new Promise(resolve => {{ frame.onload = resolve; document.body.append(frame); }});
                 const result = await frame.contentWindow.eval({probe});
                 frame.remove();
                 return result;
             }})()"#,
-            probe = serde_json::to_string(&format!(
-                "{PROBE}({cases}.map(({{expectedEncodedBodySize, ...test}}) => test))"
-            ))?
+            probe = serde_json::to_string(&format!("{PROBE}(preloadSriCases)"))?
         ),
         count,
     ).await?;
