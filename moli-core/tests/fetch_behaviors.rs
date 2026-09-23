@@ -15,6 +15,9 @@ mod preload_lifecycle;
 #[path = "fetch_behaviors/preload_as.rs"]
 mod preload_as;
 
+#[path = "fetch_behaviors/preload_as.rs"]
+mod preload_as;
+
 fn diagnostic_global<'a>(page: &'a Page, name: &str) -> Option<&'a JsValueSnapshot> {
     page.script_execution().global(name)
 }
