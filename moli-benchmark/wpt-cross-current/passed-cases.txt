@@ -7933,6 +7933,8 @@ pointerlock/constructor.html
 pointerlock/pointerlock-requires-gesture.html
 preload/avoid-delaying-onload-link-modulepreload-exec.html
 preload/avoid-delaying-onload-link-modulepreload.html
+preload/avoid-delaying-onload-link-preload-style.html
+preload/avoid-delaying-onload-link-preload.html
 preload/modulepreload-as.html
 preload/modulepreload-json.html
 preload/modulepreload-multiple.html

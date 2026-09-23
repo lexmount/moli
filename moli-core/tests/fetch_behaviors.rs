@@ -9,14 +9,12 @@ use moli_core::{
 use std::time::Instant;
 use support::FixtureServer;
 use tokio::time::Duration;
+
+
+#[path = "fetch_behaviors/preload_as.rs"]
+mod preload_as;
 #[path = "fetch_behaviors/preload_lifecycle.rs"]
 mod preload_lifecycle;
-
-#[path = "fetch_behaviors/preload_as.rs"]
-mod preload_as;
-
-#[path = "fetch_behaviors/preload_as.rs"]
-mod preload_as;
 
 fn diagnostic_global<'a>(page: &'a Page, name: &str) -> Option<&'a JsValueSnapshot> {
     page.script_execution().global(name)

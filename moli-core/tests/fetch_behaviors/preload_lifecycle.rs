@@ -1,20 +1,5 @@
+use super::preload_as::evaluate_preload_probe;
 use super::*;
-
-async fn evaluate_preload_probe(page: &mut Page, fixture: &str) -> Result<serde_json::Value> {
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        page.evaluate_runtime_expression_with_await_async(
-            &format!("({fixture}).then(JSON.stringify)"),
-            true,
-        ),
-    )
-    .await??;
-    Ok(serde_json::from_str(
-        result["value"]
-            .as_str()
-            .expect("preload lifecycle observations"),
-    )?)
-}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ordinary_preloads_do_not_delay_window_load_or_lose_late_events() -> Result<()> {
