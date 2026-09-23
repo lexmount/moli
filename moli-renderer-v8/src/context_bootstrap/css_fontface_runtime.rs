@@ -58,6 +58,6 @@ pub(crate) use loading::{
     bind_stylesheet_font_face, finish_font_face_url_load, publish_font_face_load_changes,
 };
 pub(super) use storage::install_font_face_set_template_accessors;
-pub(crate) use storage::new_font_face_set;
-pub(crate) use storage::rebuild_font_face_set_faces;
-pub(crate) use storage::settle_document_font_face_set_ready;
+pub(crate) use storage::{
+    new_font_face_set, rebuild_font_face_set_faces, settle_document_font_face_set_ready,
+};
