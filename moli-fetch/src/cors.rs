@@ -2,7 +2,10 @@ use moli_web_mime::response_header_values;
 
 use crate::RequestCredentialsMode;
 
-fn combined_cors_response_header_value(headers: &[(String, String)], name: &str) -> Option<String> {
+fn combined_cors_response_header_value(
+    headers: &[(String, Vec<u8>)],
+    name: &str,
+) -> Option<String> {
     // Fetch combines every matching field, including empty values. Neither
     // Allow-Origin nor Allow-Credentials permits a list.
     let values = response_header_values(headers, name);

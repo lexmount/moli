@@ -654,7 +654,7 @@ fn enqueue_pending_network_body_chunk_in_maps(
 pub(crate) fn release_pending_opaque_response_body(
     scope: &mut v8::PinScope<'_, '_>,
     body_source_id: NetworkBodySourceId,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     body: &SubresourceResponseBody,
 ) -> Result<(), String> {
     match validated_opaque_response_body(response_headers, body) {

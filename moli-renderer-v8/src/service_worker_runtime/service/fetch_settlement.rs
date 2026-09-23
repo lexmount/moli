@@ -1648,7 +1648,7 @@ mod tests {
                     completion_queue.sender(),
                     mode,
                 );
-                let headers = vec![("X-Visible".to_owned(), "present".to_owned())];
+                let headers = vec![("X-Visible".to_owned(), b"present".to_vec())];
                 service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
                     event_id,
                     owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(

@@ -275,9 +275,9 @@ mod tests {
         assert_eq!(
             head.headers,
             vec![
-                ("Content-Length".to_owned(), "2".to_owned()),
-                ("Content-Type".to_owned(), "".to_owned()),
-                ("Content-Range".to_owned(), "bytes 1-2/4".to_owned()),
+                ("Content-Length".to_owned(), b"2".to_vec()),
+                ("Content-Type".to_owned(), Vec::new()),
+                ("Content-Range".to_owned(), b"bytes 1-2/4".to_vec()),
             ]
         );
         assert_eq!(

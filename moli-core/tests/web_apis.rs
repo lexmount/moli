@@ -1,9 +1,3 @@
-#[path = "web_apis/font_queries.rs"]
-mod font_queries;
-
-#[path = "web_apis/indexed_db_transaction.rs"]
-mod indexed_db_transaction;
-
 use moli_test_support as support;
 
 use anyhow::Result;
@@ -32,6 +26,8 @@ mod fetch_body_realm;
 mod fetch_opaque_stream;
 #[path = "web_apis/fetch_preaborted_upload.rs"]
 mod fetch_preaborted_upload;
+#[path = "web_apis/font_queries.rs"]
+mod font_queries;
 #[path = "web_apis/indexed_db_transaction.rs"]
 mod indexed_db_transaction;
 #[path = "web_apis/pipe_disturbed.rs"]

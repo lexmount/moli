@@ -2,8 +2,8 @@ use super::*;
 use crate::{
     callback_invocation::{CallbackInvocation, CallbackInvocationOutcome, CallbackInvoker},
     context_bootstrap::events::{
-        EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, error_event_handler_arguments, event_internal_bool_flag,
-        set_event_internal_flag,
+        EVENT_PASSIVE_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, error_event_handler_arguments,
+        event_internal_bool_flag, set_event_internal_flag,
     },
     context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
@@ -163,7 +163,12 @@ fn dispatch_simple_event_target_event_with_original_target_collecting_errors<'s>
             );
             dispatched |= outcome.invoked;
             if let Some(returned) = outcome.value {
-                apply_event_handler_return_value(scope, event, v8::Local::new(scope, &returned), handler_type);
+                apply_event_handler_return_value(
+                    scope,
+                    event,
+                    v8::Local::new(scope, &returned),
+                    handler_type,
+                );
             }
         }
     }
@@ -463,7 +468,8 @@ fn invoke_simple_event_callback_with_invocation<'s>(
                         &report,
                     );
                 } else {
-                    let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
+                    let _ =
+                        crate::worker::dispatch_current_worker_callback_exception(scope, *report);
                 }
                 SimpleEventCallbackResult {
                     invoked: true,

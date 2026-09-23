@@ -178,9 +178,9 @@ fn cors_redirect_referrer_never_recovers_stripped_information() -> Result<()> {
                 status: 302,
                 status_text: None,
                 headers: vec![
-                    ("Location".to_owned(), location.to_owned()),
-                    ("Referrer-Policy".to_owned(), policy.to_owned()),
-                    ("Access-Control-Allow-Origin".to_owned(), "*".to_owned()),
+                    ("Location".to_owned(), location.as_bytes().to_vec()),
+                    ("Referrer-Policy".to_owned(), policy.as_bytes().to_vec()),
+                    ("Access-Control-Allow-Origin".to_owned(), b"*".to_vec()),
                 ],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
@@ -232,7 +232,7 @@ fn cors_redirect_modes_precede_location_parsing() -> Result<()> {
                     status,
                     status_text: None,
                     headers: location
-                        .map(|value| vec![("Location".to_owned(), value.to_owned())])
+                        .map(|value| vec![("Location".to_owned(), value.as_bytes().to_vec())])
                         .unwrap_or_default(),
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),

@@ -130,7 +130,7 @@ pub(crate) fn validate_fetch_response_headers(
 pub(crate) fn fetch_response_needs_orb_body_validation(
     request_origin: impl Into<WebOrigin>,
     response_url: &url::Url,
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     request_mode: RequestMode,
 ) -> bool {
     request_mode == RequestMode::NoCors
@@ -140,7 +140,7 @@ pub(crate) fn fetch_response_needs_orb_body_validation(
 }
 
 pub(crate) fn validated_opaque_response_body<'a>(
-    response_headers: &[(String, String)],
+    response_headers: &[(String, Vec<u8>)],
     body: &'a crate::protocol_types::SubresourceResponseBody,
 ) -> Result<std::borrow::Cow<'a, [u8]>, FetchResponseSecurityViolation> {
     let bytes = body.try_bytes().map_err(|error| {
@@ -718,7 +718,10 @@ mod tests {
                     assert_eq!(
                         validate_cors_response_chain(
                             &origin,
-                            &header_response(response_url.clone(), headers.clone()),
+                            &header_response(
+                                response_url.clone(),
+                                moli_fetch::headers_from_byte_strings(&headers).unwrap()
+                            ),
                             mode
                         )
                         .is_ok(),
@@ -770,7 +773,10 @@ mod tests {
                 assert_eq!(
                     validate_cors_response_chain(
                         &document_url,
-                        &header_response(response_url.clone(), headers.clone()),
+                        &header_response(
+                            response_url.clone(),
+                            moli_fetch::headers_from_byte_strings(&headers).unwrap()
+                        ),
                         mode
                     )
                     .is_ok(),
@@ -780,7 +786,10 @@ mod tests {
                 assert!(
                     validate_cors_response_chain(
                         &document_url,
-                        &header_response(document_url.clone(), headers.clone()),
+                        &header_response(
+                            document_url.clone(),
+                            moli_fetch::headers_from_byte_strings(&headers).unwrap()
+                        ),
                         mode
                     )
                     .is_ok(),
@@ -937,7 +946,7 @@ mod tests {
 
         let allowed_response = header_response(
             response_url,
-            vec![("Access-Control-Allow-Origin".to_owned(), "null".to_owned())],
+            vec![("Access-Control-Allow-Origin".to_owned(), b"null".to_vec())],
         );
         assert!(
             validate_cors_response_chain(
