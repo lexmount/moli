@@ -7,7 +7,7 @@ use crate::page_task_queue::{
     RendererPageHistoryTraversalTaskKind, RendererPageNavigationApiTaskId,
     RendererPageNavigationApiTaskKind, RendererPageNavigationApiTaskProducer,
 };
-use moli_page_types::SessionHistoryStepId;
+use moli_session_history::SessionHistoryStepId;
 use moli_webapi::navigation_values::navigation_result_object;
 use std::{
     cell::RefCell,

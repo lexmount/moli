@@ -133,7 +133,15 @@ pub(super) fn restore<'s>(
                 moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
             );
         }
-        super::session_history_traversal::finish_entry(scope, owner, Some(&entry.key));
+        // Document ownership can commit before a preserved Window installs its
+        // new history view. Release the barrier only once that view is current.
+        if super::navigation_entry::navigation_current_entry(scope, owner)
+            .and_then(|entry| entry_reference(scope, entry))
+            .as_ref()
+            == Some(&entry)
+        {
+            super::session_history_traversal::finish_entry(scope, owner, Some(&entry.key));
+        }
         let root = binding.popup.map_or(
             OwnerDispatchScope::Top,
             OwnerDispatchScope::LightweightPopup,

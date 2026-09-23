@@ -215,7 +215,7 @@ pub(super) fn history_delta_traversal_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     delta: i64,
-    from: Option<moli_page_types::SessionHistoryStepId>,
+    from: Option<moli_session_history::SessionHistoryStepId>,
 ) -> Option<HistoryDeltaTraversalPlan<'s>> {
     let owner = runtime_window_owner(scope, history);
     let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
