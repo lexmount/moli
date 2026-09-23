@@ -539,7 +539,7 @@ fn begin_child_document_stream_replacement<'s>(
 ) -> Option<v8::Local<'s, v8::Context>> {
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let document_handle = child_document_native_handle_for_runtime(scope, host_ptr, document)?;
-    unsafe { &mut *host_ptr }.begin_child_document_stream_replacement(
+    JsContextHost::begin_child_document_stream_replacement(
         scope,
         host_ptr,
         child_handle,
@@ -549,17 +549,17 @@ fn begin_child_document_stream_replacement<'s>(
 
 impl JsContextHost {
     fn begin_child_document_stream_replacement<'s>(
-        &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Context>> {
-        debug_assert!(std::ptr::eq(host_ptr, self));
-        if self.child_browsing_context_document_handle(child_handle) != Some(document_handle) {
+        if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
+            != Some(document_handle)
+        {
             return None;
         }
-        if self.child_document_stream_is_blocked_by_navigation(child_handle) {
+        if unsafe { &*host_ptr }.child_document_stream_is_blocked_by_navigation(child_handle) {
             tracing::debug!(
                 ?child_handle,
                 ?document_handle,
@@ -567,7 +567,7 @@ impl JsContextHost {
             );
             return None;
         }
-        let script_context = match self
+        let script_context = match unsafe { &mut *host_ptr }
             .ensure_prebootstrapped_child_default_context(scope, child_handle)
         {
             Ok(context) => context,
@@ -581,16 +581,17 @@ impl JsContextHost {
                 return None;
             }
         };
-        if self.child_document_is_executing_parser_script(document_handle) {
+        if unsafe { &*host_ptr }.child_document_is_executing_parser_script(document_handle) {
             return Some(script_context);
         }
-        let document_url = self.document_url_for_handle(document_handle);
-        let document_base_url = self.document_base_url_for_handle(document_handle);
+        let document_url = unsafe { &*host_ptr }.document_url_for_handle(document_handle);
+        let document_base_url = unsafe { &*host_ptr }.document_base_url_for_handle(document_handle);
         // Validate the target owner before any unload callback is observable.
         // Descendant unload handlers can run arbitrary script, including a
         // reentrant document.open(), so this admission snapshot must not be
         // committed after callbacks without being refreshed.
-        self.frame_owner_store
+        unsafe { &mut *host_ptr }
+            .frame_owner_store
             .plan_child_document_open_replacement(
                 child_handle,
                 document_handle,
@@ -598,23 +599,29 @@ impl JsContextHost {
                 document_base_url,
             )?;
 
-        self.dispatch_document_open_descendant_frame_unload_lifecycle(scope, document_handle);
-        if self
+        Self::dispatch_document_open_descendant_frame_unload_lifecycle(
+            scope,
+            host_ptr,
+            document_handle,
+        );
+        if unsafe { &*host_ptr }
             .child_browsing_contexts
             .get(&child_handle)
             .is_some_and(|entry| entry.pending_attribute_bootstrap_commit())
         {
-            self.cancel_child_browsing_context_attribute_navigation(child_handle);
+            unsafe { &mut *host_ptr }
+                .cancel_child_browsing_context_attribute_navigation(child_handle);
         }
 
-        if self.child_browsing_context_document_handle(child_handle) != Some(document_handle)
-            || self.child_document_stream_is_blocked_by_navigation(child_handle)
+        if unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
+            != Some(document_handle)
+            || unsafe { &*host_ptr }.child_document_stream_is_blocked_by_navigation(child_handle)
         {
             return None;
         }
-        let document_url = self.document_url_for_handle(document_handle);
-        let document_base_url = self.document_base_url_for_handle(document_handle);
-        let replacement_plan = self
+        let document_url = unsafe { &*host_ptr }.document_url_for_handle(document_handle);
+        let document_base_url = unsafe { &*host_ptr }.document_base_url_for_handle(document_handle);
+        let replacement_plan = unsafe { &mut *host_ptr }
             .frame_owner_store
             .plan_child_document_open_replacement(
                 child_handle,
@@ -623,101 +630,125 @@ impl JsContextHost {
                 document_base_url.clone(),
             )?;
         let retired_owner = replacement_plan.retired_owner();
-        let resource_authority = self
+        let resource_authority = unsafe { &*host_ptr }
             .document_resource_loader_for_owner(retired_owner)
             .expect("child document.open() requires its exact committed resource authority")
             .clone();
-        let document_origin = self
+        let document_origin = unsafe { &*host_ptr }
             .child_browsing_context_window_origin(child_handle)
             .expect("child document.open() requires its committed Window origin");
-        let children = self
+        let children = unsafe { &*host_ptr }
             .dom_host()
             .child_handles(document_handle)
             .collect::<Vec<_>>();
-        crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
-            let host = unsafe { &mut *host_ptr };
-            let transition = host
-                .frame_owner_store
-                .commit_child_document_open_replacement(replacement_plan);
-            let current_owner = transition
-                .current_owner()
-                .expect("committed child document-open replacement must install an owner");
-            host.replace_document_resource_loader_for_document_open(
-                crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
-                crate::network::context::DocumentFetchContext::new(
-                    crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
-                    document_url.clone(),
-                    document_base_url,
-                    document_origin,
-                ),
-                crate::network::context::DocumentResourceAuthoritySource::Inherited(
-                    resource_authority,
-                ),
-            );
+        let current_owner =
+            crate::custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
+                let host = unsafe { &mut *host_ptr };
+                let transition = host
+                    .frame_owner_store
+                    .commit_child_document_open_replacement(replacement_plan);
+                let current_owner = transition
+                    .current_owner()
+                    .expect("committed child document-open replacement must install an owner");
+                host.replace_document_resource_loader_for_document_open(
+                    crate::native_bridge::WindowDocumentOwner::Frame(retired_owner),
+                    crate::network::context::DocumentFetchContext::new(
+                        crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
+                        document_url.clone(),
+                        document_base_url,
+                        document_origin,
+                    ),
+                    crate::network::context::DocumentResourceAuthoritySource::Inherited(
+                        resource_authority,
+                    ),
+                );
 
-            host.clear_child_window_document_event_state(scope, child_handle);
-            host.clear_event_callbacks_for_document_replacement(document_handle, false);
-            for child in children {
-                let _ =
-                    remove_child_to_current_reaction_queue(scope, host_ptr, document_handle, child);
-            }
+                host.clear_child_window_document_event_state(scope, child_handle);
+                host.clear_event_callbacks_for_document_replacement(document_handle, false);
+                for child in children {
+                    let _ = remove_child_to_current_reaction_queue(
+                        scope,
+                        host_ptr,
+                        document_handle,
+                        child,
+                    );
+                }
 
-            host.cancel_child_meta_refresh_navigation(child_handle);
-            host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
-            host.retire_image_state_for_document(document_handle);
-            host.cancel_pending_media_loads_for_document(document_handle);
-            host.cancel_pending_text_track_loads_for_document(document_handle);
-            host.cancel_child_document_script_work_for_owner(child_handle, retired_owner);
-            host.child_document_parsers
-                .clear(retired_owner.document_owner());
-            host.drop_child_browsing_context_subtree_with_window_realm(scope, document_handle);
-            if let Some(entry) = host.child_browsing_contexts.get_mut(&child_handle) {
-                entry.clear_document_runtime_state();
-            }
-            host.request_child_frame_realm_materialization(child_handle);
-            host.install_empty_child_classic_script_runner_for_current_document(
-                child_handle,
-                current_owner.local_window_id,
-                current_owner.document_id,
-            );
-            host.dom_host_mut()
-                .mark_subtree_connected_preserving_owner_document(document_handle);
-            let security_token_refreshed =
-                host.refresh_child_default_world_security_token(scope, child_handle);
-            host.install_child_document_write_parser(
-                child_handle,
-                current_owner.document_owner(),
-                document_handle,
-                document_url,
-            );
-            host.note_child_frame_load_started_for_parent(child_handle);
-            host.queue_child_frame_document_opened_event(child_handle);
-            tracing::debug!(
-                ?child_handle,
-                ?retired_owner,
-                ?current_owner,
-                ?document_handle,
-                security_token_refreshed,
-                "opened child document stream through same-LocalWindow owner transaction"
-            );
-        });
-        Some(script_context)
+                if unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+                    != Some(current_owner)
+                {
+                    return None;
+                }
+                let host = unsafe { &mut *host_ptr };
+                host.cancel_child_meta_refresh_navigation(child_handle);
+                host.cancel_stylesheet_subresource_fetches_for_document_owner(retired_owner);
+                host.retire_image_state_for_document(document_handle);
+                host.cancel_pending_media_loads_for_document(document_handle);
+                host.cancel_pending_text_track_loads_for_document(document_handle);
+                host.cancel_child_document_script_work_for_owner(child_handle, retired_owner);
+                host.child_document_parsers
+                    .clear(retired_owner.document_owner());
+                Self::drop_child_browsing_context_subtree_with_window_realm(
+                    scope,
+                    host_ptr,
+                    document_handle,
+                );
+                if unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+                    != Some(current_owner)
+                {
+                    return None;
+                }
+                let host = unsafe { &mut *host_ptr };
+                if let Some(entry) = host.child_browsing_contexts.get_mut(&child_handle) {
+                    entry.clear_document_runtime_state();
+                }
+                host.request_child_frame_realm_materialization(child_handle);
+                host.install_empty_child_classic_script_runner_for_current_document(
+                    child_handle,
+                    current_owner.local_window_id,
+                    current_owner.document_id,
+                );
+                host.dom_host_mut()
+                    .mark_subtree_connected_preserving_owner_document(document_handle);
+                let security_token_refreshed =
+                    host.refresh_child_default_world_security_token(scope, child_handle);
+                host.install_child_document_write_parser(
+                    child_handle,
+                    current_owner.document_owner(),
+                    document_handle,
+                    document_url,
+                );
+                host.note_child_frame_load_started_for_parent(child_handle);
+                host.queue_child_frame_document_opened_event(child_handle);
+                tracing::debug!(
+                    ?child_handle,
+                    ?retired_owner,
+                    ?current_owner,
+                    ?document_handle,
+                    security_token_refreshed,
+                    "opened child document stream through same-LocalWindow owner transaction"
+                );
+                Some(current_owner)
+            })?;
+        (unsafe { &*host_ptr }.current_child_document_task_owner(child_handle)
+            == Some(current_owner))
+        .then_some(script_context)
     }
 
     /// Replaces a child frame's current document without invoking page-visible
     /// `Document.open`, `write`, or `close` properties.
     pub(crate) fn set_child_browsing_context_document_content(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         html: &str,
     ) -> bool {
-        let Some(document_handle) = self.child_browsing_context_document_handle(child_handle)
+        let Some(document_handle) =
+            unsafe { &*host_ptr }.child_browsing_context_document_handle(child_handle)
         else {
             return false;
         };
-        let Some(script_context) = self.begin_child_document_stream_replacement(
+        let Some(script_context) = Self::begin_child_document_stream_replacement(
             scope,
             host_ptr,
             child_handle,
@@ -729,7 +760,7 @@ impl JsContextHost {
         // successfully handed the markup to this child Document. A `false`
         // pump result can mean that the parser is intentionally parked on a
         // parser-blocking stylesheet; it is not a missing-Document failure.
-        let _ = self.pump_child_document_write_parser(
+        let _ = unsafe { &mut *host_ptr }.pump_child_document_write_parser(
             scope,
             script_context,
             child_handle,

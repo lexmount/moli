@@ -102,13 +102,13 @@ fn node_document_write_or_writeln_callback<'s>(
     }
     if implicit_replacement_session {
         clear_window_event_handlers(scope);
-        runtime.prepare_root_document_replacement(scope, runtime_ptr, handle);
+        JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
     }
     for chunk in parsed.text {
-        let _ = runtime.write_html(scope, runtime_ptr, handle, &chunk);
+        let _ = unsafe { &mut *runtime_ptr }.write_html(scope, runtime_ptr, handle, &chunk);
     }
     if append_newline {
-        let _ = runtime.write_html(scope, runtime_ptr, handle, "\n");
+        let _ = unsafe { &mut *runtime_ptr }.write_html(scope, runtime_ptr, handle, "\n");
     }
     rv.set_undefined();
 }
@@ -185,7 +185,7 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
         let runtime = unsafe { &mut *runtime_ptr };
         if !runtime.has_active_parser_write_insertion_point() {
             clear_window_event_handlers(scope);
-            runtime.prepare_root_document_replacement(scope, runtime_ptr, handle);
+            JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle);
         }
     }
     rv.set(args.this().into());
@@ -201,13 +201,21 @@ fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
 
 impl JsContextHost {
     fn prepare_root_document_replacement(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
     ) {
-        self.dispatch_document_open_descendant_frame_unload_lifecycle(scope, document_handle);
-        self.clear_event_callbacks_for_document_replacement(document_handle, true);
+        let owner = unsafe { &*host_ptr }.current_main_document_task_owner();
+        Self::dispatch_document_open_descendant_frame_unload_lifecycle(
+            scope,
+            host_ptr,
+            document_handle,
+        );
+        if unsafe { &*host_ptr }.current_main_document_task_owner() != owner {
+            return;
+        }
+        unsafe { &mut *host_ptr }
+            .clear_event_callbacks_for_document_replacement(document_handle, true);
         custom_elements::with_custom_element_reaction_scope(scope, host_ptr, |scope| {
             let _ = unsafe { &mut *host_ptr }.remove_all_children_for_document_replacement(
                 scope,
@@ -215,25 +223,24 @@ impl JsContextHost {
                 document_handle,
             );
         });
-        self.open_root_document(scope);
+        if unsafe { &*host_ptr }.current_main_document_task_owner() == owner {
+            Self::open_root_document(scope, host_ptr);
+        }
     }
 
     /// Replaces the active root document through the native document stream.
-    ///
-    /// This is the internal equivalent of Blink's `Document::SetContent`: it
-    /// deliberately bypasses the page-visible `document.open/write/close`
-    /// properties, which may have been replaced by page script.
+    /// Bypasses page-visible document methods without retaining a host borrow
+    /// across descendant retirement callbacks.
     pub(crate) fn set_root_document_content(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
         html: &str,
     ) {
-        let document_handle = self.document_handle();
+        let document_handle = unsafe { &*host_ptr }.document_handle();
         clear_window_event_handlers(scope);
-        self.prepare_root_document_replacement(scope, host_ptr, document_handle);
-        let _ = self.write_html(scope, host_ptr, document_handle, html);
-        self.close_document(scope, host_ptr);
+        Self::prepare_root_document_replacement(scope, host_ptr, document_handle);
+        let _ = unsafe { &mut *host_ptr }.write_html(scope, host_ptr, document_handle, html);
+        unsafe { &mut *host_ptr }.close_document(scope, host_ptr);
     }
 }
 

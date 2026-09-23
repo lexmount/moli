@@ -3,6 +3,14 @@ use super::*;
 use crate::custom_elements::{CustomElementRegistryAssociation, CustomElementRegistryKey};
 use crate::document_script_scheduler::FrameDocumentClassicScriptSchedulerWork;
 
+/// Identity captured before author callbacks. The DOM handle can be reused by
+/// a newly attached browsing context while the old Window is being canceled.
+struct ChildWindowRetirement {
+    handle: DomHandle,
+    frame_id: String,
+    local_window: Option<crate::frame_owner_model::LocalWindowId>,
+}
+
 impl JsContextHost {
     fn remove_child_browsing_context_entry(
         &mut self,
@@ -100,6 +108,15 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) -> Option<FrameDocumentClassicScriptSchedulerWork> {
+        // Reinsertion from an abort/navigateerror handler creates a new Window.
+        // Finish only the retiring context before installing its successor.
+        if self
+            .child_browsing_contexts
+            .get(&handle)
+            .is_some_and(|entry| entry.retiring)
+        {
+            self.drop_child_browsing_context_handles(vec![handle]);
+        }
         match self.child_browsing_context_bootstrap_for_handle(handle) {
             Some(attribute_bootstrap) => {
                 let existing = self.child_browsing_contexts.get(&handle).cloned();
@@ -366,6 +383,7 @@ impl JsContextHost {
                     handle,
                     ChildBrowsingContextEntry {
                         frame_id,
+                        retiring: false,
                         current_document_loader_id: existing.as_ref().and_then(|entry| {
                             entry.current_document_loader_id().map(ToOwned::to_owned)
                         }),
@@ -596,24 +614,91 @@ impl JsContextHost {
     pub(crate) fn drop_child_browsing_context_subtree(&mut self, root: DomHandle) {
         let mut handles = Vec::new();
         self.collect_child_browsing_context_host_handles(root, &mut handles);
-        self.drop_child_browsing_context_handles(handles, None);
+        self.drop_child_browsing_context_handles(handles);
     }
 
+    /// Orchestrate synchronous cancellation without borrowing the host across
+    /// author JS. Callers must also release their host borrow before entering.
     pub(crate) fn drop_child_browsing_context_subtree_with_window_realm(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
         root: DomHandle,
     ) {
-        let mut handles = Vec::new();
-        self.collect_child_browsing_context_host_handles(root, &mut handles);
-        self.drop_child_browsing_context_handles(handles, Some(scope));
+        let retirements = {
+            let host = unsafe { &mut *host_ptr };
+            let mut handles = Vec::new();
+            host.collect_child_browsing_context_host_handles(root, &mut handles);
+            let mut retirements = Vec::new();
+            // Mark the whole batch before the first callback: a handler for A
+            // can reattach B before B reaches its own cancellation boundary.
+            for handle in handles {
+                let Some(entry) = host.child_browsing_contexts.get_mut(&handle) else {
+                    continue;
+                };
+                if entry.retiring {
+                    // Nested removal must not dispatch the same cancellation twice.
+                    host.drop_child_browsing_context_handles(vec![handle]);
+                    continue;
+                }
+                entry.retiring = true;
+                let frame_id = entry.frame_id.clone();
+                let retirement = ChildWindowRetirement {
+                    handle,
+                    frame_id,
+                    local_window: host
+                        .current_child_document_task_owner(handle)
+                        .map(|owner| owner.local_window_id),
+                };
+                host.prepare_child_window_retirement(handle);
+                let window = host.child_window_proxy_records.live_window(scope, handle);
+                retirements.push((retirement, window));
+            }
+            retirements
+        };
+        for (retirement, window) in retirements {
+            // Settle the captured old Window even if an earlier callback has
+            // already replaced it. Looking up by handle here would cancel its
+            // successor, or leave the old Window's promises pending forever.
+            if let Some(window) = window
+                && let Some(context) = window.get_creation_context(scope)
+            {
+                let scope = &mut v8::ContextScope::new(scope, context);
+                crate::context_bootstrap::inform_about_canceled_navigation_for_window(
+                    scope,
+                    window,
+                    crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
+                );
+            }
+            let host = unsafe { &mut *host_ptr };
+            if host.child_window_retirement_is_current(&retirement) {
+                host.drop_child_browsing_context_handles(vec![retirement.handle]);
+            }
+        }
     }
 
-    fn drop_child_browsing_context_handles(
-        &mut self,
-        handles: Vec<DomHandle>,
-        mut scope: Option<&mut v8::PinScope<'_, '_>>,
-    ) {
+    fn child_window_retirement_is_current(&self, retirement: &ChildWindowRetirement) -> bool {
+        self.child_browsing_contexts
+            .get(&retirement.handle)
+            .is_some_and(|entry| entry.frame_id == retirement.frame_id)
+            && self
+                .current_child_document_task_owner(retirement.handle)
+                .map(|owner| owner.local_window_id)
+                == retirement.local_window
+    }
+
+    fn prepare_child_window_retirement(&mut self, handle: DomHandle) {
+        if let Some(owner) = self.current_child_document_task_owner(handle) {
+            self.pending_history_traversal_admissions.retire_owner(
+                super::super::WindowExecutionContextOwner::Frame(owner.local_window_id),
+            );
+        }
+        self.cancel_child_meta_refresh_navigation(handle);
+        self.clear_pending_child_document_loads_for_handle(handle);
+        self.retire_current_child_navigation_commit_task(handle);
+        self.unregister_service_worker_child_client(handle);
+    }
+
+    fn drop_child_browsing_context_handles(&mut self, handles: Vec<DomHandle>) {
         for handle in handles {
             let document_handle_before_drop = self.child_browsing_context_document_handle(handle);
             let frame_id = self
@@ -625,13 +710,7 @@ impl JsContextHost {
                 self.completed_child_browsing_context_loads
                     .retain(|load| load.frame_id != frame_id);
             }
-            self.cancel_child_meta_refresh_navigation(handle);
-            self.clear_pending_child_document_loads_for_handle(handle);
-            self.retire_current_child_navigation_commit_task(handle);
-            self.unregister_service_worker_child_client(handle);
-            if let Some(scope) = scope.as_deref_mut() {
-                self.inform_about_canceled_child_navigation_before_detach(scope, handle);
-            }
+            self.prepare_child_window_retirement(handle);
             self.clear_child_parser_classic_runner_for_current_document(handle);
             let removed = self.remove_child_browsing_context_entry(handle).is_some();
             self.clear_child_browsing_context_current_document(handle);
@@ -658,18 +737,29 @@ impl JsContextHost {
     }
 
     pub(crate) fn drop_child_browsing_contexts_moved_into_own_document_subtree(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
         root: DomHandle,
     ) {
-        let mut handles = Vec::new();
-        self.collect_child_browsing_context_host_handles(root, &mut handles);
+        let handles = {
+            let host = unsafe { &*host_ptr };
+            let mut handles = Vec::new();
+            host.collect_child_browsing_context_host_handles(root, &mut handles);
+            handles
+        };
         for handle in handles {
-            let Some(owner_document) = self.dom_host().owner_document_handle(handle) else {
-                continue;
+            let should_drop = {
+                let host = unsafe { &*host_ptr };
+                host.dom_host()
+                    .owner_document_handle(handle)
+                    .is_some_and(|document| {
+                        host.child_browsing_context_host_is_ancestor_of_document(handle, document)
+                    })
             };
-            if self.child_browsing_context_host_is_ancestor_of_document(handle, owner_document) {
-                self.drop_child_browsing_context_subtree_with_window_realm(scope, handle);
+            if should_drop {
+                Self::drop_child_browsing_context_subtree_with_window_realm(
+                    scope, host_ptr, handle,
+                );
             }
         }
     }

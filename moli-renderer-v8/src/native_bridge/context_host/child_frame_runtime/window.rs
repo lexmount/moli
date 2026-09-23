@@ -631,37 +631,6 @@ unsafe extern "C" fn window_access_check_callback(
 }
 
 impl JsContextHost {
-    pub(in crate::native_bridge::context_host) fn inform_about_canceled_child_navigation_before_detach(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-    ) {
-        // Pending traversal admission is settled by ScriptVm after this native
-        // detach finishes. Other navigation cancellation keeps its synchronous
-        // event/committed-entry semantics.
-        if let Some(owner) = self.current_child_document_task_owner(handle) {
-            self.pending_history_traversal_admissions.retire_owner(
-                super::super::WindowExecutionContextOwner::Frame(owner.local_window_id),
-            );
-        }
-        let Some(window) = self.child_window_proxy_records.live_window(scope, handle) else {
-            return;
-        };
-        let Some(context) = window.get_creation_context(scope) else {
-            return;
-        };
-        let window = v8::Global::new(scope, window);
-        let context = v8::Global::new(scope, context);
-        let context = v8::Local::new(scope, &context);
-        let child_scope = &mut v8::ContextScope::new(scope, context);
-        let window = v8::Local::new(child_scope, &window);
-        crate::context_bootstrap::inform_about_canceled_navigation_for_window(
-            child_scope,
-            window,
-            crate::context_bootstrap::NavigationCancellationReason::LocalWindowRetirement,
-        );
-    }
-
     pub(in crate::native_bridge::context_host) fn refresh_child_window_access_surfaces_after_origin_mutation(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

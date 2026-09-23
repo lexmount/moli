@@ -875,18 +875,21 @@ impl JsContextHost {
     /// dispatch pagehide/visibilitychange before unload while the parent
     /// document's listeners are still installed.
     fn dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
         handle: DomHandle,
     ) {
-        let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
+        let Some(window) =
+            unsafe { &mut *host_ptr }.existing_child_browsing_context_window_wrapper(scope, handle)
         else {
             return;
         };
-        let Some(document) = self.child_browsing_context_document_wrapper(scope, handle) else {
+        let Some(document) =
+            unsafe { &mut *host_ptr }.child_browsing_context_document_wrapper(scope, handle)
+        else {
             return;
         };
-        let Some(action) = self
+        let Some(action) = unsafe { &mut *host_ptr }
             .frame_owner_store
             .begin_current_child_document_unload(handle)
         else {
@@ -901,25 +904,28 @@ impl JsContextHost {
             let _ = call_object_method(scope, document, "dispatchEvent", &[event.into()]);
         }
         dispatch_unload_for_runtime_owner(scope, window);
-        let _ = self
+        let _ = unsafe { &mut *host_ptr }
             .frame_owner_store
             .finish_current_child_document_unload(action);
-        unsafe { &mut *self.runtime }
-            .cancel_window_execution_context_timers(execution_context_owner);
+        unsafe { &mut *host_ptr }.cancel_window_execution_context_timers(execution_context_owner);
     }
 
     pub(crate) fn dispatch_document_open_descendant_frame_unload_lifecycle(
-        &mut self,
         scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut Self,
         document_handle: DomHandle,
     ) {
-        let handles = self.child_browsing_context_handles_in_document_order();
+        let handles = unsafe { &*host_ptr }.child_browsing_context_handles_in_document_order();
         for handle in handles {
-            if self.dom_host().owner_document_handle(handle) != Some(document_handle) {
+            if unsafe { &*host_ptr }
+                .dom_host()
+                .owner_document_handle(handle)
+                != Some(document_handle)
+            {
                 continue;
             }
-            self.dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
-                scope, handle,
+            Self::dispatch_child_browsing_context_document_open_unload_lifecycle_if_needed(
+                scope, host_ptr, handle,
             );
         }
     }

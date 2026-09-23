@@ -2996,6 +2996,116 @@ async fn pending_precommit_navigation_slot_is_not_script_writable() {
     );
 }
 #[tokio::test]
+async fn navigation_retirement_reentry_preserves_successor_window() {
+    for pending_sibling in [false, true] {
+        let server = StaticHttpServer::spawn(if pending_sibling { 2 } else { 1 }).await;
+        let parent_url = server.base_url().join("parent").unwrap();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        vm.eval(&format!("globalThis.pendingSibling = {pending_sibling};"))
+            .unwrap();
+        vm.eval(
+            r##"
+        globalThis.frame = document.createElement('iframe');
+        frame.src = new URL('/child', location.href).href;
+        globalThis.loaded = 0;
+        frame.onload = () => loaded++;
+        const container = document.body || document.documentElement || document;
+        globalThis.group = document.createElement('div');
+        globalThis.survivor = document.createElement('iframe');
+        if (globalThis.pendingSibling) {
+            survivor.src = new URL('/survivor', location.href).href;
+            survivor.onload = () => loaded++;
+        }
+        group.appendChild(frame); group.appendChild(survivor);
+        container.appendChild(group);
+    "##,
+        )
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(loaded === (pendingSibling ? 2 : 1))",
+            "true",
+            "retirement child load",
+        )
+        .await;
+        vm.eval(
+        r##"
+        const oldChild = frame.contentWindow;
+        const oldNavigation = oldChild.navigation;
+        globalThis.log = [];
+        globalThis.settled = [];
+        const oldSurvivor = survivor.contentWindow;
+        globalThis.siblingSettled = [];
+        globalThis.siblingErrors = 0;
+        if (globalThis.pendingSibling) {
+            oldSurvivor.navigation.addEventListener('navigateerror', () => siblingErrors++);
+            oldSurvivor.navigation.addEventListener('navigate', event => {
+                event.intercept({handler: () => new Promise(resolve => globalThis.releaseSibling = resolve)});
+            }, {once: true});
+            const pending = oldSurvivor.navigation.navigate(oldSurvivor.location.href + '#waiting');
+            pending.committed.then(() => siblingSettled.push('committed'), e => siblingSettled.push(e.name));
+            pending.finished.then(() => siblingSettled.push('finished'), e => siblingSettled.push(e.name));
+        }
+        oldNavigation.addEventListener('navigateerror', event => {
+            log.push('error:' + event.error.name);
+            survivor.remove();
+            survivor.removeAttribute('src');
+            container.appendChild(survivor);
+            survivor.contentWindow.history.replaceState('successor', '');
+            log.push('new-window:' + (survivor.contentWindow !== oldSurvivor));
+        }, {once: true});
+        oldNavigation.addEventListener('navigate', event => {
+            event.signal.addEventListener('abort', () => log.push('abort'));
+            event.intercept({handler() {
+                log.push('handler');
+                group.remove();
+                log.push('after-remove');
+            }});
+        }, {once: true});
+        const result = oldNavigation.navigate(oldChild.location.href + '#pending');
+        result.committed.then(() => settled.push('committed'), e => settled.push(e.name));
+        result.finished.then(() => settled.push('finished'), e => settled.push(e.name));
+        log.push('after-navigate');
+    "##,
+    )
+    .unwrap();
+        assert_eq!(
+            vm.eval("JSON.stringify(log)").unwrap(),
+            r#"["handler","abort","error:AbortError","new-window:true","after-remove","after-navigate"]"#
+        );
+        assert_eq!(
+        vm.eval(
+            "JSON.stringify([survivor.isConnected, survivor.contentWindow.history.state, settled])"
+        )
+        .unwrap(),
+        r#"[true,"successor",["committed","AbortError"]]"#
+    );
+        assert!(
+            vm._context_host
+                .borrow()
+                .pending_history_traversal_admissions
+                .is_empty()
+        );
+        if pending_sibling {
+            assert_eq!(
+                vm.eval("JSON.stringify([siblingSettled, siblingErrors])")
+                    .unwrap(),
+                r#"[["committed","AbortError"],1]"#
+            );
+            vm.eval("releaseSibling();").unwrap();
+            assert_eq!(
+                vm.eval("survivor.contentWindow.history.state").unwrap(),
+                "successor"
+            );
+            assert_eq!(vm.eval("String(siblingErrors)").unwrap(), "1");
+        }
+    }
+}
+
+#[tokio::test]
 async fn navigation_intercept_handlers_preserve_cancellation_and_committed_entry() {
     for api in [
         "location-fragment",

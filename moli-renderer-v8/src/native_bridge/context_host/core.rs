@@ -501,11 +501,26 @@ impl JsContextHost {
             .map(RendererDocumentLifecycleJournalHandle::identity)
     }
 
-    pub(crate) fn open_root_document(&mut self, scope: &mut v8::PinScope<'_, '_>) {
-        let descendant_count_before = self.child_browsing_contexts.len();
-        for child_handle in self.top_level_child_browsing_context_handles_in_document_order() {
-            self.drop_child_browsing_context_subtree_with_window_realm(scope, child_handle);
+    pub(crate) fn open_root_document(scope: &mut v8::PinScope<'_, '_>, host_ptr: *mut Self) {
+        let (owner, descendant_count_before, document) = {
+            let host = unsafe { &*host_ptr };
+            (
+                host.current_main_document_task_owner(),
+                host.child_browsing_contexts.len(),
+                host.document_handle(),
+            )
+        };
+        Self::drop_child_browsing_context_subtree_with_window_realm(scope, host_ptr, document);
+        if unsafe { &*host_ptr }.current_main_document_task_owner() == owner {
+            unsafe { &mut *host_ptr }.commit_root_document_open(scope, descendant_count_before);
         }
+    }
+
+    fn commit_root_document_open(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        descendant_count_before: usize,
+    ) {
         let retired_document_handle = self.document_handle();
         let retired_image_event_count =
             self.retire_image_state_for_document(retired_document_handle);

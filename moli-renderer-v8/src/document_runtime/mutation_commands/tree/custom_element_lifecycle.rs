@@ -81,8 +81,9 @@ impl DocumentRuntime {
                     scope, host_ptr, handle,
                 );
             }
-            unsafe { &mut *host_ptr }
-                .drop_child_browsing_context_subtree_with_window_realm(scope, root);
+            JsContextHost::drop_child_browsing_context_subtree_with_window_realm(
+                scope, host_ptr, root,
+            );
         }
     }
 

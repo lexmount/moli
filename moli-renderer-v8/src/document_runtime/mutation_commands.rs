@@ -325,8 +325,9 @@ impl DocumentRuntime {
                         );
                     }
                 }
-                unsafe { &mut *host_ptr }
-                    .drop_child_browsing_context_subtree_with_window_realm(scope, root);
+                JsContextHost::drop_child_browsing_context_subtree_with_window_realm(
+                    scope, host_ptr, root,
+                );
             }
         }
         record_dom_binding_timing("dom.setTextContent", started);

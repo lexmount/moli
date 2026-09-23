@@ -98,6 +98,7 @@ impl JsContextHost {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn top_level_child_browsing_context_handles_in_document_order(
         &self,
     ) -> Vec<DomHandle> {

@@ -40,6 +40,7 @@ pub(in crate::native_bridge::context_host) use request_scope::{
 #[derive(Debug, Clone)]
 pub(super) struct ChildBrowsingContextEntry {
     frame_id: String,
+    retiring: bool,
     current_document_loader_id: Option<String>,
     name: Option<String>,
     id: Option<String>,

@@ -32,7 +32,9 @@ impl ScriptVm {
     ) -> Result<RendererSetDocumentContentResult> {
         let result = if self.root_frame_id() == Some(frame_id) {
             self.with_default_context_scope(|scope, host_ptr| {
-                unsafe { &mut *host_ptr }.set_root_document_content(scope, host_ptr, html);
+                crate::native_bridge::JsContextHost::set_root_document_content(
+                    scope, host_ptr, html,
+                );
                 Ok(())
             })?;
             RendererSetDocumentContentResult::Updated
@@ -46,7 +48,7 @@ impl ScriptVm {
             };
             let updated = self.with_default_context_scope(|scope, host_ptr| {
                 Ok(
-                    unsafe { &mut *host_ptr }.set_child_browsing_context_document_content(
+                    crate::native_bridge::JsContextHost::set_child_browsing_context_document_content(
                         scope,
                         host_ptr,
                         child_handle,

@@ -11,16 +11,17 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         insertion_plan: &TreeInsertionPlan<'_>,
     ) {
-        let runtime = unsafe { &mut *host_ptr };
         if insertion_plan.adoption.crosses_documents() {
             for &root in insertion_plan.insertion_roots {
-                runtime.migrate_inline_style_metadata_in_subtree(root);
+                unsafe { &mut *host_ptr }.migrate_inline_style_metadata_in_subtree(root);
             }
         }
         for &root in insertion_plan.insertion_roots {
-            runtime.clear_disconnected_shadow_roots_in_subtree(root);
-            runtime.drop_child_browsing_contexts_moved_into_own_document_subtree(scope, root);
-            runtime.sync_child_browsing_context_subtree(scope, root);
+            unsafe { &mut *host_ptr }.clear_disconnected_shadow_roots_in_subtree(root);
+            JsContextHost::drop_child_browsing_contexts_moved_into_own_document_subtree(
+                scope, host_ptr, root,
+            );
+            unsafe { &mut *host_ptr }.sync_child_browsing_context_subtree(scope, root);
         }
     }
 
@@ -30,9 +31,10 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         roots: &[DomHandle],
     ) {
-        let runtime = unsafe { &mut *host_ptr };
         for &root in roots {
-            runtime.drop_child_browsing_context_subtree_with_window_realm(scope, root);
+            JsContextHost::drop_child_browsing_context_subtree_with_window_realm(
+                scope, host_ptr, root,
+            );
         }
     }
 }
