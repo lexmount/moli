@@ -1961,8 +1961,8 @@ impl JsContextHost {
             );
         }
         // Hover changes the source style, not the published rendered world.
-        // Explicit geometry/paint demands may refresh it; subsequent pointer
-        // phases continue consuming the retained snapshot.
+        // Geometry reads and pointer phases keep consuming the retained
+        // snapshot until a fresh visual publication replaces it.
         self.invalidate_layout_after_interaction_state_change();
         true
     }

@@ -6078,7 +6078,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
 }
 
 #[test]
-fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_geometry_demand() {
+fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_fresh_paint() {
     let mut vm = new_parsed_test_vm(
         "https://hover-dropdown.test/",
         r#"
@@ -6150,8 +6150,9 @@ fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_geometry_demand() {
         "true|true|true|true|block"
     );
 
-    vm.eval("document.getElementById('submenu').getBoundingClientRect()")
-        .expect("explicit geometry demand publishes the displayed submenu");
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(1920, 1080, 1.0))
+        .expect("fresh paint publishes the displayed submenu")
+        .expect("document layout");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("mousedown should hit the newly displayed submenu");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mouseup", 0, Some(0), 0.0, 0.0)

@@ -536,9 +536,11 @@ impl JsContextHost {
 
     pub(crate) fn invalidate_layout_after_interaction_state_change(&self) {
         self.clear_layout_rect_cache();
+        // Interactions dirty future visual publication, while ordinary geometry
+        // and input keep consuming the latest compatible frozen snapshot.
         self.document_layout_state
             .borrow_mut()
-            .invalidate_latest_layout_for_demand();
+            .mark_visual_state_dirty();
     }
 
     pub(crate) fn document_web_font_resources_are_current(

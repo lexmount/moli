@@ -17,7 +17,6 @@ struct LatestFrozenLayout {
     document: DomHandle,
     tree: Box<FrozenLayoutTree<DomHandle>>,
     environment: LayoutEnvironment,
-    reusable_for_demand: bool,
 }
 
 /// Single-slot storage for the latest successful frozen layout tree.
@@ -45,9 +44,9 @@ impl LatestLayoutTreeCache {
     }
 
     pub(super) fn matches_environment(&self, environment: LayoutEnvironment) -> bool {
-        self.latest.as_ref().is_some_and(|snapshot| {
-            snapshot.reusable_for_demand && snapshot.environment == environment
-        })
+        self.latest
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.environment == environment)
     }
 
     pub(super) fn publish(
@@ -60,16 +59,7 @@ impl LatestLayoutTreeCache {
             document,
             tree: Box::new(tree),
             environment,
-            reusable_for_demand: true,
         });
-    }
-
-    /// Keep the rendered world available to input while the next geometry
-    /// demand rebuilds it after an interaction such as scrolling or hover.
-    pub(super) fn invalidate_for_demand(&mut self) {
-        if let Some(snapshot) = &mut self.latest {
-            snapshot.reusable_for_demand = false;
-        }
     }
 
     pub(super) fn clear(&mut self) {

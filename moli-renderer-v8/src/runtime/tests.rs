@@ -12299,7 +12299,7 @@ async fn owner_scheduler_applies_a_wheel_batch_at_the_fixed_action_window_deadli
         .expect("default resource request client");
     let (base_url, effect_request_seen, release_effect_response, effect_server) =
         spawn_owner_wake_gated_server_with_content_type(
-            "/action-window-intersection-applied",
+            "/action-window-scroll-applied",
             "ok",
             "text/plain; charset=utf-8",
         )
@@ -12352,11 +12352,9 @@ globalThis.__lmActionWindowObserver = new IntersectionObserver(entries => {
   const entry = entries.find(candidate => candidate.target.id === "target");
   if (!entry) return;
   __lmActionWindowIoLog.push(entry.isIntersecting);
-  if (__lmActionWindowIoLog.length === 2) {
-    fetch("/action-window-intersection-applied");
-  }
 });
 __lmActionWindowObserver.observe(document.getElementById("target"));
+addEventListener("scroll", () => fetch("/action-window-scroll-applied"), { once: true });
 "installed"
 "#
             .to_owned(),
@@ -12389,17 +12387,17 @@ __lmActionWindowObserver.observe(document.getElementById("target"));
     tokio::time::timeout(Duration::from_secs(3), effect_request_seen)
         .await
         .expect("the owner scheduler should apply the wheel batch at its deadline")
-        .expect("IntersectionObserver effect signal should remain open");
+        .expect("scroll effect signal should remain open");
     assert!(
         opened_at.elapsed() >= Duration::from_millis(900),
         "the fixed one-second action window must not apply immediately"
     );
     release_effect_response
         .send(())
-        .expect("intersection effect response should release once");
+        .expect("scroll effect response should release once");
     effect_server
         .await
-        .expect("intersection effect server should finish");
+        .expect("scroll effect server should finish");
 
     let (state, _) = page
         .run_async_command(RendererPageCommand::EvaluateExpression {
@@ -12416,7 +12414,7 @@ __lmActionWindowObserver.observe(document.getElementById("target"));
     assert_eq!(
         renderer_json_value(state),
         Some(serde_json::json!(
-            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:100","microtask:100","microtask:-100","microtask:100"],"ioLog":[false,true]}"#
+            r#"{"scrollY":100,"wheelLog":["event:100","event:-100","event:100","microtask:100","microtask:-100","microtask:100"],"ioLog":[false]}"#
         ))
     );
 

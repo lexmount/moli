@@ -110,7 +110,7 @@ fn mouse_click_consumes_snapshot_through_hover_focus_and_dom_mutation() {
 }
 
 #[test]
-fn mouse_input_uses_latest_published_geometry_until_an_explicit_refresh() {
+fn mouse_and_geometry_reuse_the_snapshot_until_fresh_paint() {
     let mut vm = new_parsed_test_vm(
         "https://mouse-snapshot.test/",
         r#"<!doctype html><style>body{min-height:100px}</style>
@@ -121,7 +121,16 @@ fn mouse_input_uses_latest_published_geometry_until_an_explicit_refresh() {
     mouse(&mut vm, "mousemove").unwrap();
     assert_eq!(vm.eval("JSON.stringify(hits)").unwrap(), r#"["target"]"#);
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
-    // Hover invalidation is observed by the next geometry demand, never input.
+    // DOM and hover changes do not invalidate ordinary geometry reads.
+    assert_eq!(
+        vm.eval("String(target.getBoundingClientRect().left)")
+            .unwrap(),
+        "20"
+    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(1920, 1080, 1.0))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         vm.eval("String(target.getBoundingClientRect().left)")
             .unwrap(),
@@ -134,7 +143,7 @@ fn mouse_input_uses_latest_published_geometry_until_an_explicit_refresh() {
 }
 
 #[test]
-fn mouse_handlers_can_explicitly_demand_geometry() {
+fn mouse_handler_geometry_reads_reuse_the_published_snapshot() {
     let mut vm = new_parsed_test_vm(
         "https://mouse-snapshot.test/",
         r#"<!doctype html>
@@ -143,8 +152,8 @@ fn mouse_handlers_can_explicitly_demand_geometry() {
     vm.eval("target.getBoundingClientRect();target.onmousemove=()=>{target.style.left='300px';window.observedLeft=target.getBoundingClientRect().left}").unwrap();
     let before = vm.layout_pass_observability_for_test().1;
     mouse(&mut vm, "mousemove").unwrap();
-    assert_eq!(vm.eval("String(observedLeft)").unwrap(), "300");
-    assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
+    assert_eq!(vm.eval("String(observedLeft)").unwrap(), "20");
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
 }
 
 #[test]
@@ -163,7 +172,13 @@ fn mouse_wheel_updates_scroll_without_refreshing_the_rendered_world() {
             .unwrap();
         assert_eq!(vm.layout_pass_observability_for_test().1, before);
     }
-    // scrollTop is an explicit geometry observation in Moli and can refresh.
+    // Scroll metrics and bounds still come from the published snapshot.
+    assert_eq!(vm.eval("String(target.scrollTop)").unwrap(), "0");
+    vm.eval("target.getBoundingClientRect()").unwrap();
+    assert_eq!(vm.layout_pass_observability_for_test().1, before);
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(1920, 1080, 1.0))
+        .unwrap()
+        .unwrap();
     assert_eq!(vm.eval("String(target.scrollTop)").unwrap(), "150");
     assert_eq!(vm.layout_pass_observability_for_test().1, before + 1);
     vm.eval("target.getBoundingClientRect()").unwrap();

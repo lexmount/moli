@@ -149,10 +149,9 @@ pub(crate) fn apply_scroll_observable_effects(
     if effects.is_empty() {
         return;
     }
-    // Native lazy loading deliberately combines the retained pre-scroll
-    // projection with live element offsets, so admit those requests before
-    // invalidating it for subsequent geometry demands. Coordinate input
-    // retains this projection until such a demand publishes a replacement.
+    // Native lazy loading combines the retained projection with live scroll
+    // offsets. Geometry and input retain that projection until fresh visual
+    // publication replaces it.
     for effects in &effects {
         if let Some(document) = effects.document() {
             queue_revealed_lazy_image_loads(scope, runtime_ptr, document);

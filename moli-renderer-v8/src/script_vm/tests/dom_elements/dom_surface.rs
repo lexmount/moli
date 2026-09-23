@@ -255,7 +255,7 @@ fn element_scroll_into_view_if_needed_updates_observable_window_scroll() {
 }
 
 #[test]
-fn wheel_default_action_scrolls_and_refreshes_geometry_unless_canceled() {
+fn wheel_default_action_scrolls_unless_canceled() {
     let mut vm = new_storage_test_vm("https://wheel-default-scroll.test/");
     vm.eval(
         r#"
@@ -292,6 +292,8 @@ fn wheel_default_action_scrolls_and_refreshes_geometry_unless_canceled() {
         .expect("wheel input should dispatch");
     assert!(outcome.handled);
 
+    // Publish the scrolled geometry before checking its rendered position.
+    refresh_layout_for_test(&mut vm);
     let result = vm
         .eval(
             r#"
@@ -330,7 +332,7 @@ fn wheel_default_action_scrolls_and_refreshes_geometry_unless_canceled() {
 }
 
 #[test]
-fn window_scroll_refreshes_intersection_observer_geometry() {
+fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
     let mut vm = new_storage_test_vm("https://scroll-intersection-observer.test/");
     vm.set_viewport_surface(Some(crate::protocol_types::ViewportSurface {
         inner_width: 800,
@@ -382,6 +384,19 @@ fn window_scroll_refreshes_intersection_observer_geometry() {
 
     vm.eval("window.scrollTo(0, 400)")
         .expect("window scroll should evaluate");
+    assert_eq!(
+        vm.eval("JSON.stringify(window.__intersectionStates)")
+            .expect("scroll should retain the published intersection geometry"),
+        "[false]"
+    );
+    vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+        .expect("fresh paint publishes the scrolled geometry")
+        .expect("document layout");
+    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
+        crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+        Ok(())
+    })
+    .expect("check intersections against the newly published geometry");
     assert_eq!(
         vm.eval("JSON.stringify(window.__intersectionStates)")
             .expect("scrolled intersection state should flush"),
@@ -764,6 +779,7 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
         "committing derived effects must not perform another layout"
     );
 
+    refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval(
             "(() => { const frame = document.getElementById('wheel-frame'); return [frame.contentDocument.getElementById('wheel-scroller').scrollTop, frame.contentWindow.__wheelGeometryReads].join('|'); })()"
@@ -1175,6 +1191,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     vm.dispatch_mouse_event_at_point(90.0, 90.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("horizontal thumb release should dispatch");
 
+    refresh_layout_for_test(&mut vm);
     let before_controls = vm
         .eval("scroller.scrollTop")
         .expect("pre-control scrollTop should evaluate")
@@ -1184,6 +1201,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         .expect("back button press should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 5.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("back button release should dispatch");
+    refresh_layout_for_test(&mut vm);
     let after_back = vm
         .eval("scroller.scrollTop")
         .expect("back-button scrollTop should evaluate")
@@ -1195,6 +1213,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         .expect("forward button press should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 80.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("forward button release should dispatch");
+    refresh_layout_for_test(&mut vm);
     let after_forward = vm
         .eval("scroller.scrollTop")
         .expect("forward-button scrollTop should evaluate")
@@ -1206,6 +1225,7 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
         .expect("forward track press should dispatch");
     vm.dispatch_mouse_event_at_point(190.0, 60.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("forward track release should dispatch");
+    refresh_layout_for_test(&mut vm);
     let after_track = vm
         .eval("scroller.scrollTop")
         .expect("track scrollTop should evaluate")
@@ -1260,6 +1280,7 @@ fn painted_overlay_wins_over_scrollbar_and_corner_consumes_input() {
     refresh_layout_for_test(&mut vm);
     vm.eval("scroller.scrollTop = 80")
         .expect("scroller should move before the overlay probe");
+    refresh_layout_for_test(&mut vm);
 
     vm.dispatch_mouse_event_at_point(210.0, 30.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("overlay press should dispatch");
@@ -1758,6 +1779,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
         .expect("captured nested thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(515.0, 115.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("captured nested thumb release should dispatch");
+    refresh_layout_for_test(&mut vm);
     let after_nested: serde_json::Value = serde_json::from_str(
         &vm.eval("JSON.stringify([inner.scrollTop, outer.scrollTop, sibling.scrollTop])")
             .expect("nested drag state should evaluate"),
@@ -1829,6 +1851,7 @@ fn nested_and_sibling_scrollbar_drags_stay_bound_to_the_pressed_scroller() {
     vm.dispatch_mouse_event_at_point(295.0, 125.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("outer thumb release should dispatch");
 
+    refresh_layout_for_test(&mut vm);
     let result: serde_json::Value = serde_json::from_str(
         &vm.eval(
             "JSON.stringify([outer.scrollTop, inner.scrollTop, sibling.scrollTop, horizontal.scrollLeft, document.getElementById('thin-child').scrollLeft, document.getElementById('thin-child').scrollTop, document.getElementById('rtl-child').scrollLeft, document.getElementById('rtl-child').scrollTop, __nestedScrollbarDomEvents])",
@@ -1903,6 +1926,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
     );
     vm.dispatch_mouse_event_at_point(700.0, 420.0, "mousemove", -1, Some(1), 0.0, 0.0)
         .expect("first scaled incremental thumb move should dispatch");
+    refresh_layout_for_test(&mut vm);
     let first_move = vm
         .eval("scaled.scrollTop")
         .expect("first scaled scrollTop should evaluate")
@@ -1916,6 +1940,7 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
         .expect("scaled captured thumb move should dispatch outside its element");
     vm.dispatch_mouse_event_at_point(700.0, 440.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("scaled captured thumb release should dispatch");
+    refresh_layout_for_test(&mut vm);
     let moderate = vm
         .eval("scaled.scrollTop")
         .expect("scaled scrollTop should evaluate")
@@ -1932,19 +1957,20 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
         .expect("scaled lower-clamp thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 590.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("scaled lower-clamp thumb release should dispatch");
+    refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("scaled.scrollTop")
             .expect("maximum scaled scrollTop should evaluate"),
         "215"
     );
 
-    refresh_layout_for_test(&mut vm);
     vm.dispatch_mouse_event_at_point(355.0, 460.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("scaled upper-clamp thumb press should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 300.0, "mousemove", -1, Some(1), 0.0, 0.0)
         .expect("scaled upper-clamp thumb move should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 300.0, "mouseup", 0, Some(0), 0.0, 0.0)
         .expect("scaled upper-clamp thumb release should dispatch");
+    refresh_layout_for_test(&mut vm);
     assert_eq!(
         vm.eval("scaled.scrollTop")
             .expect("minimum scaled scrollTop should evaluate"),
@@ -1953,7 +1979,6 @@ fn transformed_scrollbar_drag_uses_local_motion_clamps_and_cancels_on_button_los
 
     // Losing the primary-button bit cancels native capture. Later moves must
     // return to DOM dispatch and must not continue scrolling the old element.
-    refresh_layout_for_test(&mut vm);
     vm.dispatch_mouse_event_at_point(355.0, 400.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("cancelable scaled thumb press should dispatch");
     vm.dispatch_mouse_event_at_point(700.0, 440.0, "mousemove", -1, Some(0), 0.0, 0.0)

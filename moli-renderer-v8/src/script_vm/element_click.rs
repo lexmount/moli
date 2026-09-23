@@ -7,7 +7,7 @@ use crate::runtime::{
     RendererElementClickError as ClickError, RendererElementClickTarget as ClickTarget,
     RendererInputDispatchOutcome, RendererPointerEventProperties, RendererPreparedPointerClick,
 };
-use moli_layout::{LayoutFlushReason, LayoutPoint, LayoutQuad};
+use moli_layout::{LayoutFlushReason, LayoutPassRequest, LayoutPoint, LayoutQuad};
 
 fn layout_error(error: impl std::fmt::Display) -> ClickError {
     ClickError::LayoutUnavailable(error.to_string())
@@ -36,11 +36,25 @@ impl ScriptVm {
                 return Ok(ClickTarget::DomActivation);
             }
         }
-        self.with_default_context_scope(|scope, runtime_ptr| {
-            Ok(scroll_node_into_view_at_center(scope, runtime_ptr, handle)?)
-        })
-        .map_err(layout_error)?
-        .ok_or(ClickError::NoClickableRect)?;
+        let scrolled = self
+            .with_default_context_scope(|scope, runtime_ptr| {
+                Ok(scroll_node_into_view_at_center(scope, runtime_ptr, handle)?)
+            })
+            .map_err(layout_error)?
+            .ok_or(ClickError::NoClickableRect)?;
+        if scrolled {
+            // Element click must prepare a point in the newly scrolled view.
+            // Ordinary geometry reads and coordinate input retain the snapshot.
+            let viewport = {
+                let host = self._context_host.borrow();
+                host.layout_viewport_for_document(host.document_handle())
+            };
+            self.with_fresh_layout_pass(
+                LayoutPassRequest::new(viewport, LayoutFlushReason::HitTest),
+                |_| Ok(()),
+            )
+            .map_err(layout_error)?;
+        }
         self.prepare_pointer_click_geometry(handle)
             .map(ClickTarget::Pointer)
     }
