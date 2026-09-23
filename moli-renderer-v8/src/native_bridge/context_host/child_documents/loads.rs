@@ -535,6 +535,11 @@ impl JsContextHost {
         let mut body_activity = ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
         let snapshot_to_install = match result {
             Ok(ChildDocumentLoadOutcome::IgnoredNavigation) => {
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    super::super::OwnerDispatchScope::Child(handle),
+                );
                 self.clear_child_browsing_context_pending_navigation(handle);
                 if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
                     entry.restore_navigation_entry_seed_from_committed();
@@ -696,6 +701,11 @@ impl JsContextHost {
                 };
                 entry.clear_cached_snapshot();
                 entry.clear_completed_document_network();
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    super::super::OwnerDispatchScope::Child(handle),
+                );
                 self.reject_replaced_service_worker_child_client_navigation(
                     handle,
                     format!("Cannot navigate to URL: {error}"),

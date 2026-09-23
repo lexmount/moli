@@ -794,6 +794,11 @@ impl JsContextHost {
                     scope, host_ptr, retirement.handle, false,
                 );
             }
+            if unsafe { &*host_ptr }.child_window_retirement_is_current(&retirement) {
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope, host_ptr, super::super::OwnerDispatchScope::Child(retirement.handle),
+                );
+            }
             let host = unsafe { &mut *host_ptr };
             if host.child_window_retirement_is_current(&retirement) {
                 host.drop_child_browsing_context_handles(vec![retirement.handle]);

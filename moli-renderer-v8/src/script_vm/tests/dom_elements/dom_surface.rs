@@ -15626,10 +15626,14 @@ child.location.href = "about:blank#2";
     assert_eq!(result, "about:blank#2|0|true|");
 }
 
-#[test]
-fn initial_about_blank_iframe_assign_replaces_history_after_same_document_update() {
+#[tokio::test]
+async fn initial_about_blank_iframe_assign_replaces_history_after_same_document_update() {
     for update_fragment in [false, true] {
-        let mut vm = new_storage_test_vm("https://initial-blank-history.test/");
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://initial-blank-history.test/",
+            &loader,
+        );
         vm.exec(
             r#"
 const frame = document.createElement('iframe');
@@ -15661,7 +15665,11 @@ const initialDocument = frame.contentDocument;
             None,
         )
         .expect("initial document navigation should queue");
-        vm.drain_pending_child_frame_work_for_test();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm, &loader,
+            "String(frame.contentDocument !== initialDocument && frame.contentDocument.readyState === 'complete')",
+            "true", "replacement Document must complete after queued hashchange delivery",
+        ).await;
 
         assert_eq!(
             vm.eval(
@@ -15812,7 +15820,11 @@ frame.contentWindow.location.replace('about:blank');
             .committed_navigation_entry_seed;
         assert!(
             seed.entries.iter().any(|entry| {
-                entry.id == previous_entry_id && entry.history_index < seed.current_index
+                crate::context_bootstrap::navigation_entry_public_token(entry.id.as_str())
+                    == crate::context_bootstrap::navigation_entry_public_token(
+                        previous_entry_id.as_str(),
+                    )
+                    && entry.history_index < seed.current_index
             }),
             "assign must retain the previous history step; initial srcdoc: {initial_srcdoc}"
         );

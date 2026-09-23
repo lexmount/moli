@@ -2731,6 +2731,11 @@ impl JsContextHost {
         let mut classic_script_load_pending = false;
         match completion.result {
             Ok(PopupDocumentLoadOutcome::IgnoredNavigation) => {
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    super::OwnerDispatchScope::LightweightPopup(popup_id),
+                );
                 if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
                     record.location_url = pending.previous_url.clone();
                 }
@@ -2898,6 +2903,11 @@ impl JsContextHost {
                     url = %pending.target_url,
                     error,
                     "lightweight popup document load failed"
+                );
+                crate::context_bootstrap::finish_joint_history_without_document_commit(
+                    scope,
+                    self,
+                    super::OwnerDispatchScope::LightweightPopup(popup_id),
                 );
                 let Some(current_owner) = self.current_lightweight_popup_document_owner(popup_id)
                 else {

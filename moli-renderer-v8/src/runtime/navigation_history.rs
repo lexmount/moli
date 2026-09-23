@@ -2,17 +2,18 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use moli_page_types::{
+    JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryStepId,
+};
+use moli_page_types::{
     NavigationHistoryMutation, cross_document_navigation_seed, reload_navigation_seed,
     traversal_navigation_seed_candidate,
 };
 use parking_lot::Mutex;
-use moli_page_types::{JointSessionHistory, SessionHistoryStepId, SessionHistoryContextId, SessionHistoryEntry};
 use url::Url;
 
 use crate::native_bridge::{
     NavigationHistoryDocumentId, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
     NestedHistoryStore,
-
 };
 
 /// The committed history of a renderer's top-level Document. Publishing a
@@ -81,13 +82,21 @@ impl RendererNavigationHistory {
         let joint = self.joint.lock().clone().and_then(|mut joint| {
             let current = current_entry(seed)?;
             let entry = SessionHistoryEntry {
-                key: moli_page_types::NavigationHistoryEntryKey::from_serialized(crate::context_bootstrap::navigation_entry_public_token(current.key.as_str())),
+                key: moli_page_types::NavigationHistoryEntryKey::from_serialized(
+                    crate::context_bootstrap::navigation_entry_public_token(current.key.as_str()),
+                ),
                 document: current.document_id.clone(),
             };
             match seed.session_history.commit {
-                moli_page_types::SessionHistoryCommit::Push => joint.push(SessionHistoryContextId::ROOT, entry),
+                moli_page_types::SessionHistoryCommit::Push => {
+                    joint.push(SessionHistoryContextId::ROOT, entry)
+                }
                 moli_page_types::SessionHistoryCommit::Traverse => {
-                    let step = target_step.or(seed.session_history.target_step).or_else(|| joint.step_for_entry(SessionHistoryContextId::ROOT, &entry.key))?;
+                    let step = target_step
+                        .or(seed.session_history.target_step)
+                        .or_else(|| {
+                            joint.step_for_entry(SessionHistoryContextId::ROOT, &entry.key)
+                        })?;
                     joint.traverse(step)?;
                 }
                 _ => joint.replace(SessionHistoryContextId::ROOT, entry),
@@ -102,15 +111,15 @@ impl RendererNavigationHistory {
         }
     }
 
-    pub(crate) fn install_joint_history(
-        &self,
-        history: &mut JointSessionHistory,
-    ) {
+    pub(crate) fn install_joint_history(&self, history: &mut JointSessionHistory) {
         if let Some(joint) = self.joint.lock().clone() {
             *history = joint;
         }
     }
     pub(crate) fn publish(&self, seed: NavigationHistoryEntrySeed) {
+        if let Some(history) = seed.session_history.traversable.as_deref() {
+            *self.joint.lock() = Some(history.clone());
+        }
         *self.snapshot.lock() = Some(Arc::new(seed));
     }
 
@@ -143,22 +152,52 @@ impl RendererNavigationHistory {
         )?))
     }
 
-    pub fn traverse(&self, delta: i64) -> Option<RendererNavigationHistoryRequest> {
+    fn traversal_target(
+        &self,
+        delta: i64,
+    ) -> Option<(
+        Arc<NavigationHistoryEntrySeed>,
+        u32,
+        Option<SessionHistoryStepId>,
+    )> {
         let source = self.snapshot()?;
-        let target_index =
-            u32::try_from(i64::from(source.current_index).checked_add(delta)?).ok()?;
-        let candidate = traversal_navigation_seed_candidate(
+        let joint = self.joint.lock();
+        let (index, step) = if let Some(joint) = joint.as_ref() {
+            let step = joint.step_by_delta(delta)?;
+            let entry = joint
+                .entries_at(step)?
+                .get(&SessionHistoryContextId::ROOT)?;
+            let index = source
+                .entries
+                .iter()
+                .find(|candidate| {
+                    crate::context_bootstrap::navigation_entry_public_token(candidate.key.as_str())
+                        == entry.key.as_str()
+                })?
+                .history_index;
+            (index, Some(step))
+        } else {
+            (
+                u32::try_from(i64::from(source.current_index).checked_add(delta)?).ok()?,
+                None,
+            )
+        };
+        Some((source, index, step))
+    }
+
+    pub fn traverse(&self, delta: i64) -> Option<RendererNavigationHistoryRequest> {
+        let (source, target_index, step) = self.traversal_target(delta)?;
+        let mut candidate = traversal_navigation_seed_candidate(
             source.entries.clone(),
             source.current_index,
             target_index,
         )?;
+        candidate.seed.session_history.target_step = step;
         Some(self.request(candidate.seed))
     }
 
     pub fn traversal_is_same_document(&self, delta: i64) -> Option<bool> {
-        let source = self.snapshot()?;
-        let target_index =
-            u32::try_from(i64::from(source.current_index).checked_add(delta)?).ok()?;
+        let (source, target_index, _) = self.traversal_target(delta)?;
         let current = current_entry(&source)?;
         let target = source
             .entries
@@ -238,6 +277,9 @@ impl RendererNavigationHistoryRequest {
             .and_then(|activation| activation.from.as_mut())
         {
             from.index = from.history_index;
+        }
+        if self.navigation_type() == Some("traverse") {
+            seed.session_history.target_step = self.requested.session_history.target_step;
         }
         update_destination_url(&mut seed, final_url);
         if self.initial_empty_source

@@ -137,6 +137,7 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
         return;
     };
     let results = match &queued.action {
+        crate::native_bridge::PendingHistoryTraversalAction::ByDelta { .. } => &[],
         crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
             traversal.results.as_slice()
         }
@@ -155,7 +156,7 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut JsContextHost,
     traversal: PendingHistoryTraversal,
-) {
+) -> bool {
     let plan = history_traversal_target_window(scope, host, traversal.target).and_then(|owner| {
         let history = window_history_for_holder(scope, owner)?;
         let entries = history_entries(scope, history)?;
@@ -175,13 +176,14 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     let Some(plan) = plan else {
         let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
         reject_pending_navigation_results(scope, &traversal.results, error);
-        return;
+        return false;
     };
     let info = traversal
         .info
         .as_ref()
         .map(|value| v8::Local::new(scope, value));
     super::super::navigation_traversal_coordinator::execute(scope, plan, info, traversal.results);
+    true
 }
 
 pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
@@ -190,9 +192,7 @@ pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
     outcome: &NavigationDispatchOutcome<'s>,
     finished_resolvers: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !outcome.intercepted {
-        return None;
-    }
+    if !outcome.intercepted { return None; }
     let navigation = window_navigation_for_holder(scope, applied.owner)?;
     let transition_resolver = outcome
         .precommit_event
@@ -258,14 +258,8 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         return;
     };
     let (error, result) = if outcome.intercepted {
-        if let Some(event) = outcome.precommit_event {
-            run_navigation_precommit_deferred_handlers(scope, event)
-        } else {
-            (outcome.intercept_error, outcome.intercept_result)
-        }
-    } else {
-        (None, None)
-    };
+        outcome.precommit_event.map_or((outcome.intercept_error, outcome.intercept_result), |event| run_navigation_precommit_deferred_handlers(scope, event))
+    } else { (None, None) };
     suppress_intercept_result_unhandled_rejection(scope, result);
     dispatch_history_entry_post_commit_events(scope, applied, true);
     let Some(data) = settlement else {

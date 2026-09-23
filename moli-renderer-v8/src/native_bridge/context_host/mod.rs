@@ -197,7 +197,7 @@ pub(crate) use child_frame_snapshots::{
 };
 use child_frames::ChildBrowsingContextEntry;
 pub(in crate::native_bridge::context_host) use child_frames::ChildParserClassicScriptCandidate;
-pub(crate) use child_frames::{NestedHistoryStore};
+pub(crate) use child_frames::NestedHistoryStore;
 pub(crate) use event_callbacks::{EventCallbackId, PreparedEventCallback};
 pub(crate) use host_loads::ChildFrameAttachmentSnapshot;
 #[cfg(test)]

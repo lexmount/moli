@@ -5,7 +5,7 @@ use super::navigation_activation::{
     navigation_transition_matches_resolver, precommit_transition_resolver_from_event,
     take_navigation_transition_committed_resolver,
 };
-use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
+use super::navigation_entry::{history_entries, navigation_current_entry};
 use super::navigation_events::{
     NavigationDispatchOutcome, dispatch_beforeunload_for_runtime_owner,
     dispatch_navigation_traverse_event_with_outcome,
@@ -13,12 +13,12 @@ use super::navigation_events::{
 use super::navigation_result::navigation_dom_exception;
 use super::navigation_seed::history_entry_seed_for_traversal;
 use super::navigation_traversal_execution::{
-    TraversalTarget, queue_history_traversal_without_result,
+    TraversalTarget,
 };
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
-    navigation_document_is_active, window_history_for_holder, window_location_for_holder,
+    navigation_document_is_active, window_location_for_holder,
     window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use crate::document_runtime::DomHandle;
@@ -29,28 +29,6 @@ use crate::native_bridge::history_traversal::{
 use crate::native_bridge::{NavigationHistoryEntrySeed, PendingNavigationResult};
 use crate::util::context_host_ptr_from_global_bridge;
 use moli_session_history::SessionHistoryEntry;
-
-pub(super) fn queue_plan<'s>(scope: &mut v8::PinScope<'s, '_>, mut plan: JointTraversalPlan<'s>) {
-    // Root Document replacement belongs to the browser/popup loader.
-    if let Some(index) = plan.cross_document_root_index(scope) {
-        queue_history_traversal_without_result(scope, plan.targets.remove(index));
-        return;
-    }
-    let Some(history) = window_history_for_holder(scope, plan.owner) else {
-        return;
-    };
-    let index = history_index(scope, history);
-    queue_history_traversal_without_result(
-        scope,
-        TraversalTarget {
-            owner: plan.owner,
-            history,
-            current_index: index,
-            target_index: index,
-            joint_step: Some(plan.step()),
-        },
-    );
-}
 
 fn entry_reference<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -144,6 +122,7 @@ pub(super) fn execute<'s>(
     let Some((participants, execution_owner)) = captured else {
         let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
         results::reject_pending_navigation_results(scope, &results, error);
+        super::session_history_traversal::cancel_step(scope, plan.owner, plan.step());
         return;
     };
     let mut admission = PendingHistoryTraversalAdmission {
@@ -218,6 +197,18 @@ pub(super) fn execute<'s>(
             );
             return;
         }
+        if let Some((url, _)) = history_entry_seed_for_traversal(
+            scope, target.owner, target.current_index, target.target_index,
+        ) && let Some(navigation) = navigation {
+            let results = if target.owner.strict_equals(plan.owner.into()) {
+                admission.results.as_slice()
+            } else {
+                &[]
+            };
+            super::navigation_result::track_cross_document_traversal_navigation(
+                scope, navigation, outcome.signal, url.as_str(), results,
+            );
+        }
         if let Some(promise) = outcome.precommit_result {
             precommit.push(promise);
         }
@@ -277,7 +268,7 @@ fn validate<'s>(
     if !admission.active.get() || !navigation_document_is_active(scope, owner) {
         return None;
     }
-    let targets = super::session_history::project_traversal(scope, owner, &admission.plan)?;
+    let targets = super::navigation_traversal_plan::project_traversal_participants(scope, owner, &admission.plan)?;
     if targets.len() != admission.participants.len() {
         return None;
     }
@@ -379,6 +370,8 @@ fn settle_aborted_admission<'s>(
     if !results_rejected {
         results::reject_pending_navigation_results(scope, &admission.results, error);
     }
+    let owner = v8::Local::new(scope, &admission.initiator);
+    super::session_history_traversal::cancel_step(scope, owner, admission.plan.target_step());
 }
 
 pub(super) fn cancel_pending<'s>(
@@ -461,6 +454,7 @@ struct CrossDocumentParticipant<'s> {
 }
 
 fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalAdmission) {
+    let _execution = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     for participant in &admission.participants {
         if let Some(event) = &participant.outcome.event {
             let event = v8::Local::new(scope, event);
@@ -553,6 +547,12 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
             owner,
             moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
         );
+    }
+    for (_, entry) in &applied {
+        apply::finish_history_entry_commit(scope, entry);
+    }
+    if targets.is_empty() {
+        super::session_history_traversal::finish_entry(scope, owner, None);
     }
     let finished = traversal::finished_resolver_array(scope, &admission.results);
     let resolved_entry = navigation_current_entry(scope, owner)

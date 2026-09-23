@@ -1,5 +1,6 @@
+use super::history_runtime::results::reject_pending_navigation_results;
 use super::history_runtime::{
-    history_traversal_target_window, reject_pending_navigation_results, route_history_traversal_task,
+    history_traversal_target_window, route_history_traversal_task,
 };
 use super::navigation_entry::{history_entries};
 use super::navigation_events::{
@@ -14,8 +15,7 @@ use super::navigation_result::{
 use super::navigation_seed::history_entry_seed_for_traversal;
 use super::navigation_window::{navigation_document_is_active, window_navigation_for_holder};
 use super::navigation_window::{
-    runtime_window_is_global,
-    window_history_for_holder, window_task_target_for_runtime_owner,
+    runtime_window_is_global, window_history_for_holder, window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::native_bridge::{
@@ -41,6 +41,15 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
         traversal_target_entry(scope, &target)
             .and_then(|entry| super::session_history::step_for_entry(scope, target.owner, &entry))
     });
+    if target.joint_step.is_some_and(|step| {
+        !super::session_history::traversal_is_allowed(scope, target.owner, step)
+    }) {
+        return Some(navigation_rejected_dom_exception_result(
+            scope,
+            "The initiator cannot traverse all affected navigables",
+            "SecurityError",
+        ));
+    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return Some(navigation_rejected_dom_exception_result(scope, "Navigation was canceled", "AbortError"));
     };
@@ -110,71 +119,76 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
     Some(result)
 }
 
-pub(super) fn queue_history_traversal_without_result<'s>(
+pub(super) fn queue_history_traversal_by_delta<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    mut target: TraversalTarget<'s>,
+    history: v8::Local<'s, v8::Object>,
+    delta: i64,
 ) {
-    target.joint_step = target.joint_step.or_else(|| {
-        traversal_target_entry(scope, &target)
-            .and_then(|entry| super::session_history::step_for_entry(scope, target.owner, &entry))
-    });
+    let owner = super::navigation_window::runtime_window_owner(scope, history);
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(exact_target) = window_task_target_for_runtime_owner(scope, host, target.owner) else {
+    let Some(target) = window_task_target_for_runtime_owner(scope, host, owner) else {
         return;
     };
-    if let Some((_target_url, mut seed)) = history_entry_seed_for_traversal(
-        scope,
-        target.owner,
-        target.current_index,
-        target.target_index,
-    ) {
-        seed.session_history.target_step = target.joint_step;
-        super::session_history::capture_for_navigation(scope, target.owner, &mut seed);
-        if runtime_window_is_global(scope, target.owner) {
-            let binding = super::session_history::binding(scope, host, target.owner);
-            let Some(delta) = target
-                .joint_step
-                .and_then(|step| host.session_histories.get_mut(binding.popup).delta_to(step))
-            else {
-                return;
-            };
-            host.record_pending_top_level_history_traversal(delta);
-            return;
-        }
-        let target_key = traversal_target_entry(scope, &target)
-            .map(|entry| entry.borrow().key.as_str().to_owned());
-        let receiver_context = target.history.get_creation_context(scope)
-            .unwrap_or_else(|| scope.get_current_context());
-        let receiver_scope = &mut v8::ContextScope::new(scope, receiver_context);
-        if let Some(producer) = host.queue_cross_document_history_traversal(
-            receiver_scope, exact_target, target.target_index, target_key, seed,
-        ) {
-            route_history_traversal_task(receiver_scope, host, producer);
-        }
-        return;
-    }
-    let target_entry = traversal_target_entry(scope, &target);
-    if !traversal_target_entry_still_available(scope, &target, target_entry.as_ref()) {
-        return;
-    }
-    let receiver_context = target
-        .history
+    let binding = super::session_history::binding(scope, host, owner);
+    let step = host.session_histories.get_mut(binding.popup).current_step();
+    let context = history
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
-    let receiver_scope = &mut v8::ContextScope::new(scope, receiver_context);
-    let target_key = target_entry.map(|entry| entry.borrow().key.as_str().to_owned());
-    if let Some(producer) = host.queue_history_traversal(
-        receiver_scope,
-        exact_target,
-        target.target_index,
-        target.joint_step,
-        target_key,
-    ) {
-        route_history_traversal_task(receiver_scope, host, producer);
+    let scope = &mut v8::ContextScope::new(scope, context);
+    if let Some(producer) =
+        host.queue_history_traversal_by_delta(scope, target, delta, binding.popup, step)
+    {
+        route_history_traversal_task(scope, host, producer);
     }
+}
+
+fn apply_history_traversal_by_delta(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut JsContextHost,
+    exact_target: crate::native_bridge::WindowTaskTarget,
+    delta: i64,
+    from: moli_page_types::SessionHistoryStepId,
+) {
+    let Some(owner) = history_traversal_target_window(scope, host, exact_target) else {
+        return;
+    };
+    let context = owner
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let Some(history) = window_history_for_holder(scope, owner) else {
+        return;
+    };
+    use super::navigation_traversal_plan::{
+        HistoryDeltaTraversalPlan, history_delta_traversal_target,
+    };
+    let target = match history_delta_traversal_target(scope, history, delta, Some(from)) {
+        Some(HistoryDeltaTraversalPlan::Traverse(target)) => target,
+        Some(HistoryDeltaTraversalPlan::Denied) => return,
+        None => {
+            let binding = super::session_history::binding(scope, host, owner);
+            if binding.popup.is_none()
+                && host.sandbox_allows_history_traversal(
+                    exact_target.dispatch_scope(),
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                    crate::native_bridge::OwnerDispatchScope::Top,
+                )
+            {
+                host.record_pending_top_level_history_traversal(delta);
+            }
+            return;
+        }
+    };
+    super::session_history_traversal::apply_step(
+        scope,
+        host,
+        exact_target,
+        target.step(),
+        None,
+    );
 }
 
 fn traversal_target_entry<'s>(
@@ -217,9 +231,9 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     scope: &mut v8::PinScope<'s, 'i>,
     host: &mut JsContextHost,
     traversal: PendingCrossDocumentTraversal,
-) {
+) -> bool {
     if matches!(traversal.target.dispatch_scope(), crate::native_bridge::OwnerDispatchScope::Child(_)) {
-        super::history_runtime::apply_pending_history_traversal(
+        return super::history_runtime::apply_pending_history_traversal(
             scope, host,
             crate::native_bridge::PendingHistoryTraversal {
                 joint_step: traversal.seed.session_history.target_step,
@@ -230,22 +244,21 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
                 results: traversal.results,
             },
         );
-        return;
     }
     let Some(target_url) = traversal.seed.entries.iter()
         .find(|entry| entry.history_index == traversal.seed.current_index)
         .map(|entry| entry.url.clone())
     else {
         reject_cross_document_traversal(scope, &traversal);
-        return;
+        return false;
     };
     let Some(owner) = history_traversal_target_window(scope, host, traversal.target) else {
         reject_cross_document_traversal(scope, &traversal);
-        return;
+        return false;
     };
     let Some(history) = window_history_for_holder(scope, owner) else {
         reject_cross_document_traversal(scope, &traversal);
-        return;
+        return false;
     };
     if !traversal_target_key_still_available(
         scope,
@@ -254,7 +267,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
         traversal.target_key.as_deref(),
     ) {
         reject_cross_document_traversal(scope, &traversal);
-        return;
+        return false;
     }
     let info = traversal
         .info
@@ -277,7 +290,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     }
     if !is_current(scope, host) {
         reject_cross_document_traversal(scope, &traversal);
-        return;
+        return false;
     }
     let navigation = window_navigation_for_holder(scope, owner);
     if let Some(navigation) = navigation {
@@ -285,7 +298,7 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
     }
     if !is_current(scope, host) {
         reject_cross_document_traversal(scope, &traversal);
-        return;
+        return false;
     }
     let outcome = navigation.map_or_else(NavigationDispatchOutcome::proceed, |navigation| {
         dispatch_navigation_traverse_event_with_outcome(
@@ -328,20 +341,21 @@ pub(in crate::context_bootstrap) fn apply_pending_cross_document_traversal<'s, '
         if !closing_popup {
             reject_cross_document_traversal(scope, &traversal);
         }
-        return;
+        return false;
     }
     match dispatch_scope {
         crate::native_bridge::OwnerDispatchScope::Child(_) => unreachable!("child traversal uses the coordinator"),
         crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            if !host.queue_lightweight_popup_cross_document_traversal(
+            let queued = host.queue_lightweight_popup_cross_document_traversal(
                 scope,
                 popup_id,
                 &target_url,
                 traversal.seed,
-            ) && let Some(navigation) = navigation
-            {
+            );
+            if !queued && let Some(navigation) = navigation {
                 cancel_active_cross_document_navigation(scope, navigation, None);
             }
+            queued
         }
         crate::native_bridge::OwnerDispatchScope::Top => {
             unreachable!("top-level traversals are handed off to the browser")
@@ -355,11 +369,32 @@ pub(crate) fn apply_authorized_history_traversal_task(
     action: PendingHistoryTraversalAction,
 ) {
     match action {
+        PendingHistoryTraversalAction::ByDelta {
+            target,
+            delta,
+            position,
+        } => {
+            let from = position.borrow().step;
+            let previous = host.replace_active_history_delta_position(Some(position));
+            apply_history_traversal_by_delta(scope, host, target, delta, from);
+            host.replace_active_history_delta_position(previous);
+        }
         PendingHistoryTraversalAction::SameDocument(traversal) => {
-            super::history_runtime::apply_pending_history_traversal(scope, host, traversal);
+            super::session_history_traversal::apply_entry(scope, host, traversal);
         }
         PendingHistoryTraversalAction::CrossDocument(traversal) => {
-            apply_pending_cross_document_traversal(scope, host, *traversal);
+            super::session_history_traversal::apply_entry(
+                scope,
+                host,
+                crate::native_bridge::PendingHistoryTraversal {
+                    joint_step: traversal.seed.session_history.target_step,
+                    target: traversal.target,
+                    target_index: traversal.target_index,
+                    target_key: traversal.target_key,
+                    info: traversal.info,
+                    results: traversal.results,
+                },
+            );
         }
     }
 }

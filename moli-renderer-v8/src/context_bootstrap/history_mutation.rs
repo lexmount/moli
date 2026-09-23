@@ -80,6 +80,12 @@ pub(crate) fn update_history_for_document_open<'s>(
     let _ = entries.set_index(scope, index, entry.into());
     set_history_entries(scope, history, entries);
     sync_navigation_current_entry_from_history_entry(scope, window, entry);
+    super::session_history::commit(
+        scope,
+        window,
+        entry,
+        moli_page_types::SessionHistoryCommit::Replace,
+    );
     sync_navigation_entry_seed_from_owner(scope, window);
     if let Some(navigation) = window_navigation_for_holder(scope, window) {
         dispatch_navigation_currententrychange(scope, navigation, Some(previous), Some("replace"));
@@ -306,13 +312,7 @@ fn mutate_history_object<'s>(
         },
     );
     pruned.extend(super::session_history::prune_views(scope, owner));
-    sync_same_document_navigation_commit(
-        scope,
-        owner,
-        url.as_str(),
-        "historyApi",
-        true,
-    );
+    sync_same_document_navigation_commit(scope, owner, url.as_str(), "historyApi", true);
     // A currententrychange listener may immediately start another navigation.
     // Its source Document and frame owner must already reflect this commit.
     sync_navigation_entry_seed_from_owner(scope, owner);

@@ -91,11 +91,13 @@ mod platform_object_worlds;
 mod session_history;
 mod shared_event_targets;
 mod world_wrappers;
+mod session_history_traversal;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,
 };
 pub(crate) use session_history::prune_joint_session_history;
+pub(crate) use session_history_traversal::finish_without_document_commit as finish_joint_history_without_document_commit;
 mod notification_runtime;
 mod observer_template;
 mod opfs;
