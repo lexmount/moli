@@ -62,7 +62,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
             let _ = next_entries.set_index(scope, next_index, next_entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_at_least_visible_entries(scope, history, next_entries);
+            set_history_length_after_push(scope, history, entries, next_entries);
             set_history_state(scope, history, history_state);
             set_navigation_current_entry(scope, navigation, next_entry);
         }
@@ -154,7 +154,7 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
             let _ = next_entries.set_index(scope, next_index, next_entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_at_least_visible_entries(scope, history, next_entries);
+            set_history_length_after_push(scope, history, entries, next_entries);
             set_history_state(scope, history, history_state);
             set_navigation_current_entry(scope, navigation, next_entry);
             if let Some(location) = window_location_for_holder(scope, owner) {

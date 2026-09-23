@@ -20,7 +20,7 @@ use super::navigation_events::{
     refresh_navigation_destination_indexes,
 };
 use super::navigation_projection::{
-    build_visible_navigation_entries_array, set_history_length_at_least_visible_entries,
+    build_visible_navigation_entries_array, set_history_length_after_push,
     set_history_length_from_visible_entries,
 };
 use super::navigation_serialize::{

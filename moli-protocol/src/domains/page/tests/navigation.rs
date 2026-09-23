@@ -360,6 +360,103 @@ async fn renderer_fragment_navigation_preserves_initial_document_residence() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn navigation_bootstraps_browser_history_length_before_author_scripts() {
+    async fn page() -> impl axum::response::IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><script>globalThis.initialHistoryLength=history.length</script>",
+        )
+    }
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind history bootstrap server");
+    let addr = listener
+        .local_addr()
+        .expect("history bootstrap server address");
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/{page}", axum::routing::get(page)),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    let first_url = format!("http://{addr}/first");
+    let second_url = format!("http://{addr}/second");
+    let third_url = format!("http://{addr}/third");
+    let mut first_entry_id = None;
+
+    for step in 0..5 {
+        ctx.sent.clear();
+        let (method, params) = match step {
+            0 => ("Page.navigate", json!({ "url": first_url })),
+            1 => ("Page.navigate", json!({ "url": second_url })),
+            2 => ("Page.reload", json!({})),
+            3 => (
+                "Page.navigateToHistoryEntry",
+                json!({ "entryId": first_entry_id }),
+            ),
+            _ => ("Page.navigate", json!({ "url": third_url })),
+        };
+        ctx.process_async(json!({
+            "id": 9210,
+            "method": method,
+            "sessionId": "SID-1",
+            "params": params
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, 9210);
+        assert!(response["error"].is_null(), "{method}: {response}");
+        wait_until_message(
+            &mut ctx,
+            Some("SID-1"),
+            "history bootstrap document DOMContentLoaded",
+            |message| message["method"] == json!("Page.domContentEventFired"),
+        )
+        .await;
+
+        ctx.process_async(json!({
+            "id": 9211,
+            "method": "Page.getNavigationHistory",
+            "sessionId": "SID-1"
+        }))
+        .await;
+        let history = take_response_by_id(&mut ctx, 9211);
+        let entries = history["result"]["entries"]
+            .as_array()
+            .expect("history entries");
+        let expected_length = if step == 0 { 2 } else { 3 };
+        assert_eq!(entries.len(), expected_length, "{method}");
+        if step == 0 {
+            first_entry_id = entries[1]["id"].as_i64();
+        }
+
+        ctx.process_async(json!({
+            "id": 9212,
+            "method": "Runtime.evaluate",
+            "sessionId": "SID-1",
+            "params": {
+                "expression": "({initial:initialHistoryLength, current:history.length})",
+                "returnByValue": true
+            }
+        }))
+        .await;
+        let state = take_response_by_id(&mut ctx, 9212);
+        assert_eq!(
+            state["result"]["result"]["value"],
+            json!({
+                "initial": expected_length,
+                "current": expected_length
+            }),
+            "{method}: {state}"
+        );
+    }
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn navigation_history_supports_playwright_back_forward_commands() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");

@@ -230,16 +230,23 @@ pub(super) fn set_history_length_from_visible_entries<'s>(
     set_top_history_length_at_least(scope, history, length);
 }
 
-pub(super) fn set_history_length_at_least_visible_entries<'s>(
+pub(super) fn set_history_length_after_push<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
+    previous_entries: v8::Local<'s, v8::Array>,
     entries: v8::Local<'s, v8::Array>,
 ) {
     let length = history_length_floor_from_visible_entries(scope, history, entries);
     let current_length = history_length_number(scope, history)
         .unwrap_or(0.0)
         .max(0.0);
-    let length = current_length.max(length);
+    // Navigation entries can omit earlier Documents and other frames' steps.
+    // Add newly appended entries to the existing joint length; replacing a
+    // forward entry after traversal adds no step.
+    let previous_length =
+        history_length_floor_from_visible_entries(scope, history, previous_entries);
+    let added_entries = entries.length().saturating_sub(previous_entries.length());
+    let length = (current_length.max(previous_length) + f64::from(added_entries)).max(length);
     set_history_length(scope, history, length);
     set_top_history_length_at_least(scope, history, length);
 }

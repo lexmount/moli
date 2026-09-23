@@ -47,6 +47,21 @@ impl TargetNavigationHistoryState {
         self.entries.is_empty()
     }
 
+    pub(crate) fn length_after_navigation(&self) -> usize {
+        match self.pending_update {
+            Some(
+                PendingNavigationHistoryUpdate::ReplaceCurrent
+                | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument,
+            ) => self.entries.len().max(1),
+            Some(PendingNavigationHistoryUpdate::TraverseToEntry(entry_id))
+                if self.entries.iter().any(|entry| entry.id == entry_id) =>
+            {
+                self.entries.len()
+            }
+            _ => self.current_index.map_or(1, |index| index + 2),
+        }
+    }
+
     pub(crate) fn allocate_entry_id(&mut self) -> i32 {
         let id = self.next_entry_id;
         self.next_entry_id = self

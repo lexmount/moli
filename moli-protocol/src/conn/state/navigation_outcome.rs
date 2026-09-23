@@ -145,6 +145,7 @@ impl RendererMainDocumentCommitSeed {
             security_origin,
             secure_context_type,
             timestamp: self.timestamp,
+            session_history_length: None,
         }
     }
 }

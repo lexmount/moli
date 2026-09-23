@@ -2414,6 +2414,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         security_origin: "null".to_owned(),
         secure_context_type: "InsecureScheme".to_owned(),
         timestamp: 0.0,
+        session_history_length: None,
     };
     conn.commit_loaded_navigation_target_identity_for_owner(
         &owner,

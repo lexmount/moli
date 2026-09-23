@@ -5845,6 +5845,13 @@ impl ScriptVm {
         })
     }
 
+    pub(super) fn install_session_history_length(&mut self, length: usize) {
+        let _ = self.with_default_context_scope(|scope, _runtime_ptr| {
+            super::context_bootstrap::install_session_history_length(scope, length);
+            Ok(())
+        });
+    }
+
     pub(super) fn install_navigation_bootstrap_entry(
         &mut self,
         entry_seed: Option<super::native_bridge::NavigationHistoryEntrySeed>,

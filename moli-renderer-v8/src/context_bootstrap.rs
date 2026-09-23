@@ -324,6 +324,7 @@ pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_even
 pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
     install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
+    install_session_history_length,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;

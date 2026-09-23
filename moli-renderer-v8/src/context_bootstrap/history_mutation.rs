@@ -16,7 +16,7 @@ use super::navigation_events::{
     run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
-use super::navigation_projection::set_history_length_at_least_visible_entries;
+use super::navigation_projection::set_history_length_after_push;
 use super::navigation_result::{
     cancel_pending_same_document_navigation_finishes,
     cancel_pending_same_document_navigation_finishes_including_reentrant,
@@ -211,7 +211,7 @@ fn mutate_history_object<'s>(
             let _ = next_entries.set_index(scope, next_index, entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_at_least_visible_entries(scope, history, next_entries);
+            set_history_length_after_push(scope, history, entries, next_entries);
             entry
         }
         HistoryMutationKind::Replace => {

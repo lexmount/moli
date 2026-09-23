@@ -813,6 +813,8 @@ pub struct RendererMainDocumentCommit {
     pub security_origin: String,
     pub secure_context_type: String,
     pub timestamp: f64,
+    /// Browser-owned session-history length at this document's commit.
+    pub session_history_length: Option<usize>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

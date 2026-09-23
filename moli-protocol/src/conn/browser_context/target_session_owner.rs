@@ -180,6 +180,7 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
+    session_history_length: Option<usize>,
 }
 
 impl TargetNavigationLoadInputs {
@@ -196,9 +197,11 @@ impl TargetNavigationLoadInputs {
         final_url: &Url,
         network_error_page: Option<&NetworkErrorPageNavigation>,
     ) -> Option<RendererMainDocumentCommit> {
-        self.main_document_commit_seed
-            .as_ref()
-            .map(|seed| seed.resolve(final_url, network_error_page))
+        self.main_document_commit_seed.as_ref().map(|seed| {
+            let mut commit = seed.resolve(final_url, network_error_page);
+            commit.session_history_length = self.session_history_length;
+            commit
+        })
     }
 
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
@@ -337,6 +340,12 @@ impl TargetNavigationLoadInputs {
                 .subresource_interception_config(),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
+            session_history_length: Some(
+                target
+                    .owner_state
+                    .navigation_history_state
+                    .length_after_navigation(),
+            ),
         }
     }
 
@@ -402,6 +411,7 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: (false, None),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
+            session_history_length: None,
         }
     }
 
@@ -3280,6 +3290,7 @@ mod tests {
             security_origin: "https://nav.example".to_owned(),
             secure_context_type: "Secure".to_owned(),
             timestamp: 0.0,
+            session_history_length: None,
         };
         {
             let mut owner = TargetSessionOwnerMut {

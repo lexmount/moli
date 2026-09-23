@@ -44,7 +44,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let _ = next_entries.set_index(scope, next_index, next_entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_at_least_visible_entries(scope, history, next_entries);
+            set_history_length_after_push(scope, history, entries, next_entries);
             set_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, next_entry);
             dispatch_navigation_currententrychange(scope, navigation, previous_entry, Some("push"));

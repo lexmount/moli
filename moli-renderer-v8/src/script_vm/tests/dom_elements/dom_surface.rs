@@ -10353,6 +10353,94 @@ fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
 }
 
 #[tokio::test]
+async fn child_history_push_preserves_existing_top_history_length() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for parent_steps in [0, 1, 3] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://joint-child-length.test/page.html",
+            &loader,
+        );
+        for _ in 0..parent_steps {
+            vm.eval("history.pushState(null, ''); 'pushed'")
+                .expect("parent history should advance");
+        }
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '<p>child</p>';
+  (document.body || document.documentElement || document).appendChild(frame);
+  return 'ready';
+})()
+"#,
+        )
+        .expect("child history frame setup should evaluate");
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+            .await
+            .expect("child should finish loading");
+
+        let result = vm
+            .eval(
+                r#"
+(() => {
+  const child = document.querySelector('iframe').contentWindow;
+  const lengths = [];
+  const snapshot = () => lengths.push(history.length, child.history.length);
+  snapshot();
+  child.history.replaceState({ step: 0 }, '');
+  snapshot();
+  child.history.pushState({ step: 1 }, '');
+  snapshot();
+  child.history.pushState({ step: 2 }, '');
+  snapshot();
+  child.history.replaceState({ step: 3 }, '');
+  snapshot();
+  return lengths.concat(child.history.state.step).join('|');
+})()
+"#,
+            )
+            .expect("child history mutations should evaluate");
+        let initial_length = parent_steps + 1;
+        let first_push_length = initial_length + 1;
+        let second_push_length = initial_length + 2;
+        assert_eq!(
+            result,
+            format!(
+                "{initial_length}|{initial_length}|{initial_length}|{initial_length}|\
+                 {first_push_length}|{first_push_length}|{second_push_length}|{second_push_length}|\
+                 {second_push_length}|{second_push_length}|3"
+            ),
+            "parent history steps: {parent_steps}"
+        );
+
+        vm.eval("document.querySelector('iframe').contentWindow.history.back(); 'queued'")
+            .expect("child history back should queue traversal");
+        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+            .await
+            .expect("child history traversal should finish");
+        assert_eq!(
+            vm.eval("document.querySelector('iframe').contentWindow.history.state.step")
+                .expect("back should restore the first pushed state"),
+            "1"
+        );
+        assert_eq!(
+            vm.eval(
+                r#"
+(() => {
+  const child = document.querySelector('iframe').contentWindow;
+  child.history.pushState({ step: 4 }, '');
+  return [history.length, child.history.length, child.history.state.step].join('|');
+})()
+"#,
+            )
+            .expect("push after back should replace the forward history step"),
+            format!("{second_push_length}|{second_push_length}|4"),
+            "parent history steps: {parent_steps}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn top_history_back_routes_to_child_joint_history_entry() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
