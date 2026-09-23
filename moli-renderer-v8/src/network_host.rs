@@ -69,7 +69,8 @@ pub(crate) use self::body_source::{
     pending_network_body_stream, release_pending_opaque_response_body,
 };
 pub(crate) use self::browser_response::{
-    LocalUrlError, local_url_response, local_url_response_result, local_url_response_with_blob_entry,
+    LocalUrlError, local_url_response, local_url_response_result,
+    local_url_response_with_blob_entry,
 };
 pub(crate) use self::csp_redirect::FetchCspRedirectState;
 pub(crate) use self::csp_reports::{

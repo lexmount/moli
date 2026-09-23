@@ -39,9 +39,7 @@ impl CapturedBlobUrl {
         } = self.data.as_ref()?
         else {
             // Fetch's blob scheme only reads Blob objects, never MediaSource.
-            return Some(Err(
-                super::browser_response::LocalUrlError::MediaSource,
-            ));
+            return Some(Err(super::browser_response::LocalUrlError::MediaSource));
         };
         Some(super::browser_response::blob_response(
             url,

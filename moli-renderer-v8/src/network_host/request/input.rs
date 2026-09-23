@@ -3,10 +3,12 @@ use super::*;
 use crate::webidl;
 
 pub(super) fn normalize_fetch_request_method(method: &str) -> Result<String, webidl::WebIdlError> {
-    normalize_request_method(method).map_err(|error| webidl::WebIdlError::custom_message(match error {
-        RequestMethodError::InvalidToken => "Request method is not a valid HTTP token",
-        RequestMethodError::Forbidden => "Request method is forbidden",
-    }))
+    normalize_request_method(method).map_err(|error| {
+        webidl::WebIdlError::custom_message(match error {
+            RequestMethodError::InvalidToken => "Request method is not a valid HTTP token",
+            RequestMethodError::Forbidden => "Request method is forbidden",
+        })
+    })
 }
 
 #[derive(Debug)]
@@ -324,7 +326,9 @@ fn object_bool_property(
 
 pub(crate) fn validate_request_url_credentials(url: &url::Url) -> Result<(), webidl::WebIdlError> {
     if !url.username().is_empty() || url.password().is_some_and(|value| !value.is_empty()) {
-        return Err(webidl::WebIdlError::custom_message("Request URL must not include credentials"));
+        return Err(webidl::WebIdlError::custom_message(
+            "Request URL must not include credentials",
+        ));
     }
     Ok(())
 }

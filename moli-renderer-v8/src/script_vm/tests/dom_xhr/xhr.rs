@@ -4470,6 +4470,9 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 let head = moli_fetch::ResponseHead {
                     final_url: request.url.clone(),
                     status: 200,
+                    status_text: None,
+                    cache_state: Default::default(),
+                    preload_state: Default::default(),
                     headers,
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),

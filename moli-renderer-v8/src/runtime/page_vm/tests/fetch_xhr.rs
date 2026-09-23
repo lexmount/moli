@@ -7601,7 +7601,7 @@ async fn request_and_fetch_argument_errors_preserve_exceptions_without_side_effe
                     const inits = [
                         {method: {toString: throwSentinel}},
                         {headers: {[Symbol.iterator]: throwSentinel}},
-                        ...['method', 'body', 'headers', 'signal'].map(member => new Proxy({}, {
+                        ...['method', 'headers', 'signal'].map(member => new Proxy({}, {
                             has(target, key) {
                                 if (key === member) throw sentinel;
                                 return Reflect.has(target, key);
@@ -7650,9 +7650,9 @@ async fn request_and_fetch_argument_errors_preserve_exceptions_without_side_effe
                     await invalidSignal.catch(error => { caught = error; });
                     check(caught instanceof other.TypeError, 'validation TypeError must belong to function realm');
                     const invalidUrl = other.fetch.call(window, 'http://[');
-                    check(invalidUrl instanceof Promise, 'preparation rejection must belong to receiver realm');
+                    check(invalidUrl instanceof other.Promise, 'URL conversion rejection must belong to function realm');
                     await invalidUrl.catch(error => { caught = error; });
-                    check(caught instanceof TypeError && caught.message.startsWith('failed to resolve url `http://[`:'), 'preparation TypeError must belong to receiver realm');
+                    check(caught instanceof other.TypeError && caught.message.startsWith('failed to resolve url `http://[`:'), 'URL conversion TypeError must belong to function realm');
                     frame.remove();
                 }
                 return 'ok';

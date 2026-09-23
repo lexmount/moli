@@ -1,5 +1,8 @@
 use super::*;
-use crate::network_host::{CapturedBlobUrl, FetchArgumentError, convert_fetch_arguments, local_url_response_with_blob_entry, normalized_headers_entries};
+use crate::network_host::{
+    CapturedBlobUrl, FetchArgumentError, convert_fetch_arguments,
+    local_url_response_with_blob_entry, normalized_headers_entries,
+};
 use crate::service_worker_runtime::{
     ServiceWorkerClientId, ServiceWorkerDirectFetchResult, ServiceWorkerFetchDispatch,
     ServiceWorkerFetchRequest, ServiceWorkerFetchRequestMetadata, ServiceWorkerRequestDestination,

@@ -334,7 +334,17 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    let internal_id = spawn_network_fetch(scope, host, resolver, prepared);
+    let internal_id = match spawn_network_fetch(scope, host, resolver, prepared) {
+        Ok(internal_id) => internal_id,
+        Err(error) => {
+            let message =
+                v8_string(scope, &error.to_string()).unwrap_or_else(|| v8::String::empty(scope));
+            let exception = v8::Exception::type_error(scope, message);
+            resolver.reject(scope, exception);
+            rv.set(promise.into());
+            return;
+        }
+    };
     if let Some(signal) = signal {
         install_window_fetch_abort_listener(scope, signal, internal_id);
     }

@@ -92,19 +92,27 @@ impl RequestInitValidation {
         cache: &str,
     ) -> Result<Option<String>, webidl::WebIdlError> {
         if self.window_non_null {
-            return Err(webidl::WebIdlError::custom_message("RequestInit's window member must be null"));
+            return Err(webidl::WebIdlError::custom_message(
+                "RequestInit's window member must be null",
+            ));
         }
         let referrer = self
             .referrer
             .as_deref()
             .map(|value| normalize_request_referrer(scope, value))
             .transpose()
-            .map_err(|_| webidl::WebIdlError::custom_message("Request referrer is not a valid URL"))?;
+            .map_err(|_| {
+                webidl::WebIdlError::custom_message("Request referrer is not a valid URL")
+            })?;
         if self.mode == Some(RequestMode::Navigate) {
-            return Err(webidl::WebIdlError::custom_message("Cannot construct a Request with mode navigate"));
+            return Err(webidl::WebIdlError::custom_message(
+                "Cannot construct a Request with mode navigate",
+            ));
         }
         if cache == "only-if-cached" && mode != "same-origin" {
-            return Err(webidl::WebIdlError::custom_message("Request cache only-if-cached requires mode same-origin"));
+            return Err(webidl::WebIdlError::custom_message(
+                "Request cache only-if-cached requires mode same-origin",
+            ));
         }
         Ok(referrer)
     }
@@ -255,10 +263,14 @@ pub(crate) fn parse_fetch_init<'s>(
     // Null and undefined RequestInit bodies inherit an input Request's body.
     let body_present = prepared_body.is_some();
     if body_stream.is_some() && init.duplex.is_none() {
-        return Err(webidl::WebIdlError::custom_message("Request with a ReadableStream body requires duplex"));
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with a ReadableStream body requires duplex",
+        ));
     }
     if body_stream.is_some() && init.keepalive == Some(true) {
-        return Err(webidl::WebIdlError::custom_message("Request with keepalive cannot have a ReadableStream body"));
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with keepalive cannot have a ReadableStream body",
+        ));
     }
     let body = prepared_body.as_ref().map(|body| body.bytes.clone());
     let body_content_type = prepared_body
@@ -303,14 +315,16 @@ pub(crate) fn validate_fetch_body(
     has_stream_body: bool,
     method: &str,
     mode: RequestMode,
-) -> Result<(), String> {
+) -> Result<(), webidl::WebIdlError> {
     if has_body && matches!(method, "GET" | "HEAD") {
-        return Err("Request with GET/HEAD method cannot have body".to_owned());
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with GET/HEAD method cannot have body",
+        ));
     }
     if has_stream_body && !matches!(mode, RequestMode::Cors | RequestMode::SameOrigin) {
-        return Err(
-            "Request with a ReadableStream body requires cors or same-origin mode".to_owned(),
-        );
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with a ReadableStream body requires cors or same-origin mode",
+        ));
     }
     Ok(())
 }
