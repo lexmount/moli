@@ -1301,7 +1301,7 @@ fn is_external_async_classic_candidate_in_host(host: &DomHost, node_id: NativeNo
     moli_script::classify_script_kind(Some(script_type)) == moli_page_types::ScriptKind::Classic
 }
 
-fn is_modulepreload_link_candidate(
+fn is_preload_link_candidate(
     token_local_name: &str,
     token_namespace: &str,
     token_attributes: &[NativeAttribute],
@@ -1309,13 +1309,13 @@ fn is_modulepreload_link_candidate(
     if token_namespace != "http://www.w3.org/1999/xhtml" || token_local_name != "link" {
         return false;
     }
-    let mut has_modulepreload_rel = false;
+    let mut has_preload_rel = false;
     let mut has_non_empty_href = false;
     for attribute in token_attributes {
         match attribute.local_name() {
             "rel" => {
-                has_modulepreload_rel |=
-                    link_rel_includes_token(attribute.value(), "modulepreload");
+                has_preload_rel |= link_rel_includes_token(attribute.value(), "modulepreload")
+                    || link_rel_includes_token(attribute.value(), "preload");
             }
             "href" => {
                 has_non_empty_href |= !attribute.value().trim().is_empty();
@@ -1323,7 +1323,7 @@ fn is_modulepreload_link_candidate(
             _ => {}
         }
     }
-    has_modulepreload_rel && has_non_empty_href
+    has_preload_rel && has_non_empty_href
 }
 
 fn is_meta_csp_candidate(
@@ -3042,9 +3042,9 @@ impl ParserStreamHtmlTreeSinkTarget {
             .collect()
     }
 
-    pub(super) fn drain_discovered_modulepreload_link_candidates(&mut self) -> Vec<NativeNodeId> {
+    pub(super) fn drain_discovered_preload_link_candidates(&mut self) -> Vec<NativeNodeId> {
         self.state
-            .discovered_modulepreload_link_candidates
+            .discovered_preload_link_candidates
             .drain(..)
             .collect()
     }
@@ -3405,9 +3405,9 @@ impl ParserStreamHtmlTreeSinkTarget {
                 .discovered_async_prefetch_candidates
                 .push_back(node_id);
         }
-        if is_modulepreload_link_candidate(token_local_name, token_namespace, token_attributes) {
+        if is_preload_link_candidate(token_local_name, token_namespace, token_attributes) {
             self.state
-                .discovered_modulepreload_link_candidates
+                .discovered_preload_link_candidates
                 .push_back(node_id);
         }
         if is_meta_csp_candidate(token_local_name, token_namespace, token_attributes) {
@@ -4012,44 +4012,52 @@ fn parser_stream_async_prefetch_uses_shared_script_type_classification() {
 }
 
 #[test]
-fn parser_stream_discovers_modulepreload_link_candidates() {
+fn parser_stream_discovers_preload_link_candidates() {
     let html = concat!(
         "<!doctype html><html><head>",
         "<link rel='modulepreload' href='/entry.mjs'>",
         "<link rel='dns-prefetch MODULEPRELOAD' href='/caps.mjs'>",
         "<link rel='modulepreload' href='   '>",
-        "<link rel='preload' href='/classic.js'>",
+        "<link rel='preload' as='script' href='/classic.js'>",
+        "<link rel='dns-prefetch PRELOAD' as='style' href='/style.css'>",
+        "<link rel='preload' href=''>",
+        "<link rel='prefetch' href='/other.js'>",
         "</head></html>",
     );
     let url = Url::parse("https://example.test/").expect("test url");
 
     let live = crate::DocumentStream::new_scripting_enabled_parser_stream_for_testing(url);
-    let mut modulepreload_candidates = Vec::new();
+    let mut preload_candidates = Vec::new();
     for chunk in html_chunks(html) {
         let outcome = live.pump_parser_step(chunk);
         assert!(
             outcome.discovered_async_prefetch_scripts.is_empty(),
-            "modulepreload links should not be reported as async script prefetches"
+            "preload links should not be reported as async script prefetches"
         );
-        modulepreload_candidates.extend(outcome.discovered_modulepreload_link_candidates);
+        preload_candidates.extend(outcome.discovered_preload_link_candidates);
     }
 
     let actual = live.snapshot_parser_stream_document();
-    let candidate_hrefs: Vec<_> = modulepreload_candidates
+    let candidate_hrefs: Vec<_> = preload_candidates
         .into_iter()
         .map(|node_id| {
             actual
                 .node(node_id)
                 .and_then(Node::as_element)
                 .and_then(|element| element.attribute("href"))
-                .expect("modulepreload candidate should be a link with href")
+                .expect("preload candidate should be a link with href")
                 .to_owned()
         })
         .collect();
 
     assert_eq!(
         candidate_hrefs,
-        vec!["/entry.mjs".to_owned(), "/caps.mjs".to_owned()]
+        vec![
+            "/entry.mjs".to_owned(),
+            "/caps.mjs".to_owned(),
+            "/classic.js".to_owned(),
+            "/style.css".to_owned(),
+        ]
     );
 }
 

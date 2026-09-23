@@ -44,6 +44,7 @@ impl DocumentSubresourceCspKind {
 }
 
 #[must_use = "report-only and enforced CSP results must be handled together"]
+#[derive(Default)]
 pub(crate) struct DocumentContentSecurityPolicyCheck {
     report_only_violations: Vec<DocumentContentSecurityPolicyViolation>,
     enforced_violations: Vec<DocumentContentSecurityPolicyViolation>,
@@ -316,6 +317,131 @@ impl DocumentPolicyContainer {
 }
 
 impl DocumentRuntime {
+    pub(crate) fn preload_link_csp_check_for_document(
+        &self,
+        document: Option<DomHandle>,
+        document_url: &Url,
+        policy_container: &DocumentPolicyContainer,
+        link: DomHandle,
+        request_url: &Url,
+    ) -> DocumentContentSecurityPolicyCheck {
+        use crate::link_as::{LinkAsDestination, link_as_destination};
+        if self.bypass_content_security_policy() {
+            return DocumentContentSecurityPolicyCheck::default();
+        }
+        let Some(node) = self.dom_host.node(link) else {
+            return DocumentContentSecurityPolicyCheck::default();
+        };
+        let Some(element) = node.as_element() else {
+            return DocumentContentSecurityPolicyCheck::default();
+        };
+        let destination = link_as_destination(element.attribute("as"));
+        let nonce = element.cryptographic_nonce();
+        let self_url = policy_container
+            .content_security_policy_self_url
+            .as_ref()
+            .unwrap_or(document_url);
+        let check = |policies: Vec<DocumentContentSecurityPolicyString>, disposition| {
+            let mut violations = match destination {
+                LinkAsDestination::Style => {
+                    document_style_element_url_policy_violations_from_document_policies(
+                        policies,
+                        self_url,
+                        request_url,
+                        ContentSecurityPolicyRedirectStatus::NoRedirect,
+                        disposition,
+                        ContentSecurityPolicyStyleElementRequest { nonce },
+                    )
+                }
+                LinkAsDestination::Script => policies
+                    .into_iter()
+                    .filter_map(|policy| {
+                        let mut violation = document_script_element_url_policy_violation(
+                            std::slice::from_ref(&policy.policy),
+                            &policy.reporting_endpoints,
+                            self_url,
+                            request_url,
+                            ContentSecurityPolicyRedirectStatus::NoRedirect,
+                            disposition,
+                            ContentSecurityPolicyScriptElementRequest {
+                                nonce,
+                                integrity: element.attribute("integrity"),
+                                parser_inserted: node.flags().parser_created(),
+                            },
+                        )?;
+                        apply_document_policy_reporting_flags(&mut violation, &policy);
+                        Some(violation)
+                    })
+                    .collect(),
+                _ => {
+                    let kind = match destination {
+                        LinkAsDestination::Fetch => {
+                            ContentSecurityPolicyResourceKind::DocumentConnect
+                        }
+                        LinkAsDestination::Font => ContentSecurityPolicyResourceKind::DocumentFont,
+                        LinkAsDestination::Image => {
+                            ContentSecurityPolicyResourceKind::DocumentImage
+                        }
+                        LinkAsDestination::Track => {
+                            ContentSecurityPolicyResourceKind::DocumentMedia
+                        }
+                        _ => return Vec::new(),
+                    };
+                    document_url_policy_violations_from_document_policies(
+                        policies,
+                        self_url,
+                        request_url,
+                        kind,
+                        ContentSecurityPolicyRedirectStatus::NoRedirect,
+                        disposition,
+                    )
+                }
+            };
+            for violation in &mut violations {
+                violation.document_uri =
+                    crate::content_security_policy::csp_url_for_report(document_url);
+            }
+            violations
+        };
+        DocumentContentSecurityPolicyCheck {
+            enforced_violations: check(
+                self.document_content_security_policy_strings_for_optional_document(
+                    document,
+                    &policy_container.response_content_security_policies,
+                    &policy_container.content_security_reporting_endpoints,
+                ),
+                ContentSecurityPolicyDisposition::Enforce,
+            ),
+            report_only_violations: check(
+                document_response_content_security_policy_strings(
+                    &policy_container.response_content_security_report_only_policies,
+                    &policy_container.content_security_reporting_endpoints,
+                ),
+                ContentSecurityPolicyDisposition::Report,
+            ),
+        }
+    }
+
+    pub(in crate::document_runtime) fn apply_preload_link_csp_check(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        link: DomHandle,
+        check: DocumentContentSecurityPolicyCheck,
+    ) {
+        let (report_only, enforced) = check.into_violations();
+        self.set_stylesheet_owner_csp_disposition(
+            host_ptr,
+            link,
+            super::StylesheetOwnerCspDisposition::from_blocked(!enforced.is_empty()),
+        );
+        for violation in report_only.into_iter().chain(enforced) {
+            self.queue_content_security_policy_violation_event_for_element_best_effort(
+                scope, host_ptr, link, &violation,
+            );
+        }
+    }
+
     pub(super) fn apply_base_url_csp_mutation_steps(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

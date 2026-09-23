@@ -7,6 +7,7 @@ mod lifecycle;
 mod live_parser;
 mod loads;
 mod navigation_admission;
+mod parser_preloads;
 mod parser_store;
 mod snapshots;
 
@@ -26,6 +27,7 @@ pub(in crate::native_bridge::context_host) use frame_owner_resource_timing::{
 };
 pub(super) use initial_empty::ChildInitialEmptyDocumentInit;
 pub(crate) use loads::{ChildDocumentLoadApplication, ChildDocumentLoadBodyActivity};
+pub(in crate::native_bridge::context_host) use parser_preloads::PendingChildParserPreload;
 pub(in crate::native_bridge::context_host) use parser_store::ChildDocumentParserStore;
 pub(in crate::native_bridge::context_host) use snapshots::child_document_content_type_from_headers;
 

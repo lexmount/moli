@@ -215,6 +215,7 @@ impl JsContextHost {
             // resources discovered by the outer step before parking it too.
             let discovery_signals = parser.take_discovery_signals();
             self.queue_live_child_parser_discovery_signals(
+                scope,
                 child_handle,
                 document_handle,
                 discovery_signals,
@@ -591,6 +592,7 @@ impl JsContextHost {
                 .set_html_quirks_mode_for_parser_document(document_handle, QuirksMode::NoQuirks);
         }
         self.queue_live_child_parser_discovery_signals(
+            scope,
             child_handle,
             document_handle,
             finish_signals.discovery_signals,
@@ -634,23 +636,21 @@ impl JsContextHost {
 
     fn queue_live_child_parser_discovery_signals(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         child_handle: DomHandle,
         document_handle: DomHandle,
         discovery_signals: crate::live_document_parser::LiveDocumentParserDiscoverySignals,
     ) {
         let async_prefetch_count = discovery_signals.async_prefetch_scripts.len();
-        let modulepreload_link_count = discovery_signals.modulepreload_link_candidates.len();
+        let preload_link_count = discovery_signals.preload_link_candidates.len();
         let blocking_stylesheet_count = discovery_signals.blocking_stylesheet_inputs.len();
-        let modulepreload_link_candidates = discovery_signals.modulepreload_link_candidates;
+        let preload_link_candidates = discovery_signals.preload_link_candidates;
         let blocking_stylesheet_inputs = discovery_signals.blocking_stylesheet_inputs;
-        if async_prefetch_count != 0
-            || modulepreload_link_count != 0
-            || blocking_stylesheet_count != 0
-        {
+        if async_prefetch_count != 0 || preload_link_count != 0 || blocking_stylesheet_count != 0 {
             tracing::debug!(
                 child_document_handle = ?document_handle,
                 async_prefetch_count,
-                modulepreload_link_count,
+                preload_link_count,
                 blocking_stylesheet_count,
                 "child live parser emitted document-owned discovery signals"
             );
@@ -674,10 +674,16 @@ impl JsContextHost {
                 );
             }
         }
+        self.queue_child_parser_discovered_preloads(
+            scope,
+            child_handle,
+            document_handle,
+            &preload_link_candidates,
+        );
         self.queue_child_parser_discovered_modulepreload_links(
             child_handle,
             document_handle,
-            modulepreload_link_candidates,
+            preload_link_candidates,
         );
     }
 
@@ -701,6 +707,9 @@ impl JsContextHost {
             else {
                 continue;
             };
+            let Some(raw_href) = modulepreload_href(element) else {
+                continue;
+            };
             if let Some(invalid_as) = invalid_modulepreload_as_value(element) {
                 tracing::debug!(
                     child_handle = ?child_handle,
@@ -715,9 +724,6 @@ impl JsContextHost {
                 );
                 continue;
             }
-            let Some(raw_href) = modulepreload_href(element) else {
-                continue;
-            };
             let Some(initiator_url) =
                 self.child_browsing_context_request_initiator_url(child_handle)
             else {
@@ -899,6 +905,7 @@ impl JsContextHost {
                 return false;
             }
             self.queue_live_child_parser_discovery_signals(
+                scope,
                 child_handle,
                 document_handle,
                 insertion.take_discovery_signals(),

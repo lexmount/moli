@@ -543,7 +543,7 @@ impl HtmlTreeSinkStream {
             return ParserPumpOutcome {
                 result: ParserPumpStep::InputDrained,
                 discovered_async_prefetch_scripts: Vec::new(),
-                discovered_modulepreload_link_candidates: Vec::new(),
+                discovered_preload_link_candidates: Vec::new(),
                 discovered_blocking_stylesheet_inputs: Vec::new(),
             };
         }
@@ -609,8 +609,8 @@ impl HtmlTreeSinkStream {
         };
         let discovered_async_prefetch_candidate_node_ids =
             self.drain_discovered_async_prefetch_candidates();
-        let discovered_modulepreload_link_candidate_node_ids =
-            self.drain_discovered_modulepreload_link_candidates();
+        let discovered_preload_link_candidate_node_ids =
+            self.drain_discovered_preload_link_candidates();
         let discovered_blocking_stylesheet_inputs =
             self.drain_discovered_blocking_stylesheet_inputs();
         let captured_blocking_stylesheet_signatures =
@@ -676,8 +676,7 @@ impl HtmlTreeSinkStream {
             return ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: Vec::new(),
-                discovered_modulepreload_link_candidates:
-                    discovered_modulepreload_link_candidate_node_ids,
+                discovered_preload_link_candidates: discovered_preload_link_candidate_node_ids,
                 discovered_blocking_stylesheet_inputs,
             };
         }
@@ -685,7 +684,7 @@ impl HtmlTreeSinkStream {
         let (
             result,
             discovered_async_prefetch_scripts,
-            discovered_modulepreload_link_candidates,
+            discovered_preload_link_candidates,
             discovered_blocking_stylesheet_inputs,
         ) = {
             let target = self.parser.sink().borrow_target();
@@ -772,7 +771,7 @@ impl HtmlTreeSinkStream {
             (
                 result,
                 discovered_async_prefetch_scripts,
-                discovered_modulepreload_link_candidate_node_ids,
+                discovered_preload_link_candidate_node_ids,
                 discovered_blocking_stylesheet_inputs,
             )
         };
@@ -780,7 +779,7 @@ impl HtmlTreeSinkStream {
         ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts,
-            discovered_modulepreload_link_candidates,
+            discovered_preload_link_candidates,
             discovered_blocking_stylesheet_inputs,
         }
     }
@@ -850,10 +849,10 @@ impl HtmlTreeSinkStream {
             .drain_discovered_async_prefetch_candidates()
     }
 
-    pub fn drain_discovered_modulepreload_link_candidates(&self) -> Vec<NativeNodeId> {
+    pub fn drain_discovered_preload_link_candidates(&self) -> Vec<NativeNodeId> {
         self.parser
             .sink()
-            .drain_discovered_modulepreload_link_candidates()
+            .drain_discovered_preload_link_candidates()
     }
 
     pub fn drain_discovered_parser_meta_csp_candidates(&self) -> Vec<NativeNodeId> {
@@ -950,8 +949,7 @@ impl HtmlTreeSinkStream {
         let signals = ParserFinishDiscoverySignals {
             parser_created_null_registry_elements: target
                 .take_parser_stream_null_custom_element_registry_elements(),
-            discovered_modulepreload_link_candidates: target
-                .drain_discovered_modulepreload_link_candidates(),
+            discovered_preload_link_candidates: target.drain_discovered_preload_link_candidates(),
             discovered_parser_meta_csp_candidates: target
                 .drain_discovered_parser_meta_csp_candidates(),
             discovered_blocking_stylesheet_inputs: target

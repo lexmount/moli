@@ -8234,6 +8234,165 @@ globalThis.__childParserModuleEvalValue = 144;"#
 }
 
 #[tokio::test]
+async fn child_parser_preloads_wait_for_one_exact_realm_before_starting_fetches() {
+    let (mut vm, _) = new_child_modulepreload_page_test_vm("https://parser-preloads.test/");
+    vm.eval(r#"
+      const root = document.documentElement || document.appendChild(document.createElement('html'));
+      const body = document.body || root.appendChild(document.createElement('body'));
+      const frame = document.createElement('iframe');
+      frame.srcdoc = '<link rel="preload" as="style" href="data:text/css,body{}"><link rel="preload" as="style" href="data:text/css,p{}">';
+      body.append(frame);
+    "#).expect("insert parser preloads");
+    assert_eq!(
+        vm.run_next_child_frame_semantic_turn().await,
+        Some(ChildFrameSemanticTurnKind::NavigationCommit)
+    );
+    assert!(vm.live_child_default_runtime_realm_inventory().is_empty());
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_child_parser_preload_count_for_test(),
+        2
+    );
+    assert!(!vm.document_runtime.has_pending_style_loads());
+    assert!(
+        vm.run_one_child_realm_materialization_body_for_test()
+            .expect("materialize preload realm")
+            .is_some()
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_child_parser_preload_count_for_test(),
+        0
+    );
+    assert!(vm.document_runtime.has_pending_style_loads());
+    assert!(
+        vm.run_one_child_realm_materialization_body_for_test()
+            .expect("one shared realm turn")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn child_parser_preloads_are_discarded_before_realm_admission_after_navigation() {
+    let (mut vm, _) =
+        new_child_modulepreload_page_test_vm("https://parser-preloads-replaced.test/");
+    vm.eval(
+        r#"
+      const root = document.documentElement || document.appendChild(document.createElement('html'));
+      const body = document.body || root.appendChild(document.createElement('body'));
+      const frame = document.createElement('iframe');
+      frame.id = 'preload-frame';
+      frame.srcdoc = '<link rel="preload" as="style" href="data:text/css,body{}">';
+      body.append(frame);
+    "#,
+    )
+    .expect("insert parser preload");
+    assert_eq!(
+        vm.run_next_child_frame_semantic_turn().await,
+        Some(ChildFrameSemanticTurnKind::NavigationCommit)
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_child_parser_preload_count_for_test(),
+        1
+    );
+    vm.eval(
+        "document.getElementById('preload-frame').srcdoc = '<!doctype html><p>replacement</p>'; ",
+    )
+    .expect("replace child before realm turn");
+    vm.run_one_child_navigation_commit_body_for_test()
+        .expect("replacement navigation")
+        .expect("replacement commit");
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_child_parser_preload_count_for_test(),
+        0
+    );
+    let stale = vm
+        .run_one_child_realm_materialization_body_for_test()
+        .expect("stale realm turn")
+        .expect("old reservation remains scheduler-visible");
+    assert!(matches!(
+        stale.action.target_effect,
+        crate::page_task_queue::PageChildRealmMaterializationTargetEffect::IgnoredStaleOwner { .. }
+    ));
+    assert!(!vm.document_runtime.has_pending_style_loads());
+    assert!(
+        vm.run_one_child_realm_materialization_body_for_test()
+            .expect("no replacement preload work")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn child_parser_preloads_do_not_rebind_to_a_replacement_realm() {
+    let (mut vm, _) = new_child_modulepreload_page_test_vm("https://parser-preloads-realm.test/");
+    vm.eval(
+        r#"
+      const root = document.documentElement || document.appendChild(document.createElement('html'));
+      const body = document.body || root.appendChild(document.createElement('body'));
+      const frame = document.createElement('iframe');
+      frame.id = 'preload-frame';
+      frame.srcdoc = '<link rel="preload" as="style" href="data:text/css,body{}">';
+      body.append(frame);
+    "#,
+    )
+    .expect("insert parser preload");
+    assert_eq!(
+        vm.run_next_child_frame_semantic_turn().await,
+        Some(ChildFrameSemanticTurnKind::NavigationCommit)
+    );
+    let child = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_handles_in_document_order()[0];
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_child_parser_preload_count_for_test(),
+        1
+    );
+    vm.eval("void document.getElementById('preload-frame').contentWindow.Function")
+        .expect("expose the reserved child realm");
+    let original = vm
+        ._context_host
+        .borrow()
+        .frame_owner_current_child_snapshot(child)
+        .unwrap();
+    vm._context_host
+        .borrow_mut()
+        .clear_child_default_execution_context_id(child);
+    vm.eval("void document.getElementById('preload-frame').contentWindow.Function")
+        .expect("expose a replacement child realm");
+    let replacement = vm
+        ._context_host
+        .borrow()
+        .frame_owner_current_child_snapshot(child)
+        .unwrap();
+    assert_eq!(original.document_id, replacement.document_id);
+    assert_ne!(original.realm_id, replacement.realm_id);
+    assert!(
+        vm.run_one_child_realm_materialization_body_for_test()
+            .expect("materialize replacement realm")
+            .is_some()
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_child_parser_preload_count_for_test(),
+        0
+    );
+    assert!(
+        !vm.document_runtime.has_pending_style_loads(),
+        "preload reserved for the original realm must not start in its replacement"
+    );
+}
+
+#[tokio::test]
 async fn parser_discovered_child_modulepreloads_wait_for_one_realm_turn_and_promote_fifo() {
     let (mut vm, modulepreload_source) =
         new_child_modulepreload_page_test_vm("https://child-modulepreload-pre-realm.test/");

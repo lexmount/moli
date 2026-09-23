@@ -220,6 +220,25 @@ pub(super) async fn static_page() -> Html<&'static str> {
     Html(STATIC_HTML)
 }
 
+pub(super) async fn preload_request_counter(
+    Extension(state): Extension<FixtureRuntimeState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Response {
+    if params
+        .get("action")
+        .is_some_and(|action| action == "result")
+    {
+        format!(
+            "count={}",
+            state.preload_request_count.swap(0, Ordering::SeqCst)
+        )
+        .into_response()
+    } else {
+        state.preload_request_count.fetch_add(1, Ordering::SeqCst);
+        (StatusCode::NOT_FOUND, "No entry is found").into_response()
+    }
+}
+
 pub(super) async fn child_dynamic_markup_document(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {

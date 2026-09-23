@@ -411,8 +411,7 @@ impl HtmlParserSession {
         ParserFinishDiscoverySignals {
             parser_created_null_registry_elements: sink
                 .take_parser_stream_null_custom_element_registry_elements(),
-            discovered_modulepreload_link_candidates: sink
-                .drain_discovered_modulepreload_link_candidates(),
+            discovered_preload_link_candidates: sink.drain_discovered_preload_link_candidates(),
             discovered_parser_meta_csp_candidates: sink
                 .drain_discovered_parser_meta_csp_candidates(),
             discovered_blocking_stylesheet_inputs: sink

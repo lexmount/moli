@@ -79,7 +79,7 @@ struct LiveDocumentParserStepAdvance {
 #[derive(Debug, Default)]
 pub(crate) struct LiveDocumentParserDiscoverySignals {
     pub(crate) async_prefetch_scripts: Vec<PreparedScript>,
-    pub(crate) modulepreload_link_candidates: Vec<NativeNodeId>,
+    pub(crate) preload_link_candidates: Vec<NativeNodeId>,
     pub(crate) parser_meta_csp_candidates: Vec<NativeNodeId>,
     pub(crate) blocking_stylesheet_inputs: Vec<DocumentOwnedBlockingStylesheetDiscoveryInput>,
 }
@@ -93,8 +93,8 @@ impl LiveDocumentParserDiscoverySignals {
     pub(crate) fn extend(&mut self, other: Self) {
         self.async_prefetch_scripts
             .extend(other.async_prefetch_scripts);
-        self.modulepreload_link_candidates
-            .extend(other.modulepreload_link_candidates);
+        self.preload_link_candidates
+            .extend(other.preload_link_candidates);
         self.parser_meta_csp_candidates
             .extend(other.parser_meta_csp_candidates);
         self.blocking_stylesheet_inputs
@@ -148,12 +148,12 @@ fn live_document_parser_advance_from_outcome(
     let ParserPumpOutcome {
         result,
         discovered_async_prefetch_scripts,
-        discovered_modulepreload_link_candidates,
+        discovered_preload_link_candidates,
         discovered_blocking_stylesheet_inputs,
     } = outcome;
     let discovery_signals = LiveDocumentParserDiscoverySignals {
         async_prefetch_scripts: discovered_async_prefetch_scripts,
-        modulepreload_link_candidates: discovered_modulepreload_link_candidates,
+        preload_link_candidates: discovered_preload_link_candidates,
         parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
         blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
     };
@@ -1198,14 +1198,14 @@ fn finish_live_document_parser(
 ) -> DocumentParserFinishSignals {
     let crate::parser::ParserFinishDiscoverySignals {
         parser_created_null_registry_elements,
-        discovered_modulepreload_link_candidates,
+        discovered_preload_link_candidates,
         discovered_parser_meta_csp_candidates,
         discovered_blocking_stylesheet_inputs,
     } = stream.finish_with_runtime_dom_consumer(owner);
     DocumentParserFinishSignals {
         parser_created_null_registry_elements,
         discovery_signals: LiveDocumentParserDiscoverySignals {
-            modulepreload_link_candidates: discovered_modulepreload_link_candidates,
+            preload_link_candidates: discovered_preload_link_candidates,
             parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
             blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
             ..LiveDocumentParserDiscoverySignals::default()
@@ -1219,14 +1219,14 @@ fn finish_live_xml_document_parser(
 ) -> DocumentParserFinishSignals {
     let crate::parser::ParserFinishDiscoverySignals {
         parser_created_null_registry_elements,
-        discovered_modulepreload_link_candidates,
+        discovered_preload_link_candidates,
         discovered_parser_meta_csp_candidates,
         discovered_blocking_stylesheet_inputs,
     } = stream.finish_with_runtime_dom_consumer(owner);
     DocumentParserFinishSignals {
         parser_created_null_registry_elements,
         discovery_signals: LiveDocumentParserDiscoverySignals {
-            modulepreload_link_candidates: discovered_modulepreload_link_candidates,
+            preload_link_candidates: discovered_preload_link_candidates,
             parser_meta_csp_candidates: discovered_parser_meta_csp_candidates,
             blocking_stylesheet_inputs: discovered_blocking_stylesheet_inputs,
             ..LiveDocumentParserDiscoverySignals::default()

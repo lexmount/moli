@@ -6703,7 +6703,7 @@ globalThis.__outerContinued = true;
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver
             .parser_session
@@ -6758,7 +6758,7 @@ globalThis.__outerContinued = true;
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><script>window.answer = 42;</script></head><body><div>late</div></body></html>",
@@ -6821,7 +6821,7 @@ globalThis.__outerContinued = true;
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><body><svg><script>window.svgAnswer = 42;</script></svg><div>late</div></body></html>",
@@ -14551,7 +14551,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -14622,7 +14622,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 r#"<!doctype html><script>customElements.define("x-sync", class extends HTMLElement {});</script>"#,
@@ -14749,7 +14749,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -14888,7 +14888,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -14969,7 +14969,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = state.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             assert!(
@@ -15052,7 +15052,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -15226,7 +15226,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(&html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -15463,7 +15463,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -17290,7 +17290,7 @@ document.body.setAttribute("data-range", [
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver
             .parser_session
@@ -17347,7 +17347,7 @@ document.body.setAttribute("data-range", [
                 result,
                 discovered_async_prefetch_scripts: _,
                 discovered_blocking_stylesheet_inputs: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
             } = driver
                 .parser_session
                 .stream_handle()
@@ -17446,7 +17446,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script async src=\"/async.js\"></script></head></html>",
@@ -17579,7 +17579,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
@@ -17701,7 +17701,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script defer src=\"/defer.js\"></script></head></html>",
@@ -17889,7 +17889,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"module\" src=\"/module.mjs\"></script></head></html>",
@@ -18012,7 +18012,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"module\" src=\"/pending.mjs\"></script></head></html>",
@@ -18107,7 +18107,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"module\" src=\"/ready.mjs\"></script></head></html>",
@@ -18214,7 +18214,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><script type=\"importmap\">{\"imports\":{\"fixture\":\"/module.mjs\"}}</script></head></html>",
@@ -18343,7 +18343,7 @@ document.body.setAttribute("data-range", [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_blocking_stylesheet_inputs,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
