@@ -72,6 +72,15 @@ async function(fontBytes) {
     const data = bytes('ttf'), padded = new Uint8Array(data.length + 20); padded.set(data, 8); return padded;
   }, 'SyntaxError');
 
+  for (const format of ['ttf', 'woff', 'woff2']) {
+    for (const trim of [0, 10]) {
+      const data = bytes(format).slice(0, fontBytes[format].length - trim);
+      const source = 'url("data:font/ttf;base64,' + btoa(String.fromCharCode(...data)) + '")';
+      const face = new FontFace(format + trim, source);
+      check('url-' + format + '-' + trim, await face.load().then(() => face.status, e => e.name), trim ? 'NetworkError' : 'loaded');
+    }
+  }
+
   const iframe = document.createElement('iframe');
   const ready = new Promise(resolve => iframe.onload = resolve);
   document.body.append(iframe); await ready;
