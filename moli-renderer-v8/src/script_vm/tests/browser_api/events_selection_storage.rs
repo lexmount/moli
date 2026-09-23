@@ -8280,7 +8280,28 @@ async fn window_post_message_options_transfer_list_transfers_ports() {
 
 #[tokio::test]
 async fn message_port_dispatch_uses_lightweight_popup_owner_scope() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    // Compile the listener inside the popup; an opener-created function keeps
+    // its opener realm even when assigned to popup.onmessage.
+    let popup_source = r#"
+onmessage = event => {
+  if (event.data !== "setup") {
+    return;
+  }
+  const channel = new MessageChannel();
+  channel.port2.onmessage = () => {
+    event.source.postMessage("popup-port-handler-ran", event.origin);
+  };
+  channel.port1.postMessage("start");
+};
+opener.postMessage("fixture-ready", "*");
+"#;
+    let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+        "<!doctype html><script>{popup_source}</script>"
+    )])
+    .await;
+    let popup_url = server.base_url().join("/popup.html").expect("popup URL");
+    let popup_origin = popup_url.origin().ascii_serialization();
+    let loader = static_http_loader([]);
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
         "https://message-port-popup-owner.test/",
         &loader,
@@ -8288,60 +8309,66 @@ async fn message_port_dispatch_uses_lightweight_popup_owner_scope() {
 
     let setup = vm
         .eval(
-            r#"
+            &r#"
 (() => {
+  let resolvePopupReady;
+  const popupReady = new Promise(resolve => { resolvePopupReady = resolve; });
   globalThis.__messagePortPopupOwnerMessages = [];
   onmessage = event => {
+    if (event.data === "fixture-ready") { resolvePopupReady(); return; }
     __messagePortPopupOwnerMessages.push("window:" + event.data + ":" + event.origin);
   };
 
-  const popup = open("https://message-port-popup-child.test/page.html");
-  popup.onmessage = event => {
-    if (event.data !== "setup") {
-      return;
-    }
-    const channel = new MessageChannel();
-    channel.port2.onmessage = () => {
-      event.source.postMessage("popup-port-handler-ran", event.origin);
-    };
-    channel.port1.postMessage("start");
-  };
-  popup.postMessage("setup", "*");
+  const popup = open("__POPUP_CALLBACK_URL__");
+
+  popupReady.then(() => popup.postMessage("setup", "*"));
   return "scheduled";
 })()
-"#,
+"#
+            .replace("__POPUP_CALLBACK_URL__", popup_url.as_str()),
         )
         .expect("popup-owned MessagePort setup should evaluate");
     assert_eq!(setup, "scheduled");
 
-    for _ in 0..12 {
-        if vm
-            .eval(
-                r#"String(globalThis.__messagePortPopupOwnerMessages.some(
-  message => message.startsWith("window:popup-port-handler-ran:")
-))"#,
-            )
-            .expect("popup-owned MessagePort completion should evaluate")
-            == "true"
-        {
-            break;
-        }
-        let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
-            .await
-            .expect("wait driver should advance popup-owned MessagePort");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        r#"String(__messagePortPopupOwnerMessages.length)"#,
+        "1",
+        "popup callback workflow",
+    )
+    .await;
 
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__messagePortPopupOwnerMessages)")
             .expect("popup-owned MessagePort messages should evaluate"),
-        r#"["window:popup-port-handler-ran:https://message-port-popup-child.test"]"#
+        format!(r#"["window:popup-port-handler-ran:{popup_origin}"]"#)
     );
+    assert_eq!(server.finish_targets().await, ["/popup.html"]);
 }
 
 #[tokio::test]
 async fn window_message_handler_broadcast_channel_stays_in_lightweight_popup_owner() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    // Compile the listener inside the popup; an opener-created function keeps
+    // its opener realm even when assigned to popup.onmessage.
+    let popup_source = r#"
+onmessage = event => {
+  if (event.data !== "probe") {
+    return;
+  }
+  const popupChannel = new BroadcastChannel("window-message-popup-broadcast-channel-owner");
+  popupChannel.postMessage("from-popup-window-message");
+  event.source.postMessage("done", event.origin);
+};
+opener.postMessage("fixture-ready", "*");
+"#;
+    let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+        "<!doctype html><script>{popup_source}</script>"
+    )])
+    .await;
+    let popup_url = server.base_url().join("/popup.html").expect("popup URL");
+    let popup_origin = popup_url.origin().ascii_serialization();
+    let loader = static_http_loader([]);
     let mut vm = new_broadcast_channel_page_test_vm_with_loader(
         "https://window-message-popup-broadcast-channel-owner.test/",
         &loader,
@@ -8349,55 +8376,38 @@ async fn window_message_handler_broadcast_channel_stays_in_lightweight_popup_own
 
     let setup = vm
         .eval(
-            r#"
+            &r#"
 (() => {
+  let resolvePopupReady;
+  const popupReady = new Promise(resolve => { resolvePopupReady = resolve; });
   globalThis.__windowMessagePopupBroadcastChannelMessages = [];
   const topChannel = new BroadcastChannel("window-message-popup-broadcast-channel-owner");
   topChannel.onmessage = event => {
     __windowMessagePopupBroadcastChannelMessages.push("top-bc:" + event.data + ":" + event.origin);
   };
   onmessage = event => {
+    if (event.data === "fixture-ready") { resolvePopupReady(); return; }
     __windowMessagePopupBroadcastChannelMessages.push("window:" + event.data + ":" + event.origin);
   };
 
-  const popup = open("https://window-message-popup-broadcast-channel-child.test/page.html");
-  popup.onmessage = event => {
-    if (event.data !== "probe") {
-      return;
-    }
-    const popupChannel = new BroadcastChannel("window-message-popup-broadcast-channel-owner");
-    popupChannel.postMessage("from-popup-window-message");
-    event.source.postMessage("done", event.origin);
-  };
-  popup.postMessage("probe", "*");
+  const popup = open("__POPUP_CALLBACK_URL__");
+
+  popupReady.then(() => popup.postMessage("probe", "*"));
   return "scheduled";
 })()
-"#,
+"#
+            .replace("__POPUP_CALLBACK_URL__", popup_url.as_str()),
         )
         .expect("popup window-message BroadcastChannel owner workflow should schedule");
     assert_eq!(setup, "scheduled");
 
-    for _ in 0..12 {
-        if vm
-            .eval(
-                r#"String(globalThis.__windowMessagePopupBroadcastChannelMessages.some(
-  message => message.startsWith("window:")
-))"#,
-            )
-            .expect("popup window-message BroadcastChannel completion should evaluate")
-            == "true"
-        {
-            break;
-        }
-        let outcome = vm
-            .run_one_window_message_executor_turn(&loader)
-            .await
-            .expect("typed popup Window.postMessage turn should apply");
-        assert!(
-            outcome,
-            "popup window-message workflow should retain a scheduler-visible task"
-        );
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        r#"String(__windowMessagePopupBroadcastChannelMessages.some(message => message.startsWith("window:")))"#,
+        "true",
+        "popup callback workflow",
+    ).await;
 
     vm.apply_pending_broadcast_channel_delivery_tasks(&loader, 4)
         .await
@@ -8406,8 +8416,9 @@ async fn window_message_handler_broadcast_channel_stays_in_lightweight_popup_own
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__windowMessagePopupBroadcastChannelMessages)")
             .expect("popup window-message BroadcastChannel messages should evaluate"),
-        r#"["window:done:https://window-message-popup-broadcast-channel-child.test"]"#
+        format!(r#"["window:done:{popup_origin}"]"#)
     );
+    assert_eq!(server.finish_targets().await, ["/popup.html"]);
 }
 
 #[test]
