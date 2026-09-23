@@ -70,7 +70,8 @@ pub(crate) use self::body_source::{
     retain_pending_network_body_state_in_retired_realm,
 };
 pub(crate) use self::browser_response::{
-    LocalUrlError, local_url_response, local_url_response_result, local_url_response_with_blob_entry,
+    LocalUrlError, local_url_response, local_url_response_result,
+    local_url_response_with_blob_entry,
 };
 pub(crate) use self::csp_redirect::FetchCspRedirectState;
 pub(crate) use self::csp_reports::{
