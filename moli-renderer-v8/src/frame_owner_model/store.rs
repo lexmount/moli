@@ -2748,12 +2748,12 @@ impl FrameOwnerStore {
         ))
     }
 
-    pub(crate) fn accept_current_main_link_event_owner(
+    pub(crate) fn accept_current_link_event_owner(
         &self,
         owner: FrameDocumentTaskOwner,
         element: DomHandle,
     ) -> Option<DocumentLinkEventOwner> {
-        self.main_document_task_owner_is_current(owner)
+        self.document_task_owner_is_current(owner)
             .then(|| DocumentLinkEventOwner::new(owner, element))
     }
 
@@ -3336,6 +3336,46 @@ impl FrameOwnerStore {
         self.frames
             .get(&local_window.frame_id)
             .is_some_and(|frame| frame.scheduler_lane_id == owner.scheduler_lane_id)
+    }
+
+    fn frame_id_for_document_task_owner(&self, owner: FrameDocumentTaskOwner) -> Option<&FrameId> {
+        let document = self.documents.get(&owner.document_id)?;
+        if document.local_window_id != owner.local_window_id {
+            return None;
+        }
+        let window = self.local_windows.get(&owner.local_window_id)?;
+        let lane = self.scheduler_lanes.get(&owner.scheduler_lane_id)?;
+        (lane.frame_id == window.frame_id).then_some(&window.frame_id)
+    }
+
+    pub(crate) fn child_frame_id_for_document_task_owner(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<&FrameId> {
+        let frame_id = self.frame_id_for_document_task_owner(owner)?;
+        (self.frames.get(frame_id)?.kind == FrameKind::ChildIframe).then_some(frame_id)
+    }
+
+    /// Resource Timing belongs to the request's Window. document.open() replaces
+    /// the Document epoch but retains that Window and its performance timeline.
+    pub(crate) fn resource_timing_realm_for_document_task_owner(
+        &self,
+        owner: FrameDocumentTaskOwner,
+    ) -> Option<FrameRealmId> {
+        let frame_id = self.frame_id_for_document_task_owner(owner)?;
+        let frame = self.frames.get(frame_id)?;
+        let window = self.local_windows.get(&owner.local_window_id)?;
+        if frame.lifecycle != FrameLifecycleState::Attached
+            || frame.current_local_window_id != Some(owner.local_window_id)
+            || window.lifecycle != LocalWindowLifecycleState::Current
+        {
+            return None;
+        }
+        let realm_id = window.realm_id?;
+        let realm = self.realms.get(&realm_id)?;
+        (realm.lifecycle == FrameRealmLifecycleState::Materialized
+            && realm.local_window_id == owner.local_window_id)
+            .then_some(realm_id)
     }
 
     pub(crate) fn current_reserved_realm_id_for_document_task_owner(

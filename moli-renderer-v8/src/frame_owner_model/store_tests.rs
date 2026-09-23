@@ -755,7 +755,7 @@ fn main_modulepreload_owner_never_allocates_a_load_event_delay() {
     );
 
     let event_owner = store
-        .accept_current_main_link_event_owner(owner, handle(10))
+        .accept_current_link_event_owner(owner, handle(10))
         .expect("current modulepreload should retain exact event ownership");
     assert_eq!(event_owner.owner(), owner);
     assert_eq!(event_owner.element(), handle(10));

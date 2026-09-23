@@ -37,3 +37,7 @@ pub use types::{
     StylesheetBlockingOperation, StylesheetBlockingStatus, StylesheetCompletion,
     StylesheetImportGraphFetchResult, StylesheetImportNetworkResult,
 };
+
+/// Captured publication route for one stylesheet request or import graph.
+pub type StylesheetCompletionPublisher =
+    std::sync::Arc<dyn Fn(StylesheetCompletion) + Send + Sync + 'static>;
