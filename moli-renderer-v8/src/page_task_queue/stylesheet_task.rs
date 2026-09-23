@@ -22,7 +22,32 @@ use super::{
     networking::RendererPageNetworkingSource,
 };
 
-pub(crate) type RendererPageStylesheetTaskOwner = super::RendererPageMainDocumentTaskOwner;
+/// Exact root-Page and main/child Document residence of stylesheet/link work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RendererPageStylesheetTaskOwner {
+    root_document: RendererDocumentToken,
+    document_owner: FrameDocumentTaskOwner,
+}
+
+impl RendererPageStylesheetTaskOwner {
+    pub(crate) const fn new(
+        root_document: RendererDocumentToken,
+        document_owner: FrameDocumentTaskOwner,
+    ) -> Self {
+        Self {
+            root_document,
+            document_owner,
+        }
+    }
+
+    pub(crate) const fn root_document(self) -> RendererDocumentToken {
+        self.root_document
+    }
+
+    pub(crate) const fn document_owner(self) -> FrameDocumentTaskOwner {
+        self.document_owner
+    }
+}
 
 /// One raw stylesheet terminal classified as HTML Networking work.
 #[derive(Debug)]
@@ -76,7 +101,7 @@ pub(crate) struct RendererPageStylesheetTaskRouteClosed;
 
 /// PageVm-stamped route pair for the two normative task-source classes used by
 /// stylesheet processing. It becomes useful only after it is bound to an exact
-/// main-Document epoch.
+/// Document epoch.
 #[derive(Clone, Debug)]
 pub(crate) struct RendererPageStylesheetTaskSender {
     networking: RendererPageNetworkingRoute,
@@ -108,7 +133,7 @@ impl RendererPageStylesheetTaskSender {
     }
 }
 
-/// Producer bound to one exact main Document.
+/// Producer bound to one exact main or child Document.
 ///
 /// Async fetches clone this value at start. Rebinding the current Document
 /// therefore cannot retarget an already-running fetch to its replacement.
