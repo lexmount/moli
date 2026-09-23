@@ -419,34 +419,6 @@ pub(super) fn plan_traversal<'s>(
         .plan_traversal(step)
 }
 
-/// Preserve the admitted transition across V8 continuations without storing
-/// native pointers. Unchanged contexts may attach/detach while admission waits;
-/// a new changing participant or timeline mutation requires fresh admission.
-pub(super) fn traversal_admission_signature(plan: &SessionHistoryTraversalPlan) -> String {
-    fn identity(entry: &SessionHistoryEntry) -> (&str, &str) {
-        (entry.key.as_str(), entry.document.as_str())
-    }
-    let changes = plan
-        .changes()
-        .iter()
-        .map(|change| {
-            (
-                change.context.raw(),
-                change.from.as_ref().map(identity),
-                change.to.as_ref().map(identity),
-            )
-        })
-        .collect::<Vec<_>>();
-    serde_json::to_string(&(
-        plan.revision().raw(),
-        plan.source_step().raw(),
-        plan.target_step().raw(),
-        plan.delta(),
-        changes,
-    ))
-    .expect("history admission identities serialize without loss")
-}
-
 pub(super) fn project_traversal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,

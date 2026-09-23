@@ -800,6 +800,8 @@ pub(crate) type JsContextHostPageTaskCapabilities =
 
 pub(crate) struct JsContextHost {
     pub(crate) session_histories: session_history::RendererSessionHistories,
+    pub(crate) pending_history_traversal_admissions:
+        super::history_traversal::PendingHistoryTraversalAdmissions,
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,
@@ -1244,6 +1246,7 @@ impl JsContextHost {
             return;
         }
         self.page_context_resources_closed = true;
+        self.pending_history_traversal_admissions.clear();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
         self.v8_finalizers.clear_for_context_teardown();

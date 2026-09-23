@@ -57,7 +57,6 @@ mod navigation_entry_state;
 mod navigation_events;
 mod navigation_handler_callbacks;
 mod navigation_history_pruning;
-mod navigation_joint_traversal;
 mod navigation_lifecycle;
 mod navigation_mutation;
 mod navigation_projection;
@@ -68,6 +67,7 @@ mod navigation_seed;
 mod navigation_serialize;
 mod navigation_surface;
 mod navigation_traversal;
+mod navigation_traversal_coordinator;
 mod navigation_traversal_execution;
 mod navigation_traversal_plan;
 mod navigation_window;
@@ -152,6 +152,7 @@ pub(crate) use navigation_history_pruning::{
 pub(crate) use navigation_result::{
     NavigationFinishedResultApplication, apply_pending_navigation_finished_result,
 };
+pub(crate) use navigation_traversal_coordinator::cancel_history_traversals_for_retiring_window;
 pub(crate) use navigation_traversal_execution::apply_authorized_history_traversal_task;
 pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;

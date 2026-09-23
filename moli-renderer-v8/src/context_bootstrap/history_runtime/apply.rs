@@ -3,23 +3,20 @@ use super::super::location_runtime::{
 };
 use super::super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entries_share_document,
-    navigation_entry_url_value, restore_current_navigation_entry_scroll_position,
-    set_history_index, set_history_state, sync_navigation_current_entry_from_history_entry,
+    navigation_entry_url_value, set_history_index, set_history_state,
+    sync_navigation_current_entry_from_history_entry,
 };
 use super::super::navigation_events::{
-    dispatch_navigation_currententrychange, dispatch_navigation_success, dispatch_popstate_event,
-    navigation_has_active_scroll_event, queue_hash_change_for_runtime_owner,
+    dispatch_navigation_currententrychange, dispatch_popstate_event,
+    queue_hash_change_for_runtime_owner,
 };
 use super::super::navigation_mutation::sync_local_document_front_from_window;
-use super::super::navigation_result::perform_navigation_scroll_if_needed;
 use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
     window_location_for_holder, window_navigation_for_holder,
 };
 use super::super::*;
-use super::results::{resolve_pending_navigation_committed, resolve_pending_navigation_finished};
-use crate::native_bridge::PendingNavigationResult;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 
 pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
@@ -39,103 +36,6 @@ pub(in crate::context_bootstrap) struct PreparedHistoryEntry<'s> {
     history: v8::Local<'s, v8::Object>,
     location: v8::Local<'s, v8::Object>,
     applied: AppliedHistoryEntry<'s>,
-}
-
-pub(in crate::context_bootstrap) fn apply_history_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    index: u32,
-    plan: Option<&moli_session_history::SessionHistoryTraversalPlan>,
-    dispatch_popstate: bool,
-    pending_results: Option<&[PendingNavigationResult]>,
-) {
-    let Some(applied) = apply_history_entry_commit(scope, history, index, plan) else {
-        if let Some(results) = pending_results {
-            let error = super::super::navigation_result::navigation_dom_exception(
-                scope,
-                "Navigation was canceled",
-                "AbortError",
-            );
-            super::results::reject_pending_navigation_results(scope, results, error);
-        }
-        return;
-    };
-    if let Some(results) = pending_results {
-        resolve_pending_navigation_committed(scope, results, applied.resolved_entry);
-    }
-    dispatch_history_entry_currententrychange(scope, &applied);
-    if dispatch_popstate {
-        perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    }
-    if !navigation_document_has_opaque_origin(scope, applied.owner)
-        && let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
-    {
-        let has_active_scroll_event = navigation_has_active_scroll_event(scope, navigation);
-        if has_active_scroll_event
-            || !restore_current_navigation_entry_scroll_position(scope, applied.owner)
-        {
-            perform_navigation_scroll_if_needed(scope, navigation, &applied.url, true);
-        }
-        dispatch_navigation_success(scope, navigation);
-    }
-    if let Some(results) = pending_results {
-        resolve_pending_navigation_finished(scope, results, applied.resolved_entry);
-    }
-    if dispatch_popstate {
-        perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
-    }
-    dispatch_history_entry_post_commit_events(scope, &applied, dispatch_popstate);
-}
-
-pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    index: u32,
-    plan: Option<&moli_session_history::SessionHistoryTraversalPlan>,
-) -> Option<AppliedHistoryEntry<'s>> {
-    let owner = runtime_window_owner(scope, history);
-    let targets = match plan {
-        Some(plan) => super::super::session_history::project_traversal(scope, owner, plan)?,
-        None => Vec::new(),
-    };
-    // The multi-participant coordinator admits and commits complete plans.
-    // This path is only the specialized single same-Document executor.
-    if targets
-        .iter()
-        .any(|target| !target.history.strict_equals(history.into()))
-    {
-        return None;
-    }
-    // Admission can run script, so validate the stable step again before any
-    // local entry is changed. Forward pruning invalidates it atomically.
-    if let Some(plan) = plan {
-        let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
-        let binding = super::super::session_history::binding(scope, host, owner);
-        let expected = plan.target_entries().get(&binding.context)?;
-        let live = history_entries(scope, history)?
-            .get_index(scope, index)
-            .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
-            .and_then(|entry| super::super::session_history::entry_reference(scope, entry))?;
-        if &live != expected {
-            return None;
-        }
-    }
-    let prepared = prepare_local_history_entry_commit(scope, history, index)?;
-    let delta = match plan {
-        Some(plan) => Some(super::super::session_history::commit_traversal(
-            scope, owner, plan,
-        )?),
-        None => None,
-    };
-    let applied = commit_prepared_history_entry(scope, prepared);
-    if let Some(delta) = delta.filter(|delta| *delta != 0) {
-        super::super::session_history::publish(
-            scope,
-            owner,
-            moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
-        );
-    }
-    Some(applied)
 }
 
 /// Resolve every fallible input before any participant changes its live view.

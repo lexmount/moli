@@ -530,7 +530,7 @@ fn history_traverse<'s>(
         queue_browser_owned_top_level_history_traversal(scope, history, delta);
         return;
     };
-    super::navigation_joint_traversal::queue_plan(scope, plan);
+    super::navigation_traversal_coordinator::queue_plan(scope, plan);
 }
 
 fn queue_browser_owned_top_level_history_traversal<'s>(
@@ -565,7 +565,7 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     if plan.has_cross_document_root(scope) {
         return false;
     }
-    super::navigation_joint_traversal::queue_plan(scope, plan);
+    super::navigation_traversal_coordinator::queue_plan(scope, plan);
     true
 }
 

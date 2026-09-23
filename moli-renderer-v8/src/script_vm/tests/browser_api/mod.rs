@@ -45,6 +45,7 @@ mod storage_access;
 mod structured_clone;
 mod transferable_streams;
 mod traversal;
+mod traversal_coordinator;
 mod trusted_types;
 mod web_audio;
 mod webrtc;

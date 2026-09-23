@@ -77,6 +77,9 @@ impl ScriptVm {
                     .is_none_or(|local_window_id| local_window_id == retired_owner.local_window_id),
                 "committed LocalWindow retirement must identify the retired document owner"
             );
+            if execution_context_retired {
+                self.cancel_history_traversals_for_retiring_window(execution_context_owner);
+            }
             if execution_context_retired
                 && let Some(execution_context_id) = self
                     .child_frame_realm_store

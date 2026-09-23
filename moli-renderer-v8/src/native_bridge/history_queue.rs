@@ -1,5 +1,5 @@
 use super::{
-    DomHandle, JsContextHost, NavigationHistoryEntrySeed, WindowExecutionContextBinding,
+    JsContextHost, NavigationHistoryEntrySeed, WindowExecutionContextBinding,
     WindowExecutionContextIdentity, WindowTaskTarget,
 };
 use crate::page_task_queue::{
@@ -64,10 +64,8 @@ pub(crate) struct PendingHistoryTraversal {
 
 pub(crate) struct PendingChildCrossDocumentTraversal {
     pub(crate) target: WindowTaskTarget,
-    pub(crate) child_handle: DomHandle,
     pub(crate) target_index: u32,
     pub(crate) target_key: Option<String>,
-    pub(crate) target_url: String,
     pub(crate) seed: NavigationHistoryEntrySeed,
     pub(crate) info: Option<v8::Global<v8::Value>>,
     pub(crate) results: Vec<PendingNavigationResult>,
@@ -602,10 +600,8 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
-        child_handle: DomHandle,
         target_index: u32,
         target_key: Option<String>,
-        target_url: &str,
         seed: NavigationHistoryEntrySeed,
     ) -> Option<RendererPageHistoryTraversalProducer> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
@@ -616,10 +612,8 @@ impl JsContextHost {
             relevant_context,
             PendingChildCrossDocumentTraversal {
                 target,
-                child_handle,
                 target_index,
                 target_key,
-                target_url: target_url.to_owned(),
                 seed,
                 info: None,
                 results: Vec::new(),
@@ -638,10 +632,8 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
-        child_handle: DomHandle,
         target_index: u32,
         target_key: Option<String>,
-        target_url: &str,
         seed: NavigationHistoryEntrySeed,
         info: Option<v8::Local<'s, v8::Value>>,
     ) -> Option<(
@@ -662,10 +654,8 @@ impl JsContextHost {
             relevant_context,
             PendingChildCrossDocumentTraversal {
                 target,
-                child_handle,
                 target_index,
                 target_key,
-                target_url: target_url.to_owned(),
                 seed,
                 info: info.map(|info| v8::Global::new(scope, info)),
                 results: vec![PendingNavigationResult {

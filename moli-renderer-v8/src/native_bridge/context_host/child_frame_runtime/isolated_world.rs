@@ -133,7 +133,12 @@ impl JsContextHost {
             self.request_child_frame_realm_materialization(handle);
             return Ok(context);
         }
-        if let Some(stale) = pending_contexts.borrow_mut().remove(&handle) {
+        let stale = pending_contexts.borrow_mut().remove(&handle);
+        if let Some(stale) = stale {
+            crate::context_bootstrap::cancel_history_traversals_for_retiring_window(
+                scope,
+                super::super::WindowExecutionContextOwner::Frame(stale.local_window_id),
+            );
             self.retire_window_execution_contexts_for_context_token(
                 stale.runtime_observable_context_token,
             );

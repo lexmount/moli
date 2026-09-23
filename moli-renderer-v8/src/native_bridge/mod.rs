@@ -17,6 +17,7 @@ pub(crate) mod document;
 pub(crate) mod element;
 mod helpers;
 mod history_queue;
+pub(crate) mod history_traversal;
 pub(super) mod identity;
 pub(crate) mod named_access;
 mod node;
@@ -31,9 +32,8 @@ use super::{
 
 use bindings::NativeBridgeBindings;
 pub(crate) use history_queue::{
-    NavigationAttemptId, PendingChildCrossDocumentTraversal, PendingHistoryTraversal,
-    PendingHistoryTraversalAction, PendingNavigationApiTaskAction, PendingNavigationFinishedResult,
-    PendingNavigationResult,
+    NavigationAttemptId, PendingHistoryTraversal, PendingHistoryTraversalAction,
+    PendingNavigationApiTaskAction, PendingNavigationFinishedResult, PendingNavigationResult,
 };
 use identity::{BridgeHandle, BridgeIdentityStore, DomTokenListKind, ReflectorId};
 use identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind};

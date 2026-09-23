@@ -8,6 +8,24 @@ use super::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use crate::{frame_owner_model::FrameRealmId, native_bridge::JsContextHost};
 
 impl ScriptVm {
+    pub(super) fn cancel_history_traversals_for_retiring_window(
+        &mut self,
+        owner: crate::native_bridge::WindowExecutionContextOwner,
+    ) {
+        if self
+            ._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .is_empty()
+        {
+            return;
+        }
+        let _ = self.with_default_context_scope(|scope, _| {
+            crate::context_bootstrap::cancel_history_traversals_for_retiring_window(scope, owner);
+            Ok(())
+        });
+    }
+
     pub(crate) fn start_scanned_image_preload(
         &mut self,
         request_url: url::Url,

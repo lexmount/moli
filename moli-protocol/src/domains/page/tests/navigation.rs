@@ -627,6 +627,16 @@ async fn joint_history_traversal_precommit_rejection_aborts_the_whole_step() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn joint_history_traversal_stop_during_pagehide_cancels_after_precommit() {
+    assert_joint_history_precommit("stop-pagehide").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn joint_history_traversal_participant_replacement_rejects_surviving_api_promises() {
+    assert_joint_history_precommit("replace-participant").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn joint_history_traversal_precommit_cannot_restore_a_pruned_step() {
     assert_joint_history_precommit("prune").await;
 }
@@ -840,16 +850,26 @@ async fn assert_joint_history_precommit(mode: &str) {
         },
     )
     .await;
+    joint_history_test_evaluate(
+        &mut ctx,
+        if mode == "replace-participant" {
+            "globalThis.testTraversalApi = true"
+        } else {
+            "globalThis.testTraversalApi = false"
+        },
+    )
+    .await;
     let pending=joint_history_test_evaluate(&mut ctx,r#"(async()=>{
         history.replaceState('top0','');
         globalThis.frame=document.createElement('iframe');frame.src='/a0';
         await new Promise(resolve=>{frame.onload=resolve;document.body.append(frame)});
         await new Promise(resolve=>setTimeout(resolve,0));
         frame.contentWindow.history.replaceState('a0','');
+        if(testTraversalApi)history.pushState('top1','');
         await new Promise(resolve=>{frame.onload=resolve;frame.contentWindow.location.assign('/a1')});
         await new Promise(resolve=>setTimeout(resolve,0));
         frame.contentWindow.history.replaceState('a1','');
-        history.pushState('top1','');
+        if(!testTraversalApi)history.pushState('top1','');
         globalThis.pagehides=0;frame.contentWindow.onpagehide=()=>pagehides++;
         globalThis.snapshot=()=>[history.state,frame.contentWindow.history.state,
             frame.contentWindow.location.pathname,history.length,frame.contentWindow.history.length,pagehides];
@@ -859,7 +879,15 @@ async fn assert_joint_history_precommit(mode: &str) {
         navigation.onnavigate=event=>{
             if(event.navigationType==='traverse')event.intercept({precommitHandler:()=>{admitted();return gate}});
         };
-        history.go(testTraversalDelta);await started;return snapshot();
+        globalThis.settlements=[];
+        if(testTraversalApi){
+            const result=navigation.back();
+            result.committed.catch(error=>settlements.push('committed:'+error.name));
+            result.finished.catch(error=>settlements.push('finished:'+error.name));
+        }else{
+            history.go(testTraversalDelta);
+        }
+        await started;return snapshot();
     })()"#).await;
     assert_eq!(pending, json!(["top1", "a1", "/a1", 4, 4, 0]), "{mode}");
     ctx.process_async(json!({"id":9341,"method":"Page.getNavigationHistory","sessionId":"SID-1"}))
@@ -893,6 +921,17 @@ async fn assert_joint_history_precommit(mode: &str) {
         }
         "attach-single" => "new Promise(resolve=>{onpopstate=()=>resolve(snapshot());release()})",
         "reject" => "block(new Error('blocked'));failed.then(()=>snapshot())",
+        "stop-pagehide" => {
+            r#"new Promise(resolve=>{
+            navigation.addEventListener('navigateerror',()=>resolve(snapshot()),{once:true});
+            frame.onload=()=>setTimeout(()=>resolve(snapshot()),0);
+            frame.contentWindow.onpagehide=()=>{pagehides++;stop()};
+            release();
+        })"#
+        }
+        "replace-participant" => {
+            "new Promise(resolve=>{frame.onload=()=>setTimeout(()=>resolve(snapshot()),0);frame.src='/successor'})"
+        }
         _ => "release();failed.then(()=>snapshot())",
     };
     let after = joint_history_test_evaluate(&mut ctx, expression).await;
@@ -900,9 +939,25 @@ async fn assert_joint_history_precommit(mode: &str) {
         "resolve" | "attach" => (json!(["top0", "a0", "/a0", 4, 4, 1]), 1, 4),
         "attach-single" => (json!(["top0", "a1", "/a1", 4, 4, 0]), 2, 4),
         "reject" => (json!(["top1", "a1", "/a1", 4, 4, 0]), 3, 4),
+        "stop-pagehide" => (json!(["top1", "a1", "/a1", 4, 4, 1]), 3, 4),
+        "replace-participant" => (json!(["top1", null, "/successor", 5, 5, 1]), 4, 5),
         _ => (json!(["top1", "a1", "/a1", 1, 1, 0]), 0, 1),
     };
     assert_eq!(after, expected, "{mode}");
+    if mode == "replace-participant" {
+        assert_eq!(
+            joint_history_test_evaluate(
+                &mut ctx,
+                "release();Promise.resolve().then(()=>snapshot())"
+            )
+            .await,
+            expected
+        );
+        assert_eq!(
+            joint_history_test_evaluate(&mut ctx, "settlements").await,
+            json!(["committed:AbortError", "finished:AbortError"])
+        );
+    }
     ctx.process_async(json!({"id":9341,"method":"Page.getNavigationHistory","sessionId":"SID-1"}))
         .await;
     let browser = take_response_by_id(&mut ctx, 9341);

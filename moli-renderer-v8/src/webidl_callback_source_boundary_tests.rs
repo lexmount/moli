@@ -85,7 +85,9 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
     ),
     allowed(
         "context_bootstrap/history_runtime/traversal.rs",
-        2,
+        // Post-commit settlement invokes the intercepted result's then method.
+        // Precommit adoption now uses PromiseResolver in the shared coordinator.
+        1,
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(

@@ -1212,16 +1212,6 @@ pub(crate) fn dispatch_srcdoc_navigation_navigate_event_for_window<'s>(
     )
 }
 
-pub(super) fn dispatch_navigation_traverse_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    history: v8::Local<'s, v8::Object>,
-    target_index: u32,
-) -> bool {
-    dispatch_navigation_traverse_event_with_outcome(scope, navigation, history, target_index, None)
-        .proceed
-}
-
 pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,

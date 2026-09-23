@@ -3576,6 +3576,11 @@ impl ScriptVm {
                 Some(context)
             }
             Some(context) => {
+                self.cancel_history_traversals_for_retiring_window(
+                    crate::native_bridge::WindowExecutionContextOwner::Frame(
+                        context.local_window_id,
+                    ),
+                );
                 self._context_host
                     .borrow_mut()
                     .retire_window_execution_contexts_for_context_token(
@@ -3711,6 +3716,13 @@ impl ScriptVm {
                 .collect::<Vec<_>>()
         };
         if !stale_prebootstrapped_contexts.is_empty() {
+            for context in &stale_prebootstrapped_contexts {
+                self.cancel_history_traversals_for_retiring_window(
+                    crate::native_bridge::WindowExecutionContextOwner::Frame(
+                        context.local_window_id,
+                    ),
+                );
+            }
             {
                 let mut host = self._context_host.borrow_mut();
                 for context in &stale_prebootstrapped_contexts {
@@ -3759,6 +3771,9 @@ impl ScriptVm {
         let Some(context) = self.child_frame_realm_store.remove(&execution_context_id) else {
             return;
         };
+        self.cancel_history_traversals_for_retiring_window(
+            crate::native_bridge::WindowExecutionContextOwner::Frame(context.local_window_id),
+        );
         let retired_timer_count = self
             .document_runtime
             .cancel_timers_for_context_token(context.runtime_observable_context_token);
