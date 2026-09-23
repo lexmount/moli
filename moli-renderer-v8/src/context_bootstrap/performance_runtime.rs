@@ -243,6 +243,7 @@ fn record_performance_load_event_for_window(
 }
 
 pub(crate) struct ResourcePerformanceEntry {
+    preload_state: moli_fetch::ResponsePreloadState,
     name: String,
     initiator_type: String,
     start_unix_millis: Option<f64>,
@@ -299,6 +300,7 @@ impl ResourcePerformanceEntry {
             &response.headers,
             body_size as f64,
             response.cache_state,
+            response.preload_state.clone(),
         )
     }
 
@@ -317,6 +319,7 @@ impl ResourcePerformanceEntry {
             &response.headers,
             body_size as f64,
             response.cache_state,
+            response.preload_state.clone(),
         )
     }
 
@@ -334,6 +337,7 @@ impl ResourcePerformanceEntry {
             &response.headers,
             response.body_bytes().len() as f64,
             response.cache_state,
+            response.preload_state.clone(),
         )
     }
 
@@ -345,6 +349,7 @@ impl ResourcePerformanceEntry {
         response_headers: &[(String, Vec<u8>)],
         body_size: f64,
         cache_state: moli_fetch::ResponseCacheState,
+        preload_state: moli_fetch::ResponsePreloadState,
     ) -> Self {
         // Resource Timing deliberately uses a fixed overhead rather than
         // exposing response-header sizes, which could reveal cookies.
@@ -357,6 +362,7 @@ impl ResourcePerformanceEntry {
             .and_then(|value| moli_web_mime::mime_essence(&value))
             .unwrap_or_default();
         Self {
+            preload_state,
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             start_unix_millis,
@@ -385,6 +391,7 @@ impl ResourcePerformanceEntry {
             &network.response_headers,
             network.encoded_data_length as f64,
             network.cache_state,
+            network.preload_state.clone(),
         )
     }
 
@@ -402,6 +409,7 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
     ) -> Self {
         Self {
+            preload_state: Default::default(),
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             start_unix_millis,
@@ -419,6 +427,9 @@ pub(crate) fn record_resource_performance_entry(
     scope: &mut v8::PinScope<'_, '_>,
     entry: ResourcePerformanceEntry,
 ) {
+    if entry.preload_state.is_consumed() {
+        return;
+    }
     if !url::Url::parse(&entry.name).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
         return;
     }

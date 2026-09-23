@@ -99,6 +99,10 @@ async fn fetch_browser_subresource_with_preflight_headers_and_observer(
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<Response>, String> {
+    if let Some(preload) = loader.consume_document_preload(&request) {
+        let response = preload.response().await?.response.into();
+        return Ok(NetworkFetchResult::without_request_observation(response));
+    }
     if browser_request_needs_cors_redirect_checks(&request) {
         return fetch_browser_subresource_with_cors_redirect_checks(
             loader,
@@ -515,6 +519,13 @@ async fn fetch_browser_subresource_raw_stream_with_preflight_headers_and_observe
     preflight_request_headers: Vec<(String, String)>,
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
+    if let Some(preload) = loader.consume_document_preload(&request) {
+        let response = crate::network::streaming_raw_response_from_local_response(
+            preload.response().await?.response.into(),
+        )
+        .map_err(format_network_error)?;
+        return Ok(NetworkFetchResult::without_request_observation(response));
+    }
     if browser_request_needs_cors_redirect_checks(&request) {
         return fetch_browser_subresource_raw_stream_with_cors_redirect_checks(
             loader,
@@ -680,6 +691,11 @@ pub(crate) fn spawn_async_subresource_fetch(
     .then(|| loader.parkable_image_manager(&task_runner));
     let request = observe_async_xhr_upload(request, &completion_tx, internal_id);
     task_runner.spawn(async move {
+        if let Some(preload) = loader.consume_document_preload(&request) {
+            let completion = preload.into_completion(internal_id, request).await;
+            let _ = completion_tx.send_async_subresource(completion);
+            return;
+        }
         let preflight_observer =
             CorsPreflightNetworkObserver::new(completion_tx.clone(), network_context);
         let auth_requires_buffered_transport = request.auth_requires_buffered_transport();
@@ -1090,6 +1106,7 @@ mod tests {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 true,

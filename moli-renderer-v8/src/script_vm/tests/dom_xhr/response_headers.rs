@@ -36,6 +36,7 @@ fn xhr_response_headers_are_filtered_combined_and_sorted_before_events() {
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             };
             if streaming {

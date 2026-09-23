@@ -593,6 +593,7 @@ mod tests {
                 response_body: SubresourceResponseBody::from_bytes(b"prepared".to_vec()),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
             });
         let action = crate::domains::activity::PreparedSubresourceContinueAction::capture_for_test(
             &mut conn,
@@ -671,6 +672,7 @@ mod tests {
                 response_body: SubresourceResponseBody::from_bytes(b"old".to_vec()),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
             });
         let old_action =
             crate::domains::activity::PreparedSubresourceContinueAction::capture_for_test(
