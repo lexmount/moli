@@ -12,7 +12,6 @@ use crate::{
     context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
-    native_bridge::lightweight_popup_id_from_window,
     util::context_host_ptr_from_global_bridge,
 };
 
@@ -341,7 +340,7 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
         callback_name,
         callback_this,
         listener.relevant_context(),
-        captured_relevant_identity,
+        listener.relevant_identity(),
         invocation,
         callback_errors,
     )
