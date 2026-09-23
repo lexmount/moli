@@ -217,6 +217,13 @@ impl ControlledResourceLoad {
             phase,
             self.load.request_client().page_network_policy().clone(),
         );
+        #[cfg(test)]
+        let pause = {
+            let mut pause = pause;
+            pause.request_policy_for_test =
+                Some((self.request.request_mode, self.request.credentials_mode));
+            pause
+        };
         let redirect = (phase == InterceptionPhase::Request)
             .then(|| self.request.redirect_chain().last().cloned())
             .flatten();

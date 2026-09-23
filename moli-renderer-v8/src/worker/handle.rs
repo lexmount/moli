@@ -177,6 +177,8 @@ pub(crate) enum WorkerMessage {
     DispatchPendingPromiseRejections,
     /// Run one task from the worker's networking task source.
     RunNetworkingTask,
+    /// Run one task from the worker's font loading task source.
+    RunFontLoadingTask,
     /// A worker spawned from this worker has queued a parent-facing event.
     NestedWorkerEvent {
         worker_id: DedicatedWorkerId,
@@ -538,6 +540,8 @@ pub(crate) enum WorkerErrorSource {
 #[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct WorkerPendingSubresourceFetch {
+    pub(crate) request_policy:
+        Option<(moli_fetch::RequestMode, moli_fetch::RequestCredentialsMode)>,
     pub(crate) fetch_id: u64,
     pub(crate) network_partition_key: Option<String>,
     pub(crate) info: PendingSubresourceFetchInfo,
