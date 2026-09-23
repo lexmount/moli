@@ -39,6 +39,14 @@ async function jointHistoryEventOrder(base, initiator, intercept) {
     nav.oncurrententrychange = () => {
       log('currententrychange');
       check(win.location.hash === '', name + ' committed URL before currententrychange');
+      if (intercept !== 'none') {
+        const transition = nav.transition;
+        check(transition instanceof win.NavigationTransition, name + ' transition realm');
+        check(transition.committed instanceof win.Promise, name + ' transition committed realm');
+        check(transition.finished instanceof win.Promise, name + ' transition finished realm');
+        check(transition.from === record.from, name + ' transition from identity');
+        check(transition.to === record.destination, name + ' transition destination identity');
+      }
       queueMicrotask(() => {
         log('currententrychange microtask');
         if (intercept !== 'none')
@@ -48,6 +56,8 @@ async function jointHistoryEventOrder(base, initiator, intercept) {
     nav.onnavigate = event => {
       log('navigate');
       if (intercept === 'none') return;
+      record.from = nav.currentEntry;
+      record.destination = event.destination;
       event.intercept({handler() {
         record.handlers++;
         log('handler 1');

@@ -4,7 +4,7 @@ const JOINT_HISTORY_TRAVERSAL: &str =
     include_str!("../../../tests/fixtures/joint-history-traversal.js");
 
 #[tokio::test]
-async fn joint_history_handlers_and_commit_reactions_precede_target_realm_popstate() {
+async fn joint_history_callbacks_preserve_event_order_and_target_realms() {
     let script = include_str!("../../../tests/fixtures/joint-history-event-order.js");
     for initiator in ["first", "last", "top"] {
         for intercept in ["none", "resolve", "reject", "stop"] {

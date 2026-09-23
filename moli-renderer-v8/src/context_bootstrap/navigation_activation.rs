@@ -219,6 +219,10 @@ pub(super) fn install_navigation_transition<'s>(
     to: Option<v8::Local<'s, v8::Object>>,
     navigation_type: &'static str,
 ) -> Option<v8::Local<'s, v8::PromiseResolver>> {
+    // Joint traversals can install another Window's transition from the
+    // initiating realm. The transition and both promises belong to Navigation.
+    let context = navigation.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let resolver = v8::PromiseResolver::new(scope)?;
     let finished = resolver.get_promise(scope);
     suppress_unhandled_rejection(scope, finished);
