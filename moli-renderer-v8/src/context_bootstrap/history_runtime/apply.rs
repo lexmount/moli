@@ -113,6 +113,13 @@ pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
     applied
 }
 
+pub(in crate::context_bootstrap) fn finish_history_entry_commit<'s>(
+    scope: &mut v8::PinScope<'s, '_>, applied: &AppliedHistoryEntry<'s>,
+) {
+    let key = super::super::session_history::entry_reference(scope, applied.entry).map(|entry| entry.key);
+    super::super::session_history_traversal::finish_entry(scope, applied.owner, key.as_ref());
+}
+
 pub(in crate::context_bootstrap) fn dispatch_history_entry_currententrychange<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     applied: &AppliedHistoryEntry<'s>,

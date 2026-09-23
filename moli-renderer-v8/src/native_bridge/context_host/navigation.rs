@@ -9,7 +9,7 @@ use crate::runtime::{
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerClientNavigateError};
 use moli_fetch::BrowserNavigationRequestKind;
 use moli_page_types::{
-    NavigationHistoryEntrySeed, NavigationHistoryMutation, SameDocumentHistoryUpdate,
+    NavigationHistoryEntrySeed, NavigationHistoryMutation,
 };
 use url::Url;
 
@@ -185,9 +185,8 @@ impl JsContextHost {
             && source_document == target_document
             && source_document.and_then(|document| self.document_is_completely_loaded(document))
                 == Some(false);
-        let replaces_initial = target_child.is_some_and(|handle| {
-            self.child_current_document_is_initial_empty(handle)
-        });
+        let replaces_initial =
+            target_child.is_some_and(|handle| self.child_current_document_is_initial_empty(handle));
         let same_origin = source_document
             .and_then(|document| self.owner_dispatch_scope_for_node(document))
             .and_then(|source| self.window_access_origin_for_dispatch_scope(source))

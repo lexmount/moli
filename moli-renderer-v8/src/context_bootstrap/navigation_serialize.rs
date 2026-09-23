@@ -119,7 +119,12 @@ pub(super) fn publish_top_level_navigation_history<'s>(
     host.top_level_navigation_history()
         .publish(NavigationHistoryEntrySeed {
             session_history: moli_page_types::SessionHistorySeed {
-                traversable: Some(Box::new(unsafe { &mut *host_ptr }.session_histories.get_mut(None).clone())),
+                traversable: Some(Box::new(
+                    unsafe { &mut *host_ptr }
+                        .session_histories
+                        .get_mut(None)
+                        .clone(),
+                )),
                 ..Default::default()
             },
             entries,

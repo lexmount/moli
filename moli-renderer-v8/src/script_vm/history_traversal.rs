@@ -67,6 +67,13 @@ impl ScriptVm {
                 anyhow!("authorized history traversal lost its exact pending payload")
             })?;
 
+        let Some(queued) = self
+            ._context_host
+            .borrow_mut()
+            .defer_pending_history_traversal_task(queued)
+        else {
+            return Ok(());
+        };
         let execution_context = queued.execution_context;
         let action = queued.action;
         let (bound_owner, bound_dispatch_scope, _realm_token, context) =
@@ -111,7 +118,7 @@ impl ScriptVm {
             return Ok(false);
         };
         let results = match queued.action {
-            PendingHistoryTraversalAction::ByDelta { .. } => return Ok(false),
+            PendingHistoryTraversalAction::ByDelta { .. } => Vec::new(),
             PendingHistoryTraversalAction::SameDocument(traversal) => traversal.results,
             PendingHistoryTraversalAction::CrossDocument(traversal) => traversal.results,
         };

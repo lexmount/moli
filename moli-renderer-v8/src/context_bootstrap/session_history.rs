@@ -109,7 +109,9 @@ pub(super) fn restore<'s>(
         && let Some(snapshot) = &seed.session_history.traversable
     {
         *history = (**snapshot).clone();
-        return;
+        if seed.session_history.commit != SessionHistoryCommit::Traverse {
+            return;
+        }
     }
     let entry = SessionHistoryEntry {
         key: NavigationHistoryEntryKey::from_serialized(
@@ -117,6 +119,26 @@ pub(super) fn restore<'s>(
         ),
         document: snapshot.document_id.clone(),
     };
+    if seed.session_history.commit == SessionHistoryCommit::Traverse
+        && let Some(step) = seed.session_history.target_step
+    {
+        if seed.session_history.admitted_entry.is_none()
+            && let Some(plan) = plan_traversal(scope, owner, step)
+            && let Some(delta) = commit_traversal(scope, owner, &plan).filter(|delta| *delta != 0) {
+            publish(
+                scope,
+                owner,
+                moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
+            );
+        }
+        super::session_history_traversal::finish_entry(scope, owner, Some(&entry.key));
+        let root = binding.popup.map_or(
+            OwnerDispatchScope::Top,
+            OwnerDispatchScope::LightweightPopup,
+        );
+        unsafe { &mut *host_ptr }.remember_nested_histories(root);
+        return;
+    }
     // The seed may be installed repeatedly while a child navigation loads.
     // Identity, rather than URL or list shape, makes the commit idempotent.
     if history.entry(binding.context) == Some(&entry)
@@ -146,7 +168,10 @@ pub(super) fn restore<'s>(
     if let Some(update) = update {
         publish(scope, owner, update);
     }
-    let root = binding.popup.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::LightweightPopup);
+    let root = binding.popup.map_or(
+        OwnerDispatchScope::Top,
+        OwnerDispatchScope::LightweightPopup,
+    );
     unsafe { &mut *host_ptr }.remember_nested_histories(root);
 }
 
@@ -169,6 +194,7 @@ pub(crate) fn install_session_history_position(
     if let Some(entry) = entry {
         history.attach(SessionHistoryContextId::ROOT, None, entry);
     }
+    super::navigation_serialize::publish_top_level_navigation_history(scope, owner);
 }
 
 /// Called after the main realm is admitted. Child realms may be prebootstrapped
@@ -246,7 +272,10 @@ pub(super) fn commit<'s>(
     if let Some(update) = update {
         publish(scope, owner, update);
     }
-    let root = binding.popup.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::LightweightPopup);
+    let root = binding.popup.map_or(
+        OwnerDispatchScope::Top,
+        OwnerDispatchScope::LightweightPopup,
+    );
     unsafe { &mut *host_ptr }.remember_nested_histories(root);
 }
 
@@ -346,7 +375,9 @@ pub(super) fn prune_views<'s>(
     let top = runtime_top_window_owner(scope, owner);
     let mut owners = vec![top];
     let children = super::window_accessors::window_document_handle(scope, top, host)
-        .map(|document| host.child_browsing_context_handles_in_document_order_for_document(document))
+        .map(|document| {
+            host.child_browsing_context_handles_in_document_order_for_document(document)
+        })
         .unwrap_or_default();
     for handle in children {
         if let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) {
@@ -388,7 +419,7 @@ pub(super) fn prune_views<'s>(
         // history includes hidden entries and cannot supply these indices.
         set_history_entries(scope, history, retained);
         set_history_index(scope, history, current);
-        super::navigation_serialize::sync_child_navigation_entry_seed_from_owner(scope, owner);
+        super::navigation_serialize::sync_navigation_entry_seed_from_owner(scope, owner);
     }
     removed
 }
@@ -441,8 +472,6 @@ pub(super) fn project_traversal<'s>(
     if !entries.contains_key(&SessionHistoryContextId::ROOT) {
         return None;
     }
-    let source = super::navigation_window::window_task_target_for_runtime_owner(scope, host, owner)?.dispatch_scope();
-    let root = binding.popup.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::LightweightPopup);
     let mut targets = Vec::new();
     for (&context, entry) in entries {
         let Some(owner) = owner_for_context(scope, host, context, binding.popup) else {
@@ -464,10 +493,6 @@ pub(super) fn project_traversal<'s>(
             continue;
         };
         if current_index != target_index {
-            let target = super::navigation_window::window_task_target_for_runtime_owner(scope, host, owner)?.dispatch_scope();
-            if !host.sandbox_allows_history_traversal(source, target, root) {
-                return Some(Vec::new());
-            }
             targets.push(super::navigation_traversal_execution::TraversalTarget {
                 owner,
                 history,
@@ -480,6 +505,34 @@ pub(super) fn project_traversal<'s>(
     Some(targets)
 }
 
+/// Admission uses the initiating Document's committed sandbox for every affected navigable.
+pub(super) fn traversal_is_allowed<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    step: SessionHistoryStepId,
+) -> bool {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let source = runtime_window_dispatch_scope(scope, owner).unwrap_or(OwnerDispatchScope::Top);
+    let binding = binding(scope, host, owner);
+    let root = binding.popup.map_or(
+        OwnerDispatchScope::Top,
+        OwnerDispatchScope::LightweightPopup,
+    );
+    match plan_traversal(scope, owner, step).and_then(|plan| project_traversal(scope, owner, &plan)) {
+        Some(targets) => targets.iter().all(|target| {
+            host.sandbox_allows_history_traversal(
+                source,
+                runtime_window_dispatch_scope(scope, target.owner).unwrap_or(root),
+                root,
+            )
+        }),
+        None => host.sandbox_allows_history_traversal(source, root, root),
+    }
+}
+
 pub(super) fn commit_traversal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -487,9 +540,11 @@ pub(super) fn commit_traversal<'s>(
 ) -> Option<i64> {
     let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
     let binding = binding(scope, host, owner);
-    host.session_histories
-        .get_mut(binding.popup)
-        .commit_traversal(plan)
+    let delta = host
+        .session_histories
+        .commit_traversal(binding.popup, plan)?;
+    host.commit_active_history_delta_position(binding.popup, plan.target_step());
+    Some(delta)
 }
 
 pub(super) fn publish<'s>(
