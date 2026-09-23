@@ -131,6 +131,37 @@ struct InputEventInitDeclaration<'scope> {
     cancelable: bool,
     composed: bool,
     input_type: v8::Local<'scope, v8::String>,
+    data: v8::Local<'scope, v8::Value>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TextEditInputType {
+    InsertText,
+    InsertLineBreak,
+    InsertFromDrop,
+    DeleteContentBackward,
+    DeleteContentForward,
+}
+
+impl TextEditInputType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::InsertText => "insertText",
+            Self::InsertLineBreak => "insertLineBreak",
+            Self::InsertFromDrop => "insertFromDrop",
+            Self::DeleteContentBackward => "deleteContentBackward",
+            Self::DeleteContentForward => "deleteContentForward",
+        }
+    }
+
+    pub(crate) fn data(self, text: &str) -> Option<&str> {
+        match self {
+            Self::InsertText | Self::InsertFromDrop => Some(text),
+            Self::InsertLineBreak | Self::DeleteContentBackward | Self::DeleteContentForward => {
+                None
+            }
+        }
+    }
 }
 
 fn keyboard_event_legacy_codes(event_type: &str, key: &str, code: &str) -> (u32, u32, u32) {
@@ -761,15 +792,22 @@ pub(crate) fn construct_focus_event<'s>(
     construct_event(scope, "FocusEvent", event_type, init)
 }
 
-pub(crate) fn construct_beforeinput_event<'s>(
+pub(crate) fn construct_input_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    input_type: &str,
+    event_type: &str,
+    input_type: TextEditInputType,
+    data: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let input_type = v8_string(scope, input_type)?;
-    let init = InputEventInitDeclaration::new(true, true, true, input_type)
-        .bind(scope)
-        .ok()?;
-    construct_event(scope, "InputEvent", "beforeinput", init)
+    let input_type = v8_string(scope, input_type.as_str())?;
+    let data = match data {
+        Some(text) => v8_string(scope, text)?.into(),
+        None => v8::null(scope).into(),
+    };
+    let init =
+        InputEventInitDeclaration::new(true, event_type == "beforeinput", true, input_type, data)
+            .bind(scope)
+            .ok()?;
+    construct_event(scope, "InputEvent", event_type, init)
 }
 
 pub(crate) fn construct_simple_event<'s>(

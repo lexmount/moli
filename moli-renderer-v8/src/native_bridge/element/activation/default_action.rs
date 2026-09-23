@@ -23,12 +23,12 @@ use crate::{
 use super::super::super::JsContextHost;
 use super::super::forms::{FormAssociatedResetCallbackTiming, reset_form_default_action};
 use super::super::{
-    NodePublicEventDispatchOutcome, cache_input_files_from_selected_files,
+    NodePublicEventDispatchOutcome, TextEditInputType, cache_input_files_from_selected_files,
     construct_click_event_with_detail_and_modifiers, construct_command_event,
-    construct_simple_event, contenteditable_editing_host, dispatch_popover_toggle_events,
-    dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
-    is_disabled_form_control, is_focusable, is_valid_submit_button,
-    label_activation_control_handle, observable_bounding_client_rect,
+    construct_input_event, construct_simple_event, contenteditable_editing_host,
+    dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
+    element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
+    is_valid_submit_button, label_activation_control_handle, observable_bounding_client_rect,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
     replace_text_control_selection, resolve_url_like_attribute,
     resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
@@ -215,7 +215,13 @@ fn perform_text_drop_default_action(
     if text.is_empty() {
         return false;
     }
-    replace_text_control_selection(scope, runtime_ptr, handle, &text)
+    replace_text_control_selection(
+        scope,
+        runtime_ptr,
+        handle,
+        &text,
+        TextEditInputType::InsertFromDrop,
+    )
 }
 
 fn slice_chars(value: &str, start: usize, end: usize) -> String {
@@ -536,15 +542,20 @@ pub(crate) fn replace_contenteditable_selection(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     replacement_text: &str,
+    input_type: TextEditInputType,
 ) -> bool {
     let Some(target) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let Some(before_input) = construct_input_event(
+        scope,
+        "beforeinput",
+        input_type,
+        input_type.data(replacement_text),
+    ) else {
         return false;
     };
-    let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
-    if event_default_prevented(scope, before_input) {
+    if !dispatch_public_event(scope, runtime_ptr, handle, before_input).allows_default() {
         return false;
     }
     let inserted = if let Some(selection) = window_selection(scope) {
@@ -570,7 +581,12 @@ pub(crate) fn replace_contenteditable_selection(
     if !inserted {
         return false;
     }
-    if let Some(event) = construct_simple_event(scope, "input", true, false, true) {
+    if let Some(event) = construct_input_event(
+        scope,
+        "input",
+        input_type,
+        input_type.data(replacement_text),
+    ) {
         let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
     }
     true

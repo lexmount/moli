@@ -7,7 +7,7 @@ use super::{
     JsContextHost, detached_native_handle_for_runtime, is_html_document, throw_dom_exception,
 };
 use crate::native_bridge::element::{
-    contenteditable_editing_host, dispatch_text_control_event, is_text_control,
+    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
     replace_text_control_selection, text_control_value,
 };
@@ -480,12 +480,24 @@ fn exec_command_insert_text(
         return false;
     };
     if is_text_control(unsafe { &*runtime_ptr }, active) {
-        return replace_text_control_selection(scope, runtime_ptr, active, replacement);
+        return replace_text_control_selection(
+            scope,
+            runtime_ptr,
+            active,
+            replacement,
+            TextEditInputType::InsertText,
+        );
     }
     let Some(editing_host) = contenteditable_editing_host(unsafe { &*runtime_ptr }, active) else {
         return false;
     };
-    replace_contenteditable_selection(scope, runtime_ptr, editing_host, replacement)
+    replace_contenteditable_selection(
+        scope,
+        runtime_ptr,
+        editing_host,
+        replacement,
+        TextEditInputType::InsertText,
+    )
 }
 
 pub(in crate::native_bridge) fn node_document_query_command_supported_callback<'s>(

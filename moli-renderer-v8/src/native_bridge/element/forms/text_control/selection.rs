@@ -1,12 +1,11 @@
-use super::events::{
-    dispatch_text_control_event, queue_text_control_select_event,
-    queue_text_control_selection_change_event,
-};
+use super::events::{queue_text_control_select_event, queue_text_control_selection_change_event};
 use super::value::{
-    clamp_text_control_offset, is_text_control, supports_variable_length_selection,
+    clamp_text_control_offset, is_text_control, normalize_textarea_api_value,
+    supports_variable_length_selection,
 };
 use super::*;
 use crate::dom::forms::parse_non_negative_length_attribute;
+use crate::native_bridge::element::{TextEditInputType, construct_input_event};
 use crate::util::{utf16_replace_units_range_lossy, utf16_units, v8str};
 use crate::webidl;
 
@@ -70,15 +69,6 @@ fn text_control_selection_idl_owner(runtime: &JsContextHost, handle: DomHandle) 
         .unwrap_or("HTMLInputElement")
 }
 
-fn event_default_prevented(
-    scope: &mut v8::PinScope<'_, '_>,
-    event: v8::Local<'_, v8::Object>,
-) -> bool {
-    event
-        .get(scope, v8str(scope, "defaultPrevented").into())
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
 pub(crate) fn text_control_set_selection_range_internal(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -125,16 +115,21 @@ pub(crate) fn replace_text_control_selection(
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
     replacement_text: &str,
+    input_type: TextEditInputType,
 ) -> bool {
     if !is_text_control(unsafe { &*runtime_ptr }, handle) {
         return false;
     }
 
-    let Some(before_input) = construct_simple_event(scope, "beforeinput", true, true, true) else {
+    let Some(before_input) = construct_input_event(
+        scope,
+        "beforeinput",
+        input_type,
+        input_type.data(replacement_text),
+    ) else {
         return false;
     };
-    let _ = dispatch_public_event(scope, runtime_ptr, handle, before_input);
-    if event_default_prevented(scope, before_input) {
+    if !dispatch_public_event(scope, runtime_ptr, handle, before_input).allows_default() {
         return false;
     }
 
@@ -187,7 +182,14 @@ pub(crate) fn replace_text_control_selection(
     let selection_changed =
         text_control_set_selection_range_internal(scope, runtime_ptr, handle, caret, caret);
     if changed || selection_changed {
-        dispatch_text_control_event(scope, runtime_ptr, handle, "input");
+        // beforeinput describes the request; input describes the text actually
+        // inserted after single-line normalization and maxlength truncation.
+        let inserted_text = String::from_utf16_lossy(&replacement_units);
+        if let Some(event) =
+            construct_input_event(scope, "input", input_type, input_type.data(&inserted_text))
+        {
+            let _ = dispatch_public_event(scope, runtime_ptr, handle, event);
+        }
     }
     changed || selection_changed
 }
@@ -206,7 +208,7 @@ fn text_control_user_edit_replacement_units(
     let replacement_text = if element.is_html_input() {
         normalize_single_line_text_insertion(replacement_text)
     } else {
-        replacement_text.to_owned()
+        normalize_textarea_api_value(replacement_text)
     };
     let mut replacement_units = utf16_units(&replacement_text);
 

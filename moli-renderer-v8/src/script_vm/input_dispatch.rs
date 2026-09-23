@@ -17,10 +17,10 @@ use crate::dom::{
     native::{Node, SelectedFile},
 };
 use crate::native_bridge::element::{
-    TouchEventPoint, activate_default_submit_button_via_keyboard,
+    TextEditInputType, TouchEventPoint, activate_default_submit_button_via_keyboard,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    construct_beforeinput_event, construct_drag_event, construct_keyboard_event,
+    construct_drag_event, construct_input_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -1852,7 +1852,13 @@ impl ScriptVm {
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
             if is_text_control(unsafe { &*runtime_ptr }, handle) {
-                let _ = replace_text_control_selection(scope, runtime_ptr, handle, text);
+                let _ = replace_text_control_selection(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                    text,
+                    TextEditInputType::InsertText,
+                );
                 return Ok(true);
             }
             let runtime = unsafe { &*runtime_ptr };
@@ -1864,6 +1870,7 @@ impl ScriptVm {
                 runtime_ptr,
                 editing_host,
                 text,
+                TextEditInputType::InsertText,
             ))
         });
         self.finish_input_command_checkpoint(result)
@@ -1975,13 +1982,18 @@ impl ScriptVm {
                         runtime_ptr,
                         handle,
                         "\n",
+                        TextEditInputType::InsertLineBreak,
                     )));
                 }
                 if input_blocks_implicit_submission(runtime, handle) && is_character_phase {
                     // Enter's editing default action must remain cancelable before
                     // activating a default submit button (and firing its click).
-                    let Some(before_input) = construct_beforeinput_event(scope, "insertLineBreak")
-                    else {
+                    let Some(before_input) = construct_input_event(
+                        scope,
+                        "beforeinput",
+                        TextEditInputType::InsertLineBreak,
+                        None,
+                    ) else {
                         return Ok(input_dispatch_outcome(false));
                     };
                     if !dispatch_public_event(scope, runtime_ptr, handle, before_input)
@@ -2016,20 +2028,12 @@ impl ScriptVm {
                     return Ok(input_dispatch_outcome(true));
                 }
                 if target.is_text_control {
-                    if target.is_textarea && text.contains('\r') {
-                        let normalized_text = text.replace("\r\n", "\n").replace('\r', "\n");
-                        return Ok(input_dispatch_outcome(replace_text_control_selection(
-                            scope,
-                            runtime_ptr,
-                            handle,
-                            &normalized_text,
-                        )));
-                    }
                     return Ok(input_dispatch_outcome(replace_text_control_selection(
                         scope,
                         runtime_ptr,
                         handle,
                         text,
+                        TextEditInputType::InsertText,
                     )));
                 }
                 if let Some(editing_host) = contenteditable_editing_host(runtime, handle) {
@@ -2038,6 +2042,7 @@ impl ScriptVm {
                         runtime_ptr,
                         editing_host,
                         text,
+                        TextEditInputType::InsertText,
                     )));
                 }
                 return Ok(input_dispatch_outcome(true));
@@ -2197,6 +2202,11 @@ impl ScriptVm {
                     runtime_ptr,
                     handle,
                     "",
+                    if key_lower == "backspace" {
+                        TextEditInputType::DeleteContentBackward
+                    } else {
+                        TextEditInputType::DeleteContentForward
+                    },
                 )));
             }
 
@@ -2230,6 +2240,11 @@ impl ScriptVm {
                     runtime_ptr,
                     editing_host,
                     "",
+                    if key_lower == "backspace" {
+                        TextEditInputType::DeleteContentBackward
+                    } else {
+                        TextEditInputType::DeleteContentForward
+                    },
                 )));
             }
 

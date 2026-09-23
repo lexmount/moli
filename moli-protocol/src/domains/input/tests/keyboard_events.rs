@@ -11,6 +11,7 @@ async fn keyboard_fixture(control: &str) -> TestContext {
     let html = r#"<html><body>CONTROL<input id='other'><script>
         window.__events = [];
         window.__keypresses = [];
+        window.__inputEvents = [];
         window.__cancel = '';
         window.__moveFocus = false;
         for (const type of ['keydown', 'keypress', 'beforeinput', 'input', 'keyup']) {
@@ -20,6 +21,14 @@ async fn keyboard_fixture(control: &str) -> TestContext {
                     __keypresses.push({key: event.key, code: event.code,
                         keyCode: event.keyCode, charCode: event.charCode,
                         which: event.which, trusted: event.isTrusted});
+                }
+                if (type === 'beforeinput' || type === 'input') {
+                    __inputEvents.push({type, inputEvent: event instanceof InputEvent,
+                        data: event.data, inputType: event.inputType,
+                        isComposing: event.isComposing, trusted: event.isTrusted,
+                        bubbles: event.bubbles, composed: event.composed,
+                        cancelable: event.cancelable,
+                        value: event.target.value ?? event.target.textContent});
                 }
                 if (type === __cancel) event.preventDefault();
                 if (type === 'keydown' && __moveFocus)
@@ -54,6 +63,166 @@ async fn field_value(ctx: &mut TestContext) -> String {
 async fn events(ctx: &mut TestContext) -> serde_json::Value {
     serde_json::from_str(&evaluate_string(ctx, "JSON.stringify(__events)").await)
         .expect("event log must be JSON")
+}
+
+async fn assert_input_events(
+    ctx: &mut TestContext,
+    input_type: &str,
+    before_data: Option<&str>,
+    input_data: Option<&str>,
+    before_value: &str,
+    after_value: &str,
+    canceled: bool,
+) {
+    let event = |event_type: &str, data: Option<&str>, value: &str| {
+        json!({"type": event_type, "inputEvent": true, "data": data,
+            "inputType": input_type, "isComposing": false, "trusted": true,
+            "bubbles": true, "composed": true, "cancelable": event_type == "beforeinput",
+            "value": value})
+    };
+    let mut expected = vec![event("beforeinput", before_data, before_value)];
+    if !canceled {
+        expected.push(event("input", input_data, after_value));
+    }
+    let actual: serde_json::Value =
+        serde_json::from_str(&evaluate_string(ctx, "JSON.stringify(__inputEvents)").await)
+            .expect("input event log must be JSON");
+    assert_eq!(actual, json!(expected));
+    assert_eq!(field_value(ctx).await, after_value);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_text_editing_dispatches_input_events_with_text_and_cancellation() {
+    for control in CONTROLS {
+        for route in ["keyDown", "char", "insertText"] {
+            for text in ["a", "😀z"] {
+                for canceled in [false, true] {
+                    let mut ctx = keyboard_fixture(control).await;
+                    if canceled {
+                        assert!(evaluate_bool(&mut ctx, "(__cancel = 'beforeinput') !== ''").await);
+                    }
+                    if route == "insertText" {
+                        ctx.process_async(json!({"id": 902, "method": "Input.insertText",
+                            "params": {"text": text}}))
+                            .await;
+                        ctx.expect_result(902, json!({}), None);
+                    } else {
+                        dispatch(&mut ctx, route, text, "", text).await;
+                    }
+                    assert_input_events(
+                        &mut ctx,
+                        "insertText",
+                        Some(text),
+                        Some(text),
+                        "",
+                        if canceled { "" } else { text },
+                        canceled,
+                    )
+                    .await;
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_text_editing_deletion_input_events_report_direction_and_null_data() {
+    for control in CONTROLS {
+        for (key, input_type) in [
+            ("Backspace", "deleteContentBackward"),
+            ("Delete", "deleteContentForward"),
+        ] {
+            for canceled in [false, true] {
+                let mut ctx = keyboard_fixture(control).await;
+                assert!(
+                    evaluate_bool(
+                        &mut ctx,
+                        r#"(() => {
+                    const field = document.getElementById('field');
+                    if ('value' in field) {
+                        field.value = 'abc'; field.setSelectionRange(1, 2);
+                    } else {
+                        field.textContent = 'abc';
+                        const range = document.createRange();
+                        range.setStart(field.firstChild, 1); range.setEnd(field.firstChild, 2);
+                        const selection = getSelection();
+                        selection.removeAllRanges(); selection.addRange(range);
+                    }
+                    return true;
+                })()"#
+                    )
+                    .await
+                );
+                if canceled {
+                    assert!(evaluate_bool(&mut ctx, "(__cancel = 'beforeinput') !== ''").await);
+                }
+                dispatch(&mut ctx, "rawKeyDown", key, key, "").await;
+                assert_input_events(
+                    &mut ctx,
+                    input_type,
+                    None,
+                    None,
+                    "abc",
+                    if canceled { "abc" } else { "ac" },
+                    canceled,
+                )
+                .await;
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_textarea_enter_input_events_report_line_break_and_null_data() {
+    for (route, key) in [("keyDown", "Enter"), ("char", "")] {
+        for canceled in [false, true] {
+            let mut ctx = keyboard_fixture(CONTROLS[1]).await;
+            if canceled {
+                assert!(evaluate_bool(&mut ctx, "(__cancel = 'beforeinput') !== ''").await);
+            }
+            dispatch(&mut ctx, route, key, "", "\r").await;
+            assert_input_events(
+                &mut ctx,
+                "insertLineBreak",
+                None,
+                None,
+                "",
+                if canceled { "" } else { "\n" },
+                canceled,
+            )
+            .await;
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cdp_text_editing_input_data_reflects_maxlength_and_single_line_normalization() {
+    for control in &CONTROLS[..2] {
+        for (text, inserted) in [("abc", "ab"), ("😀X", "😀"), ("a\rb", "a ")] {
+            if *control == CONTROLS[1] && text.contains('\r') {
+                continue;
+            }
+            let mut ctx = keyboard_fixture(control).await;
+            assert!(
+                evaluate_bool(
+                    &mut ctx,
+                    "(document.getElementById('field').maxLength = 2) === 2"
+                )
+                .await
+            );
+            dispatch(&mut ctx, "char", "", "", text).await;
+            assert_input_events(
+                &mut ctx,
+                "insertText",
+                Some(text),
+                Some(inserted),
+                "",
+                inserted,
+                false,
+            )
+            .await;
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
