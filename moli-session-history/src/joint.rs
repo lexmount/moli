@@ -265,11 +265,27 @@ impl JointSessionHistory {
         })
     }
 
-    pub fn context_entries(&self, context: SessionHistoryContextId) -> Vec<(SessionHistoryStepId, SessionHistoryEntry)> {
-        self.steps.iter().filter_map(|step| step.entries.get(&context).cloned().map(|entry| (step.id, entry))).collect()
+    pub fn context_entries(
+        &self,
+        context: SessionHistoryContextId,
+    ) -> Vec<(SessionHistoryStepId, SessionHistoryEntry)> {
+        self.steps
+            .iter()
+            .filter_map(|step| {
+                step.entries
+                    .get(&context)
+                    .cloned()
+                    .map(|entry| (step.id, entry))
+            })
+            .collect()
     }
 
-    pub fn restore_context(&mut self, context: SessionHistoryContextId, parent: SessionHistoryContextId, entries: &[(SessionHistoryStepId, SessionHistoryEntry)]) {
+    pub fn restore_context(
+        &mut self,
+        context: SessionHistoryContextId,
+        parent: SessionHistoryContextId,
+        entries: &[(SessionHistoryStepId, SessionHistoryEntry)],
+    ) {
         self.parents.insert(context, parent);
         for step in &mut self.steps {
             if let Some((_, entry)) = entries.iter().find(|(id, _)| *id == step.id) {
