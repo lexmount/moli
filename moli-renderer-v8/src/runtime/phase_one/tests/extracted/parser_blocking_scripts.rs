@@ -763,7 +763,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_stylesheet_inputs: _,
         } = driver
             .parser_session
@@ -832,7 +832,7 @@ fn phase_transition_syncs_parser_created_style_sources_for_later_reads() {
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_stylesheet_inputs: _,
             } = state.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             assert!(
@@ -914,7 +914,7 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -1085,7 +1085,7 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(&html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {

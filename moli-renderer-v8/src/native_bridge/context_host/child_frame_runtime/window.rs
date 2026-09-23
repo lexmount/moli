@@ -929,6 +929,7 @@ impl PageScriptHost {
         handle: DomHandle,
         owner: crate::frame_owner_model::FrameDocumentTaskOwner,
     ) -> bool {
+        self.discard_child_parser_preloads(handle, Some(owner));
         let failed = self
             .frame_owner_store
             .fail_child_realm_materialization(handle, owner);
