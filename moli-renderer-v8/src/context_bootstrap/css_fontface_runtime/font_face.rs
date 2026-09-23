@@ -332,46 +332,46 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         (source, "error", Some(error), None)
     } else {
         match parsed.source {
-        FontFaceConstructorSource::Css(source)
-            if moli_css_parse::normalize_font_face_src(&source).is_some() =>
-        {
-            (source, "unloaded", None, None)
-        }
-        FontFaceConstructorSource::Css(source) => {
-            let error = crate::context_bootstrap::new_dom_exception_value(
-                scope,
-                "Invalid FontFace source descriptor.",
-                "SyntaxError",
-            );
-            (source, "error", Some(error), None)
-        }
-        FontFaceConstructorSource::Binary(value) => {
-            // BufferSource conversion retains the native buffer; copying its
-            // bytes belongs to the operation, after descriptor conversion.
-            // A descriptor getter may have modified or detached the buffer.
-            let bytes = match webidl::convert::<webidl::BufferSource>(
-                scope,
-                value,
-                webidl::Context::argument("FontFace", 2),
-            ) {
-                Ok(bytes) => bytes.into_bytes(),
-                Err(error) => {
-                    webidl::throw_error(scope, &error);
-                    return;
-                }
-            };
-            if moli_layout::validate_web_font_bytes(&bytes).is_ok() {
-                (String::new(), "loaded", None, Some(bytes))
-            } else {
+            FontFaceConstructorSource::Css(source)
+                if moli_css_parse::normalize_font_face_src(&source).is_some() =>
+            {
+                (source, "unloaded", None, None)
+            }
+            FontFaceConstructorSource::Css(source) => {
                 let error = crate::context_bootstrap::new_dom_exception_value(
                     scope,
-                    "Invalid font data in ArrayBuffer.",
+                    "Invalid FontFace source descriptor.",
                     "SyntaxError",
                 );
-                (String::new(), "error", Some(error), None)
+                (source, "error", Some(error), None)
+            }
+            FontFaceConstructorSource::Binary(value) => {
+                // BufferSource conversion retains the native buffer; copying its
+                // bytes belongs to the operation, after descriptor conversion.
+                // A descriptor getter may have modified or detached the buffer.
+                let bytes = match webidl::convert::<webidl::BufferSource>(
+                    scope,
+                    value,
+                    webidl::Context::argument("FontFace", 2),
+                ) {
+                    Ok(bytes) => bytes.into_bytes(),
+                    Err(error) => {
+                        webidl::throw_error(scope, &error);
+                        return;
+                    }
+                };
+                if moli_layout::validate_web_font_bytes(&bytes).is_ok() {
+                    (String::new(), "loaded", None, Some(bytes))
+                } else {
+                    let error = crate::context_bootstrap::new_dom_exception_value(
+                        scope,
+                        "Invalid font data in ArrayBuffer.",
+                        "SyntaxError",
+                    );
+                    (String::new(), "error", Some(error), None)
+                }
             }
         }
-    }
     };
     FontFaceObjectDeclaration::new(
         parsed.family,
