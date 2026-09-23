@@ -529,8 +529,9 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
     let value_units = utf16_units(&value);
     let value_len = value_units.len() as u32;
     let (current_start, current_end) = current_selection_or_end(runtime, handle, value_len);
-    let start = parsed.start.unwrap_or(current_start).min(value_len);
-    let end = parsed.end.unwrap_or(current_end).min(value_len);
+    let start = parsed.start.unwrap_or(current_start);
+    let end = parsed.end.unwrap_or(current_end);
+    // Validate before clamping so reversed out-of-bounds ranges still throw.
     if end < start {
         throw_dom_exception(
             scope,
@@ -540,6 +541,8 @@ pub(in crate::native_bridge) fn text_control_set_range_text_callback<'s>(
         );
         return;
     }
+    let start = start.min(value_len);
+    let end = end.min(value_len);
 
     let replacement_units = utf16_units(&parsed.replacement);
     let replacement_len = replacement_units.len() as u32;

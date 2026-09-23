@@ -3476,6 +3476,70 @@ fn writing_suggestions_reflects_and_inherits_nearest_ancestor_state() {
 }
 
 #[test]
+fn set_range_text_validates_range_before_clamping_offsets() {
+    let mut vm = new_storage_test_vm("https://forms-selection-set-range-text-order.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const failures = [];
+              const cases = [
+                ['abc', 100, 99, 'IndexSizeError', 'abc'],
+                ['abc', 4, 3, 'IndexSizeError', 'abc'],
+                ['abc', 3, 2, 'IndexSizeError', 'abc'],
+                ['', 1, 0, 'IndexSizeError', ''],
+                ['abc', -1, -2, 'IndexSizeError', 'abc'],
+                ['abc', 99, 100, null, 'abcY'],
+                ['abc', 100, 100, null, 'abcY'],
+                ['abc', 1, 100, null, 'aY'],
+                ['abc', 2 ** 32, 1, null, 'Ybc'],
+                ['', 0, 0, null, 'Y']
+              ];
+              for (const type of ['text', 'search', 'tel', 'url', 'password', 'textarea']) {
+                for (const connected of [false, true]) {
+                  const field = document.createElement(type === 'textarea' ? 'textarea' : 'input');
+                  if (type !== 'textarea') field.type = type;
+                  if (connected) {
+                    (document.body || document.documentElement || document).appendChild(field);
+                  }
+                  for (const [value, start, end, expectedError, expectedValue] of cases) {
+                    field.value = value;
+                    field.setSelectionRange(1, 2, 'backward');
+                    const selection = () => JSON.stringify([
+                      field.selectionStart, field.selectionEnd, field.selectionDirection
+                    ]);
+                    const beforeSelection = selection();
+                    let errorName = null;
+                    let isIndexSizeError = false;
+                    try {
+                      field.setRangeText('Y', start, end);
+                    } catch (error) {
+                      errorName = error.name;
+                      isIndexSizeError = error instanceof DOMException && error.code === 1;
+                    }
+                    if (errorName !== expectedError || field.value !== expectedValue ||
+                        (expectedError && (!isIndexSizeError || selection() !== beforeSelection))) {
+                      failures.push({
+                        type, connected, value, start, end, expectedError, expectedValue,
+                        errorName, actualValue: field.value, isIndexSizeError,
+                        beforeSelection, afterSelection: selection()
+                      });
+                    }
+                  }
+                  field.remove();
+                }
+              }
+              return JSON.stringify(failures);
+            })()
+            "#,
+        )
+        .expect("setRangeText range validation and clamping should evaluate");
+
+    assert_eq!(result, "[]");
+}
+
+#[test]
 fn set_range_text_preserve_mode_adjusts_selection_by_replacement_delta() {
     let mut vm = new_storage_test_vm("https://forms-selection-set-range-text.test/");
 
