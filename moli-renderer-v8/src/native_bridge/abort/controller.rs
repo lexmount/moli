@@ -1,6 +1,4 @@
-use super::{
-    ABORT_CONTROLLER_SIGNAL_SLOT, AbortStore, abort_error_value, create_signal_with_prototype,
-};
+use super::{ABORT_CONTROLLER_SIGNAL_SLOT, AbortStore, abort_error_value, create_signal};
 use crate::util::{context_host_ptr_from_global_bridge, get_private_value, v8str};
 
 pub(crate) fn abort_controller_constructor_callback(
@@ -22,17 +20,7 @@ pub(crate) fn abort_controller_constructor_callback(
         rv.set_undefined();
         return;
     };
-    let global = scope.get_current_context().global(scope);
-    let Some(signal_ctor) = global
-        .get(scope, v8str(scope, "AbortSignal").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        rv.set(args.this().into());
-        return;
-    };
-    let Some(signal) =
-        create_signal_with_prototype(scope, signal_ctor, unsafe { &mut *host_ptr }, false, None)
-    else {
+    let Some(signal) = create_signal(scope, unsafe { &mut *host_ptr }, false, None) else {
         rv.set(args.this().into());
         return;
     };

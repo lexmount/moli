@@ -71,7 +71,7 @@ impl DocumentRuntime {
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: v8::Local<'s, v8::Function>,
-        delay_ms: u32,
+        delay_ms: u64,
         owner: HostTimerOwner,
         extra_args: Vec<v8::Global<v8::Value>>,
     ) -> u32 {

@@ -645,7 +645,7 @@ impl JsContextHost {
         let timer_id = self.queue_timeout(
             scope,
             callback,
-            navigation.delay_ms,
+            u64::from(navigation.delay_ms),
             HostTimerOwner::ChildWindow(handle),
             Vec::new(),
         );

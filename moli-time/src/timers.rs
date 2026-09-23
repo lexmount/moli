@@ -33,7 +33,7 @@ impl TimerReadyAllowance {
 #[derive(Debug)]
 pub struct ReadyTimer<T> {
     pub id: TimerId,
-    pub delay_ms: u32,
+    pub delay_ms: u64,
     pub payload: T,
 }
 
@@ -42,7 +42,7 @@ struct ScheduledTimer<T> {
     id: TimerId,
     sequence: u64,
     run_at: Instant,
-    delay_ms: u32,
+    delay_ms: u64,
     payload: T,
 }
 
@@ -93,7 +93,9 @@ impl<T> Default for TimerScheduler<T> {
 }
 
 impl<T> TimerScheduler<T> {
-    pub fn schedule_after(&mut self, payload: T, delay_ms: u32, now: Instant) -> TimerId {
+    // Internal timeouts such as AbortSignal.timeout accept 64-bit delays.
+    // HTML timers apply their own argument conversion before scheduling.
+    pub fn schedule_after(&mut self, payload: T, delay_ms: u64, now: Instant) -> TimerId {
         let id = self.allocate_id();
         self.schedule_existing_after(id, payload, delay_ms, now);
         id
@@ -226,7 +228,7 @@ impl<T> TimerScheduler<T> {
         &mut self,
         id: TimerId,
         payload: T,
-        delay_ms: u32,
+        delay_ms: u64,
         now: Instant,
     ) -> bool {
         self.running.remove(&id);
@@ -281,14 +283,14 @@ impl<T> TimerScheduler<T> {
         self.active.len()
     }
 
-    fn schedule_existing_after(&mut self, id: TimerId, payload: T, delay_ms: u32, now: Instant) {
+    fn schedule_existing_after(&mut self, id: TimerId, payload: T, delay_ms: u64, now: Instant) {
         let sequence = self.next_sequence;
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.active.insert(id);
         self.pending.push(ScheduledTimer {
             id,
             sequence,
-            run_at: now + Duration::from_millis(u64::from(delay_ms)),
+            run_at: now + Duration::from_millis(delay_ms),
             delay_ms,
             payload,
         });
@@ -350,12 +352,12 @@ fn timer_precedes<T>(left: &ScheduledTimer<T>, right: &ScheduledTimer<T>) -> boo
 
 fn timer_ready(
     run_at: Instant,
-    delay_ms: u32,
+    delay_ms: u64,
     now: Instant,
     allowance: TimerReadyAllowance,
 ) -> bool {
     run_at <= now
-        || (delay_ms <= allowance.max_delay_ms
+        || (delay_ms <= u64::from(allowance.max_delay_ms)
             && run_at.duration_since(now).le(&allowance.allowance))
 }
 
@@ -397,6 +399,37 @@ mod tests {
         assert_eq!(ready.id, slow);
         assert_eq!(ready.payload, "slow");
         scheduler.finish_running(ready.id);
+    }
+
+    #[test]
+    fn long_timeouts_preserve_their_full_deadline() {
+        let now = Instant::now();
+        for delay_ms in [u64::from(u32::MAX) + 1, 9_007_199_254_740_991] {
+            let mut scheduler = TimerScheduler::default();
+            let id = scheduler.schedule_after("long", delay_ms, now);
+            let deadline = now + Duration::from_millis(delay_ms);
+            assert_eq!(scheduler.next_deadline(), Some(deadline));
+            assert!(
+                scheduler
+                    .take_next_ready(
+                        deadline - Duration::from_millis(1),
+                        TimerReadyAllowance::NONE
+                    )
+                    .is_none()
+            );
+            let ready = scheduler
+                .take_next_ready(deadline, TimerReadyAllowance::NONE)
+                .unwrap();
+            assert_eq!(ready.id, id);
+            assert_eq!(ready.delay_ms, delay_ms);
+            assert!(scheduler.reschedule_running_after(id, ready.payload, delay_ms, deadline));
+            assert_eq!(
+                scheduler.next_deadline(),
+                Some(deadline + Duration::from_millis(delay_ms))
+            );
+            assert!(scheduler.cancel(id));
+            assert_eq!(scheduler.pending_count(), 0);
+        }
     }
 
     #[test]

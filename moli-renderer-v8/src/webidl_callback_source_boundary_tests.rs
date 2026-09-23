@@ -124,11 +124,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::BrowserAlgorithm,
     ),
     allowed(
-        "native_bridge/abort/statics.rs",
-        2,
-        DirectCallOwner::BrowserAlgorithm,
-    ),
-    allowed(
         "network_host/body_source.rs",
         3,
         DirectCallOwner::BrowserAlgorithm,
@@ -143,7 +138,6 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         2,
         DirectCallOwner::BrowserAlgorithm,
     ),
-    allowed("worker/abort.rs", 2, DirectCallOwner::BrowserAlgorithm),
     allowed(
         "worker/timer_callback.rs",
         1,

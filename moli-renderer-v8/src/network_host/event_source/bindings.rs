@@ -393,7 +393,7 @@ pub(crate) fn schedule_event_source_connect<'s>(
     let timer_id = unsafe { &mut *host_ptr }.queue_timeout(
         scope,
         callback,
-        delay_ms.min(u32::MAX as u64) as u32,
+        delay_ms.min(u64::from(u32::MAX)),
         crate::host::HostTimerOwner::Window,
         Vec::new(),
     );
