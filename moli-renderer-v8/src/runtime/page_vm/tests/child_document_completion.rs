@@ -739,6 +739,7 @@ pub(super) fn stale_loaded_completion(
                     response_body: None,
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                 }),
             },
         ))),

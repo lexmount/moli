@@ -188,6 +188,7 @@ fn cors_redirect_referrer_never_recovers_stripped_information() -> Result<()> {
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             };
             assert_eq!(
@@ -241,6 +242,7 @@ fn cors_redirect_modes_precede_location_parsing() -> Result<()> {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 let result = redirects.advance(head, false, None);

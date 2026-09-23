@@ -1,5 +1,6 @@
 use moli_crypto::DigestAlgorithm;
 
+#[derive(PartialEq, Eq)]
 pub struct IntegrityMetadataHash<'a> {
     pub algorithm: DigestAlgorithm,
     pub digest: &'a str,

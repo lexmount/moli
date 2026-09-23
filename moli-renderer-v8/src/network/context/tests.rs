@@ -528,3 +528,53 @@ async fn dropping_unpublished_worker_authority_cancels_ordinary_loads() {
     assert!(cancel.is_cancelled());
     assert!(load.is_cancelled());
 }
+
+#[tokio::test]
+async fn document_preloads_survive_transport_replacement_and_open_but_not_new_documents() {
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let first = document_loader(transport.clone(), 1, "https://example.test/page");
+    let request = moli_fetch::Request::new("GET", "https://example.test/asset", None, vec![])
+        .unwrap()
+        .with_page_network_policy()
+        .with_request_mode(moli_fetch::RequestMode::NoCors)
+        .with_browser_request_metadata(moli_fetch::BrowserRequestMetadata::Script);
+    let producer = first
+        .request_client()
+        .register_document_preload(&request)
+        .unwrap();
+    // A preload lookup is independent of whether the network transport can
+    // currently make a request, both on a miss and when consuming a response.
+    transport.set_network_offline(true);
+    let other = first.fork_for_document(context(2, "https://example.test/page"));
+    assert!(
+        other
+            .request_client()
+            .consume_document_preload(&request)
+            .is_none()
+    );
+    let replaced = first.with_replacement_transport(transport.handle());
+    let opened = DocumentResourceLoader::for_document_open(
+        context(3, "https://example.test/page"),
+        super::document::DocumentResourceAuthoritySource::Inherited(replaced.clone()),
+        &replaced,
+    );
+    first.begin_detach();
+    let captured = opened.request_client().frozen_request_client();
+    let consumer = captured.consume_document_preload(&request).unwrap();
+    producer.complete(Err("retained preload failure".to_owned()));
+    assert_eq!(
+        consumer.response().await.unwrap_err(),
+        "retained preload failure"
+    );
+    let producer = opened
+        .request_client()
+        .register_document_preload(&request)
+        .unwrap();
+    let consumer = captured.consume_document_preload(&request).unwrap();
+    opened.begin_detach();
+    assert_eq!(
+        consumer.response().await.unwrap_err(),
+        "preload Document retired"
+    );
+    drop(producer);
+}

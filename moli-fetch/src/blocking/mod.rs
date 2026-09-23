@@ -74,6 +74,7 @@ pub struct StreamingHtmlResponseStart {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub preload_state: crate::ResponsePreloadState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     pub network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -91,6 +92,7 @@ impl StreamingHtmlResponseStart {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         }
     }

@@ -164,6 +164,7 @@ async fn prepare_browser_owned_error_page_navigation_with_engine_async(
         redirect_chain: Vec::new(),
         from_cache: false,
         cache_state: Default::default(),
+        preload_state: Default::default(),
         negotiated_http_version: None,
     };
     prepare_captured_document_response_with_engine_async(
@@ -1369,6 +1370,7 @@ fn decoded_data_url_navigation_response(
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             },
             decoded.body,
@@ -1464,6 +1466,7 @@ async fn load_inline_html_navigation_with_engine_async(
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             };
             prepare_navigation_from_captured_raw_response_with_engine_async(

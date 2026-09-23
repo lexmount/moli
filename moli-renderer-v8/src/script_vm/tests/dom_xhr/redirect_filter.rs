@@ -58,6 +58,7 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                                     redirect_chain: Vec::new(),
                                     from_cache: false,
                                     cache_state: Default::default(),
+                                    preload_state: Default::default(),
                                     negotiated_http_version: None,
                                 },
                                 "body".to_owned(),
