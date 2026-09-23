@@ -3483,9 +3483,9 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                 let pending = vm.take_pending_subresource_fetch_infos();
                 assert_eq!(pending.len(), 1);
                 let request = &pending[0];
-                let mut headers = vec![("Content-Type".to_owned(), mime.to_owned())];
+                let mut headers = vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())];
                 if let Some(header) = header {
-                    headers.push(("lAsT-mOdIfIeD".to_owned(), header.to_owned()));
+                    headers.push(("lAsT-mOdIfIeD".to_owned(), header.as_bytes().to_vec()));
                 }
                 let head = moli_fetch::ResponseHead {
                     final_url: request.url.clone(),

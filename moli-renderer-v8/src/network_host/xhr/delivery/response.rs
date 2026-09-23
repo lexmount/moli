@@ -601,7 +601,7 @@ fn parse_xhr_response_document<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     body_text: &str,
     mime: Option<&str>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> v8::Local<'s, v8::Value> {
     let Some(mime) =
         mime.filter(|mime| is_html_document_mime(mime) || is_dom_parser_xml_mime(mime))

@@ -15,6 +15,7 @@ pub(crate) fn websocket_proxy_route(
     .map_err(|error| error.to_string())
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn websocket_proxy_route_with_env(
     url: &Url,
     context: &ConnectOptions,
