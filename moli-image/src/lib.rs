@@ -21,7 +21,7 @@ pub use png::{
 pub use raster::{
     DecodedRasterImage, RasterDecodeError, RasterImageFormat, RasterImageMetadata,
     decode_raster_image, decode_raster_image_with_metadata, probe_raster_image,
-    raster_image_dimensions,
+    raster_image_dimensions, supports_image_mime_essence,
 };
 pub use rgba::{RgbaImage, RgbaImageError};
 pub use svg::{

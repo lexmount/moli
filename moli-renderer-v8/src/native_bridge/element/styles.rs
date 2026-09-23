@@ -579,7 +579,7 @@ pub(crate) fn iframe_handle_viewport(
     iframe_handle_viewport_with_depth(host, frame_handle, 0)
 }
 
-pub(in crate::native_bridge::element) fn style_viewport_for_document(
+pub(crate) fn style_viewport_for_document(
     host: &JsContextHost,
     document: DomHandle,
 ) -> StyleViewport {

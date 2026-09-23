@@ -371,7 +371,10 @@ pub fn stylesheet_preload_link_request(
     let element = document.stylesheet_element(native_node_id)?;
     if !element.is_html_element("link")
         || element.disabled
-        || !stylesheet_type_is_supported(element.type_attr.as_deref())
+        || element
+            .type_attr
+            .as_deref()
+            .is_some_and(|value| !value.is_empty() && !moli_web_mime::is_css_mime(value))
     {
         return None;
     }
@@ -890,5 +893,21 @@ mod tests {
         assert!(host.remove_attribute(link, "disabled"));
         assert!(host.set_attribute(link, "type", "text/plain"));
         assert!(stylesheet_preload_link_request(&host, node_id).is_none());
+
+        for value in [
+            "text/css; charset=UTF-8",
+            "\tTEXT/CSS \r\n",
+            "text/css;ignored",
+        ] {
+            assert!(host.set_attribute(link, "type", value));
+            assert!(
+                stylesheet_preload_link_request(&host, node_id).is_some(),
+                "CSS preload MIME hint {value:?} must select the typed stylesheet owner"
+            );
+        }
+        for value in [" ", "\u{a0}text/css", "text/css, text/css"] {
+            assert!(host.set_attribute(link, "type", value));
+            assert!(stylesheet_preload_link_request(&host, node_id).is_none());
+        }
     }
 }

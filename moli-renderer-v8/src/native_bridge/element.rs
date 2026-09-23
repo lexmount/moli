@@ -80,7 +80,7 @@ pub(crate) use styles::{
     STYLE_DECLARATION_TARGET_CONTEXT_EPOCH_SLOT, STYLE_DECLARATION_TARGET_EMPTY_COMPUTED_SLOT,
     STYLE_DECLARATION_VIEWPORT_HEIGHT_SLOT, STYLE_DECLARATION_VIEWPORT_WIDTH_SLOT,
     StyleObservation, computed_style_target_context, iframe_handle_viewport,
-    marker_pseudo_element_is_generated_for_document_snapshot,
+    marker_pseudo_element_is_generated_for_document_snapshot, style_viewport_for_document,
 };
 mod stylesheets;
 mod template_install;
