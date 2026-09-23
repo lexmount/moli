@@ -737,7 +737,10 @@ mod tests {
                     assert_eq!(
                         validate_cors_response_chain(
                             &origin,
-                            &header_response(response_url.clone(), headers.clone()),
+                            &header_response(
+                                response_url.clone(),
+                                moli_fetch::headers_from_byte_strings(&headers).unwrap()
+                            ),
                             mode
                         )
                         .is_ok(),
@@ -789,7 +792,10 @@ mod tests {
                 assert_eq!(
                     validate_cors_response_chain(
                         &document_url,
-                        &header_response(response_url.clone(), headers.clone()),
+                        &header_response(
+                            response_url.clone(),
+                            moli_fetch::headers_from_byte_strings(&headers).unwrap()
+                        ),
                         mode
                     )
                     .is_ok(),
@@ -799,7 +805,10 @@ mod tests {
                 assert!(
                     validate_cors_response_chain(
                         &document_url,
-                        &header_response(document_url.clone(), headers.clone()),
+                        &header_response(
+                            document_url.clone(),
+                            moli_fetch::headers_from_byte_strings(&headers).unwrap()
+                        ),
                         mode
                     )
                     .is_ok(),
