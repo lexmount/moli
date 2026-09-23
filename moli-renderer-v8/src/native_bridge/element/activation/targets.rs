@@ -396,7 +396,7 @@ fn navigate_element_popup_target<'s>(
         opener,
         None,
         target_name,
-        resolved_url,
+        Some(resolved_url),
         creator.base_url,
         creator.policy_container,
         false,
@@ -539,14 +539,13 @@ fn navigate_special_target_from_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source_window: v8::Local<'s, v8::Object>,
     target: Option<SpecialBrowsingContextTarget>,
-    resolved_url: &str,
+    resolved_url: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let target_window = special_target_window_from_window(scope, source_window, target)?;
-    let navigated = if resolved_url.is_empty() {
-        true
-    } else {
-        navigate_target_window_location(scope, target_window, resolved_url)
+    let Some(resolved_url) = resolved_url else {
+        return Some(target_window);
     };
+    let navigated = navigate_target_window_location(scope, target_window, resolved_url);
     if navigated { Some(target_window) } else { None }
 }
 
@@ -554,7 +553,7 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     source_window: v8::Local<'s, v8::Object>,
     target: SpecialBrowsingContextTarget,
-    resolved_url: &str,
+    resolved_url: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     assert_ne!(
         target,
@@ -596,7 +595,7 @@ pub(super) fn navigate_hyperlink_source_browsing_context(
                 scope,
                 source_window,
                 Some(SpecialBrowsingContextTarget::Current),
-                resolved_url,
+                Some(resolved_url),
             )
             .is_some()
         }

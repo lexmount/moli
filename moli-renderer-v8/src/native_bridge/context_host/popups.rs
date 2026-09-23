@@ -818,7 +818,7 @@ impl PageScriptHost {
         opener: Option<v8::Local<'s, v8::Object>>,
         opener_child_handle: Option<DomHandle>,
         target_name: &str,
-        href: &str,
+        href: Option<&str>,
         creator_base_url: Url,
         creator_policy_container: DocumentPolicyContainer,
         update_existing_opener: bool,
@@ -843,15 +843,21 @@ impl PageScriptHost {
                 record.opener = endpoint;
                 record.opener_window = Some(opener_window);
                 set_private_value(scope, window, LIGHTWEIGHT_POPUP_OPENER_SLOT, opener.into());
+                let endpoint =
+                    lightweight_popup_initiator_endpoint(scope, Some(opener), opener_child_handle);
+                if let Some(record) = self.lightweight_popup_record_mut(popup_id) {
+                    record.opener = endpoint;
+                    record.opener_window = Some(v8::Global::new(scope, opener));
+                }
             }
-            if href.is_empty() {
+            let Some(href) = href else {
                 return Some(OpenedLightweightPopup {
                     window,
                     popup_id,
                     created_new_browsing_context: false,
                     document_response: None,
                 });
-            }
+            };
             let (document_response, receiver) = self.auxiliary_document_response_channel(href);
             if let Some(window) = self.reopen_lightweight_popup_window(
                 scope,
@@ -871,7 +877,7 @@ impl PageScriptHost {
                 });
             }
         }
-        let href = if href.is_empty() { "about:blank" } else { href };
+        let href = href.unwrap_or("about:blank");
         let (document_response, receiver) = self.auxiliary_document_response_channel(href);
         let (window, popup_id) = self.create_lightweight_popup_window(
             scope,
