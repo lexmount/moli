@@ -150,7 +150,8 @@ pub(crate) use crypto::{
     crypto_key_clone_payload_from_object, crypto_key_object_from_clone_payload,
 };
 pub(crate) use css_fontface_runtime::{
-    load_font_faces_for_family, new_font_face_set, rebuild_font_face_set_faces,
+    complete_font_face_resource, load_font_faces_for_family, new_font_face_set,
+    rebuild_font_face_set_faces,
 };
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;

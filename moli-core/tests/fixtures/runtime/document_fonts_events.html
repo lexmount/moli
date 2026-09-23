@@ -16,18 +16,18 @@
 
       function onLoadingDone() {
         loadingDone += 1;
+        document.body.setAttribute('data-loading-a', String(loadingA));
+        document.body.setAttribute('data-loading-b', String(loadingB));
+        document.body.setAttribute('data-loadingdone', String(loadingDone));
       }
 
       document.fonts.addEventListener('loading', onLoadingA);
       document.fonts.addEventListener('loading', onLoadingB);
       document.fonts.addEventListener('loadingdone', onLoadingDone);
       document.fonts.removeEventListener('loading', onLoadingA);
-      document.fonts.add(new FontFace('Roboto', 'url(roboto.woff2)'));
+      globalThis.fontFixtureDone = new Promise(resolve => document.fonts.addEventListener('loadingdone', resolve, {once: true}));
+      document.fonts.add(new FontFace('Roboto', 'url(/compat/font.ttf)'));
       document.fonts.load('italic bold 16px Roboto');
-
-      document.body.setAttribute('data-loading-a', String(loadingA));
-      document.body.setAttribute('data-loading-b', String(loadingB));
-      document.body.setAttribute('data-loadingdone', String(loadingDone));
     </script>
   </body>
 </html>

@@ -352,6 +352,15 @@ fn parse_css_angle_degrees(value: &str) -> Option<f32> {
         .filter(|value| value.is_finite())
 }
 
+pub(crate) fn font_face_source_urls(source: &str, base_url: &Url) -> Vec<Url> {
+    moli_css_parse::normalize_font_face_src(source)
+        .and_then(|source| crate::css_style::top_level_comma_separated_component_values(&source))
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|source| preferred_font_source_url(source, base_url))
+        .collect()
+}
+
 fn preferred_font_source_url(source: &str, base_url: &Url) -> Option<Url> {
     let mut input = ParserInput::new(source);
     let mut input = Parser::new(&mut input);

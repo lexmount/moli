@@ -5,6 +5,7 @@
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
 <script src="/wpt/resources/WebIDLParser.js"></script>
 <script src="/wpt/resources/idlharness.js"></script>
+<script src="/wpt/ported/resources/font-fixture.js"></script>
 <script>
 idl_test([`
 enum FontFaceLoadStatus { "unloaded", "loading", "loaded", "error" };
@@ -58,13 +59,13 @@ dictionary FontFaceDescriptors {
   idlArray.enable_attribute_descriptor_assertions();
   idlArray.enable_object_brand_assertions();
   idlArray.add_objects({
-    FontFace: ["new FontFace('FixtureFace', 'url(fixture.woff2)')"],
+    FontFace: ["new FontFace('FixtureFace', fontFixtureSource)"],
     FontFaceSet: ["document.fonts"]
   });
 });
 
 promise_test(async function () {
-  const face = new FontFace("FixtureFace", "url(fixture.woff2)", {
+  const face = new FontFace("FixtureFace", fontFixtureSource, {
     style: "italic",
     weight: "700",
     stretch: "condensed",
@@ -86,7 +87,7 @@ promise_test(async function () {
   assert_equals(face.loaded, face.loaded);
   assert_equals(fonts.ready, fonts.ready);
   assert_equals(face.family, "FixtureFace");
-  assert_equals(face.source, "url(fixture.woff2)");
+  assert_equals(face.source, fontFixtureSource);
   assert_equals(face.status, "unloaded");
   assert_equals(await face.load(), face);
   assert_equals(await face.loaded, face);

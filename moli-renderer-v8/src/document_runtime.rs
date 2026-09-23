@@ -90,8 +90,8 @@ pub(crate) use script_lifecycle::{
 pub(crate) use security_policy::{
     DocumentConnectPolicySnapshot, DocumentContentSecurityPolicyCheck,
     DocumentContentSecurityPolicyViolation, DocumentNavigationEmbeddingContext,
-    DocumentSubresourceCspKind, create_content_security_policy_violation_event,
-    document_content_security_policy_error_message,
+    DocumentRequestPolicySnapshot, DocumentSubresourceCspKind,
+    create_content_security_policy_violation_event, document_content_security_policy_error_message,
 };
 pub(crate) use stylesheet_runtime::attribute_reprocesses_connected_stylesheet;
 #[cfg(test)]

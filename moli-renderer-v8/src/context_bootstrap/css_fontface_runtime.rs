@@ -28,7 +28,6 @@ pub(super) const FONT_FACE_LOADED_SLOT: &str = "__moliFontFaceLoaded";
 pub(super) const FONT_FACE_LOADED_RESOLVER_SLOT: &str = "__moliFontFaceLoadedResolver";
 pub(super) const FONT_FACE_ERROR_SLOT: &str = "__moliFontFaceError";
 pub(super) const FONT_FACE_SET_OWNERS_SLOT: &str = "__moliFontFaceSetOwners";
-pub(super) const FONT_FACE_LOAD_NOTIFICATION_SENT_SLOT: &str = "__moliFontFaceLoadNotificationSent";
 pub(super) const FONT_FACE_SET_MANUAL_FACES_SLOT: &str = "__moliFontFaceSetManualFaces";
 pub(super) const FONT_FACE_SET_CONNECTED_FACES_SLOT: &str = "__moliFontFaceSetConnectedFaces";
 pub(super) const FONT_FACE_SET_STATUS_SLOT: &str = "__moliFontFaceSetStatus";
@@ -39,6 +38,7 @@ const FONT_FACE_SET_LISTENERS_SLOT: &str = "__moliFontFaceSetListeners";
 mod events;
 mod font_face;
 mod font_face_set;
+mod font_loading;
 mod query;
 mod storage;
 
@@ -56,6 +56,7 @@ pub(super) use font_face_set::{
     font_face_set_has_callback, font_face_set_keys_callback, font_face_set_load_callback,
     font_face_set_values_callback,
 };
+pub(crate) use font_loading::complete_font_face_resource;
 pub(super) use storage::install_font_face_set_template_accessors;
 pub(crate) use storage::new_font_face_set;
 pub(crate) use storage::rebuild_font_face_set_faces;

@@ -10,6 +10,7 @@ mod csp_reports;
 mod event_source;
 mod fetch;
 mod fetch_surface;
+mod font_face;
 mod headers;
 mod image;
 mod js_values;
@@ -116,6 +117,7 @@ pub(in crate::network_host) use self::fetch_surface::{
     set_request_slot_bool, set_response_slot_value,
 };
 pub(crate) use self::fetch_surface::{mark_response_headers_immutable, set_response_slot_string};
+pub(crate) use self::font_face::{font_face_base_url, start_font_face_resource_fetch};
 pub(crate) use self::headers::headers_constructor_callback;
 pub(crate) use self::headers::install_headers_template_bindings;
 pub(crate) use self::headers::{

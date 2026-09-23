@@ -2345,10 +2345,15 @@ async fn window_css_exposes_escape_and_supports() -> Result<()> {
 #[tokio::test]
 async fn document_fonts_remove_event_listener_keeps_other_event_types_intact() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/document-fonts-events"))
+        .await?;
+
+    page.evaluate_runtime_expression_with_await_async("fontFixtureDone", true)
         .await?;
 
     assert!(
@@ -4036,10 +4041,15 @@ async fn chrome_media_query_list_add_and_remove_listener_cover_wpt_subset() -> R
 #[tokio::test]
 async fn chrome_fontfaceset_event_handlers_fire_in_loading_then_done_order_subset() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
 
-    let page = browser
+    let mut page = browser
         .fetch(&server.url("/compat/chrome-fontfaceset-events-subset"))
+        .await?;
+
+    page.evaluate_runtime_expression_with_await_async("fontFixtureDone", true)
         .await?;
 
     assert!(
@@ -4878,7 +4888,9 @@ async fn servo_fontfaceset_delete_and_clear_do_not_remove_css_connected_faces() 
 #[tokio::test]
 async fn servo_fontfaceset_load_replaces_ready_and_rejects_css_wide_keywords() -> Result<()> {
     let server = FixtureServer::spawn().await?;
-    let browser = Browser::new(AppConfig::default())?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
 
     let page = browser
         .fetch(&server.url("/compat/servo-fontfaceset-load-ready"))

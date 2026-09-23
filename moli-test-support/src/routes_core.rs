@@ -1419,6 +1419,14 @@ pub(super) async fn servo_fontfaceset_load_ready_page() -> Html<&'static str> {
     Html(SERVO_FONTFACESET_LOAD_READY_HTML)
 }
 
+pub(super) async fn font_loading_fixture() -> Response {
+    (
+        [(CONTENT_TYPE, HeaderValue::from_static("font/ttf"))],
+        include_bytes!("../../moli-layout/tests/fixtures/moli-ahem.ttf").as_slice(),
+    )
+        .into_response()
+}
+
 pub(super) async fn servo_fontfaceset_empty_family_load_page() -> Html<&'static str> {
     Html(SERVO_FONTFACESET_EMPTY_FAMILY_LOAD_HTML)
 }

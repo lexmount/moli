@@ -937,6 +937,12 @@ fn validate_registered_font(
         .ok_or(WebFontRegistrationError::UnsupportedPayload)
 }
 
+/// Validates a downloaded font without registering it in a document's layout.
+pub fn validate_web_font_bytes(bytes: &[u8]) -> Result<(), WebFontRegistrationError> {
+    let decoded = decode_web_font_bytes(bytes)?;
+    validate_registered_font(&WebFontFace::new("FontFace"), decoded)
+}
+
 fn decode_web_font_bytes(bytes: &[u8]) -> Result<Arc<[u8]>, WebFontRegistrationError> {
     let decoded = match bytes.get(..4) {
         Some(b"wOFF") => wuff::decompress_woff1(bytes)

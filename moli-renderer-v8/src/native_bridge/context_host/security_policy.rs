@@ -1199,8 +1199,24 @@ impl JsContextHost {
         handle: DomHandle,
         violation: &DocumentContentSecurityPolicyViolation,
     ) {
-        if let Err(error) = self
-            .dispatch_child_content_security_policy_violation_event(scope, handle, violation, false)
+        let Some(document) = self.child_browsing_context_document_handle(handle) else {
+            return;
+        };
+        let Some(owner) = self.current_child_document_task_owner(handle) else {
+            return;
+        };
+        let host_ptr: *mut JsContextHost = self;
+        // Preserve the source Document as the event target and enqueue the
+        // event on its lifecycle, just as for a top-level Document.
+        if let Err(error) = unsafe { &mut *self.runtime }
+            .queue_content_security_policy_violation_event_for_target(
+                scope,
+                host_ptr,
+                Some(document),
+                violation,
+                false,
+                Some(owner),
+            )
         {
             tracing::error!(
                 blocked_uri = violation.blocked_uri.as_str(),

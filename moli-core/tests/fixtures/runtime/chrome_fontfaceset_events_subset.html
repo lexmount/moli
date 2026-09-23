@@ -8,11 +8,13 @@
       document.fonts.onloading = (event) => events.push(event.type);
       document.fonts.onloadingdone = (event) => events.push(event.type);
       document.fonts.onloadingerror = (event) => events.push(event.type);
-      document.fonts.add(new FontFace('FixtureFace', 'url(fixture.woff2)'));
+      const done = new Promise(resolve => document.fonts.addEventListener('loadingdone', resolve, {once: true}));
+      document.fonts.add(new FontFace('FixtureFace', 'url(/compat/font.ttf)'));
 
-      document.fonts
+      globalThis.fontFixtureDone = document.fonts
         .load('10px FixtureFace')
         .then(() => document.fonts.ready)
+        .then(() => done)
         .then(() => {
           body.setAttribute('data-order', events.join(','));
           body.setAttribute('data-count', String(events.length));
