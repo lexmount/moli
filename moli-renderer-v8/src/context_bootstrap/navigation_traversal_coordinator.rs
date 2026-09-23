@@ -554,9 +554,6 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
             moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
         );
     }
-    for (_, entry) in &applied {
-        apply::finish_history_entry_commit(scope, entry);
-    }
     if targets.is_empty() {
         super::session_history_traversal::finish_entry(scope, owner, None);
     }

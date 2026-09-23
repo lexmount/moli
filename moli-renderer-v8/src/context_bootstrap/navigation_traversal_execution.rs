@@ -362,6 +362,7 @@ pub(crate) fn apply_authorized_history_traversal_task(
     host: &mut JsContextHost,
     action: PendingHistoryTraversalAction,
 ) {
+    let popup = host.history_traversal_popup(&action);
     match action {
         PendingHistoryTraversalAction::ByDelta {
             target,
@@ -390,6 +391,19 @@ pub(crate) fn apply_authorized_history_traversal_task(
                 },
             );
         }
+    }
+    resume_pending_history_traversals(scope, host, popup);
+}
+
+pub(crate) fn resume_pending_history_traversals(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &mut JsContextHost,
+    popup: Option<u64>,
+) {
+    // Rejected or no-op requests never open a commit barrier. They must still
+    // release the next request in this traversable's queue.
+    for producer in host.resume_pending_history_traversals(popup) {
+        route_history_traversal_task(scope, host, producer);
     }
 }
 
