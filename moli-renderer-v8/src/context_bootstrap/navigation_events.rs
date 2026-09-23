@@ -518,6 +518,10 @@ pub(super) fn dispatch_popstate_event<'s>(
     owner: v8::Local<'s, v8::Object>,
     state: v8::Local<'s, v8::Value>,
 ) {
+    let context = owner
+        .get_creation_context(scope)
+        .unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
     let Some(event) = construct_native_popstate_event(scope, state) else {
         return;
     };
