@@ -4,6 +4,7 @@ mod blob_mime;
 mod computed_style;
 mod cssom;
 mod dom;
+mod file_input;
 mod forms;
 mod misc;
 mod no_cors_redirect;
