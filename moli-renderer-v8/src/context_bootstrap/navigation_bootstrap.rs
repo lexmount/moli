@@ -110,7 +110,6 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
         });
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, initial_seed.current_index);
-    super::session_history::initialize(scope, window, &initial_seed);
     set_private_value(scope, window, WINDOW_HISTORY_SLOT, history.into());
 
     let navigation = match window_runtime_object(scope, window, WINDOW_NAVIGATION_SLOT) {

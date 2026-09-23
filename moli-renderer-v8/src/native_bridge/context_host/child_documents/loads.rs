@@ -181,6 +181,10 @@ impl JsContextHost {
         self.pending_child_document_navigations.insert(
             load_id,
             PendingChildDocumentNavigation {
+                admitted_history_entry: self
+                    .child_browsing_contexts
+                    .get(&handle)
+                    .and_then(|entry| entry.navigation_entry_seed().session_history.admitted_entry),
                 target,
                 target_url: target_url.clone(),
                 resource_loader: resource_loader.clone(),
@@ -401,6 +405,37 @@ impl JsContextHost {
             handle,
             target.load_id(),
         );
+        if pending
+            .admitted_history_entry
+            .as_ref()
+            .is_some_and(|entry| {
+                !self
+                    .session_histories
+                    .entry_is_current(super::super::OwnerDispatchScope::Child(handle), entry)
+            })
+        {
+            // Author navigation while the response was in flight superseded
+            // this participant. It cannot restore an old view or joint cursor.
+            self.clear_child_browsing_context_pending_navigation(handle);
+            if let Some(entry) = self.child_browsing_contexts.get_mut(&handle)
+                && entry.navigation_entry_seed().session_history.admitted_entry
+                    == pending.admitted_history_entry
+            {
+                entry.restore_navigation_entry_seed_from_committed();
+            }
+            self.clear_pending_service_worker_child_client_if_matches(
+                handle,
+                pending.reserved_service_worker_client_id,
+            );
+            let _ = self.finish_child_frame_navigation_without_load_dispatch(
+                handle,
+                target.navigation_load(),
+            );
+            return ChildDocumentLoadApplication::SupersededDuringApplication {
+                completion: ChildDocumentLoadCompletion::new(target, network_attribution, result),
+                body_activity: ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
+            };
+        }
         let result = match result {
             Ok(ChildDocumentLoadOutcome::Loaded(mut loaded)) => {
                 if self.bypass_content_security_policy() {

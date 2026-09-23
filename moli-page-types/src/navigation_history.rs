@@ -310,7 +310,10 @@ pub fn apply_child_browsing_context_navigation_to_entry_seed(
     history_state_json: Option<String>,
     navigation_state_json: Option<String>,
 ) {
-    seed.session_history.commit = crate::SessionHistoryCommit::Push;
+    seed.session_history = crate::SessionHistorySeed {
+        commit: crate::SessionHistoryCommit::Push,
+        ..Default::default()
+    };
     let next_index = seed.current_index + 1;
     let current_navigation_index = seed
         .entries
@@ -368,7 +371,10 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
     history_state_json: Option<String>,
     navigation_state_json: Option<String>,
 ) {
-    seed.session_history.commit = crate::SessionHistoryCommit::Replace;
+    seed.session_history = crate::SessionHistorySeed {
+        commit: crate::SessionHistoryCommit::Replace,
+        ..Default::default()
+    };
     let current_index = seed.current_index;
     let current_navigation_index = seed
         .entries
@@ -412,7 +418,10 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
 pub fn apply_child_browsing_context_javascript_url_navigation_to_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
 ) {
-    seed.session_history.commit = crate::SessionHistoryCommit::Replace;
+    seed.session_history = crate::SessionHistorySeed {
+        commit: crate::SessionHistoryCommit::Replace,
+        ..Default::default()
+    };
     let current_index = seed.current_index;
     let Some(previous_entry) = seed
         .entries

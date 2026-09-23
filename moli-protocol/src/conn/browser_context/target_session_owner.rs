@@ -2390,6 +2390,15 @@ impl CdpConnection {
             .owner_state
             .navigation_history_state
             .snapshot();
+        if (index, entries.len()) != (update.position.index(), update.position.length()) {
+            tracing::error!(
+                browser_index = index,
+                browser_length = entries.len(),
+                renderer_index = update.position.index(),
+                renderer_length = update.position.length(),
+                "browser and renderer joint history positions diverged"
+            );
+        }
         debug_assert_eq!(
             (index, entries.len()),
             (update.position.index(), update.position.length()),

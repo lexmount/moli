@@ -33,7 +33,12 @@ pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
     history_index: u32,
     entry: v8::Local<'s, v8::Object>,
     previous_entry: Option<v8::Local<'s, v8::Object>>,
-    additional: Vec<AppliedHistoryEntry<'s>>,
+}
+
+pub(in crate::context_bootstrap) struct PreparedHistoryEntry<'s> {
+    history: v8::Local<'s, v8::Object>,
+    location: v8::Local<'s, v8::Object>,
+    applied: AppliedHistoryEntry<'s>,
 }
 
 pub(in crate::context_bootstrap) fn apply_history_entry<'s>(
@@ -98,34 +103,13 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
         Some(step) => super::super::session_history::targets_at(scope, owner, step)?,
         None => Vec::new(),
     };
-    let mut additional = Vec::new();
-    let mut cross_document = Vec::new();
-    for target in targets {
-        if target.history.strict_equals(history.into()) {
-            continue;
-        }
-        let entries = history_entries(scope, target.history)?;
-        let current = entries
-            .get_index(scope, target.current_index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-        let next = entries
-            .get_index(scope, target.target_index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-        if !navigation_entries_share_document(scope, current, next) {
-            cross_document.push(target);
-            continue;
-        }
-        if let Some(navigation) = window_navigation_for_holder(scope, target.owner)
-            && !super::super::navigation_events::dispatch_navigation_traverse_event(
-                scope,
-                navigation,
-                target.history,
-                target.target_index,
-            )
-        {
-            return None;
-        }
-        additional.push(target);
+    // The multi-participant coordinator admits and commits complete plans.
+    // This path is only the specialized single same-Document executor.
+    if targets
+        .iter()
+        .any(|target| !target.history.strict_equals(history.into()))
+    {
+        return None;
     }
     // Admission can run script, so validate the stable step again before any
     // local entry is changed. Forward pruning invalidates it atomically.
@@ -146,20 +130,14 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
             return None;
         }
     }
+    let prepared = prepare_local_history_entry_commit(scope, history, index)?;
     let delta = match step {
         Some(step) => Some(super::super::session_history::commit_traversal(
             scope, owner, step,
         )?),
         None => None,
     };
-    let mut applied = apply_local_history_entry_commit(scope, history, index)?;
-    for target in additional {
-        if let Some(entry) =
-            apply_local_history_entry_commit(scope, target.history, target.target_index)
-        {
-            applied.additional.push(entry);
-        }
-    }
+    let applied = commit_prepared_history_entry(scope, prepared);
     if let Some(delta) = delta.filter(|delta| *delta != 0) {
         super::super::session_history::publish(
             scope,
@@ -167,19 +145,15 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
             moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
         );
     }
-    for target in cross_document {
-        super::super::navigation_traversal_execution::queue_history_traversal_without_result(
-            scope, target,
-        );
-    }
     Some(applied)
 }
 
-fn apply_local_history_entry_commit<'s>(
+/// Resolve every fallible input before any participant changes its live view.
+pub(in crate::context_bootstrap) fn prepare_local_history_entry_commit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     index: u32,
-) -> Option<AppliedHistoryEntry<'s>> {
+) -> Option<PreparedHistoryEntry<'s>> {
     let owner = runtime_window_owner(scope, history);
     let previous_history_index = history_index(scope, history);
     let previous_entry = navigation_current_entry(scope, owner);
@@ -192,41 +166,51 @@ fn apply_local_history_entry_commit<'s>(
     let state = super::super::navigation_entry_state::clone_history_entry_state(scope, entry)
         .unwrap_or_else(|| v8::null(scope).into());
     let url = navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
-    set_history_index(scope, history, index);
-    set_history_state(scope, history, state);
-
     let location = window_location_for_holder(scope, owner)?;
-    sync_location_object(scope, location, &url);
-    let Ok(parsed_url) = url::Url::parse(&url) else {
-        return None;
-    };
-    sync_navigation_current_entry_from_history_entry(scope, owner, entry);
-    let resolved_entry = navigation_current_entry(scope, owner)
-        .map(v8::Local::<v8::Value>::from)
-        .unwrap_or_else(|| v8::undefined(scope).into());
-    sync_child_navigation_entry_seed_from_owner(scope, owner);
-    Some(AppliedHistoryEntry {
-        owner,
-        state,
-        old_url,
-        url,
-        parsed_url,
-        resolved_entry,
-        previous_history_index,
-        history_index: index,
-        entry,
-        previous_entry,
-        additional: Vec::new(),
+    let parsed_url = url::Url::parse(&url).ok()?;
+    Some(PreparedHistoryEntry {
+        history,
+        location,
+        applied: AppliedHistoryEntry {
+            owner,
+            state,
+            old_url,
+            url,
+            parsed_url,
+            resolved_entry: v8::undefined(scope).into(),
+            previous_history_index,
+            history_index: index,
+            entry,
+            previous_entry,
+        },
     })
+}
+
+/// No author callbacks or fallible lookups are allowed in the commit phase.
+pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    prepared: PreparedHistoryEntry<'s>,
+) -> AppliedHistoryEntry<'s> {
+    let PreparedHistoryEntry {
+        history,
+        location,
+        mut applied,
+    } = prepared;
+    set_history_index(scope, history, applied.history_index);
+    set_history_state(scope, history, applied.state);
+    sync_location_object(scope, location, &applied.url);
+    sync_navigation_current_entry_from_history_entry(scope, applied.owner, applied.entry);
+    applied.resolved_entry = navigation_current_entry(scope, applied.owner)
+        .map(Into::into)
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    sync_child_navigation_entry_seed_from_owner(scope, applied.owner);
+    applied
 }
 
 pub(in crate::context_bootstrap) fn dispatch_history_entry_currententrychange<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     applied: &AppliedHistoryEntry<'s>,
 ) {
-    for other in &applied.additional {
-        dispatch_history_entry_currententrychange(scope, other);
-    }
     if !navigation_document_has_opaque_origin(scope, applied.owner)
         && let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
     {
@@ -244,9 +228,6 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
     applied: &AppliedHistoryEntry<'s>,
     dispatch_popstate: bool,
 ) {
-    for other in &applied.additional {
-        dispatch_history_entry_post_commit_events(scope, other, dispatch_popstate);
-    }
     if runtime_window_is_global(scope, applied.owner) {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return;

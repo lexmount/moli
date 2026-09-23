@@ -56,6 +56,7 @@ mod navigation_entry_state;
 mod navigation_events;
 mod navigation_handler_callbacks;
 mod navigation_history_pruning;
+mod navigation_joint_traversal;
 mod navigation_lifecycle;
 mod navigation_mutation;
 mod navigation_projection;
@@ -324,8 +325,8 @@ pub(crate) use self::navigation_events::dispatch_cross_document_navigation_navig
 pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_event_for_window;
 pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
-    install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
-    install_navigation_entry_view_for_holder,
+    commit_navigation_history_for_document, install_navigation_bootstrap_entry,
+    install_navigation_bootstrap_entry_for_holder, install_navigation_entry_view_for_holder,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;

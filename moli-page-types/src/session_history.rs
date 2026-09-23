@@ -94,6 +94,9 @@ pub struct SessionHistorySeed {
     pub commit: SessionHistoryCommit,
     pub traversable: Option<Box<JointSessionHistory>>,
     pub target_step: Option<SessionHistoryStepId>,
+    /// A cross-Document participant of an already accepted joint traversal.
+    /// Its load may materialize this entry, but may not move the shared cursor.
+    pub admitted_entry: Option<SessionHistoryEntry>,
 }
 
 /// One already-committed traversable mutation, published in renderer FIFO

@@ -1,7 +1,7 @@
 mod admission;
-mod apply;
+pub(super) mod apply;
 mod results;
-mod traversal;
+pub(super) mod traversal;
 
 pub(super) use self::admission::require_fully_active_history_owner;
 pub(super) use self::apply::apply_history_entry;

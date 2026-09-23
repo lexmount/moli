@@ -236,21 +236,43 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     host: &mut JsContextHost,
     mut traversal: PendingHistoryTraversal,
 ) {
-    // Earlier queued work can already have installed this frame's entry while
-    // other participants still need to move to the requested joint step.
-    if traversal.results.is_empty()
-        && let Some(step) = traversal.joint_step
-        && let Some(owner) = history_traversal_target_window(scope, host, traversal.target)
-        && let Some(target) = super::super::session_history::targets_at(scope, owner, step)
-            .and_then(|targets| targets.into_iter().next())
-        && let Some(exact) = window_task_target_for_runtime_owner(scope, host, target.owner)
-    {
-        traversal.target = exact;
-        traversal.target_index = target.target_index;
-        traversal.target_key = history_entries(scope, target.history)
-            .and_then(|entries| entries.get_index(scope, target.target_index))
-            .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
-            .and_then(|entry| navigation_entry_key_value(scope, entry));
+    if let Some(step) = traversal.joint_step {
+        let Some(owner) = history_traversal_target_window(scope, host, traversal.target) else {
+            let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
+            reject_pending_navigation_results(scope, &traversal.results, error);
+            return;
+        };
+        let Some(plan) = super::super::navigation_traversal_plan::JointTraversalPlan::resolve(
+            scope, owner, step,
+        ) else {
+            let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
+            reject_pending_navigation_results(scope, &traversal.results, error);
+            return;
+        };
+        if super::super::navigation_joint_traversal::requires_joint_execution(scope, &plan) {
+            let info = traversal
+                .info
+                .as_ref()
+                .map(|info| v8::Local::new(scope, info));
+            super::super::navigation_joint_traversal::execute(
+                scope,
+                plan,
+                info,
+                &traversal.results,
+            );
+            return;
+        }
+        if traversal.results.is_empty()
+            && let [target] = plan.targets.as_slice()
+            && let Some(exact) = window_task_target_for_runtime_owner(scope, host, target.owner)
+        {
+            traversal.target = exact;
+            traversal.target_index = target.target_index;
+            traversal.target_key = history_entries(scope, target.history)
+                .and_then(|entries| entries.get_index(scope, target.target_index))
+                .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
+                .and_then(|entry| navigation_entry_key_value(scope, entry));
+        }
     }
     let results = traversal.results;
     let history = history_traversal_target_window(scope, host, traversal.target)
@@ -466,6 +488,86 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     resolve_pending_navigation_results(scope, results, resolved_entry);
 }
 
+pub(in crate::context_bootstrap) fn prepare_joint_history_participant<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    applied: &super::apply::AppliedHistoryEntry<'s>,
+    outcome: &NavigationDispatchOutcome<'s>,
+    finished_resolvers: v8::Local<'s, v8::Array>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if !outcome.intercepted {
+        return None;
+    }
+    let navigation = window_navigation_for_holder(scope, applied.owner)?;
+    Some(set_active_traversal_intercept_settlement(
+        scope,
+        navigation,
+        outcome.signal,
+        finished_resolvers,
+        applied.resolved_entry,
+        &applied.url,
+    ))
+}
+
+pub(in crate::context_bootstrap) fn finish_joint_history_participant<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    applied: &super::apply::AppliedHistoryEntry<'s>,
+    outcome: NavigationDispatchOutcome<'s>,
+    finished_resolvers: v8::Local<'s, v8::Array>,
+    settlement: Option<v8::Local<'s, v8::Object>>,
+) {
+    if settlement.is_some_and(|data| !traversal_intercept_is_active(scope, data.into())) {
+        return;
+    }
+    let Some(navigation) = window_navigation_for_holder(scope, applied.owner) else {
+        dispatch_history_entry_post_commit_events(scope, applied, true);
+        resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
+        return;
+    };
+    let (error, result) = if outcome.intercepted {
+        if let Some(event) = outcome.precommit_event {
+            run_navigation_precommit_deferred_handlers(scope, event)
+        } else {
+            (outcome.intercept_error, outcome.intercept_result)
+        }
+    } else {
+        (None, None)
+    };
+    suppress_intercept_result_unhandled_rejection(scope, result);
+    dispatch_history_entry_post_commit_events(scope, applied, true);
+    if let Some(data) = settlement {
+        if !traversal_intercept_is_active(scope, data.into()) {
+            return;
+        }
+        set_traversal_intercept_inactive(scope, navigation, data.into());
+    }
+    if let Some(error) = error {
+        finish_navigation_error_events(scope, navigation, error, &applied.url);
+        reject_resolver_array(scope, finished_resolvers, error, true);
+        if let Some(signal) = outcome.signal
+            && let Some(host) = context_host_ptr_from_global_bridge(scope)
+        {
+            unsafe { &mut *host }.abort_signal(scope, signal, error);
+        }
+        return;
+    }
+    if let Some(result) = result
+        && queue_pending_traversal_intercept_settlement(
+            scope,
+            navigation,
+            outcome.signal,
+            finished_resolvers,
+            applied.resolved_entry,
+            &applied.url,
+            result,
+        )
+    {
+        return;
+    }
+    perform_navigation_scroll_if_needed(scope, navigation, &applied.url, true);
+    dispatch_navigation_success(scope, navigation);
+    resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
+}
+
 fn history_traversal_target_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &mut JsContextHost,
@@ -567,7 +669,7 @@ fn queue_pending_precommit_history_traversal<'s>(
     .is_some()
 }
 
-fn pending_result_resolver_arrays<'s>(
+pub(in crate::context_bootstrap) fn pending_result_resolver_arrays<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     results: &[crate::native_bridge::PendingNavigationResult],
 ) -> (v8::Local<'s, v8::Array>, v8::Local<'s, v8::Array>) {
@@ -666,6 +768,9 @@ pub(in crate::context_bootstrap) fn cancel_pending_precommit_history_traversal<'
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> bool {
+    if super::super::navigation_joint_traversal::cancel_pending(scope, navigation) {
+        return true;
+    }
     let Some(data) = navigation_pending_traversal_precommit(scope, navigation)
         .filter(|data| traversal_precommit_is_active(scope, (*data).into()))
     else {
@@ -1047,7 +1152,7 @@ fn traversal_intercept_rejected_callback<'s>(
     reject_resolver_array(scope, finished_resolvers, error, true);
 }
 
-fn resolve_resolver_array<'s>(
+pub(in crate::context_bootstrap) fn resolve_resolver_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolvers: v8::Local<'s, v8::Array>,
     value: v8::Local<'s, v8::Value>,
@@ -1064,7 +1169,7 @@ fn resolve_resolver_array<'s>(
     }
 }
 
-fn reject_resolver_array<'s>(
+pub(in crate::context_bootstrap) fn reject_resolver_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resolvers: v8::Local<'s, v8::Array>,
     error: v8::Local<'s, v8::Value>,

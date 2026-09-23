@@ -11,6 +11,48 @@ use super::navigation_window::{
     window_history_for_holder,
 };
 
+pub(super) struct JointTraversalPlan<'s> {
+    pub(super) step: moli_page_types::SessionHistoryStepId,
+    pub(super) owner: v8::Local<'s, v8::Object>,
+    pub(super) targets: Vec<TraversalTarget<'s>>,
+}
+
+impl<'s> JointTraversalPlan<'s> {
+    pub(super) fn resolve(
+        scope: &mut v8::PinScope<'s, '_>,
+        owner: v8::Local<'s, v8::Object>,
+        step: moli_page_types::SessionHistoryStepId,
+    ) -> Option<Self> {
+        Some(Self {
+            step,
+            owner,
+            targets: super::session_history::targets_at(scope, owner, step)?,
+        })
+    }
+
+    pub(super) fn has_cross_document_root(&self, scope: &mut v8::PinScope<'s, '_>) -> bool {
+        self.cross_document_root_index(scope).is_some()
+    }
+
+    pub(super) fn cross_document_root_index(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+    ) -> Option<usize> {
+        self.targets.iter().position(|target| {
+            (super::navigation_window::runtime_window_is_global(scope, target.owner)
+                || crate::native_bridge::lightweight_popup_id_from_window(scope, target.owner)
+                    .is_some())
+                && super::navigation_seed::history_entry_seed_for_traversal(
+                    scope,
+                    target.owner,
+                    target.current_index,
+                    target.target_index,
+                )
+                .is_some()
+        })
+    }
+}
+
 pub(super) enum NavigationTraversalPlan<'s> {
     RejectInvalidState(&'static str),
     ResolveCurrentEntry(v8::Local<'s, v8::Object>),
@@ -115,11 +157,11 @@ pub(super) fn navigation_index_traversal_plan<'s>(
     }))
 }
 
-pub(super) fn history_delta_traversal_target<'s>(
+pub(super) fn history_delta_traversal_plan<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     delta: i64,
-) -> Option<TraversalTarget<'s>> {
+) -> Option<JointTraversalPlan<'s>> {
     let owner = runtime_window_owner(scope, history);
     let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
     let binding = super::session_history::binding(scope, host, owner);
@@ -128,16 +170,5 @@ pub(super) fn history_delta_traversal_target<'s>(
         model.traverse(step);
     }
     let step = model.step_by_delta(delta)?;
-    let target = super::session_history::targets_at(scope, owner, step)?
-        .into_iter()
-        .next();
-    // Steps whose only changed frame has been detached still advance the
-    // traversable asynchronously, without a synthetic popstate or reload.
-    Some(target.unwrap_or_else(|| TraversalTarget {
-        owner,
-        history,
-        current_index: history_index(scope, history),
-        target_index: history_index(scope, history),
-        joint_step: Some(step),
-    }))
+    JointTraversalPlan::resolve(scope, owner, step)
 }

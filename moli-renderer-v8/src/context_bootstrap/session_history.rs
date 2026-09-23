@@ -116,7 +116,9 @@ pub(super) fn restore<'s>(
     };
     // The seed may be installed repeatedly while a child navigation loads.
     // Identity, rather than URL or list shape, makes the commit idempotent.
-    if history.entry(binding.context) == Some(&entry) {
+    if history.entry(binding.context) == Some(&entry)
+        || seed.session_history.admitted_entry.is_some()
+    {
         return;
     }
     let update = match seed.session_history.commit {

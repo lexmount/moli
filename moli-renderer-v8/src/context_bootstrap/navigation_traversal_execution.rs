@@ -355,6 +355,16 @@ pub(in crate::context_bootstrap) fn apply_pending_child_cross_document_traversal
         .info
         .as_ref()
         .map(|info| v8::Local::new(scope, info));
+    if let Some(step) = traversal.seed.session_history.target_step {
+        let Some(plan) =
+            super::navigation_traversal_plan::JointTraversalPlan::resolve(scope, owner, step)
+        else {
+            reject_child_cross_document_traversal(scope, &traversal);
+            return;
+        };
+        super::navigation_joint_traversal::execute(scope, plan, info, &traversal.results);
+        return;
+    }
     if !dispatch_child_cross_document_traverse_event(scope, &target, info) {
         reject_child_cross_document_traversal(scope, &traversal);
         return;

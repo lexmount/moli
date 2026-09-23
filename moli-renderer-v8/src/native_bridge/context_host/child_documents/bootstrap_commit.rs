@@ -18,6 +18,24 @@ impl JsContextHost {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
         }
+        if self
+            .child_browsing_contexts
+            .get(&handle)
+            .and_then(|entry| entry.navigation_entry_seed().session_history.admitted_entry)
+            .is_some_and(|entry| {
+                !self
+                    .session_histories
+                    .entry_is_current(super::super::OwnerDispatchScope::Child(handle), &entry)
+            })
+        {
+            self.clear_child_browsing_context_pending_navigation(handle);
+            if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+                entry.restore_navigation_entry_seed_from_committed();
+            }
+            let _ =
+                self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
+            return Some(ChildDocumentCommitResult::ready(None));
+        }
         let creation_kind = child_document_creation_kind_for_bootstrap(&bootstrap);
         if let Some(request_url) = child_document_frame_csp_request_url(&bootstrap) {
             if let Some(violation) =

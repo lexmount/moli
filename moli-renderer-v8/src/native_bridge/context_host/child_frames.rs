@@ -693,7 +693,42 @@ impl ChildBrowsingContextEntry {
         let same_document_update = committed_current_document_id.is_none()
             || committed_current_document_id == next_current_document_id
             || self.pending_attribute_bootstrap_commit;
-        self.navigation_entry_seed = entry_seed.clone();
+        let updates_outgoing_document = same_document_update
+            && entry_seed.session_history.commit == moli_page_types::SessionHistoryCommit::Attach
+            && self
+                .navigation_entry_seed
+                .session_history
+                .admitted_entry
+                .is_some()
+            && committed_current_document_id
+                != child_navigation_current_document_id(&self.navigation_entry_seed);
+        if updates_outgoing_document {
+            // An accepted traversal owns the destination and activation. State
+            // updates in the outgoing Document only refresh its retained entry;
+            // they cannot replace the pending destination with the live cursor.
+            if let Some(updated) = entry_seed
+                .entries
+                .iter()
+                .find(|entry| entry.history_index == entry_seed.current_index)
+            {
+                let refresh = |entry: &mut NavigationHistorySerializedEntry| {
+                    if entry.key == updated.key && entry.document_id == updated.document_id {
+                        *entry = updated.clone();
+                    }
+                };
+                for entry in &mut self.navigation_entry_seed.entries {
+                    refresh(entry);
+                }
+                if let Some(activation) = &mut self.navigation_entry_seed.activation {
+                    refresh(&mut activation.entry);
+                    if let Some(from) = &mut activation.from {
+                        refresh(from);
+                    }
+                }
+            }
+        } else {
+            self.navigation_entry_seed = entry_seed.clone();
+        }
         if same_document_update {
             self.committed_navigation_entry_seed = entry_seed;
             self.pending_attribute_bootstrap_commit = false;

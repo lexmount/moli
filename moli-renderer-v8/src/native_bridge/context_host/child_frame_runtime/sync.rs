@@ -94,12 +94,7 @@ impl JsContextHost {
         } else {
             sync_window_location_history_navigation_runtime_surface(scope, wrapper);
         }
-        install_navigation_entry_view_for_holder(
-            scope,
-            wrapper,
-            &visible_state.entry_seed,
-            visible_state.seed_is_committed,
-        );
+        install_navigation_entry_view_for_holder(scope, wrapper, &visible_state.entry_seed);
         let performance_navigation_type = self.child_performance_navigation_type(handle);
         let _ = bind_window_performance_seed(
             scope,
@@ -164,7 +159,7 @@ impl JsContextHost {
             wrapper,
             &current_entry.url,
         );
-        install_navigation_entry_view_for_holder(scope, wrapper, &entry_seed, false);
+        install_navigation_entry_view_for_holder(scope, wrapper, &entry_seed);
         let performance_navigation_type = self.child_performance_navigation_type(handle);
         let _ = bind_window_performance_seed(
             scope,

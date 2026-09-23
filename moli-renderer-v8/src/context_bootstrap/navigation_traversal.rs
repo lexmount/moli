@@ -12,9 +12,7 @@ use super::navigation_callbacks::{
     cancel_pending_precommit_same_document_navigation,
     queue_pending_precommit_same_document_navigation, settle_intercepted_same_document_navigation,
 };
-use super::navigation_entry::{
-    history_entries, history_index, navigation_current_entry, navigation_entries_share_document,
-};
+use super::navigation_entry::{history_entries, history_index, navigation_current_entry};
 use super::navigation_entry_state::{
     clone_navigation_entry_state, clone_navigation_state_arg_for_result,
 };
@@ -31,17 +29,15 @@ use super::navigation_result::{
     navigation_rejected_dom_exception_result, navigation_rejected_invalid_state_result,
     navigation_rejected_value_result, navigation_result_with_pending_commit,
 };
-use super::navigation_traversal_execution::{
-    queue_history_traversal_without_result, queue_navigation_traversal_with_result,
-};
+use super::navigation_traversal_execution::queue_navigation_traversal_with_result;
 use super::navigation_traversal_plan::{
-    NavigationTraversalPlan, history_delta_traversal_target, navigation_delta_traversal_plan,
+    NavigationTraversalPlan, history_delta_traversal_plan, navigation_delta_traversal_plan,
     navigation_index_traversal_plan,
 };
 use super::navigation_window::{
     navigation_document_can_update_current_entry, navigation_document_is_active,
-    navigation_unload_event_active, runtime_window_is_global, runtime_window_owner,
-    window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
+    navigation_unload_event_active, runtime_window_owner, window_history_for_holder,
+    window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
@@ -530,11 +526,11 @@ fn history_traverse<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) {
-    let Some(target) = history_delta_traversal_target(scope, history, delta) else {
+    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
         queue_browser_owned_top_level_history_traversal(scope, history, delta);
         return;
     };
-    queue_history_traversal_without_result(scope, target);
+    super::navigation_joint_traversal::queue_plan(scope, plan);
 }
 
 fn queue_browser_owned_top_level_history_traversal<'s>(
@@ -563,30 +559,13 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     let Some(history) = window_history_for_holder(scope, global) else {
         return false;
     };
-    let Some(target) = history_delta_traversal_target(scope, history, delta) else {
+    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
         return false;
     };
-    let Some(entries) = history_entries(scope, target.history) else {
-        return false;
-    };
-    let Some(current_entry) = entries
-        .get_index(scope, target.current_index)
-        .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
-    else {
-        return false;
-    };
-    let Some(target_entry) = entries
-        .get_index(scope, target.target_index)
-        .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
-    else {
-        return false;
-    };
-    if runtime_window_is_global(scope, target.owner)
-        && !navigation_entries_share_document(scope, current_entry, target_entry)
-    {
+    if plan.has_cross_document_root(scope) {
         return false;
     }
-    queue_history_traversal_without_result(scope, target);
+    super::navigation_joint_traversal::queue_plan(scope, plan);
     true
 }
 

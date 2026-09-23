@@ -119,6 +119,25 @@ impl JsContextHost {
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
+    pub(crate) fn cancel_joint_child_history_navigation(
+        &mut self,
+        handle: DomHandle,
+        step: moli_page_types::SessionHistoryStepId,
+    ) {
+        if self
+            .child_browsing_contexts
+            .get(&handle)
+            .is_some_and(|entry| {
+                entry.navigation_entry_seed().session_history.target_step == Some(step)
+            })
+        {
+            self.clear_child_browsing_context_pending_navigation(handle);
+            if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+                entry.restore_navigation_entry_seed_from_committed();
+            }
+        }
+    }
+
     pub(crate) fn queue_deferred_child_browsing_context_navigation_to_url(
         &mut self,
         handle: DomHandle,

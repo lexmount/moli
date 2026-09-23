@@ -27,16 +27,29 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     owner: v8::Local<'s, v8::Object>,
     entry_seed: &NavigationHistoryEntrySeed,
 ) {
-    install_navigation_entry_view_for_holder(scope, owner, entry_seed, true);
+    install_navigation_entry_view_for_holder(scope, owner, entry_seed);
+    commit_navigation_history_for_document(scope, owner, entry_seed);
 }
 
-/// A pending child navigation may expose its entry view before replacing the
-/// live Document. Only a committed seed advances the shared traversable.
+/// Document installation is the authoritative boundary, including commits
+/// that reuse an initial Window and therefore do not initialize a new realm.
+pub(crate) fn commit_navigation_history_for_document<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    entry_seed: &NavigationHistoryEntrySeed,
+) {
+    super::session_history::initialize(scope, owner, entry_seed);
+    super::session_history::restore(scope, owner, entry_seed);
+}
+
+/// Refresh a Document's projection without mutating the shared traversable.
+/// During an accepted cross-Document traversal this can still be the outgoing
+/// Document's view. Only document bootstrap or an explicit history operation
+/// may commit a session history transition.
 pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     entry_seed: &NavigationHistoryEntrySeed,
-    committed: bool,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -89,9 +102,6 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     });
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, entry_seed.current_index);
-    if committed {
-        super::session_history::restore(scope, owner, entry_seed);
-    }
     set_history_state(
         scope,
         history,

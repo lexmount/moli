@@ -12,6 +12,21 @@ pub(crate) struct RendererSessionHistories {
 }
 
 impl RendererSessionHistories {
+    pub(crate) fn entry_is_current(
+        &self,
+        owner: OwnerDispatchScope,
+        entry: &moli_page_types::SessionHistoryEntry,
+    ) -> bool {
+        let Some(context) = self.contexts.get(&owner).copied() else {
+            return false;
+        };
+        self.main.entry(context) == Some(entry)
+            || self
+                .popups
+                .values()
+                .any(|history| history.entry(context) == Some(entry))
+    }
+
     pub(crate) fn detach(&mut self, owner: OwnerDispatchScope) {
         if let Some(context) = self.contexts.remove(&owner) {
             self.main.detach(context);

@@ -381,6 +381,15 @@ impl JsContextHost {
             ),
             resource_authority,
         );
+        // A preserved initial LocalWindow may already have a history surface
+        // without running realm bootstrap again. Commit its Document seed here;
+        // subsequent view refreshes must never replay this history transition.
+        if let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
+            && let Some(entry) = self.child_browsing_contexts.get(&handle)
+        {
+            let seed = entry.committed_navigation_entry_seed();
+            crate::context_bootstrap::commit_navigation_history_for_document(scope, window, &seed);
+        }
         Some(owner_transition)
     }
 
