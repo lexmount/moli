@@ -3,8 +3,8 @@ pub(in crate::context_bootstrap) use crate::util::{
     array_contains_strict, array_push_value, get_own_static_property, get_private_value,
     global_constructor_object, global_constructor_prototype, object_bool_property,
     object_defined_string_property as object_string_property_defined,
-    object_own_static_bool_property, object_own_static_property_as_array, object_property_as_array,
-    object_property_as_object, object_string_property, set_private_value,
+    object_own_static_bool_property, object_property_as_array, object_property_as_object,
+    object_string_property, set_private_value,
 };
 
 pub(in crate::context_bootstrap) fn global_queue_array<'s>(
@@ -88,14 +88,6 @@ pub(in crate::context_bootstrap) fn object_own_hidden_value<'s>(
     key: &'static str,
 ) -> Option<v8::Local<'s, v8::Value>> {
     get_own_static_property(scope, object, key)
-}
-
-pub(in crate::context_bootstrap) fn object_hidden_array<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'_, v8::Object>,
-    key: &'static str,
-) -> Option<v8::Local<'s, v8::Array>> {
-    object_own_static_property_as_array(scope, object, key)
 }
 
 pub(in crate::context_bootstrap) fn object_hidden_bool(
