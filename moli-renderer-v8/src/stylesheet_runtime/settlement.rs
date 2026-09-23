@@ -86,7 +86,7 @@ impl DocumentRuntime {
                 }
             };
             let request_url = load.request_url().clone();
-            let prepared = if terminal.failed_integrity() {
+            let prepared = if terminal.failed_integrity() || terminal.is_consumed_preload_error() {
                 None
             } else {
                 host.prepare_linked_stylesheet_resource(

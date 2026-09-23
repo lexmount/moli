@@ -191,6 +191,18 @@ pub(crate) struct DocumentPreloadConsumer {
 }
 
 impl DocumentPreloadConsumer {
+    pub(crate) fn try_response(&self) -> Option<PreloadResult> {
+        self.entry.result.lock().clone().map(|result| {
+            result.map(|mut preload| {
+                preload.response.preload_state = moli_fetch::ResponsePreloadState::Consumed {
+                    filter: preload.response_filter.clone(),
+                    from_service_worker: preload.from_service_worker,
+                };
+                preload
+            })
+        })
+    }
+
     pub(crate) async fn into_completion(
         self,
         internal_id: u64,
@@ -231,14 +243,8 @@ impl DocumentPreloadConsumer {
             let notified = self.entry.available.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if let Some(result) = self.entry.result.lock().clone() {
-                return result.map(|mut preload| {
-                    preload.response.preload_state = moli_fetch::ResponsePreloadState::Consumed {
-                        filter: preload.response_filter.clone(),
-                        from_service_worker: preload.from_service_worker,
-                    };
-                    preload
-                });
+            if let Some(result) = self.try_response() {
+                return result;
             }
             notified.await;
         }
