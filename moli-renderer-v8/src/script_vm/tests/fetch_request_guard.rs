@@ -32,6 +32,7 @@ fn fetch_request_initializers_use_request_header_guards() {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         };
         vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {

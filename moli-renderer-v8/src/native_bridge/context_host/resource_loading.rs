@@ -3086,6 +3086,7 @@ impl JsContextHost {
                         redirect_chain: Vec::new(),
                         from_cache: info.from_cache,
                         cache_state: info.cache_state,
+                        preload_state: info.preload_state.clone(),
                         negotiated_http_version: None,
                     },
                 )
@@ -3132,6 +3133,7 @@ impl JsContextHost {
                         redirect_chain: Vec::new(),
                         from_cache: info.response_from_cache,
                         cache_state: info.response_cache_state,
+                        preload_state: info.response_preload_state.clone(),
                         negotiated_http_version: None,
                     },
                 )

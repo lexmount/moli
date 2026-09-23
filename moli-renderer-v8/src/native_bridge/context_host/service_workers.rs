@@ -1712,6 +1712,44 @@ impl JsContextHost {
         &self,
         dispatch: ServiceWorkerFetchDispatch,
     ) -> bool {
+        use crate::service_worker_runtime::ServiceWorkerRequestDestination as Destination;
+        use moli_fetch::BrowserRequestMetadata as Metadata;
+        let metadata = match dispatch.request.destination {
+            Destination::Script => Some(Metadata::Script),
+            Destination::Style => Some(Metadata::Style),
+            Destination::Image => Some(Metadata::Image),
+            Destination::Font => Some(Metadata::Font),
+            Destination::Track => Some(Metadata::TextTrack),
+            Destination::Empty => Some(Metadata::Fetch),
+            _ => None,
+        };
+        if let Some(metadata) = metadata {
+            let request = moli_fetch::Request::new_browser(
+                &dispatch.request.method,
+                dispatch.request.url.clone(),
+                dispatch.request.body.clone(),
+                moli_fetch::RequestHeaders::from_byte_strings(&dispatch.request.headers)
+                    .expect("service worker request headers are ByteStrings"),
+                dispatch.network_context.request_origin.clone(),
+            )
+            .with_initiator_url(&dispatch.network_context.document_url)
+            .with_request_mode(dispatch.request.request_mode)
+            .with_credentials_mode(dispatch.request.credentials_mode)
+            .with_browser_request_metadata(metadata)
+            .with_subresource_request_metadata(
+                moli_fetch::SubresourceRequestMetadata {
+                    integrity: Some(dispatch.request.metadata.integrity.clone()),
+                    ..Default::default()
+                },
+            );
+            if let Some(preload) = dispatch.request_client.consume_document_preload(&request) {
+                dispatch.resource_task_runner.spawn(async move {
+                    let completion = preload.into_completion(dispatch.internal_id, request).await;
+                    let _ = dispatch.completion_tx.send_async_subresource(completion);
+                });
+                return true;
+            }
+        }
         self.browser_context_runtime
             .dispatch_service_worker_fetch(dispatch)
     }

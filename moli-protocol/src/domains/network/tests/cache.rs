@@ -686,6 +686,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 b"body".to_vec(),

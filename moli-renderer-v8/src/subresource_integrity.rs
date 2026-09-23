@@ -1,9 +1,27 @@
 use base64::Engine;
 use moli_crypto::DigestAlgorithm;
 
+#[derive(PartialEq, Eq)]
 pub(crate) struct IntegrityMetadataHash<'a> {
     pub(crate) algorithm: DigestAlgorithm,
     pub(crate) digest: &'a str,
+}
+
+/// Preload consumption compares parsed metadata sets, including weaker hashes,
+/// while ignoring unknown algorithms, duplicate tokens, and unknown options.
+/// A consumer with no supported metadata can consume any matching preload,
+/// including one whose integrity check failed.
+pub(crate) fn integrity_metadata_allows_preload_consumption(
+    preload: &str,
+    consumer: Option<&str>,
+) -> bool {
+    let consumer: Vec<_> = integrity_metadata_hashes(consumer.unwrap_or_default()).collect();
+    if consumer.is_empty() {
+        return true;
+    }
+    let preload: Vec<_> = integrity_metadata_hashes(preload).collect();
+    consumer.iter().all(|hash| preload.contains(hash))
+        && preload.iter().all(|hash| consumer.contains(hash))
 }
 
 struct ParsedIntegrityMetadata {
@@ -136,6 +154,33 @@ fn decode_integrity_digest(digest: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preload_integrity_compares_sets_including_weaker_hashes() {
+        let preload = "sha384-AAAA sha256-BBBB";
+        for compatible in [
+            None,
+            Some(""),
+            Some("unknown-AAAA"),
+            Some("sha256-BBBB sha384-AAAA"),
+            Some("sha384-AAAA?ignored sha256-BBBB sha384-AAAA unknown-AAAA"),
+        ] {
+            assert!(
+                integrity_metadata_allows_preload_consumption(preload, compatible),
+                "{compatible:?}"
+            );
+        }
+        for incompatible in ["sha384-AAAA", "sha384-AAAA sha256-CCCC", "sha512-AAAA"] {
+            assert!(
+                !integrity_metadata_allows_preload_consumption(preload, Some(incompatible)),
+                "{incompatible}"
+            );
+        }
+        assert!(!integrity_metadata_allows_preload_consumption(
+            "",
+            Some("sha384-AAAA")
+        ));
+    }
 
     fn response_body_matches_subresource_integrity_metadata(
         body: &[u8],

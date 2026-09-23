@@ -117,6 +117,7 @@ pub(in crate::context_bootstrap::performance_runtime) fn take_pending_resource_e
                 .get_index(scope, index)
                 .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())?;
             Some(ResourcePerformanceEntry {
+                preload_state: Default::default(),
                 name: array_string(scope, record, 0)?,
                 initiator_type: array_string(scope, record, 1)?,
                 start_unix_millis: record

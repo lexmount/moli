@@ -69,6 +69,7 @@ impl RendererPreparedNetworkResourceLoad {
                 redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
                 from_cache: head.from_cache,
                 cache_state: head.cache_state,
+                preload_state: head.preload_state.clone(),
                 negotiated_http_version: head.negotiated_http_version,
                 network_request_headers,
             },
@@ -92,6 +93,7 @@ pub struct RendererNetworkResourceLoadResponse {
     pub redirect_chain: Vec<NavigationRedirect>,
     pub from_cache: bool,
     pub cache_state: moli_fetch::ResponseCacheState,
+    pub preload_state: moli_fetch::ResponsePreloadState,
     pub negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
     pub network_request_headers: Option<Vec<(String, String)>>,
 }
@@ -114,6 +116,7 @@ impl RendererNetworkResourceLoadResponse {
                 .collect(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         }
     }

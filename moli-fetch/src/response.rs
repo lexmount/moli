@@ -16,6 +16,59 @@ pub enum ResponseCacheState {
     Validated,
 }
 
+/// The actual Fetch response filter, including Service Worker responses whose
+/// type cannot be reconstructed from the request or final URL.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum FetchResponseFilter {
+    Basic,
+    Cors(Vec<String>),
+    Opaque,
+    OpaqueRedirect,
+}
+
+impl FetchResponseFilter {
+    pub fn is_readable(&self) -> bool {
+        matches!(self, Self::Basic | Self::Cors(_))
+    }
+}
+
+/// A consumed preload retains its response filter and reports Resource Timing
+/// only for the producer. This is independent of HTTP cache state: a no-store
+/// response can also be preloaded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResponsePreloadState {
+    #[default]
+    None,
+    Consumed {
+        filter: Option<FetchResponseFilter>,
+        from_service_worker: bool,
+    },
+}
+
+impl ResponsePreloadState {
+    pub fn is_consumed(&self) -> bool {
+        matches!(self, Self::Consumed { .. })
+    }
+
+    pub fn from_service_worker(&self) -> bool {
+        matches!(
+            self,
+            Self::Consumed {
+                from_service_worker: true,
+                ..
+            }
+        )
+    }
+
+    pub fn response_filter(&self) -> Option<&FetchResponseFilter> {
+        match self {
+            Self::Consumed { filter, .. } => filter.as_ref(),
+            Self::None => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NegotiatedHttpVersion {
     Http09,
@@ -64,6 +117,7 @@ pub struct ResponseHead {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub preload_state: crate::ResponsePreloadState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
 
@@ -341,6 +395,7 @@ pub struct Response {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub preload_state: crate::ResponsePreloadState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -362,6 +417,7 @@ impl Clone for Response {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
         }
@@ -417,6 +473,7 @@ impl Response {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -456,6 +513,7 @@ impl Response {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            preload_state: head.preload_state.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -475,6 +533,7 @@ impl Response {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            preload_state: head.preload_state.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -492,6 +551,7 @@ impl Response {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         };
         let (body, body_bytes) = self
@@ -530,6 +590,7 @@ impl Response {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)
@@ -557,6 +618,7 @@ pub struct RawResponse {
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
     pub cache_state: crate::ResponseCacheState,
+    pub preload_state: crate::ResponsePreloadState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -578,6 +640,7 @@ impl Clone for RawResponse {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
         }
@@ -627,6 +690,7 @@ impl RawResponse {
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -652,6 +716,7 @@ impl RawResponse {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            preload_state: head.preload_state.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -671,6 +736,7 @@ impl RawResponse {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            preload_state: head.preload_state.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -688,6 +754,7 @@ impl RawResponse {
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
             cache_state: self.cache_state,
+            preload_state: self.preload_state.clone(),
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)

@@ -372,6 +372,7 @@ fn register_pending_window_fetch_for_test(
                             redirect_chain: Vec::new(),
                             from_cache: false,
                             cache_state: Default::default(),
+                            preload_state: Default::default(),
                             negotiated_http_version: None,
                         },
                         network_request_headers: None,
@@ -3574,6 +3575,7 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
     })
@@ -3821,6 +3823,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
     })
@@ -4025,6 +4028,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
     })

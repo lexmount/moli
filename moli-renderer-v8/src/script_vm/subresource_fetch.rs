@@ -324,6 +324,7 @@ enum ImageSubresourceTerminal<'a> {
         encoded: &'a moli_parkable_image::ParkableImage,
     },
     Failure,
+    PreloadFailure,
 }
 
 impl ImageSubresourceTerminal<'_> {
@@ -341,7 +342,7 @@ impl ImageSubresourceTerminal<'_> {
                     encoded.len(),
                 )
             }
-            Self::Failure => {
+            Self::Failure | Self::PreloadFailure => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_failure(
                     request_url.as_str(),
                     "img",
@@ -376,7 +377,7 @@ fn apply_image_subresource_terminal(
                 );
             (completion.accepted(), completion.followup())
         }
-        ImageSubresourceTerminal::Failure => {
+        ImageSubresourceTerminal::Failure | ImageSubresourceTerminal::PreloadFailure => {
             let followup = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_request_if_matches(
@@ -388,7 +389,7 @@ fn apply_image_subresource_terminal(
             (followup.is_some(), followup)
         }
     };
-    if accepted {
+    if accepted && !matches!(terminal, ImageSubresourceTerminal::PreloadFailure) {
         crate::context_bootstrap::record_resource_performance_entry(
             scope,
             terminal.resource_performance_entry(request_url),
@@ -2025,6 +2026,7 @@ impl ScriptVm {
             response_body: SubresourceResponseBody::from_navigation_response(&response),
             from_cache: response.from_cache,
             cache_state: response.cache_state,
+            preload_state: response.preload_state.clone(),
         };
         self._context_host
             .borrow_mut()
@@ -2284,6 +2286,7 @@ impl ScriptVm {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         };
         let pending = match continuation {
@@ -3035,6 +3038,7 @@ impl ScriptVm {
                 redirect_chain: Vec::new(),
                 from_cache: pending.response.from_cache,
                 cache_state: pending.response.cache_state,
+                preload_state: pending.response.preload_state.clone(),
                 negotiated_http_version: pending.response.negotiated_http_version,
             });
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
@@ -3100,6 +3104,7 @@ impl ScriptVm {
                 redirect_chain: Vec::new(),
                 from_cache: pending.response.from_cache,
                 cache_state: pending.response.cache_state,
+                preload_state: pending.response.preload_state.clone(),
                 negotiated_http_version: pending.response.negotiated_http_version,
             });
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
@@ -3174,6 +3179,7 @@ impl ScriptVm {
                     redirect_chain: Vec::new(),
                     from_cache: pending.response.from_cache,
                     cache_state: pending.response.cache_state,
+                    preload_state: pending.response.preload_state.clone(),
                     negotiated_http_version: pending.response.negotiated_http_version,
                 }),
             ),
@@ -3680,12 +3686,21 @@ impl ScriptVm {
         network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let consumed_preload = match &completion_result {
+            AsyncSubresourceFetchResult::PreloadFailure(_) => true,
+            AsyncSubresourceFetchResult::Response(response)
+            | AsyncSubresourceFetchResult::Image { response, .. } => {
+                response.preload_state.is_consumed()
+            }
+            AsyncSubresourceFetchResult::Failure(_) => false,
+        };
         let (supplied_parkable_image, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error)
+            | AsyncSubresourceFetchResult::PreloadFailure(error) => (None, Err(error)),
         };
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = async_subresource_trace_fields_for_pending(
@@ -4158,7 +4173,7 @@ impl ScriptVm {
                             sequence,
                             pending.info.internal_id,
                             &pending.info.url,
-                            ImageSubresourceTerminal::Failure,
+                            if consumed_preload { ImageSubresourceTerminal::PreloadFailure } else { ImageSubresourceTerminal::Failure },
                         ),
                         PendingSubresourceContinuation::Media {
                             media_handle,
@@ -4376,6 +4391,7 @@ impl ScriptVm {
                         response_body: SubresourceResponseBody::from_navigation_response(&response),
                         response_from_cache: response.from_cache,
                         response_cache_state: response.cache_state,
+                        response_preload_state: response.preload_state.clone(),
                     };
                     trace_async_subresource_stage(
                         "async_subresource_complete_running_auth_required",
@@ -4430,6 +4446,7 @@ impl ScriptVm {
                         response_body: SubresourceResponseBody::from_navigation_response(&response),
                         from_cache: response.from_cache,
                         cache_state: response.cache_state,
+                        preload_state: response.preload_state.clone(),
                     };
                     self._context_host
                         .borrow_mut()

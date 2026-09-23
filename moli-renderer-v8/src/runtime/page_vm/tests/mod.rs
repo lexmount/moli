@@ -14199,6 +14199,7 @@ fn module_graph_network_result_records_staged_response_started_with_cache_state(
             redirect_chain: Vec::new(),
             from_cache: true,
             cache_state: moli_fetch::ResponseCacheState::Local,
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
         "export default 1;".to_owned(),

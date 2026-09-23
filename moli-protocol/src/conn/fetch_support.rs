@@ -497,6 +497,7 @@ impl PendingFetchAuthNavigation {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 b"auth required".to_vec(),
@@ -1310,6 +1311,7 @@ impl ActiveDocumentBodyStreamState {
             redirect_chain: self.response.redirect_chain.clone(),
             from_cache: self.response.from_cache,
             cache_state: self.response.cache_state,
+            preload_state: self.response.preload_state.clone(),
             negotiated_http_version: self.response.negotiated_http_version,
         };
         let body = self

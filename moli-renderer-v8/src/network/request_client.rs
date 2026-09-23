@@ -36,6 +36,7 @@ pub struct ResourceRequestClient {
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
     script_request_origin: Option<Arc<moli_url::WebOrigin>>,
+    document_preloads: Option<super::preloads::DocumentPreloads>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -121,12 +122,38 @@ impl ResourceRequestClient {
             page_network_policy,
             browser_site_context: None,
             script_request_origin: None,
+            document_preloads: None,
         }
     }
 
     pub(crate) fn with_script_request_origin(mut self, origin: moli_url::WebOrigin) -> Self {
         self.script_request_origin = Some(Arc::new(origin));
         self
+    }
+
+    pub(crate) fn with_document_preloads(
+        mut self,
+        preloads: super::preloads::DocumentPreloads,
+    ) -> Self {
+        self.document_preloads = Some(preloads);
+        self
+    }
+
+    // Looking up a Document response must not apply the transport's offline
+    // policy: a miss can still be handled by a Service Worker. The request
+    // entry points retain their normal policy and response validation.
+    pub(crate) fn consume_document_preload(
+        &self,
+        request: &Request,
+    ) -> Option<super::preloads::DocumentPreloadConsumer> {
+        self.document_preloads.as_ref()?.consume(request)
+    }
+
+    pub(crate) fn register_document_preload(
+        &self,
+        request: &Request,
+    ) -> Option<super::preloads::DocumentPreloadProducer> {
+        self.document_preloads.as_ref()?.register(request)
     }
 
     fn script_request_with_client_origin(&self, request: Request) -> Request {
@@ -174,6 +201,7 @@ impl ResourceRequestClient {
         );
         client.browser_site_context = self.browser_site_context.clone();
         client.script_request_origin = self.script_request_origin.clone();
+        client.document_preloads = self.document_preloads.clone();
         client
     }
 
@@ -318,6 +346,13 @@ impl ResourceRequestClient {
         request: Request,
     ) -> Result<Response> {
         let request = self.apply_network_policy(self.script_request_with_client_origin(request))?;
+        if let Some(preload) = self.consume_document_preload(&request) {
+            return preload
+                .response()
+                .await
+                .map(|preload| preload.response.into())
+                .map_err(|error| super::preloads::ConsumedPreloadError(error).into());
+        }
         if let Some(result) = local_text_response(&request) {
             return result;
         }
@@ -485,6 +520,21 @@ impl ResourceRequestClient {
         F: FnOnce(Result<Response>) + Send + 'static,
     {
         let request = self.apply_network_policy(self.script_request_with_client_origin(request))?;
+        if let Some(preload) = self.consume_document_preload(&request) {
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+            resource_load.attach_consumer_cancel(move || {
+                let _ = cancel_tx.send(());
+            });
+            resource_load.task_runner().spawn(async move {
+                let result = tokio::select! {
+                    result = preload.response() => result.map(|preload| preload.response.into()).map_err(|error| super::preloads::ConsumedPreloadError(error).into()),
+                    _ = cancel_rx => Err(super::preloads::ConsumedPreloadError("preload consumer cancelled".to_owned()).into()),
+                };
+                resource_load.finish();
+                callback(result);
+            });
+            return Ok(());
+        }
         if let Some(result) = local_text_response(&request) {
             let task_runner = resource_load.task_runner();
             task_runner.spawn(async move {
@@ -1225,7 +1275,9 @@ fn local_text_response(request: &Request) -> Option<Result<Response>> {
     .map(|result| result.map_err(anyhow::Error::msg))
 }
 
-fn streaming_raw_response_from_local_response(response: Response) -> Result<StreamingRawResponse> {
+pub(crate) fn streaming_raw_response_from_local_response(
+    response: Response,
+) -> Result<StreamingRawResponse> {
     let raw_response = response.into_materialized_raw_response();
     streaming_raw_response_from_head_and_body(raw_response.head(), raw_response.clone_body_bytes())
 }
