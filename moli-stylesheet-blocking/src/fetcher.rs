@@ -290,6 +290,13 @@ pub trait StylesheetFetcher: Clone + Send + 'static {
         0
     }
 
+    /// An exact request-owner route overrides the store's default route.
+    /// The store captures this before spawning, so later Document replacement
+    /// cannot redirect an in-flight completion to another owner.
+    fn completion_publisher(&self) -> Option<crate::StylesheetCompletionPublisher> {
+        None
+    }
+
     fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>);
 
     fn fetch_stylesheet_resource(
