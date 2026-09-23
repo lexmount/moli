@@ -2848,6 +2848,38 @@ async fn child_worker_message_without_listener_drops_and_restores_top_owner_scop
 #[tokio::test]
 async fn message_port_handler_worker_uses_lightweight_popup_owner_scope() {
     run_page_vm_async_test(async move {
+        // This callback must originate in the popup, independently of its target.
+        let popup_source = r#"
+onmessage = event => {
+  if (event.data !== "setup") {
+      return;
+  }
+  const popupChannel = new BroadcastChannel("message-port-popup-worker-owner");
+  popupChannel.onmessage = channelEvent => {
+      event.source.postMessage("popup-worker:" + channelEvent.data, event.origin);
+  };
+  const channel = new MessageChannel();
+  channel.port2.onmessage = () => {
+      const workerSource = `
+          const channel = new BroadcastChannel("message-port-popup-worker-owner");
+          channel.postMessage("worker-origin");
+          channel.onmessage = event => channel.postMessage(event.origin);
+      `;
+      const workerUrl = URL.createObjectURL(
+          new Blob([workerSource], { type: "text/javascript" })
+      );
+      const worker = new Worker(workerUrl);
+      worker.onerror = error => event.source.postMessage("worker-error:" + error.message, event.origin);
+  };
+  channel.port1.postMessage("start");
+};
+opener.postMessage("fixture-ready", "*");
+"#;
+        let (popup_origin, server) = spawn_path_response_http_server(vec![(
+            "/popup.html", "HTTP/1.1 200 OK",
+            format!("<!doctype html><script>{popup_source}</script>"), Duration::ZERO,
+        )]).await;
+        let popup_url = format!("{popup_origin}/popup.html");
         let document_url = Url::parse("https://message-port-worker-popup-owner.test/page.html")
             .expect("document url");
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -2858,8 +2890,10 @@ async fn message_port_handler_worker_uses_lightweight_popup_owner_scope() {
         local_executor
             .run(async move {
                 page_vm.vm_mut().eval(
-                    r#"
+                    &r#"
                     (() => {
+                        let resolvePopupReady;
+                        const popupReady = new Promise(resolve => { resolvePopupReady = resolve; });
                         globalThis.__wsEvents = [];
                         globalThis.__wsDone = false;
                         const topChannel = new BroadcastChannel("message-port-popup-worker-owner");
@@ -2867,6 +2901,7 @@ async fn message_port_handler_worker_uses_lightweight_popup_owner_scope() {
                             __wsEvents.push("top-bc:" + event.data + ":" + event.origin);
                         };
                         addEventListener("message", event => {
+                            if (event.data === "fixture-ready") { resolvePopupReady(); return; }
                             const value = String(event.data);
                             __wsEvents.push(value + ":" + event.origin);
                             if (value === "popup-worker:worker-origin") {
@@ -2874,33 +2909,11 @@ async fn message_port_handler_worker_uses_lightweight_popup_owner_scope() {
                             }
                         });
 
-                        const popup = open("https://message-port-popup-worker-child.test/page.html");
-                        popup.onmessage = event => {
-                            if (event.data !== "setup") {
-                                return;
-                            }
-                            const popupChannel = new BroadcastChannel("message-port-popup-worker-owner");
-                            popupChannel.onmessage = channelEvent => {
-                                event.source.postMessage("popup-worker:" + channelEvent.data, event.origin);
-                            };
-                            const channel = new MessageChannel();
-                            channel.port2.onmessage = () => {
-                                const workerSource = `
-                                    const channel = new BroadcastChannel("message-port-popup-worker-owner");
-                                    channel.postMessage("worker-origin");
-                                    channel.onmessage = event => channel.postMessage(event.origin);
-                                `;
-                                const workerUrl = URL.createObjectURL(
-                                    new Blob([workerSource], { type: "text/javascript" })
-                                );
-                                const worker = new Worker(workerUrl);
-                                worker.onerror = error => event.source.postMessage("worker-error:" + error.message, event.origin);
-                            };
-                            channel.port1.postMessage("start");
-                        };
-                        popup.postMessage("setup", "*");
+                        const popup = open("__POPUP_CALLBACK_URL__");
+
+                        popupReady.then(() => popup.postMessage("setup", "*"));
                     })()
-                    "#,
+                    "#.replace("__POPUP_CALLBACK_URL__", &popup_url),
                 )?;
 
                 drive_websocket_until_done(
@@ -2914,8 +2927,9 @@ async fn message_port_handler_worker_uses_lightweight_popup_owner_scope() {
                     page_vm
                         .vm_mut()
                         .eval("JSON.stringify(globalThis.__wsEvents)")?,
-                    r#"["popup-worker:worker-origin:https://message-port-popup-worker-child.test"]"#
+                    format!(r#"["popup-worker:worker-origin:{popup_origin}"]"#)
                 );
+                server.await.expect("popup fixture should finish");
                 anyhow::Ok(())
             })
             .await

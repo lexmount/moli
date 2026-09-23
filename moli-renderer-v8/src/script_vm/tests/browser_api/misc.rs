@@ -29095,23 +29095,31 @@ async fn lightweight_popup_post_message_round_trips_with_wasm_module() {
             r#"
 (() => {
   globalThis.__popupMessageEvents = [];
-  const popup = open(URL.createObjectURL(new Blob(["<!doctype html>"], { type: "text/html" })));
   const module = new WebAssembly.Module(
     new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])
   );
-  popup.onmessage = event => {
-    const instance = new WebAssembly.Instance(event.data.module, {});
-    __popupMessageEvents.push({
-      target: "popup",
-      module: event.data.module instanceof WebAssembly.Module,
-      clone: event.data.module !== module,
-      sourceIsTop: event.source === window,
-      origin: event.origin,
-      exports: Object.keys(instance.exports).length
-    });
-    popup.opener.postMessage({ message: "reply", module: event.data.module }, "*");
-  };
+  globalThis.__popupSentModule = module;
+  const html = `<!doctype html><script>
+    onmessage = event => {
+      const instance = new WebAssembly.Instance(event.data.module, {});
+      opener.__popupMessageEvents.push({
+        target: "popup",
+        module: event.data.module instanceof WebAssembly.Module,
+        clone: event.data.module !== opener.__popupSentModule,
+        sourceIsTop: event.source === opener,
+        origin: event.origin,
+        exports: Object.keys(instance.exports).length
+      });
+      opener.postMessage({ message: "reply", module: event.data.module }, "*");
+    };
+    opener.postMessage("ready", "*");
+  <\/script>`;
+  const popup = open(URL.createObjectURL(new Blob([html], { type: "text/html" })));
   onmessage = event => {
+    if (event.data === "ready") {
+      popup.postMessage({ message: "send module", module }, "*");
+      return;
+    }
     const instance = new WebAssembly.Instance(event.data.module, {});
     __popupMessageEvents.push({
       target: "top",
@@ -29121,7 +29129,6 @@ async fn lightweight_popup_post_message_round_trips_with_wasm_module() {
       exports: Object.keys(instance.exports).length
     });
   };
-  popup.postMessage({ message: "send module", module }, "*");
   return __popupMessageEvents.length;
 })()
 "#,
