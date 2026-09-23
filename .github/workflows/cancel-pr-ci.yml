@@ -19,4 +19,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Record cancellation
-        run: echo "Cancelled validation for closed PR #${{ github.event.pull_request.number }}."
+        run: |
+          echo "Cancelled validation for closed PR #${{ github.event.pull_request.number }}."
