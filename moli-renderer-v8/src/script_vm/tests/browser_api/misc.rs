@@ -89,6 +89,35 @@ fn service_worker_csp_report_seen(
     report_body_seen || report_record_seen
 }
 
+async fn eval_font_loading_fixture(url: &str, script: &str) -> String {
+    use base64::Engine as _;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut page =
+        crate::runtime::PageVmTaskExecutorTestHarness::new(url::Url::parse(url).unwrap(), &loader);
+    let source = format!(
+        "url(data:font/ttf;base64,{})",
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+            "../../../../../moli-layout/tests/fixtures/moli-ahem.ttf"
+        ))
+    );
+    page.eval(&format!(
+        "globalThis.fontFixtureSource = {};",
+        serde_json::to_string(&source).unwrap()
+    ))
+    .unwrap();
+    page.eval(&format!("({script}).then(value => globalThis.fontFixtureResult = value, error => globalThis.fontFixtureResult = String(error.stack || error))")).unwrap();
+    for _ in 0..64 {
+        let result = page.eval("String(globalThis.fontFixtureResult)").unwrap();
+        if result != "undefined" {
+            return result;
+        }
+        wait_for_one_selected_page_task_executor_test_turn(&mut page, &loader)
+            .await
+            .unwrap();
+    }
+    panic!("font loading fixture did not settle");
+}
+
 async fn assert_popup_consecutive_history_back(from_popup: bool) {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
