@@ -115,5 +115,10 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
         current_entry,
         entry_seed.activation.as_ref(),
     );
+    if let Some(entry) = &entry_seed.session_history.admitted_entry {
+        // An accepted child load may reuse a Window whose Document committed
+        // before this projection was refreshed. Prune only the installed view.
+        super::session_history_traversal::finish_entry(scope, owner, Some(&entry.key));
+    }
     super::navigation_serialize::publish_top_level_navigation_history(scope, owner);
 }
