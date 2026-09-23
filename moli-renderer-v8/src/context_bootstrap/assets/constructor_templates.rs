@@ -8,7 +8,7 @@ use super::super::{
         webgl_debug_renderer_info_constructor_callback, webgl_lose_context_constructor_callback,
         webgl_rendering_context_constructor_callback,
     },
-    css_fontface_runtime::{font_face_constructor_callback, font_face_set_constructor_callback},
+    css_fontface_runtime::font_face_constructor_callback,
     css_runtime::{css_keyword_value_constructor_callback, css_unit_value_constructor_callback},
     css_stylesheet_runtime::css_style_sheet_constructor_callback,
     events::{EventSubclassKind, build_event_subclass_template, event_constructor_callback},
@@ -711,7 +711,8 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         | ConstructorKind::NavigationHistoryEntry
         | ConstructorKind::NavigationActivation
         | ConstructorKind::NavigationTransition
-        | ConstructorKind::MediaQueryList => {
+        | ConstructorKind::MediaQueryList
+        | ConstructorKind::FontFaceSet => {
             v8::FunctionTemplate::builder(illegal_constructor_callback).build(scope)
         }
         ConstructorKind::MediaSource => {
@@ -840,14 +841,6 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
                 font_face_constructor_callback
             ))
             .length(2)
-            .build(scope)
-        }
-        ConstructorKind::FontFaceSet => {
-            v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
-                web_api_interfaces::FontFaceSet,
-                font_face_set_constructor_callback
-            ))
-            .length(0)
             .build(scope)
         }
         ConstructorKind::AudioContext => build_audio_context_constructor_template(scope),

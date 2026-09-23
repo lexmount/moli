@@ -25,7 +25,7 @@ struct FontFaceSetObjectDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSet)]
+#[webapi(interface = web_api_interfaces::FontFaceSet, receiver)]
 struct FontFaceSetPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -38,6 +38,7 @@ struct FontFaceSetPrototypeAccessorsDeclaration {
         accessor_property,
         getter = font_face_set_attribute_getter_callback,
         data = callback_data_index_value(scope, 1),
+        returns_promise,
         enumerable
     )]
     ready: (),
@@ -104,15 +105,13 @@ fn font_face_set_attribute_getter_callback<'s>(
     }
 }
 
-pub(super) fn initialize_font_face_set_object<'s>(
+pub(crate) fn new_font_face_set<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-) {
-    FontFaceSetObjectDeclaration::default()
-        .initialize(scope, object)
-        .expect("FontFaceSet declaration should initialize object");
+) -> Option<v8::Local<'s, v8::Object>> {
+    let object = FontFaceSetObjectDeclaration::default().bind(scope).ok()?;
     initialize_font_face_set_event_target(scope, object);
     replace_font_face_set_ready_promise(scope, object);
+    Some(object)
 }
 
 pub(super) fn replace_font_face_set_ready_promise<'s>(

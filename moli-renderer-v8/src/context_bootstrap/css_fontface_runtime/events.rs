@@ -39,7 +39,7 @@ const FONT_FACE_SET_EVENT_HANDLERS: &[FontFaceSetEventHandler] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSet)]
+#[webapi(interface = web_api_interfaces::FontFaceSet, receiver)]
 struct FontFaceSetEventHandlerAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -70,7 +70,7 @@ struct FontFaceSetEventHandlerAccessorsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSetLoadEvent, enumerable)]
+#[webapi(interface = web_api_interfaces::FontFaceSetLoadEvent, enumerable, receiver)]
 struct FontFaceSetLoadEventPrototypeDeclaration {
     #[webapi(
         accessor_property,
@@ -103,6 +103,7 @@ pub(super) fn initialize_font_face_set_event_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
+    mark_simple_event_target_slot(scope, object, FONT_FACE_SET_LISTENERS_SLOT);
     for handler in FONT_FACE_SET_EVENT_HANDLERS {
         set_private_value(scope, object, handler.slot_name, v8::null(scope).into());
     }
@@ -242,6 +243,9 @@ fn dispatched_font_face_set_load_event<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let event = v8::Object::new(scope);
     initialize_event_object(scope, event, event_type, false, false);
+    web_api_interfaces::FontFaceSetLoadEvent::DESCRIPTOR
+        .initialize(scope, event)
+        .expect("font loading events should carry their native interface brand");
     if let Some(prototype) = global_constructor_prototype(scope, "FontFaceSetLoadEvent") {
         let _ = event.set_prototype(scope, prototype.into());
     }

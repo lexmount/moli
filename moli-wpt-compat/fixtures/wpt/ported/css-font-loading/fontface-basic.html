@@ -146,16 +146,18 @@ promise_test(async function () {
   assert_true(fonts.check("16px sans-serif"));
 }, "FontFaceSet load and check expose low-dependency font matching");
 
-test(function () {
+promise_test(async function (t) {
   const fonts = document.fonts;
 
-  assert_throws_name("TypeError", () => fonts.load(), "load font is required");
+  await promise_rejects_js(t, TypeError, fonts.load(), "load font is required");
   assert_throws_name("TypeError", () => fonts.check(), "check font is required");
-  assert_throws_name("TypeError", () => fonts.load(Symbol("font")), "load font Symbol conversion should throw");
+  await promise_rejects_js(t, TypeError, fonts.load(Symbol("font")), "load font Symbol conversion should reject");
   assert_throws_name("TypeError", () => fonts.check(Symbol("font")), "check font Symbol conversion should throw");
-  assert_throws_name(
-    "Error",
-    () => fonts.load({ toString() { throw new Error("font failed"); } }),
+  const conversionError = new Error("font failed");
+  await promise_rejects_exactly(
+    t,
+    conversionError,
+    fonts.load({ toString() { throw conversionError; } }),
     "load font stringification errors should propagate",
   );
   assert_throws_name(

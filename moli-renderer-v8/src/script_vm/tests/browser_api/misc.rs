@@ -1577,7 +1577,7 @@ fn internal_dynamic_maps_ignore_object_prototype_pollution() {
     out.fileReaderProtoLength = Object.prototype.load.length;
 
     Object.prototype.loading = [];
-    const fonts = typeof FontFaceSet === "function" ? new FontFaceSet() : document.fonts;
+    const fonts = document.fonts;
     fonts.addEventListener("loading", () => {});
     out.fontFaceSetProtoLength = Object.prototype.loading.length;
 
@@ -1797,7 +1797,7 @@ fn font_face_set_load_event_copies_and_freezes_fontfaces() {
     }
   };
 
-  const fonts = new FontFaceSet();
+  const fonts = document.implementation.createHTMLDocument('').fonts;
   fonts.add(face);
   let loadingShape = '';
   let doneShape = '';
@@ -1883,7 +1883,7 @@ fn font_face_set_listeners_use_event_listener_callback_interface_semantics() {
         .eval(
             r#"
 (() => {
-  const fonts = new FontFaceSet();
+  const fonts = document.implementation.createHTMLDocument('').fonts;
   const calls = [];
 
   let operationGets = 0;
@@ -1998,7 +1998,7 @@ fn font_face_set_listener_uses_callback_realm_and_exact_window_lifetime() {
 (() => {
   const iframe = __fontFaceSetCallbackRealmFrame;
   const other = iframe.contentWindow;
-  const fonts = new FontFaceSet();
+  const fonts = document.implementation.createHTMLDocument('').fonts;
   globalThis.__fontFaceSetCallbackRealmTarget = fonts;
   globalThis.__fontFaceSetCallbackExpectedRealm = other;
   globalThis.__fontFaceSetCallbackRealmFacts = [];
@@ -2044,7 +2044,7 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
 (() => {
   const face = new FontFace('Demo', 'url(demo.woff)');
   const documentFonts = document.fonts;
-  const secondary = new FontFaceSet();
+  const secondary = document.implementation.createHTMLDocument('').fonts;
   documentFonts.add(face);
   secondary.add(face);
 
@@ -2083,7 +2083,7 @@ fn font_face_load_updates_owner_sets_once_and_unlinks_removed_faces() {
   const eventCountBeforeRemovedLoad = events.length;
   removed.load();
 
-  const clearedSet = new FontFaceSet();
+  const clearedSet = document.implementation.createHTMLDocument('').fonts;
   const cleared = new FontFace('Cleared', 'url(cleared.woff)');
   clearedSet.add(cleared);
   const clearedReadyBeforeLoad = clearedSet.ready;
@@ -2347,7 +2347,7 @@ fn font_face_binary_source_union_rejects_invalid_font_data() {
         r#"
 (() => {
   const face = new FontFace('InvalidBinary', new ArrayBuffer(8));
-  const fonts = new FontFaceSet();
+  const fonts = document.implementation.createHTMLDocument('').fonts;
   fonts.add(face);
   const events = [];
   for (const type of ['loading', 'loadingdone', 'loadingerror']) {
@@ -2431,7 +2431,7 @@ fn maplike_and_setlike_iterators_use_v8_intrinsics_after_public_tampering() {
   styleTarget.style.display = "block";
   (document.body || document.documentElement || document).appendChild(styleTarget);
   const face = new FontFace("IntrinsicFace", "url(intrinsic.woff)");
-  const fontSet = new FontFaceSet();
+  const fontSet = document.implementation.createHTMLDocument('').fonts;
   fontSet.add(face);
 
   const poisoned = function poisonedBuiltinIterator() {
@@ -2546,6 +2546,73 @@ fn maplike_and_setlike_iterators_use_v8_intrinsics_after_public_tampering() {
 }
 
 #[test]
+fn font_face_set_bindings_share_event_target_and_validate_native_receivers() {
+    let mut vm = new_storage_test_vm("https://font-face-set-bindings.test/");
+    vm.eval(&format!(
+            r#"(async () => {{
+                {}
+                const frame = (document.body || document.documentElement || document)
+                    .appendChild(document.createElement('iframe'));
+                const child = frame.contentWindow;
+                const getter = Object.getOwnPropertyDescriptor(Document.prototype, 'fonts').get;
+                const windowless = document.implementation.createHTMLDocument('');
+                const mainConstructor = Object.getOwnPropertyDescriptor(window, 'FontFaceSet');
+                const childConstructor = Object.getOwnPropertyDescriptor(child, 'FontFaceSet');
+                const mainPrototype = FontFaceSet.prototype;
+                const childPrototype = child.FontFaceSet.prototype;
+                const poison = {{configurable: true, get() {{ throw new Error('author constructor'); }}}};
+                let creation;
+                try {{
+                    Object.defineProperty(window, 'FontFaceSet', poison);
+                    Object.defineProperty(child, 'FontFaceSet', poison);
+                    const childFonts = getter.call(child.document);
+                    creation = [
+                        Object.getPrototypeOf(document.fonts) === mainPrototype,
+                        Object.getPrototypeOf(windowless.fonts) === mainPrototype,
+                        Object.getPrototypeOf(childFonts) === childPrototype,
+                        childFonts === child.document.fonts,
+                    ];
+                }} finally {{
+                    Object.defineProperty(window, 'FontFaceSet', mainConstructor);
+                    Object.defineProperty(child, 'FontFaceSet', childConstructor);
+                }}
+                const main = await fontFaceSetBindingsProbe(window, document.fonts);
+                const other = await fontFaceSetBindingsProbe(child, child.document.fonts);
+                const parentSize = Object.getOwnPropertyDescriptor(FontFaceSet.prototype, 'size').get;
+                const childSize = Object.getOwnPropertyDescriptor(child.FontFaceSet.prototype, 'size').get;
+                const face = new FontFace('CrossRealm', 'url(unused.ttf)');
+                child.FontFaceSet.prototype.add.call(document.fonts, face);
+                FontFaceSet.prototype.add.call(child.document.fonts, face);
+                const crossRealm = [parentSize.call(child.document.fonts), childSize.call(document.fonts),
+                    child.FontFaceSet.prototype.has.call(document.fonts, face)];
+                frame.remove();
+                let illegal = false;
+                try {{ new FontFaceSet([]); }} catch (error) {{ illegal = error instanceof TypeError; }}
+                return JSON.stringify({{main, other, crossRealm, illegal, creation}});
+            }})().then(
+                result => globalThis.__fontFaceSetBindings = result,
+                error => globalThis.__fontFaceSetBindings = String(error.stack || error)
+            )"#,
+            include_str!("../../../../tests/fixtures/fontfaceset-bindings.js"),
+        ))
+        .expect("FontFaceSet binding probe should evaluate");
+    let result = vm
+        .eval("__fontFaceSetBindings")
+        .expect("FontFaceSet binding probe should settle");
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    for realm in ["main", "other"] {
+        assert_eq!(result[realm]["failures"], serde_json::json!([]), "{result}");
+        assert_eq!(result[realm]["checks"], 221, "{result}");
+    }
+    assert_eq!(result["crossRealm"], serde_json::json!([1, 1, true]));
+    assert_eq!(result["illegal"], true);
+    assert_eq!(
+        result["creation"],
+        serde_json::json!([true, true, true, true])
+    );
+}
+
+#[test]
 fn font_face_set_declared_slots_ignore_prototype_spoofing() {
     let mut vm = new_storage_test_vm("https://font-face-set-declared-slots.test/");
 
@@ -2570,7 +2637,7 @@ fn font_face_set_declared_slots_ignore_prototype_spoofing() {
     ].map(stringify).join(':');
   };
   const face = new FontFace('Demo', 'url(demo.woff)');
-  const fonts = new FontFaceSet();
+  const fonts = document.implementation.createHTMLDocument('').fonts;
   const style = document.createElement('style');
   style.textContent = '@font-face { font-family: "Spoofed"; src: url(spoof.woff); }';
   (document.head || document.documentElement || document).appendChild(style);
@@ -2614,12 +2681,14 @@ fn font_face_set_declared_slots_ignore_prototype_spoofing() {
       listenerCalls
     ].join('|'),
     fake: [
-      fake.status,
-      fake.ready,
-      fake.size,
-      FontFaceSet.prototype.has.call(fake, face),
-      Array.from(FontFaceSet.prototype.values.call(fake)).length
-    ].map(stringify).join('|'),
+      () => fake.status,
+      () => fake.size,
+      () => FontFaceSet.prototype.has.call(fake, face),
+      () => FontFaceSet.prototype.values.call(fake)
+    ].map(callback => {
+      try { callback(); return 'accepted'; }
+      catch (error) { return error.name; }
+    }).join('|'),
     documentFontsOwnerSlot: documentFontsSlots.includes('__moliFontFaceSetOwnerDocument'),
     documentFontsSlots,
     descriptors: ['status', 'ready', 'size']
@@ -2634,7 +2703,7 @@ fn font_face_set_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"real":"loaded|function|1|true|1|1","fake":"undefined|undefined|0|false|0","documentFontsOwnerSlot":false,"documentFontsSlots":[],"descriptors":["status:function:get status:0:undefined:undefined:undefined:true:true:false","ready:function:get ready:0:undefined:undefined:undefined:true:true:false","size:function:get size:0:undefined:undefined:undefined:true:true:false"],"hasOwnSize":false,"ownSlots":[]}"#
+        r#"{"real":"loaded|function|1|true|1|1","fake":"TypeError|TypeError|TypeError|TypeError","documentFontsOwnerSlot":false,"documentFontsSlots":[],"descriptors":["status:function:get status:0:undefined:undefined:undefined:true:true:false","ready:function:get ready:0:undefined:undefined:undefined:true:true:false","size:function:get size:0:undefined:undefined:undefined:true:true:false"],"hasOwnSize":false,"ownSlots":[]}"#
     );
 }
 

@@ -43,12 +43,11 @@ pub(super) use font_face::{
     font_face_constructor_callback, font_face_load_callback, install_font_face_template_accessors,
 };
 pub(super) use font_face_set::{
-    font_face_set_add_callback, font_face_set_add_event_listener_callback,
-    font_face_set_check_callback, font_face_set_clear_callback, font_face_set_constructor_callback,
-    font_face_set_delete_callback, font_face_set_dispatch_event_callback,
-    font_face_set_entries_callback, font_face_set_for_each_callback, font_face_set_has_callback,
-    font_face_set_keys_callback, font_face_set_load_callback,
-    font_face_set_remove_event_listener_callback, font_face_set_values_callback,
+    font_face_set_add_callback, font_face_set_check_callback, font_face_set_clear_callback,
+    font_face_set_delete_callback, font_face_set_entries_callback, font_face_set_for_each_callback,
+    font_face_set_has_callback, font_face_set_keys_callback, font_face_set_load_callback,
+    font_face_set_values_callback,
 };
 pub(super) use storage::install_font_face_set_template_accessors;
+pub(crate) use storage::new_font_face_set;
 pub(crate) use storage::rebuild_font_face_set_faces;

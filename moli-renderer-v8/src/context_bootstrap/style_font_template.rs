@@ -1,11 +1,9 @@
 use super::{
     css_fontface_runtime::{
-        font_face_load_callback, font_face_set_add_callback,
-        font_face_set_add_event_listener_callback, font_face_set_check_callback,
+        font_face_load_callback, font_face_set_add_callback, font_face_set_check_callback,
         font_face_set_clear_callback, font_face_set_delete_callback,
-        font_face_set_dispatch_event_callback, font_face_set_entries_callback,
-        font_face_set_for_each_callback, font_face_set_has_callback, font_face_set_keys_callback,
-        font_face_set_load_callback, font_face_set_remove_event_listener_callback,
+        font_face_set_entries_callback, font_face_set_for_each_callback,
+        font_face_set_has_callback, font_face_set_keys_callback, font_face_set_load_callback,
         font_face_set_values_callback, install_font_face_set_event_handler_accessors,
         install_font_face_set_load_event_template_accessors,
         install_font_face_set_template_accessors, install_font_face_template_accessors,
@@ -23,7 +21,7 @@ struct FontFaceTemplateMethodsDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(interface = web_api_interfaces::FontFaceSet, enumerable)]
+#[webapi(interface = web_api_interfaces::FontFaceSet, enumerable, receiver)]
 struct FontFaceSetTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = font_face_set_add_callback)]
     add: (),
@@ -40,7 +38,7 @@ struct FontFaceSetTemplateMethodsDeclaration {
     #[webapi(method, length = 1, callback = font_face_set_check_callback)]
     check: (),
 
-    #[webapi(method, length = 1, callback = font_face_set_load_callback)]
+    #[webapi(method, length = 1, callback = font_face_set_load_callback, returns_promise)]
     load: (),
 
     #[webapi(method, length = 0, callback = font_face_set_keys_callback)]
@@ -57,19 +55,6 @@ struct FontFaceSetTemplateMethodsDeclaration {
 
     #[webapi(method, length = 1, callback = font_face_set_for_each_callback)]
     for_each: (),
-
-    #[webapi(method, length = 2, callback = font_face_set_add_event_listener_callback)]
-    add_event_listener: (),
-
-    #[webapi(
-        method,
-        length = 2,
-        callback = font_face_set_remove_event_listener_callback
-    )]
-    remove_event_listener: (),
-
-    #[webapi(method, length = 1, callback = font_face_set_dispatch_event_callback)]
-    dispatch_event: (),
 }
 
 pub(super) fn install_style_font_template_bindings<'s>(

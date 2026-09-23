@@ -158,7 +158,7 @@ interfaces! {
     FileSystemWritableFileStream: WritableStream;
     FocusEvent: UIEvent;
     FontFace;
-    FontFaceSet;
+    FontFaceSet: EventTarget;
     FontFaceSetIterator = "FontFaceSet Iterator";
     FontFaceSetLoadEvent: Event;
     FormData;
