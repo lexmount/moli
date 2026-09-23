@@ -2205,12 +2205,11 @@ fn preload_like_link_readiness_fetch_options(
         )
     });
     let modulepreload = link_rel_includes_token(rel, "modulepreload");
-    let request_mode = if resource_type == SubresourceResourceType::Fetch
-        && link_rel_includes_token(rel, "preload")
-        && element
-            .attribute("as")
-            .map(str::trim)
-            .is_some_and(|value| value.eq_ignore_ascii_case("fetch"))
+    // Ordinary preloads create a potential-CORS request for every destination.
+    // Its default must match a classic script/image consumer's no-CORS request.
+    let request_mode = if link_rel_includes_token(rel, "preload")
+        && !modulepreload
+        && resource_type != SubresourceResourceType::Dictionary
         && cross_origin.is_none()
     {
         moli_fetch::RequestMode::NoCors
@@ -2344,6 +2343,21 @@ fn connected_link_readiness_request(
         .with_credentials_mode(options.credentials_mode);
     if options.link_preload {
         request = request.with_link_preload();
+        // These destinations need browser request headers, including Origin
+        // and Fetch Metadata. Resource type alone only sets priority.
+        let metadata = match options.resource_type {
+            SubresourceResourceType::Script => Some(moli_fetch::BrowserRequestMetadata::Script),
+            SubresourceResourceType::Image => Some(moli_fetch::BrowserRequestMetadata::Image),
+            SubresourceResourceType::Font => Some(moli_fetch::BrowserRequestMetadata::Font),
+            SubresourceResourceType::TextTrack => {
+                Some(moli_fetch::BrowserRequestMetadata::TextTrack)
+            }
+            SubresourceResourceType::Fetch => Some(moli_fetch::BrowserRequestMetadata::Fetch),
+            _ => None,
+        };
+        if let Some(metadata) = metadata {
+            request = request.with_browser_request_metadata(metadata);
+        }
     }
     if options.fetch_priority_hint.is_some() {
         request = request.with_fetch_priority_hint(options.fetch_priority_hint);
@@ -2408,11 +2422,30 @@ async fn fetch_connected_link_readiness_with_request(
     options: ConnectedLinkReadinessFetchOptions,
     request: moli_fetch::Request,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
-    let response = if options.resource_type == SubresourceResourceType::Script {
-        loader.fetch_cacheable_script_text_stream(request).await
-    } else {
+    let response = async {
+        if options.resource_type == SubresourceResourceType::Script {
+            return loader.fetch_cacheable_script_text_stream(request).await;
+        }
+        if options.link_preload && options.request_mode == moli_fetch::RequestMode::Cors {
+            let origin = request.request_origin().cloned();
+            let response = loader
+                .fetch_raw_stream_with_cancel(request, moli_fetch::FetchCancelHandle::new())
+                .await?;
+            // The transport checks redirects before following them. Check the
+            // final response too, before consuming its body or firing load.
+            if let Some(origin) = origin {
+                crate::network_host::validate_cors_response_chain(
+                    origin,
+                    &response.head(),
+                    options.credentials_mode,
+                )
+                .map_err(anyhow::Error::msg)?;
+            }
+            return response.into_lossy_materialized_text_response().await;
+        }
         loader.fetch_text_stream(request).await
-    };
+    }
+    .await;
     response
         .map(crate::protocol_types::NavigationResponse::from)
         .map_err(|error| format!("failed to fetch preload-like link `{url}`: {error}"))
@@ -4765,6 +4798,72 @@ mod tests {
         assert_eq!(options.request_mode, moli_fetch::RequestMode::NoCors);
         assert!(options.link_preload);
         assert!(options.script_fetch_metadata.is_none());
+    }
+
+    #[test]
+    fn ordinary_preload_request_mode_and_credentials_follow_crossorigin() {
+        let document_url = Url::parse("https://example.test/page").unwrap();
+        let request_origin = moli_url::WebOrigin::from_url(&document_url);
+        let url = Url::parse("https://cdn.test/resource").unwrap();
+        for destination in ["script", "image", "font", "track", "fetch"] {
+            for (attribute, mode, credentials) in [
+                (
+                    "",
+                    moli_fetch::RequestMode::NoCors,
+                    RequestCredentialsMode::Include,
+                ),
+                (
+                    "crossorigin",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                ),
+                (
+                    "crossorigin=anonymous",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                ),
+                (
+                    "crossorigin=invalid",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::SameOrigin,
+                ),
+                (
+                    "crossorigin=use-credentials",
+                    moli_fetch::RequestMode::Cors,
+                    RequestCredentialsMode::Include,
+                ),
+            ] {
+                let document = HtmlParser::SCRIPTING_ENABLED.parse(
+                    document_url.clone(),
+                    format!("<!doctype html><link rel=preload as={destination} {attribute} href='{url}'>"),
+                );
+                let options =
+                    preload_like_link_readiness_fetch_options(first_link_element(&document), false);
+                let request = connected_link_readiness_request(
+                    &document_url,
+                    &request_origin,
+                    &url,
+                    &options,
+                );
+                assert_eq!(request.request_mode, mode, "{destination}, {attribute}");
+                assert_eq!(
+                    request.credentials_mode, credentials,
+                    "{destination}, {attribute}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn modulepreload_without_crossorigin_keeps_cors_request_mode() {
+        let document = HtmlParser::SCRIPTING_ENABLED.parse(
+            Url::parse("https://example.test/page").unwrap(),
+            "<!doctype html><link rel=modulepreload href='/app.js'>".to_owned(),
+        );
+        let options =
+            preload_like_link_readiness_fetch_options(first_link_element(&document), false);
+        assert_eq!(options.request_mode, moli_fetch::RequestMode::Cors);
+        assert_eq!(options.credentials_mode, RequestCredentialsMode::SameOrigin);
     }
 
     #[test]
