@@ -7943,6 +7943,7 @@ preload/preconnect-onerror-event.html
 preload/preconnect.html
 preload/preload-type-match.html
 preload/preload-with-type.html
+preload/preload-with-unsupported-type.html
 preload/reflected-as-value.html
 preload/supported-as-values.html?as=audio&expected=0
 preload/supported-as-values.html?as=fetch&expected=1

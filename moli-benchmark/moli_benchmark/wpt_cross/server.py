@@ -83,6 +83,8 @@ MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 COMMON_ECHO_PATH = "/common/echo.py"
+PRELOAD_COUNT_PATH = "/preload/resources/preload-count.py"
+PRELOAD_COUNT_KEY = "a8697ae7-c8cb-4dbd-a8ef-27111dc7042f"
 XHR_DOCUMENT_FIXTURES = {
     "/xhr/resources/win-1252-xml.py": ("application/xml;charset=windows-1252", b"<\xff/>"),
     # The upstream handler returns a Unicode string, encoded by wptserve as UTF-8.
@@ -1679,6 +1681,8 @@ def _make_handler(
                 path = unquote(urlsplit(getattr(self, "path", "")).path)
                 if path == COMMON_ECHO_PATH:
                     return self._serve_common_echo_resource
+                if path == PRELOAD_COUNT_PATH:
+                    return self._serve_preload_count_resource
                 if path == FETCH_EMPTY_LOCATION_PATH:
                     return self._serve_empty_location_resource
                 if path == NAVIGATION_SECOND_VISIT_PATH:
@@ -1707,6 +1711,8 @@ def _make_handler(
 
         def do_OPTIONS(self) -> None:  # noqa: N802
             if self._serve_common_echo_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -1745,6 +1751,8 @@ def _make_handler(
 
         def do_POST(self) -> None:  # noqa: N802
             if self._serve_common_echo_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -1825,6 +1833,8 @@ def _make_handler(
         def _serve_fetch_resource_method(self) -> None:
             if self._serve_common_echo_resource():
                 return
+            if self._serve_preload_count_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             parsed = urlparse(self.path)
@@ -1871,6 +1881,8 @@ def _make_handler(
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
             if self._serve_common_echo_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
@@ -2028,6 +2040,35 @@ def _make_handler(
                 escape_type=escape_type,
             )
 
+        def _serve_preload_count_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != PRELOAD_COUNT_PATH:
+                return False
+            # The upstream handler only reads GET parameters, for every method.
+            self.close_connection = True
+            stash_path = PRELOAD_COUNT_PATH.rsplit("/", 1)[0] + "/"
+            params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+            try:
+                action = params["action"][0]
+            except KeyError:
+                # Upstream takes the counter before reading the required action.
+                fetch_stash.take(PRELOAD_COUNT_KEY, path=stash_path)
+                self.send_error(500)
+                return True
+            if action == "result":
+                count = fetch_stash.take(PRELOAD_COUNT_KEY, path=stash_path) or 0
+                status, content_type = 200, "text/javascript"
+                body = f"preloadCount = {count};".encode("ascii")
+            else:
+                fetch_stash.increment(PRELOAD_COUNT_KEY, path=stash_path)
+                status, content_type, body = 404, None, b"No entry is found"
+            self._send_bytes(
+                content_type, body, emit_body=self.command != "HEAD",
+                status_code=status, cache_control=None,
+                extra_headers=[("Connection", "close")],
+            )
+            return True
+
         def _serve_common_echo_resource(self) -> bool:
             parsed = urlsplit(self.path)
             if unquote(parsed.path) != COMMON_ECHO_PATH:
@@ -2091,6 +2132,8 @@ def _make_handler(
 
         def _serve_response(self, *, emit_body: bool) -> None:
             if self._serve_common_echo_resource():
+                return
+            if self._serve_preload_count_resource():
                 return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
