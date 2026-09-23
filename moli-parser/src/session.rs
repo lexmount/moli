@@ -46,6 +46,9 @@ enum TokenizerPause {
 
 struct EmbedderPausingTreeBuilder {
     inner: TreeBuilder<ParseHandle, DocumentSink>,
+    // Retain a callback's Break until html5ever accepts a pause result. This is
+    // an undelivered notification, not a copy of the owner's current run state;
+    // it must survive both later Continue callbacks and input chunk boundaries.
     deferred_owner_interruption: Cell<bool>,
 }
 

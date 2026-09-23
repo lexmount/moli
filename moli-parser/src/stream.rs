@@ -900,6 +900,7 @@ mod tests {
     struct TestMutationEffectCollector<'a> {
         host: *mut DomHost,
         effects: &'a mut DomMutationEffects,
+        interrupt_when_body_text_is: Option<&'a str>,
     }
 
     impl crate::ParserDomReadConsumer for TestMutationEffectCollector<'_> {
@@ -1200,6 +1201,25 @@ mod tests {
     impl crate::ParserMutationEffectConsumer for TestMutationEffectCollector<'_> {
         fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
             self.effects.merge(effects);
+        }
+
+        fn finish_parser_dom_mutations(&mut self) -> std::ops::ControlFlow<()> {
+            let Some(expected) = self.interrupt_when_body_text_is else {
+                return std::ops::ControlFlow::Continue(());
+            };
+            // SAFETY: the test owns the DomHost throughout this parser pump.
+            let host = unsafe { &*self.host };
+            let text = host
+                .document_body_handle_for_document(host.document_handle())
+                .and_then(|body| host.text_content(body));
+            if text.as_deref() == Some(expected) {
+                // Model a one-shot callback notification, not a level-triggered
+                // owner query. The adapter must retain it across input chunks.
+                self.interrupt_when_body_text_is = None;
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
         }
     }
 
@@ -2465,6 +2485,7 @@ mod tests {
             let mut collector = TestMutationEffectCollector {
                 host: ptr,
                 effects: &mut effects,
+                interrupt_when_body_text_is: None,
             };
             stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
                 "<!doctype html><html><head><style>@import url('/style.css');</style><script src='/app.js'></script></head></html>",
@@ -2495,6 +2516,70 @@ mod tests {
                 .iter()
                 .any(|signature| matches!(signature, DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { urls } if urls == &vec![expected_url.clone()])),
             "handoff should carry parser-created style import blocker signature through runtime DOM sinks step"
+        );
+    }
+
+    #[test]
+    fn parser_callback_interruption_survives_character_tokens_and_input_boundaries() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://example.test/").unwrap(),
+        );
+        let mut host = stream.take_parser_stream_dom_host();
+        let mut effects = DomMutationEffects::default();
+        let mut consumer = TestMutationEffectCollector {
+            host: &mut host,
+            effects: &mut effects,
+            interrupt_when_body_text_is: Some("pause"),
+        };
+        let first = stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+            "<!doctype html><body>pause",
+            &mut consumer,
+        );
+        assert!(consumer.interrupt_when_body_text_is.is_none());
+        assert!(matches!(first.result, ParserPumpStep::InputDrained));
+        let second = stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+            "&amp;<!-- between -->more<span>tail</span>",
+            &mut consumer,
+        );
+        assert!(matches!(
+            second.result,
+            ParserPumpStep::Yield(ParserYield::OwnerInterrupted)
+        ));
+        assert_eq!(stream.snapshot_pending_input(), "tail</span>");
+        let resumed = stream
+            .pump_parser_step_with_runtime_dom_consumer_without_element_creation("", &mut consumer);
+        assert!(matches!(resumed.result, ParserPumpStep::InputDrained));
+        stream.restore_parser_stream_dom_host(host);
+        let document = stream.finish();
+        let spans = document.elements_by_tag_name(document.document_node_id(), "span", false);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(document.text_content(spans[0]).as_deref(), Some("tail"));
+    }
+
+    #[test]
+    fn parser_callback_interruption_at_text_eof_does_not_invent_a_script_handoff() {
+        let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+            Url::parse("https://example.test/").unwrap(),
+        );
+        let mut host = stream.take_parser_stream_dom_host();
+        let mut effects = DomMutationEffects::default();
+        let mut consumer = TestMutationEffectCollector {
+            host: &mut host,
+            effects: &mut effects,
+            interrupt_when_body_text_is: Some("pause"),
+        };
+        let step = stream.pump_parser_step_with_runtime_dom_consumer_without_element_creation(
+            "<!doctype html><body>pause&am",
+            &mut consumer,
+        );
+        assert!(consumer.interrupt_when_body_text_is.is_none());
+        assert!(matches!(step.result, ParserPumpStep::InputDrained));
+        stream.restore_parser_stream_dom_host(host);
+        let document = stream.finish();
+        let bodies = document.elements_by_tag_name(document.document_node_id(), "body", false);
+        assert_eq!(
+            document.text_content(bodies[0]).as_deref(),
+            Some("pause&am")
         );
     }
 }
