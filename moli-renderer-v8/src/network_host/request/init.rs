@@ -217,14 +217,16 @@ pub(crate) fn validate_fetch_body(
     has_stream_body: bool,
     method: &str,
     mode: RequestMode,
-) -> Result<(), String> {
+) -> Result<(), webidl::WebIdlError> {
     if has_body && matches!(method, "GET" | "HEAD") {
-        return Err("Request with GET/HEAD method cannot have body".to_owned());
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with GET/HEAD method cannot have body",
+        ));
     }
     if has_stream_body && !matches!(mode, RequestMode::Cors | RequestMode::SameOrigin) {
-        return Err(
-            "Request with a ReadableStream body requires cors or same-origin mode".to_owned(),
-        );
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with a ReadableStream body requires cors or same-origin mode",
+        ));
     }
     Ok(())
 }

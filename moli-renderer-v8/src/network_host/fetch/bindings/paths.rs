@@ -145,7 +145,7 @@ pub(super) enum LocalFetchError {
 
 pub(super) fn local_fetch_error_text(error: &LocalFetchError) -> String {
     match error {
-        LocalFetchError::Url(LocalUrlError::BlobUnavailable { .. }) => {
+        LocalFetchError::Url(error) if error.is_unavailable_blob() => {
             FILE_NOT_FOUND_ERROR_TEXT.to_owned()
         }
         LocalFetchError::Url(error) => error.to_string(),
@@ -235,10 +235,10 @@ pub(super) fn spawn_network_fetch(
     host: &mut PageScriptHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) -> Result<u64, String> {
+) -> anyhow::Result<u64> {
     let cache_mode = prepared.cache_mode();
     let loader = prepared.resource_loader.request_client().clone();
-    let request = native_window_fetch_request(&prepared)?;
+    let request = native_window_fetch_request(&prepared).map_err(anyhow::Error::msg)?;
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
