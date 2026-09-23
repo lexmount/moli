@@ -13,6 +13,8 @@ use tokio::time::Duration;
 
 #[path = "fetch_behaviors/preload_as.rs"]
 mod preload_as;
+#[path = "fetch_behaviors/preload_crossorigin.rs"]
+mod preload_crossorigin;
 #[path = "fetch_behaviors/preload_lifecycle.rs"]
 mod preload_lifecycle;
 #[path = "fetch_behaviors/preload_parser.rs"]
