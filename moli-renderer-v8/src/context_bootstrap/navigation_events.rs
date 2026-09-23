@@ -909,10 +909,8 @@ pub(super) fn navigation_precommit_redirect<'s>(
     let destination = event
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-    let url = destination
-        .and_then(|destination| destination.get(scope, v8str(scope, "url").into()))
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
+    let url =
+        destination.and_then(|destination| navigation_destination_url_value(scope, destination));
     let history = navigate_event_private_value(scope, event, NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
