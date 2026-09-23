@@ -362,7 +362,7 @@ async fn image_current_src_is_empty_while_a_replacement_request_is_pending() {
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("replacement image request should fulfill");
@@ -741,7 +741,7 @@ async fn image_update_microtask_freezes_request_after_observing_live_base_url() 
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("base-selected image response should complete");

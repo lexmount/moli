@@ -171,8 +171,8 @@ fn xhr_null_body_statuses_discard_buffered_and_streamed_bytes() {
                     status,
                     status_text: Some("Preserved".to_owned()),
                     headers: vec![
-                        ("Content-Type".to_owned(), "text/html".to_owned()),
-                        ("Content-Length".to_owned(), "7".to_owned()),
+                        ("Content-Type".to_owned(), b"text/html".to_vec()),
+                        ("Content-Length".to_owned(), b"7".to_vec()),
                     ],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -336,8 +336,8 @@ fn xhr_null_body_late_completion_preserves_a_replacement_requests_progress() {
                     status: 200,
                     status_text: None,
                     headers: vec![
-                        ("Content-Type".to_owned(), "text/plain".to_owned()),
-                        ("Content-Length".to_owned(), "3".to_owned()),
+                        ("Content-Type".to_owned(), b"text/plain".to_vec()),
+                        ("Content-Length".to_owned(), b"3".to_vec()),
                     ],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),

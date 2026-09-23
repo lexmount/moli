@@ -53,6 +53,7 @@ fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
                         if cors { "*" } else { "Accept" }.to_owned(),
                     ),
                 ];
+                let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
                 let head = moli_fetch::ResponseHead {
                     final_url: request.url.clone(),
                     status: 200,
@@ -221,6 +222,7 @@ fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
                 ("Vary".to_owned(), "*".to_owned()),
                 ("Set-Cookie".to_owned(), "hidden=secret".to_owned()),
             ];
+            let headers = moli_fetch::headers_from_byte_strings(&headers).unwrap();
             let head = moli_fetch::ResponseHead {
                 final_url: request.url.clone(),
                 status,

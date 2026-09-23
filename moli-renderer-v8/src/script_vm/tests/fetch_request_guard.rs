@@ -25,7 +25,7 @@ fn fetch_request_initializers_use_request_header_guards() {
             status_text: None,
             final_url: request.url.clone(),
             status: 200,
-            headers: vec![("content-type".to_owned(), "application/json".to_owned())],
+            headers: vec![("content-type".to_owned(), b"application/json".to_vec())],
             request_cookie_report: None,
             cookie_set_reports: Vec::new(),
             redirected: false,
