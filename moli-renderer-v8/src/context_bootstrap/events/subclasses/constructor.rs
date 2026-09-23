@@ -30,6 +30,21 @@ fn event_subclass_constructor_callback<'s>(
         return;
     }
 
+    if matches!(
+        kind,
+        EventSubclassKind::NavigateEvent | EventSubclassKind::NavigationCurrentEntryChangeEvent
+    ) && args.length() < 2
+    {
+        throw_type_error(
+            scope,
+            &format!(
+                "Failed to construct '{}': 2 arguments required.",
+                kind.constructor_name()
+            ),
+        );
+        return;
+    }
+
     let wrapper = args.this();
     let event = new_event_state(scope);
     let Some(event_type) = event_type_argument(scope, &args, kind.constructor_name()) else {
@@ -87,6 +102,24 @@ fn event_subclass_constructor_callback<'s>(
     } else {
         None
     };
+    let navigate_event_init = if kind == EventSubclassKind::NavigateEvent {
+        let Some(init) = navigation_init::parse_navigate_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let current_entry_change_event_init =
+        if kind == EventSubclassKind::NavigationCurrentEntryChangeEvent {
+            let Some(init) = navigation_init::parse_current_entry_change_event_init(scope, &args)
+            else {
+                return;
+            };
+            Some(init)
+        } else {
+            None
+        };
     let (bubbles, cancelable, composed) = security_policy_init
         .as_ref()
         .map(security_policy::SecurityPolicyViolationEventInit::event_flags)
@@ -110,6 +143,16 @@ fn event_subclass_constructor_callback<'s>(
             clipboard_change_event_init
                 .as_ref()
                 .map(data::ClipboardChangeEventInitMembers::event_flags)
+        })
+        .or_else(|| {
+            navigate_event_init
+                .as_ref()
+                .map(navigation_init::NavigateEventInitMembers::event_flags)
+        })
+        .or_else(|| {
+            current_entry_change_event_init
+                .as_ref()
+                .map(navigation_init::NavigationCurrentEntryChangeEventInitMembers::event_flags)
         })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
@@ -219,14 +262,19 @@ fn event_subclass_constructor_callback<'s>(
                 .initialize(scope, event);
         }
         EventSubclassKind::NavigationCurrentEntryChangeEvent => {
-            if !data::initialize_navigation_current_entry_change_event(scope, event, init) {
-                return;
-            }
+            data::initialize_navigation_current_entry_change_event(
+                scope,
+                event,
+                current_entry_change_event_init
+                    .expect("NavigationCurrentEntryChangeEvent init should be parsed"),
+            );
         }
         EventSubclassKind::NavigateEvent => {
-            if !data::initialize_navigate_event(scope, event, init) {
-                return;
-            }
+            data::initialize_navigate_event(
+                scope,
+                event,
+                navigate_event_init.expect("NavigateEvent init should be parsed"),
+            );
         }
         EventSubclassKind::CloseEvent => data::initialize_close_event(scope, event, init),
         EventSubclassKind::SubmitEvent => {
@@ -291,7 +339,10 @@ pub(in crate::context_bootstrap) fn build_event_subclass_template<'s>(
     kind: EventSubclassKind,
 ) -> v8::Local<'s, v8::FunctionTemplate> {
     let data: v8::Local<'s, v8::Value> = v8::Integer::new(scope, kind as i32).into();
-    let length = if matches!(kind, EventSubclassKind::NavigateEvent) {
+    let length = if matches!(
+        kind,
+        EventSubclassKind::NavigateEvent | EventSubclassKind::NavigationCurrentEntryChangeEvent
+    ) {
         2
     } else {
         1
