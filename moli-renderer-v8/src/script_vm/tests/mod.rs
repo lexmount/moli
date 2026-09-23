@@ -2290,11 +2290,11 @@ mod dom_xhr;
 
 mod svg_length_list_native_receivers;
 
+mod dynamic_inline_scripts;
 mod element_click;
 mod eme_owner_interface_exposure_interfaces;
 mod encoded_video_chunk_shell;
 mod event_receivers;
-mod dynamic_inline_scripts;
 mod fetch_integrity;
 mod fetch_referrer;
 mod fetch_request_guard;

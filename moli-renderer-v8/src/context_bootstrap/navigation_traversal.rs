@@ -33,12 +33,12 @@ use super::navigation_result::{
 };
 use super::navigation_traversal_execution::queue_navigation_traversal_with_result;
 use super::navigation_traversal_plan::{
-    NavigationTraversalPlan, history_delta_traversal_plan, navigation_delta_traversal_plan,
-    navigation_index_traversal_plan,
+    HistoryDeltaTraversalPlan, NavigationTraversalPlan, history_delta_traversal_target,
+    navigation_delta_traversal_plan, navigation_index_traversal_plan,
 };
 use super::navigation_window::{
-    navigation_can_update_current_entry,
-    navigation_document_is_active, navigation_has_current_document, navigation_unload_event_active,
+    navigation_can_update_current_entry, navigation_document_is_active,
+    navigation_has_current_document, navigation_unload_event_active,
     runtime_window_owner, window_history_for_holder, window_location_for_holder,
     window_navigation_for_holder,
 };
@@ -541,56 +541,7 @@ fn history_traverse<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) {
-    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
-        queue_browser_owned_top_level_history_traversal(scope, history, delta);
-        return;
-    };
-    let source_owner = runtime_window_owner(scope, history);
-    if let Some(source_handle) =
-        super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-            scope,
-            source_owner,
-        )
-        && plan.targets.iter().any(|target| {
-            super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
-                scope,
-                source_handle,
-                target.owner,
-            )
-        })
-    {
-        return;
-    }
-    super::navigation_traversal_coordinator::queue_plan(scope, plan);
-}
-
-fn queue_browser_owned_top_level_history_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    delta: i64,
-) {
-    let owner = runtime_window_owner(scope, history);
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    if super::session_history::binding(scope, unsafe { &mut *host_ptr }, owner)
-        .popup
-        .is_some()
-    {
-        return;
-    }
-    let top_owner = super::navigation_window::runtime_top_window_owner(scope, owner);
-    if let Some(source_handle) =
-        super::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, owner)
-        && super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
-            scope,
-            source_handle,
-            top_owner,
-        )
-    {
-        return;
-    }
-    unsafe { &mut *host_ptr }.record_pending_top_level_history_traversal(delta);
+    super::navigation_traversal_execution::queue_history_traversal_by_delta(scope, history, delta);
 }
 
 pub(crate) fn queue_top_level_history_traversal_by_delta(
@@ -601,13 +552,15 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     let Some(history) = window_history_for_holder(scope, global) else {
         return false;
     };
-    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
+    let Some(HistoryDeltaTraversalPlan::Traverse(plan)) =
+        history_delta_traversal_target(scope, history, delta, None)
+    else {
         return false;
     };
     if plan.has_cross_document_root(scope) {
         return false;
     }
-    super::navigation_traversal_coordinator::queue_plan(scope, plan);
+    history_traverse(scope, history, delta);
     true
 }
 
