@@ -82,20 +82,29 @@ pub(crate) enum DocumentNavigationEmbeddingContext<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct DocumentConnectPolicySnapshot {
+pub(crate) struct DocumentRequestPolicySnapshot {
+    resource_kind: ContentSecurityPolicyResourceKind,
     policy_self_url: Option<Box<Url>>,
     enforce_policies: Vec<DocumentContentSecurityPolicyString>,
     report_only_policies: Vec<String>,
     reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
 }
 
-impl DocumentConnectPolicySnapshot {
+pub(crate) type DocumentConnectPolicySnapshot = DocumentRequestPolicySnapshot;
+
+impl DocumentRequestPolicySnapshot {
+    pub(crate) fn for_resource_kind(mut self, kind: ContentSecurityPolicyResourceKind) -> Self {
+        self.resource_kind = kind;
+        self
+    }
+
     pub(crate) fn from_policies(
         enforce_policies: Vec<String>,
         report_only_policies: Vec<String>,
         reporting_endpoints: ContentSecurityPolicyReportingEndpoints,
     ) -> Self {
         Self {
+            resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
             policy_self_url: None,
             enforce_policies: document_response_content_security_policy_strings(
                 &enforce_policies,
@@ -136,21 +145,36 @@ impl DocumentConnectPolicySnapshot {
         document_url: &Url,
         request_url: &Url,
     ) -> DocumentContentSecurityPolicyCheck {
+        self.check_url(
+            document_url,
+            request_url,
+            ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+        )
+    }
+
+    pub(crate) fn check_url(
+        &self,
+        document_url: &Url,
+        request_url: &Url,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> DocumentContentSecurityPolicyCheck {
         let policy_url = self.policy_self_url.as_deref().unwrap_or(document_url);
         let mut result = DocumentContentSecurityPolicyCheck {
-            report_only_violations: document_connect_policy_violations(
+            report_only_violations: document_url_policy_violations(
                 &self.report_only_policies,
                 &self.reporting_endpoints,
                 policy_url,
                 request_url,
-                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                self.resource_kind,
+                redirect_status,
                 ContentSecurityPolicyDisposition::Report,
             ),
-            enforced_violations: document_connect_policy_violations_from_document_policies(
+            enforced_violations: document_url_policy_violations_from_document_policies(
                 self.enforce_policies.clone(),
                 policy_url,
                 request_url,
-                ContentSecurityPolicyRedirectStatus::FollowedRedirect,
+                self.resource_kind,
+                redirect_status,
                 ContentSecurityPolicyDisposition::Enforce,
             ),
         };
@@ -188,7 +212,7 @@ impl DocumentConnectPolicySnapshot {
             self.enforce_policies.clone(),
             self.policy_self_url.as_deref().unwrap_or(document_url),
             request_url,
-            ContentSecurityPolicyResourceKind::DocumentConnect,
+            self.resource_kind,
             redirect_status,
             ContentSecurityPolicyDisposition::Enforce,
         )
@@ -207,11 +231,12 @@ impl DocumentConnectPolicySnapshot {
         request_url: &Url,
         redirect_status: ContentSecurityPolicyRedirectStatus,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
-        document_connect_policy_violation(
+        document_url_policy_violation(
             &self.report_only_policies,
             &self.reporting_endpoints,
             self.policy_self_url.as_deref().unwrap_or(document_url),
             request_url,
+            self.resource_kind,
             redirect_status,
             ContentSecurityPolicyDisposition::Report,
         )
@@ -1075,6 +1100,7 @@ impl DocumentRuntime {
             );
         }
         DocumentConnectPolicySnapshot {
+            resource_kind: ContentSecurityPolicyResourceKind::DocumentConnect,
             policy_self_url: policy
                 .content_security_policy_self_url
                 .clone()
@@ -1978,7 +2004,7 @@ impl DocumentRuntime {
         )
     }
 
-    fn queue_content_security_policy_violation_event_for_target<'s>(
+    pub(crate) fn queue_content_security_policy_violation_event_for_target<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
@@ -2240,25 +2266,6 @@ fn content_security_policy_frame_ancestors_violations_with_disposition_and_repor
             std::slice::from_ref(policy), protected_url, ancestor_origins, disposition, reporting_endpoints,
         )
     }).collect()
-}
-
-fn document_connect_policy_violation(
-    policies: &[String],
-    reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
-    document_url: &Url,
-    request_url: &Url,
-    redirect_status: ContentSecurityPolicyRedirectStatus,
-    disposition: ContentSecurityPolicyDisposition,
-) -> Option<DocumentContentSecurityPolicyViolation> {
-    document_url_policy_violation(
-        policies,
-        reporting_endpoints,
-        document_url,
-        request_url,
-        ContentSecurityPolicyResourceKind::DocumentConnect,
-        redirect_status,
-        disposition,
-    )
 }
 
 fn document_connect_policy_violations(

@@ -228,6 +228,14 @@ impl DocumentRuntime {
         )
     }
 
+    pub(crate) fn queue_font_loading_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+    ) -> u32 {
+        self.timeouts.queue_font_loading_task(scope, callback)
+    }
+
     pub(crate) fn queue_resource_timing_buffer_full_task<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,

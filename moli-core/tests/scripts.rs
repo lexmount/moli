@@ -1,5 +1,7 @@
 #[path = "scripts/child_script_text.rs"]
 mod child_script_text;
+#[path = "scripts/font_loading.rs"]
+mod font_loading;
 #[path = "scripts/integrity.rs"]
 mod integrity;
 

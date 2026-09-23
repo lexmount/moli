@@ -808,6 +808,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Fetch(_) => "fetch",
         PendingSubresourceContinuation::Image { .. } => "image",
         PendingSubresourceContinuation::Media { .. } => "media",
+        PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",

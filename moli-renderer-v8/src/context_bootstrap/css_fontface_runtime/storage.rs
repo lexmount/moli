@@ -256,6 +256,11 @@ fn add_font_face_set_owner<'s>(
     };
     if !array_contains_value(scope, owners, owner.into()) {
         let _ = owners.set_index(scope, owners.length(), owner.into());
+        if let Ok(face) = v8::Local::<v8::Object>::try_from(face)
+            && super::font_face::font_face_status(scope, face).as_deref() == Some("loading")
+        {
+            super::events::add_loading_font(scope, owner, face);
+        }
     }
 }
 
@@ -280,6 +285,7 @@ fn remove_font_face_set_owner<'s>(
         return;
     };
     set_private_value(scope, face, FONT_FACE_SET_OWNERS_SLOT, next.into());
+    super::events::remove_font_from_loading_set(scope, owner, face.into());
 }
 
 pub(in crate::context_bootstrap) fn set_font_face_set_slot_value<'s>(
