@@ -1137,6 +1137,60 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn queue_font_loading_task<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        callback: v8::Local<'s, v8::Function>,
+    ) {
+        // The host and its DocumentRuntime are owned by the same ScriptVm.
+        unsafe { &mut *self.runtime }.queue_font_loading_task(scope, callback);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_async_font_face_fetch(
+        &mut self,
+        execution_context: super::WindowExecutionContextBinding,
+        resource_loader: &crate::network::context::DocumentResourceLoader,
+        font: crate::types::PendingFontFaceFetch,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+    ) -> Option<u64> {
+        let request_origin = resource_loader.fetch_context().request_origin();
+        let load = resource_loader.register_load(
+            ResourceLoadKind::Font,
+            ResourceLoadDisposition::Ordinary,
+            Some(cancel_handle),
+        )?;
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        self.record_pending_subresource_request_started_with_initiator(
+            &info,
+            SubresourceRequestInitiatorType::Css,
+            load.disposition(),
+        );
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                redirect_headers: None,
+                request_origin,
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::window(execution_context),
+                credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
+                request_mode: moli_fetch::RequestMode::Cors,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::FontFace(Box::new(font)),
+                deferred_request_started: false,
+                blob_url_entry: None,
+            },
+        );
+        self.note_subresource_activity();
+        Some(internal_id)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_async_text_track_subresource_fetch(
         &mut self,
@@ -1616,14 +1670,25 @@ impl JsContextHost {
                     .get(&internal_id)
                     .map(|state| &state.pending)
             })?;
-        let fetch = pending.continuation.window_fetch()?;
-        if !fetch.connect_policy().has_policies() {
+        let (policy, redirect_state, report_context) =
+            if let Some(fetch) = pending.continuation.window_fetch() {
+                (
+                    fetch.connect_policy(),
+                    fetch.redirect_csp_state(),
+                    fetch.csp_report_context(),
+                )
+            } else if let PendingSubresourceContinuation::FontFace(font) = &pending.continuation {
+                (&font.policy, &font.redirect_state, &font.report_context)
+            } else {
+                return None;
+            };
+        if !policy.has_policies() {
             return None;
         }
-        let report_context = fetch.csp_report_context().clone();
+        let report_context = report_context.clone();
         let completion_tx = self.resource_completion_sender();
-        fetch.redirect_csp_state().redirect_check(
-            fetch.connect_policy().clone(),
+        redirect_state.redirect_check(
+            policy.clone(),
             pending.info.document_url.clone(),
             pending.info.url.clone(),
             move |violation| {

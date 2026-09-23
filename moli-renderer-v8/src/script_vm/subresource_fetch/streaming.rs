@@ -849,6 +849,11 @@ impl ScriptVm {
                         started.internal_id,
                         false,
                     ),
+                    PendingSubresourceContinuation::FontFace(face) => {
+                        let face = v8::Local::new(scope, &face.face);
+                        crate::context_bootstrap::complete_font_face_resource(scope, face, None);
+                    }
+
                     PendingSubresourceContinuation::TextTrack {
                         track_handle,
                         sequence,
@@ -1092,6 +1097,11 @@ impl ScriptVm {
                     started.internal_id,
                     crate::network_host::media_response_status_is_successful(started.head.status),
                 ),
+                PendingSubresourceContinuation::FontFace(face) => {
+                    let face = v8::Local::new(scope, &face.face);
+                    crate::context_bootstrap::complete_font_face_resource(scope, face, None);
+                }
+
                 PendingSubresourceContinuation::TextTrack {
                     track_handle,
                     sequence,

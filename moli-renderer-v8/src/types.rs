@@ -79,6 +79,13 @@ pub use crate::protocol_types::{
     WebSocketLifecycleEvent, WebSocketLifecycleKind, WebSocketNetworkEvent,
 };
 
+pub(super) struct PendingFontFaceFetch {
+    pub(super) face: v8::Global<v8::Object>,
+    pub(super) policy: crate::document_runtime::DocumentRequestPolicySnapshot,
+    pub(super) redirect_state: crate::network_host::FetchCspRedirectState,
+    pub(super) report_context: crate::network_host::WindowCspReportRequestContext,
+}
+
 pub(super) enum PendingSubresourceContinuation {
     Beacon,
     CspReport {
@@ -86,6 +93,7 @@ pub(super) enum PendingSubresourceContinuation {
     },
     EventSource(v8::Global<v8::Object>),
     Fetch(PendingWindowFetchContinuation),
+    FontFace(Box<PendingFontFaceFetch>),
     Image {
         image_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::ImageLoadEventId,
@@ -175,7 +183,9 @@ impl PendingSubresourceContinuation {
                 ..
             } => *request_initiator_type,
             Self::Media { .. } | Self::TextTrack { .. } => SubresourceRequestInitiatorType::Other,
-            Self::StylesheetSubresource { .. } => SubresourceRequestInitiatorType::Css,
+            Self::StylesheetSubresource { .. } | Self::FontFace(_) => {
+                SubresourceRequestInitiatorType::Css
+            }
             _ => SubresourceRequestInitiatorType::Script,
         }
     }

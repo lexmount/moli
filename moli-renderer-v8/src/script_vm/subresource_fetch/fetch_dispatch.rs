@@ -516,6 +516,22 @@ impl ScriptVm {
             let security_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
             let mut opaque_response_blocked = false;
             let result = result.and_then(|response| {
+                if let PendingSubresourceContinuation::FontFace(font) = &pending.continuation
+                    && response.final_url != pending.info.url
+                    && !font.redirect_state.was_checked(&response.final_url) {
+                    let redirect_status = if response.redirect_chain.is_empty() {
+                        ContentSecurityPolicyRedirectStatus::NoRedirect
+                    } else { ContentSecurityPolicyRedirectStatus::FollowedRedirect };
+                    let (reports, enforced) = font.policy.check_url(&pending.info.document_url, &response.final_url, redirect_status).into_violations();
+                    let error = enforced.first().map(|violation| crate::document_runtime::document_content_security_policy_error_message(violation, "FontFace"));
+                    for mut violation in reports.into_iter().chain(enforced) {
+                        report_window_fetch_csp_redirect_violation(scope, &context_host, &font.report_context, &pending.info.url, &mut violation);
+                    }
+                    if let Some(error) = error {
+                        return Err(error);
+                    }
+                }
+
                 if !response.redirect_chain.is_empty()
                     && let Some(message) = document_connect_csp_redirect_failure_message(
                         scope,
@@ -766,6 +782,18 @@ impl ScriptVm {
                                 response_status,
                             ),
                         ),
+                        PendingSubresourceContinuation::FontFace(face) => {
+                            crate::context_bootstrap::record_resource_performance_entry(
+                                scope,
+                                crate::context_bootstrap::ResourcePerformanceEntry::from_network_response(
+                                    pending.info.url.as_str(), "css", None, &observable_response,
+                                ),
+                            );
+                            let bytes = ((200..=299).contains(&response_status) && !opaque_response_blocked)
+                                .then(|| observable_response.body_bytes().to_vec());
+                            let face = v8::Local::new(scope, &face.face);
+                            crate::context_bootstrap::complete_font_face_resource(scope, face, bytes);
+                        }
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,
                             sequence,
@@ -911,6 +939,18 @@ impl ScriptVm {
                             pending.info.internal_id,
                             false,
                         ),
+                        PendingSubresourceContinuation::FontFace(face) => {
+                            if !consumed_preload {
+                                crate::context_bootstrap::record_resource_performance_entry(
+                                    scope,
+                                    crate::context_bootstrap::ResourcePerformanceEntry::from_network_failure(
+                                        pending.info.url.as_str(), "css", None,
+                                    ),
+                                );
+                            }
+                            let face = v8::Local::new(scope, &face.face);
+                            crate::context_bootstrap::complete_font_face_resource(scope, face, None);
+                        }
                         PendingSubresourceContinuation::TextTrack {
                             track_handle,
                             sequence,
