@@ -264,7 +264,11 @@ fn queue_font_face_set_task<'s>(
         .expect("font loading task");
     // The internal task scheduler captures this realm's exact Window/Document
     // lifetime and discards the callback when that owner retires.
-    unsafe { &mut *host_ptr }.queue_internal_task(scope, callback);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host_ptr }.queue_internal_task(scope, callback);
+    } else {
+        crate::worker::queue_worker_font_task(scope, callback);
+    }
 }
 
 fn run_font_face_set_task<'s>(
