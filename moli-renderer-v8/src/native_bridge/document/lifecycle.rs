@@ -5,8 +5,8 @@ use super::super::node::{
 };
 use super::{JsContextHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
-    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
-    form_control_is_effectively_disabled, is_text_control,
+    TextEditInputType, contenteditable_editing_host, dispatch_text_control_event,
+    document_copy_command_supported, form_control_is_effectively_disabled, is_text_control,
     queue_text_control_document_selection_change_event, replace_contenteditable_selection,
     replace_text_control_selection, replace_text_control_selection_for_insert_html,
     run_document_copy_command, text_control_value,

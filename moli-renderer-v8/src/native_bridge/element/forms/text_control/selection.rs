@@ -195,7 +195,10 @@ fn replace_text_control_selection_with_events(
     }
 
     let runtime = unsafe { &*runtime_ptr };
-    let clipboard_edit = matches!(input_type, TextEditInputType::InsertFromPaste | TextEditInputType::DeleteByCut);
+    let clipboard_edit = matches!(
+        input_type,
+        TextEditInputType::InsertFromPaste | TextEditInputType::DeleteByCut
+    );
     let handle = if clipboard_edit {
         let Some(active) = runtime.active_element_handle() else {
             return false;
@@ -215,10 +218,26 @@ fn replace_text_control_selection_with_events(
     {
         return false;
     }
-    if clipboard_edit && runtime.dom_host().node(handle).and_then(Node::as_element).is_none_or(|element| {
-        !(element.is_html_textarea() || (element.is_html_input() && matches!(element.input_type(),
-            InputType::Text | InputType::Search | InputType::Tel | InputType::Url | InputType::Email | InputType::Password | InputType::Number)))
-    }) {
+    if clipboard_edit
+        && runtime
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_none_or(|element| {
+                !(element.is_html_textarea()
+                    || (element.is_html_input()
+                        && matches!(
+                            element.input_type(),
+                            InputType::Text
+                                | InputType::Search
+                                | InputType::Tel
+                                | InputType::Url
+                                | InputType::Email
+                                | InputType::Password
+                                | InputType::Number
+                        )))
+            })
+    {
         return false;
     }
     let value = text_control_value(runtime, handle);
