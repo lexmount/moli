@@ -589,7 +589,13 @@ fn history_traversal_target_window<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     match target.dispatch_scope() {
         crate::native_bridge::OwnerDispatchScope::Top => {
-            Some(scope.get_current_context().global(scope))
+            // An isolated realm may initiate this task, but the Page's
+            // default Window owns the history being traversed.
+            Some(
+                host.page_default_context(scope)
+                    .unwrap_or_else(|| scope.get_current_context())
+                    .global(scope),
+            )
         }
         crate::native_bridge::OwnerDispatchScope::Child(child_handle) => {
             host.child_browsing_context_window_wrapper(scope, child_handle)

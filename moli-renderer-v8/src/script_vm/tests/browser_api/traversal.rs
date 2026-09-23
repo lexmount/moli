@@ -1345,7 +1345,7 @@ result.finished.catch(error => __lmClosedHistoryRoute.push("finished:" + error.n
 }
 
 #[tokio::test]
-async fn history_back_calls_from_default_and_isolated_world_coalesce_per_window() {
+async fn history_back_calls_from_default_and_isolated_world_preserve_each_step() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
         new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
@@ -1379,9 +1379,24 @@ history.pushState(null, "", "#two");
             .await
             .expect("default realm traversal should run")
     );
+    assert_eq!(
+        vm.eval("location.hash")
+            .expect("first queued traversal should preserve its destination"),
+        "#one"
+    );
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("isolated realm traversal should run after the default realm traversal")
+    );
+    assert_eq!(
+        vm.eval("location.hash")
+            .expect("second queued traversal should reach the initial entry"),
+        ""
+    );
     assert!(
         !vm.run_one_history_traversal_executor_turn(&loader)
             .await
-            .expect("history source should be drained after one Window traversal position")
+            .expect("history source should be drained after both traversals")
     );
 }

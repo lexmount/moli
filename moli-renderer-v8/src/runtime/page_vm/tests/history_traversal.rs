@@ -72,9 +72,10 @@ history.back();
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn history_back_coalesces_into_one_typed_turn_and_never_enters_page_timer() {
+async fn history_back_preserves_each_typed_turn_and_never_enters_page_timer() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let document_url = Url::parse("https://example.com/history-typed-turn").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
@@ -112,28 +113,45 @@ location.hash
             !page_vm.vm().has_ready_timeout(),
             "history traversal admission must not manufacture a PageTimer descriptor"
         );
-        assert_eq!(
-            page_vm.vm().ms_to_next_timeout(),
-            None
-        );
+        assert_eq!(page_vm.vm().ms_to_next_timeout(), None);
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
                 .await?,
-            "the coalesced traversal should consume one production selected task"
+            "the first traversal should consume one production selected task"
+        );
+        assert_eq!(page_vm.vm_mut().eval("location.hash")?, "#one");
+        assert_eq!(
+            page_vm.vm_mut().eval("__historyTurnLog.join('|')")?,
+            "popstate:#one|microtask:#one",
+            "the selected traversal must checkpoint its event microtasks before the next turn"
+        );
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
+                .await?,
+            "the second traversal should retain its own production selected task"
         );
         assert_eq!(page_vm.vm_mut().eval("location.hash")?, "");
         assert_eq!(
             page_vm.vm_mut().eval("__historyTurnLog.join('|')")?,
-            "popstate:|microtask:",
-            "the selected traversal must checkpoint its event microtasks before the next turn"
+            "popstate:#one|microtask:#one|popstate:|microtask:"
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal, &loader)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
                 .await?,
-            "two pending history.back() calls for one LocalWindow must coalesce into one source position"
+            "the history source should drain after both ordered traversal tasks"
         );
         Ok::<_, anyhow::Error>(())
     })

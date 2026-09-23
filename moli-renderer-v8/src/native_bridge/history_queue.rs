@@ -118,6 +118,7 @@ impl HistoryQueueState {
     fn pending_history_traversal_target_index(&self, target: WindowTaskTarget) -> Option<u32> {
         self.pending_history_traversal_tasks
             .iter()
+            .rev()
             .find_map(|queued| match &queued.action {
                 PendingHistoryTraversalAction::SameDocument(pending)
                     if pending.target == target =>
@@ -140,18 +141,22 @@ impl HistoryQueueState {
         info: Option<v8::Global<v8::Value>>,
         result: Option<PendingNavigationResult>,
     ) -> Option<RendererPageHistoryTraversalTaskId> {
-        if let Some(pending) = self
-            .pending_history_traversal_tasks
-            .iter_mut()
-            .find_map(|queued| match &mut queued.action {
-                PendingHistoryTraversalAction::SameDocument(pending)
-                    if pending.target == target =>
-                {
-                    Some(pending)
-                }
-                PendingHistoryTraversalAction::SameDocument(_)
-                | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
-            })
+        // History API requests are ordered steps, including a same-document
+        // traversal followed by a cross-document traversal. Only Navigation
+        // API requests with result promises can share a pending task.
+        if result.is_some()
+            && let Some(pending) =
+                self.pending_history_traversal_tasks
+                    .iter_mut()
+                    .find_map(|queued| match &mut queued.action {
+                        PendingHistoryTraversalAction::SameDocument(pending)
+                            if pending.target == target && !pending.results.is_empty() =>
+                        {
+                            Some(pending)
+                        }
+                        PendingHistoryTraversalAction::SameDocument(_)
+                        | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
+                    })
         {
             pending.target_index = target_index;
             pending.joint_step = joint_step;

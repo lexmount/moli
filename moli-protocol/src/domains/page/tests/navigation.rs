@@ -600,6 +600,115 @@ async fn joint_history_traversal_cross_document_before_same_document() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn queued_history_back_preserves_same_document_before_cross_document() {
+    assert_queued_history_same_then_cross_document(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn queued_history_forward_preserves_same_document_before_cross_document() {
+    assert_queued_history_same_then_cross_document(true).await;
+}
+
+async fn assert_queued_history_same_then_cross_document(forward: bool) {
+    let app = axum::Router::new()
+        .fallback(|| async { axum::response::Html("<!doctype html><body>history fixture") });
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.process_async(json!({
+        "id": 9350, "method": "Page.navigate", "sessionId": "SID-1",
+        "params": {"url": format!("http://{addr}/top")}
+    }))
+    .await;
+    assert!(take_response_by_id(&mut ctx, 9350)["error"].is_null());
+    wait_until_message(&mut ctx, Some("SID-1"), "history fixture load", |message| {
+        message["method"] == "Page.domContentEventFired"
+    })
+    .await;
+    joint_history_test_evaluate(
+        &mut ctx,
+        r#"
+        globalThis.frame = document.createElement('iframe');
+        globalThis.withFrameLoad = action => new Promise(resolve => {
+            frame.onload = () => resolve(true);
+            action();
+        });
+        globalThis.withFrameHash = action => new Promise(resolve => {
+            frame.contentWindow.addEventListener('hashchange', () => resolve(true), {once:true});
+            action();
+        });
+        frame.src = '/child?first';
+        withFrameLoad(() => document.body.append(frame));
+        "#,
+    )
+    .await;
+    // Separate protocol commands start the next navigation outside the
+    // preceding load handler, preserving push rather than replace semantics.
+    let hash = "withFrameHash(() => frame.contentWindow.location.hash = '#same')";
+    let load = "withFrameLoad(() => frame.contentWindow.location.search = '?second')";
+    for script in if forward { [hash, load] } else { [load, hash] } {
+        joint_history_test_evaluate(&mut ctx, script).await;
+    }
+    if forward {
+        joint_history_test_evaluate(
+            &mut ctx,
+            "withFrameLoad(() => frame.contentWindow.history.back())",
+        )
+        .await;
+        joint_history_test_evaluate(
+            &mut ctx,
+            "withFrameHash(() => frame.contentWindow.history.back())",
+        )
+        .await;
+    }
+    let method = if forward { "forward" } else { "back" };
+    let synchronous = joint_history_test_evaluate(
+        &mut ctx,
+        &format!(
+            r#"
+            globalThis.traversalEvents = [];
+            const snapshot = kind => [kind, frame.contentWindow.location.search,
+                frame.contentWindow.location.hash];
+            frame.contentWindow.addEventListener('hashchange', event => {{
+                const destination = new URL(event.newURL);
+                traversalEvents.push(['hash', destination.search, destination.hash]);
+            }}, {{once:true}});
+            globalThis.traversalsFinished = new Promise(resolve => {{
+                frame.onload = () => {{
+                    traversalEvents.push(snapshot('load'));
+                    resolve(traversalEvents);
+                }};
+            }});
+            frame.contentWindow.history.{method}();
+            frame.contentWindow.history.{method}();
+            [frame.contentWindow.location.search, frame.contentWindow.location.hash];
+            "#
+        ),
+    )
+    .await;
+    assert_eq!(
+        synchronous,
+        if forward {
+            json!(["?first", ""])
+        } else {
+            json!(["?second", "#same"])
+        }
+    );
+    let events = joint_history_test_evaluate(&mut ctx, "traversalsFinished").await;
+    assert_eq!(
+        events,
+        if forward {
+            json!([["hash", "?first", "#same"], ["load", "?second", "#same"]])
+        } else {
+            json!([["hash", "?second", ""], ["load", "?first", ""]])
+        }
+    );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn joint_history_traversal_same_document_before_cross_document() {
     assert_joint_history_multi_frame_traversal("b", false, false).await;
 }
