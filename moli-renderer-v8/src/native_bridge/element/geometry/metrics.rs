@@ -9,7 +9,7 @@ use super::super::styles::raw_inline_style_property_value;
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
 use super::client_rect::ClientRect;
 use super::mock::compute_mock_client_rect;
-use super::provider::observable_element_metrics;
+use super::provider::read_element_metrics;
 use super::scroll::{
     apply_observable_window_scroll, node_scroll_position, queue_scroll_observable_effects,
     set_node_scroll_position,
@@ -24,7 +24,7 @@ fn node_scroll_position_value<'s>(
     horizontal: bool,
 ) -> Result<f64, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
-        let metrics = observable_element_metrics(
+        let metrics = read_element_metrics(
             unsafe { &*runtime_ptr },
             handle,
             moli_layout::LayoutFlushReason::SynchronousGeometry,
@@ -63,7 +63,7 @@ fn node_scroll_position_setter_for_object<'s>(
     }
     let runtime = unsafe { &mut *runtime_ptr };
     let (minimum, maximum) = if runtime.layout_policy().uses_real_layout() {
-        observable_element_metrics(
+        read_element_metrics(
             runtime,
             handle,
             moli_layout::LayoutFlushReason::SynchronousGeometry,
@@ -231,7 +231,7 @@ fn scroll_node_to<'s>(
     } else {
         parse_scroll_coordinates(scope, &args, current_left, current_top)
     };
-    let metrics = observable_element_metrics(
+    let metrics = read_element_metrics(
         unsafe { &*runtime_ptr },
         handle,
         moli_layout::LayoutFlushReason::SynchronousGeometry,
@@ -273,7 +273,7 @@ fn node_box_metric_from_object<'s>(
     metric: &str,
 ) -> Result<i32, moli_layout::LayoutError> {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, object) {
-        let metrics = observable_element_metrics(
+        let metrics = read_element_metrics(
             unsafe { &*runtime_ptr },
             handle,
             moli_layout::LayoutFlushReason::SynchronousGeometry,
@@ -562,7 +562,7 @@ pub(in crate::native_bridge) fn node_offset_parent_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let metrics = match observable_element_metrics(
+    let metrics = match read_element_metrics(
         runtime,
         handle,
         moli_layout::LayoutFlushReason::SynchronousGeometry,
@@ -607,7 +607,13 @@ pub(in crate::native_bridge) fn node_scroll_into_view_if_needed_callback(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     if let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object(scope, args.this())
-        && let Err(error) = scroll_node_into_view_if_needed(scope, runtime_ptr, handle, None)
+        && let Err(error) = scroll_node_into_view_if_needed(
+            scope,
+            runtime_ptr,
+            handle,
+            None,
+            moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
+        )
     {
         throw_scroll_layout_error(scope, "scrollIntoViewIfNeeded", error);
     }

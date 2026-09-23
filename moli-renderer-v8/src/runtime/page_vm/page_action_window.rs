@@ -73,6 +73,7 @@ impl PageVm {
         if let Some(batch) = self.page_action_window.window.take_due(admitted_at) {
             self.apply_page_action_batch(batch)?;
         }
+        self.vm().mouse_input_surface_hit(x, y, "wheel")?;
 
         let scope = self.document_lifecycle.identity();
         let admission = self.page_action_window.window.push(

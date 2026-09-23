@@ -63,6 +63,7 @@ async fn history_keeps_action_window_but_document_open_cancels_it() {
         local_executor
             .run(async move {
                 let mut page_vm = page_vm;
+                page_vm.vm_mut().eval("const root=document.documentElement || document.appendChild(document.createElement('html')); root.getBoundingClientRect()")?;
                 let initial_document = page_vm.document_lifecycle.identity();
                 let outcome = page_vm.queue_wheel_event(
                     10.0,

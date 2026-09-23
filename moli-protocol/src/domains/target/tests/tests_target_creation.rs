@@ -2121,6 +2121,12 @@ async fn anchor_left_click_activates_blank_target_to_foreground() {
                 ),
             )
             .await;
+            ctx.process_async(json!({
+                "id": 16_090, "method": "Runtime.evaluate",
+                "params": {"expression":"document.elementFromPoint(0, 0) !== null", "returnByValue":true}
+            })).await;
+            let geometry = ctx.take_response_by_id(16_090);
+            assert_eq!(geometry["result"]["result"]["value"], true);
             let _ = ctx.take_all();
 
             dispatch_anchor_left_click(&mut ctx, 16_100, 0).await;
@@ -2163,6 +2169,12 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                 ),
             )
             .await;
+            ctx.process_async(json!({
+                "id": 16_090, "method": "Runtime.evaluate",
+                "params": {"expression":"document.elementFromPoint(0, 0) !== null", "returnByValue":true}
+            })).await;
+            let geometry = ctx.take_response_by_id(16_090);
+            assert_eq!(geometry["result"]["result"]["value"], true);
             let _ = ctx.take_all();
             ctx.process_async(json!({
                 "id": 16_150,
@@ -2252,6 +2264,12 @@ async fn anchor_platform_new_tab_click_keeps_blank_target_in_background() {
                 ),
             )
             .await;
+            ctx.process_async(json!({
+                "id": 16_090, "method": "Runtime.evaluate",
+                "params": {"expression":"document.elementFromPoint(0, 0) !== null", "returnByValue":true}
+            })).await;
+            let geometry = ctx.take_response_by_id(16_090);
+            assert_eq!(geometry["result"]["result"]["value"], true);
             let _ = ctx.take_all();
 
             #[cfg(target_os = "macos")]

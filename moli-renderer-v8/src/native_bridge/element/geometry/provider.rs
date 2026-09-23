@@ -12,6 +12,67 @@ use super::mock::{
 };
 use crate::{document_runtime::DomHandle, native_bridge::JsContextHost};
 
+/// Native input reads the rendered snapshot; explicit geometry APIs may
+/// prepare layout. Both paths share the query and result conversion below.
+#[derive(Clone, Copy)]
+pub(crate) enum GeometryRead {
+    Demand(LayoutFlushReason),
+    Snapshot,
+}
+
+impl From<LayoutFlushReason> for GeometryRead {
+    fn from(reason: LayoutFlushReason) -> Self {
+        Self::Demand(reason)
+    }
+}
+
+impl GeometryRead {
+    pub(crate) fn for_default_action(runtime: &JsContextHost) -> Self {
+        if runtime
+            .current_input_event()
+            .is_some_and(|event| event.is_mouse())
+        {
+            Self::Snapshot
+        } else {
+            Self::Demand(LayoutFlushReason::SynchronousGeometry)
+        }
+    }
+}
+
+fn query_source(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    read: impl Into<GeometryRead>,
+    query: LayoutQuery<DomHandle>,
+) -> Result<Option<LayoutQueryAnswer<DomHandle>>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let reason = match read.into() {
+        GeometryRead::Snapshot if runtime.layout_policy().uses_real_layout() => {
+            return Ok(runtime
+                .with_latest_layout_tree_for_document(document, |tree| tree.answer_query(&query)));
+        }
+        GeometryRead::Snapshot => LayoutFlushReason::SynchronousGeometry,
+        GeometryRead::Demand(reason) => reason,
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![query]),
+    )?;
+    answers
+        .answers
+        .into_iter()
+        .next()
+        .map(Some)
+        .ok_or_else(|| provider_contract_error("source geometry"))
+}
+
 pub(crate) fn observable_geometry_batch(
     runtime: &JsContextHost,
     document: DomHandle,
@@ -25,27 +86,16 @@ pub(crate) fn observable_geometry_batch(
     }
 }
 
-pub(crate) fn observable_client_rects(
+pub(crate) fn read_client_rects(
     runtime: &JsContextHost,
     source: DomHandle,
-    reason: LayoutFlushReason,
+    reason: impl Into<GeometryRead>,
 ) -> Result<Vec<ClientRect>, LayoutError> {
-    if !runtime.dom_host().is_connected(source) {
-        return Ok(Vec::new());
-    }
-    let Some(document) = runtime.layout_document_for_source(source) else {
-        return Ok(Vec::new());
-    };
-    let answers = observable_geometry_batch(
-        runtime,
-        document,
-        reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::ClientRects { source }]),
-    )?;
-    match answers.answers.into_iter().next() {
+    match query_source(runtime, source, reason, LayoutQuery::ClientRects { source })? {
         Some(LayoutQueryAnswer::ClientRects(rects)) => {
             Ok(rects.into_iter().map(client_rect_from_quad).collect())
         }
+        None => Ok(Vec::new()),
         _ => Err(provider_contract_error("client rects")),
     }
 }
@@ -83,12 +133,12 @@ pub(crate) fn observable_sources_with_fragments(
     Ok(rendered)
 }
 
-pub(crate) fn observable_bounding_client_rect(
+pub(crate) fn read_bounding_client_rect(
     runtime: &JsContextHost,
     source: DomHandle,
-    reason: LayoutFlushReason,
+    reason: impl Into<GeometryRead>,
 ) -> Result<ClientRect, LayoutError> {
-    let mut rects = observable_client_rects(runtime, source, reason)?.into_iter();
+    let mut rects = read_client_rects(runtime, source, reason)?.into_iter();
     let Some(mut bounds) = rects.next() else {
         return Ok(zero_client_rect());
     };
@@ -145,25 +195,14 @@ pub(crate) fn observable_bounding_client_rects(
         .collect()
 }
 
-pub(crate) fn observable_box_model(
+pub(crate) fn read_box_model(
     runtime: &JsContextHost,
     source: DomHandle,
-    reason: LayoutFlushReason,
+    reason: impl Into<GeometryRead>,
 ) -> Result<Option<LayoutBoxModel>, LayoutError> {
-    if !runtime.dom_host().is_connected(source) {
-        return Ok(None);
-    }
-    let Some(document) = runtime.layout_document_for_source(source) else {
-        return Ok(None);
-    };
-    let answers = observable_geometry_batch(
-        runtime,
-        document,
-        reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::BoxModel { source }]),
-    )?;
-    match answers.answers.into_iter().next() {
+    match query_source(runtime, source, reason, LayoutQuery::BoxModel { source })? {
         Some(LayoutQueryAnswer::BoxModel(model)) => Ok(model),
+        None => Ok(None),
         _ => Err(provider_contract_error("box model")),
     }
 }
@@ -179,7 +218,7 @@ pub(crate) fn observable_scroll_adjusted_client_rect(
     reason: LayoutFlushReason,
 ) -> Result<ClientRect, LayoutError> {
     if runtime.layout_policy().uses_real_layout() {
-        observable_bounding_client_rect(runtime, source, reason)
+        read_bounding_client_rect(runtime, source, reason)
     } else {
         Ok(compute_mock_scroll_adjusted_client_rect(
             runtime, source, scroll_x, scroll_y,
@@ -193,43 +232,31 @@ pub(crate) fn observable_event_offset(
     point: LayoutPoint,
     reason: LayoutFlushReason,
 ) -> Result<LayoutPoint, LayoutError> {
-    if !runtime.dom_host().is_connected(source) {
-        return Ok(point);
-    }
-    let Some(document) = runtime.layout_document_for_source(source) else {
-        return Ok(point);
-    };
-    let answers = observable_geometry_batch(
+    match query_source(
         runtime,
-        document,
+        source,
         reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::EventOffset { source, point }]),
-    )?;
-    match answers.answers.into_iter().next() {
+        LayoutQuery::EventOffset { source, point },
+    )? {
         Some(LayoutQueryAnswer::EventOffset(offset)) => Ok(offset.unwrap_or(point)),
+        None => Ok(point),
         _ => Err(provider_contract_error("event offset")),
     }
 }
 
-pub(crate) fn observable_element_metrics(
+pub(crate) fn read_element_metrics(
     runtime: &JsContextHost,
     source: DomHandle,
-    reason: LayoutFlushReason,
+    reason: impl Into<GeometryRead>,
 ) -> Result<Option<LayoutElementMetrics<DomHandle>>, LayoutError> {
-    if !runtime.dom_host().is_connected(source) {
-        return Ok(None);
-    }
-    let Some(document) = runtime.layout_document_for_source(source) else {
-        return Ok(None);
-    };
-    let answers = observable_geometry_batch(
+    match query_source(
         runtime,
-        document,
+        source,
         reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::ElementMetrics { source }]),
-    )?;
-    match answers.answers.into_iter().next() {
+        LayoutQuery::ElementMetrics { source },
+    )? {
         Some(LayoutQueryAnswer::ElementMetrics(metrics)) => Ok(metrics),
+        None => Ok(None),
         _ => Err(provider_contract_error("element metrics")),
     }
 }
@@ -239,43 +266,31 @@ pub(crate) fn observable_used_grid_tracks(
     source: DomHandle,
     reason: LayoutFlushReason,
 ) -> Result<Option<LayoutResolvedGridTracks>, LayoutError> {
-    if !runtime.dom_host().is_connected(source) {
-        return Ok(None);
-    }
-    let Some(document) = runtime.layout_document_for_source(source) else {
-        return Ok(None);
-    };
-    let answers = observable_geometry_batch(
+    match query_source(
         runtime,
-        document,
+        source,
         reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::UsedGridTracks { source }]),
-    )?;
-    match answers.answers.into_iter().next() {
+        LayoutQuery::UsedGridTracks { source },
+    )? {
         Some(LayoutQueryAnswer::UsedGridTracks(tracks)) => Ok(tracks),
+        None => Ok(None),
         _ => Err(provider_contract_error("used Grid tracks")),
     }
 }
 
-pub(crate) fn observable_scroll_into_view_geometry(
+pub(crate) fn read_scroll_into_view_geometry(
     runtime: &JsContextHost,
     source: DomHandle,
-    reason: LayoutFlushReason,
+    reason: impl Into<GeometryRead>,
 ) -> Result<Option<LayoutScrollIntoViewGeometry<DomHandle>>, LayoutError> {
-    if !runtime.dom_host().is_connected(source) {
-        return Ok(None);
-    }
-    let Some(document) = runtime.layout_document_for_source(source) else {
-        return Ok(None);
-    };
-    let answers = observable_geometry_batch(
+    match query_source(
         runtime,
-        document,
+        source,
         reason,
-        &LayoutQueryBatch::new(vec![LayoutQuery::ScrollIntoViewGeometry { source }]),
-    )?;
-    match answers.answers.into_iter().next() {
+        LayoutQuery::ScrollIntoViewGeometry { source },
+    )? {
         Some(LayoutQueryAnswer::ScrollIntoViewGeometry(geometry)) => Ok(geometry),
+        None => Ok(None),
         _ => Err(provider_contract_error("scroll-into-view geometry")),
     }
 }

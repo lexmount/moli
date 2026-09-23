@@ -2,7 +2,7 @@ use super::ScriptVm;
 use super::input_helpers::clear_input_dispatch_state;
 use crate::document_runtime::DomHandle;
 use crate::dom::{forms::InputType, native::Node};
-use crate::native_bridge::element::{observable_client_rects, scroll_node_into_view_at_center};
+use crate::native_bridge::element::{read_client_rects, scroll_node_into_view_at_center};
 use crate::runtime::{
     RendererElementClickError as ClickError, RendererElementClickTarget as ClickTarget,
     RendererInputDispatchOutcome, RendererPointerEventProperties, RendererPreparedPointerClick,
@@ -59,12 +59,11 @@ impl ScriptVm {
                 .dom_host()
                 .owner_document_handle(handle)
                 .ok_or(ClickError::StaleNode)?;
-            let rect =
-                observable_client_rects(&host, handle, LayoutFlushReason::SynchronousGeometry)
-                    .map_err(layout_error)?
-                    .into_iter()
-                    .next()
-                    .ok_or(ClickError::NoClickableRect)?;
+            let rect = read_client_rects(&host, handle, LayoutFlushReason::SynchronousGeometry)
+                .map_err(layout_error)?
+                .into_iter()
+                .next()
+                .ok_or(ClickError::NoClickableRect)?;
             let viewport = host.layout_viewport_for_document(document);
             let left = rect.left.max(0.0);
             let top = rect.top.max(0.0);

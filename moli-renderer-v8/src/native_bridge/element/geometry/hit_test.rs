@@ -104,6 +104,28 @@ pub(crate) fn observable_input_surface_hit_test(
     ignore_pointer_events_none: bool,
     include_scrollbars: bool,
 ) -> Result<InputSurfaceHit, LayoutError> {
+    if runtime.layout_policy().uses_real_layout() {
+        let viewport = runtime.layout_viewport_for_document(document);
+        runtime.ensure_layout_at_viewport(document, LayoutFlushReason::HitTest, viewport)?;
+    }
+    snapshot_input_surface_hit_test(
+        runtime,
+        document,
+        point,
+        ignore_pointer_events_none,
+        include_scrollbars,
+    )
+}
+
+/// Coordinate input must not create or refresh geometry, including embedded
+/// frame geometry. Live DOM checks only reject sources that no longer exist.
+pub(crate) fn snapshot_input_surface_hit_test(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    point: LayoutPoint,
+    ignore_pointer_events_none: bool,
+    include_scrollbars: bool,
+) -> Result<InputSurfaceHit, LayoutError> {
     if !runtime.layout_policy().uses_real_layout() {
         return input_hit_test_via_documents(runtime, document, point, ignore_pointer_events_none)
             .map(|input| InputSurfaceHit {
@@ -111,11 +133,16 @@ pub(crate) fn observable_input_surface_hit_test(
                 control: None,
             });
     }
-
-    let viewport = runtime.layout_viewport_for_document(document);
-    runtime.ensure_layout_at_viewport(document, LayoutFlushReason::HitTest, viewport)?;
     runtime
         .with_latest_layout_tree_for_document(document, |tree| {
+            if runtime
+                .dom_host()
+                .dom()
+                .document_element_handle_for_document(document)
+                != Some(tree.source_root())
+            {
+                return Err(LayoutError::NoLayoutSnapshot);
+            }
             input_surface_hit_test_in_tree(
                 runtime,
                 tree,
@@ -126,7 +153,7 @@ pub(crate) fn observable_input_surface_hit_test(
                 0,
             )
         })
-        .ok_or(LayoutError::NoLayoutRoot)
+        .ok_or(LayoutError::NoLayoutSnapshot)?
 }
 
 pub(crate) fn observable_deep_hit_test(
@@ -194,7 +221,7 @@ fn input_surface_hit_test_in_tree(
     ignore_pointer_events_none: bool,
     include_scrollbars: bool,
     depth: usize,
-) -> InputSurfaceHit {
+) -> Result<InputSurfaceHit, LayoutError> {
     let live_dom_hit = if include_scrollbars {
         let mut live_dom_hit = None;
         for surface in tree.painted_surface_hits(point, ignore_pointer_events_none) {
@@ -210,10 +237,10 @@ fn input_surface_hit_test_in_tree(
                                 hit.viewport_to_local.concatenate(root_to_frame);
                         }
                     }
-                    return InputSurfaceHit {
+                    return Ok(InputSurfaceHit {
                         input: None,
                         control: Some(control),
-                    };
+                    });
                 }
                 LayoutPaintedSurfaceHit::Dom(layout_hit) => {
                     let Some(target) = element_for_hit_source(runtime, layout_hit.source) else {
@@ -231,44 +258,46 @@ fn input_surface_hit_test_in_tree(
         live_hit_in_tree(runtime, tree, point, ignore_pointer_events_none)
     };
     let Some((layout_hit, target)) = live_dom_hit else {
-        return InputSurfaceHit::default();
+        return Ok(InputSurfaceHit::default());
     };
     let target_hit = InputHit {
         handle: target,
         root_to_frame,
     };
     if depth >= CHILD_FRAME_DEPTH_LIMIT {
-        return InputSurfaceHit {
+        return Ok(InputSurfaceHit {
             input: Some(target_hit),
             control: None,
-        };
+        });
     }
-    let Some(child_tree) = tree.embedded_frame_tree(target) else {
-        return InputSurfaceHit {
+    let Some(child_document) = runtime.child_browsing_context_document_handle(target) else {
+        return Ok(InputSurfaceHit {
             input: Some(target_hit),
             control: None,
-        };
+        });
     };
-    if runtime
-        .child_browsing_context_document_handle(target)
-        .is_none()
-    {
-        return InputSurfaceHit {
-            input: Some(target_hit),
-            control: None,
-        };
-    }
     let Some(content_box) = layout_hit.local_content_box else {
-        return InputSurfaceHit {
+        return Ok(InputSurfaceHit {
             input: Some(target_hit),
             control: None,
-        };
+        });
     };
     if !content_box.contains(layout_hit.local_point) {
-        return InputSurfaceHit {
+        return Ok(InputSurfaceHit {
             input: Some(target_hit),
             control: None,
-        };
+        });
+    }
+    let child_tree = tree
+        .embedded_frame_tree(target)
+        .ok_or(LayoutError::NoLayoutSnapshot)?;
+    if runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(child_document)
+        != Some(child_tree.source_root())
+    {
+        return Err(LayoutError::NoLayoutSnapshot);
     }
     let frame_to_child = LayoutTransform2D::translation(-content_box.x, -content_box.y)
         .concatenate(layout_hit.viewport_to_local);
@@ -280,14 +309,14 @@ fn input_surface_hit_test_in_tree(
         ignore_pointer_events_none,
         include_scrollbars,
         depth + 1,
-    );
+    )?;
     if child_hit.input.is_some() || child_hit.control.is_some() {
-        child_hit
+        Ok(child_hit)
     } else {
-        InputSurfaceHit {
+        Ok(InputSurfaceHit {
             input: Some(target_hit),
             control: None,
-        }
+        })
     }
 }
 

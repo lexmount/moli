@@ -538,6 +538,9 @@ fn transformed_constrained_iframe_routes_hover_click_and_wheel_in_child_coordina
     assert!((rect[2].as_f64().unwrap() - 719.94).abs() < 0.1);
     assert!((rect[3].as_f64().unwrap() - 499.98).abs() < 0.1);
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish the composite snapshot before coordinate input");
+
     // Child point (240, 90) is the visible center of #hover-target. The
     // iframe's 0.78 transform maps it to root-frame point (287.2, 190.2).
     vm.dispatch_mouse_event_at_point(287.2, 190.2, "mousemove", -1, Some(0), 0.0, 0.0)
@@ -654,30 +657,25 @@ fn iframe_input_reuses_one_top_level_snapshot_without_parent_child_ping_pong() {
         "true"
     );
     let passes_before = vm.layout_pass_observability_for_test().1;
-    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
-        .expect("cold child hover should dispatch");
-    let passes_after_cold = vm.layout_pass_observability_for_test().1;
+    let error = vm
+        .dispatch_mouse_event_at_point(140.0, 130.0, "mousedown", 0, Some(1), 0.0, 0.0)
+        .expect_err("input cannot build the missing iframe projection");
     assert_eq!(
-        passes_after_cold,
-        passes_before + 1,
-        "input must upgrade a geometry-only tree through one shared recursive layout demand"
+        error.downcast_ref::<moli_layout::LayoutError>(),
+        Some(&moli_layout::LayoutError::NoLayoutSnapshot)
     );
-
-    // The first hover transition invalidates its sampled tree because :hover
-    // may affect geometry. Rebuilding for the same target publishes one complete
-    // top-level snapshot; a third move can then reuse it without a child publish
-    // evicting the parent.
-    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
-        .expect("stable child hover should rebuild once");
-    let passes_after_rebuild = vm.layout_pass_observability_for_test().1;
-    assert_eq!(passes_after_rebuild, passes_after_cold + 1);
-    vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
-        .expect("stable child hover should reuse the top-level snapshot");
-    assert_eq!(
-        vm.layout_pass_observability_for_test().1,
-        passes_after_rebuild,
-        "an embedded hit must leave the top-level composite snapshot reusable"
-    );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
+    assert_eq!(vm.pressed_mouse_buttons, 0);
+    assert!(vm.pending_mouse_press.is_none());
+    vm.eval("document.elementFromPoint(140, 130)")
+        .expect("explicit deep geometry demand");
+    let prepared = vm.layout_pass_observability_for_test().1;
+    assert_eq!(prepared, passes_before + 1);
+    for _ in 0..3 {
+        vm.dispatch_mouse_event_at_point(140.0, 130.0, "mousemove", -1, Some(0), 0.0, 0.0)
+            .expect("child hover should consume the published composite snapshot");
+        assert_eq!(vm.layout_pass_observability_for_test().1, prepared);
+    }
 
     let cached = vm
         .layout_snapshot_cache_observability_for_test()
@@ -734,6 +732,8 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
     )
     .expect("iframe wheel snapshot fixture should initialize");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish the composite snapshot before wheel input");
     let passes_before = vm.layout_pass_observability_for_test().1;
     vm.begin_batched_mouse_event_dispatch();
     for delta_y in [10.0, 20.0, 30.0] {
@@ -753,14 +753,14 @@ fn iframe_wheel_batch_reuses_one_composite_snapshot_for_every_scroll_step() {
     }
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
-        passes_before + 1,
-        "every wheel step must share the hit-test pass's recursively frozen snapshot"
+        passes_before,
+        "every wheel step must share the previously published snapshot"
     );
     vm.finish_batched_mouse_event_dispatch(Ok(()), true)
         .expect("batched child wheel effects should commit");
     assert_eq!(
         vm.layout_pass_observability_for_test().1,
-        passes_before + 1,
+        passes_before,
         "committing derived effects must not perform another layout"
     );
 
@@ -830,6 +830,9 @@ fn focusing_visible_child_target_does_not_scroll_partially_hidden_transformed_if
         "#,
     )
     .expect("iframe focus fixture should initialize");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish the composite snapshot before coordinate input");
 
     // Child point (60, 40), the button center, maps through scale(.78) to
     // root-frame point (146.8, 431.2). The button is visible, while the frame
@@ -989,6 +992,9 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         "[220,160,90,70,50,40]"
     );
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish the composite snapshot before coordinate input");
+
     // Nested client point (20, 20) maps through scale(.5), the inner frame's
     // 5px border+padding edge, scale(.75), the outer frame's 10px edge, and
     // the scrolled parent to root point (136.875, 109.375).
@@ -1034,6 +1040,9 @@ fn nested_transformed_iframe_input_composes_scroll_border_padding_and_exit_coord
         .expect("nested scrollbar result should evaluate"),
         format!("[70,{events_before_scrollbar}]")
     );
+    // The child scrollTop observation above published a child-only snapshot.
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish root geometry before leaving the child frame");
     // Move to a top-document element. The outgoing events must still convert
     // this new root point through the previous nested frame chain.
     vm.dispatch_mouse_event_at_point(10.0, 10.0, "mousemove", -1, Some(0), 0.0, 0.0)

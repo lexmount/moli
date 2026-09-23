@@ -1,4 +1,4 @@
-use super::super::geometry::observable_bounding_client_rect;
+use super::super::geometry::read_bounding_client_rect;
 use super::super::{
     canonical_cross_origin_value, canonical_loading_value, canonical_preload_value,
     construct_simple_event, dispatch_public_event, element_attribute, element_has_attribute,
@@ -424,7 +424,7 @@ fn media_is_inside_initial_viewport(
     runtime: &JsContextHost,
     handle: crate::document_runtime::DomHandle,
 ) -> bool {
-    let Ok(rect) = observable_bounding_client_rect(
+    let Ok(rect) = read_bounding_client_rect(
         runtime,
         handle,
         moli_layout::LayoutFlushReason::SynchronousGeometry,

@@ -4495,6 +4495,7 @@ impl ScriptVm {
                     runtime_ptr,
                     handle,
                     rect,
+                    moli_layout::LayoutFlushReason::SynchronousGeometry.into(),
                 )? {
                     Some(_) => RendererScrollIntoViewResult::ScrolledOrAlreadyVisible,
                     None => RendererScrollIntoViewResult::NodeDoesNotHaveLayoutObject,
