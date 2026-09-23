@@ -1503,7 +1503,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         // Process parser-discovery signals after the scoped parser step ends.
         let crate::live_document_parser::LiveDocumentParserDiscoverySignals {
             async_prefetch_scripts,
-            modulepreload_link_candidates,
+            preload_link_candidates,
             parser_meta_csp_candidates,
             blocking_stylesheet_inputs,
         } = discovery_signals;
@@ -1525,7 +1525,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         );
         page_vm
             .vm_mut()
-            .accept_parser_discovered_native_modulepreloads(modulepreload_link_candidates);
+            .accept_parser_discovered_native_modulepreloads(preload_link_candidates);
         if page_vm.main_document_scripting_enabled() {
             for script in async_prefetch_scripts {
                 self.admit_prepared_parser_async_script(page_vm, parser_document_owner, script);

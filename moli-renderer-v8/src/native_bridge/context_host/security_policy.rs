@@ -84,6 +84,24 @@ impl DocumentCspOutcome {
 }
 
 impl JsContextHost {
+    pub(in crate::native_bridge::context_host) fn preload_link_csp_check(
+        &self,
+        link: DomHandle,
+        request_url: &url::Url,
+    ) -> Option<DocumentContentSecurityPolicyCheck> {
+        let owner = self.owner_dispatch_scope_for_node(link)?;
+        let snapshot = self.owner_document_policy_snapshot(owner)?;
+        Some(
+            unsafe { &*self.runtime }.preload_link_csp_check_for_document(
+                snapshot.document_handle,
+                &snapshot.document_url,
+                &snapshot.policy_container,
+                link,
+                request_url,
+            ),
+        )
+    }
+
     pub(crate) fn base_url_content_security_policy_check(
         &self,
         check: &crate::dom::native::DocumentBaseUrlPolicyCheck,

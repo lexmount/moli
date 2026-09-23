@@ -86,13 +86,13 @@ fn parser_step_with_inline_script_surfaces_handoff_on_live_backend() {
     };
 
     let crate::parser::ParserPumpOutcome {
-            result,
-            discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
-            discovered_blocking_stylesheet_inputs: _,
-        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
-            "<!doctype html><html><head><script>window.answer = 42;</script></head><body><div>late</div></body></html>",
-        );
+        result,
+        discovered_async_prefetch_scripts: _,
+        discovered_preload_link_candidates: _,
+        discovered_blocking_stylesheet_inputs: _,
+    } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
+        "<!doctype html><html><head><script>window.answer = 42;</script></head><body><div>late</div></body></html>",
+    );
     let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
         panic!("expected parser step to stop at inline script handoff");
     };
@@ -136,7 +136,8 @@ fn parser_step_with_inline_script_surfaces_handoff_on_live_backend() {
 fn inline_script_handoff_is_classified_as_blocking_classic_on_live_backend() {
     let final_url = Url::parse("https://example.test/").expect("test url");
     let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-    let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
+    let mut state =
+        ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
     let driver = ParserDriver {
         loader: &loader,
         final_url: &state.final_url,
@@ -150,7 +151,7 @@ fn inline_script_handoff_is_classified_as_blocking_classic_on_live_backend() {
     let crate::parser::ParserPumpOutcome {
         result,
         discovered_async_prefetch_scripts: _,
-        discovered_modulepreload_link_candidates: _,
+        discovered_preload_link_candidates: _,
         discovered_blocking_stylesheet_inputs: _,
     } = driver
         .parser_session
@@ -188,95 +189,95 @@ fn no_execution_datablock_handoff_consumes_parser_prepare_state_on_live_backend(
         .expect("current-thread runtime should build");
 
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-            let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            let mut driver = ParserDriver {
-                loader: &loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
+        let mut driver = ParserDriver {
+            loader: &loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
 
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_blocking_stylesheet_inputs: _,
-                discovered_modulepreload_link_candidates: _,
-            } = driver
-                .parser_session
-                .stream_handle()
-                .borrow_mut()
-                .pump_parser_step(
-                "<!doctype html><html><head><script type=\"text/plain\" src=\"/data.txt\"></script></head></html>",
-            );
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at data-block script handoff");
-            };
-            let ParserScriptHandoff::NoExecution {
-                node_id: handle, ..
-            } = handoff.as_ref()
-            else {
-                panic!("data-block parser script should surface as no-execution handoff");
-            };
-            let handle = *handle;
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_blocking_stylesheet_inputs: _,
+            discovered_preload_link_candidates: _,
+        } = driver
+            .parser_session
+            .stream_handle()
+            .borrow_mut()
+            .pump_parser_step(
+            "<!doctype html><html><head><script type=\"text/plain\" src=\"/data.txt\"></script></head></html>",
+        );
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at data-block script handoff");
+        };
+        let ParserScriptHandoff::NoExecution {
+            node_id: handle, ..
+        } = handoff.as_ref()
+        else {
+            panic!("data-block parser script should surface as no-execution handoff");
+        };
+        let handle = *handle;
 
-            let parser_dom_host = driver
-                .parser_session
-                .stream_handle()
-                .borrow_mut()
-                .take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(104),
-                local_executor,
-                &loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
+        let parser_dom_host = driver
+            .parser_session
+            .stream_handle()
+            .borrow_mut()
+            .take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(104),
+            local_executor,
+            &loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
 
-            let before = page_vm.vm().snapshot_live_document();
-            let before_element = before
-                .node(handle)
-                .and_then(Node::as_element)
-                .expect("script element should exist before handoff");
-            assert!(before_element.script_parser_inserted_for_prepare());
-            assert!(
-                !before_element.script_async(),
-                "DOM should not classify data-block scripts before prepare"
-            );
+        let before = page_vm.vm().snapshot_live_document();
+        let before_element = before
+            .node(handle)
+            .and_then(Node::as_element)
+            .expect("script element should exist before handoff");
+        assert!(before_element.script_parser_inserted_for_prepare());
+        assert!(
+            !before_element.script_async(),
+            "DOM should not classify data-block scripts before prepare"
+        );
 
-            let outcome = driver
-                .handle_parse_time_script_handoff(&mut page_vm, *handoff, None)
-                .await
-                .expect("data-block handoff should resolve without executing V8");
-            assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
+        let outcome = driver
+            .handle_parse_time_script_handoff(&mut page_vm, *handoff, None)
+            .await
+            .expect("data-block handoff should resolve without executing V8");
+        assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
 
-            let after = page_vm.vm().snapshot_live_document();
-            let after_element = after
-                .node(handle)
-                .and_then(Node::as_element)
-                .expect("script element should exist after handoff");
-            assert!(
-                !after_element.script_parser_inserted_for_prepare(),
-                "inert data-block prepare should consume parser-inserted state"
-            );
-            assert!(
-                after_element.script_async(),
-                "inert data-block prepare should expose force-async for later reactivation"
-            );
-            assert!(
-                !after_element.script_already_started(),
-                "inert data-block prepare must leave the script startable"
-            );
-        }));
+        let after = page_vm.vm().snapshot_live_document();
+        let after_element = after
+            .node(handle)
+            .and_then(Node::as_element)
+            .expect("script element should exist after handoff");
+        assert!(
+            !after_element.script_parser_inserted_for_prepare(),
+            "inert data-block prepare should consume parser-inserted state"
+        );
+        assert!(
+            after_element.script_async(),
+            "inert data-block prepare should expose force-async for later reactivation"
+        );
+        assert!(
+            !after_element.script_already_started(),
+            "inert data-block prepare must leave the script startable"
+        );
+    }));
 }
 #[test]
 fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() {
@@ -304,7 +305,7 @@ fn external_async_handoff_marks_parser_stream_already_started_on_live_backend() 
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts,
-        discovered_modulepreload_link_candidates: _,
+        discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><script async src=\"/async.js\"></script></head></html>",
@@ -436,7 +437,7 @@ fn blocking_classic_handoff_registers_parser_owned_handle_on_live_backend() {
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
@@ -557,7 +558,7 @@ fn non_async_post_parse_handoff_registers_pending_before_source_and_seals_withou
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><script defer src=\"/defer.js\"></script></head></html>",
@@ -744,7 +745,7 @@ fn parser_owned_external_module_handoff_starts_pending_script_tree_root_fetch() 
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><script type=\"module\" src=\"/module.mjs\"></script></head></html>",
@@ -849,91 +850,91 @@ fn parser_owned_module_handoff_starts_external_root_pending_tree_without_source_
         .expect("current-thread runtime should build");
 
     runtime.block_on(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-            let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            let mut driver = ParserDriver {
-                loader: &loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
+        let mut driver = ParserDriver {
+            loader: &loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
 
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
-                "<!doctype html><html><head><script type=\"module\" src=\"/pending.mjs\"></script></head></html>",
-            );
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at module handoff");
-            };
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
+            "<!doctype html><html><head><script type=\"module\" src=\"/pending.mjs\"></script></head></html>",
+        );
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at module handoff");
+        };
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(1),
-                local_executor,
-                &loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(1),
+            local_executor,
+            &loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
 
-            let outcome = driver
-                .handle_parse_time_script_handoff(&mut page_vm, *handoff, None)
-                .await
-                .expect("module handoff should start root pending script tree");
-            assert!(
-                matches!(outcome, ScriptHandoffOutcome::NoNavigation),
-                "module handoff should remain a scheduling-only step"
-            );
+        let outcome = driver
+            .handle_parse_time_script_handoff(&mut page_vm, *handoff, None)
+            .await
+            .expect("module handoff should start root pending script tree");
+        assert!(
+            matches!(outcome, ScriptHandoffOutcome::NoNavigation),
+            "module handoff should remain a scheduling-only step"
+        );
 
-            let pending_root_key = crate::module_runtime::ModuleMapKey::java_script(
-                Url::parse("https://example.test/pending.mjs").expect("root url"),
-            );
-            let pending_dep_key = crate::module_runtime::ModuleMapKey::java_script(
-                Url::parse("https://example.test/pending-dep.mjs").expect("dependency url"),
-            );
-            let pending_root_entry = page_vm
+        let pending_root_key = crate::module_runtime::ModuleMapKey::java_script(
+            Url::parse("https://example.test/pending.mjs").expect("root url"),
+        );
+        let pending_dep_key = crate::module_runtime::ModuleMapKey::java_script(
+            Url::parse("https://example.test/pending-dep.mjs").expect("dependency url"),
+        );
+        let pending_root_entry = page_vm
+            .vm()
+            .document_runtime
+            .native_module_entry_id(&pending_root_key)
+            .expect("parser handoff should start external root graph fetch immediately");
+        assert_eq!(
+            page_vm
                 .vm()
                 .document_runtime
-                .native_module_entry_id(&pending_root_key)
-                .expect("parser handoff should start external root graph fetch immediately");
-            assert_eq!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .native_module_entry_state(pending_root_entry),
-                crate::module_runtime::ModuleMapEntryState::Fetching
-            );
-            assert!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .native_module_entry_id(&pending_dep_key)
-                    .is_none(),
-                "dependency cannot be discovered until the root graph fetch completes"
-            );
+                .native_module_entry_state(pending_root_entry),
+            crate::module_runtime::ModuleMapEntryState::Fetching
+        );
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .native_module_entry_id(&pending_dep_key)
+                .is_none(),
+            "dependency cannot be discovered until the root graph fetch completes"
+        );
 
-            tokio::task::yield_now().await;
-            assert!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .native_module_entry_id(&pending_dep_key)
-                    .is_none(),
-                "module graph dependency discovery must wait for native module fetch completion"
-            );
-        });
+        tokio::task::yield_now().await;
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .native_module_entry_id(&pending_dep_key)
+                .is_none(),
+            "module graph dependency discovery must wait for native module fetch completion"
+        );
+    });
 }
 #[test]
 fn parser_owned_module_handoff_starts_loaded_source_pending_tree_dependencies() {
@@ -943,102 +944,102 @@ fn parser_owned_module_handoff_starts_loaded_source_pending_tree_dependencies() 
         .expect("current-thread runtime should build");
 
     runtime.block_on(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-            let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            let mut driver = ParserDriver {
-                loader: &loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
+        let mut driver = ParserDriver {
+            loader: &loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
 
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
-                "<!doctype html><html><head><script type=\"module\" src=\"/ready.mjs\"></script></head></html>",
-            );
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at module handoff");
-            };
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
+            "<!doctype html><html><head><script type=\"module\" src=\"/ready.mjs\"></script></head></html>",
+        );
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at module handoff");
+        };
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(1),
-                local_executor,
-                &loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-            page_vm.vm_mut().document_runtime.insert_native_module_source(
-                crate::module_runtime::ModuleMapKey::java_script(
-                    Url::parse("https://example.test/ready.mjs").expect("root url"),
-                ),
-                crate::module_runtime::ModuleSource::text(
-                    "import './ready-dep.mjs'; globalThis.readyModuleShouldNotRunYet = true;"
-                        .to_owned(),
-                ),
-            );
-
-            let outcome = driver
-                .handle_parse_time_script_handoff(&mut page_vm, *handoff, None)
-                .await
-                .expect("module handoff should start loaded-source pending script tree");
-            assert!(
-                matches!(outcome, ScriptHandoffOutcome::NoNavigation),
-                "module handoff should remain a scheduling-only step"
-            );
-
-            let root_key = crate::module_runtime::ModuleMapKey::java_script(
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(1),
+            local_executor,
+            &loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
+        page_vm.vm_mut().document_runtime.insert_native_module_source(
+            crate::module_runtime::ModuleMapKey::java_script(
                 Url::parse("https://example.test/ready.mjs").expect("root url"),
-            );
-            let dep_key = crate::module_runtime::ModuleMapKey::java_script(
-                Url::parse("https://example.test/ready-dep.mjs").expect("dependency url"),
-            );
-            let root_entry = page_vm
+            ),
+            crate::module_runtime::ModuleSource::text(
+                "import './ready-dep.mjs'; globalThis.readyModuleShouldNotRunYet = true;"
+                    .to_owned(),
+            ),
+        );
+
+        let outcome = driver
+            .handle_parse_time_script_handoff(&mut page_vm, *handoff, None)
+            .await
+            .expect("module handoff should start loaded-source pending script tree");
+        assert!(
+            matches!(outcome, ScriptHandoffOutcome::NoNavigation),
+            "module handoff should remain a scheduling-only step"
+        );
+
+        let root_key = crate::module_runtime::ModuleMapKey::java_script(
+            Url::parse("https://example.test/ready.mjs").expect("root url"),
+        );
+        let dep_key = crate::module_runtime::ModuleMapKey::java_script(
+            Url::parse("https://example.test/ready-dep.mjs").expect("dependency url"),
+        );
+        let root_entry = page_vm
+            .vm()
+            .document_runtime
+            .native_module_entry_id(&root_key)
+            .expect("loaded module source should install the root module entry");
+        assert_eq!(
+            page_vm
                 .vm()
                 .document_runtime
-                .native_module_entry_id(&root_key)
-                .expect("loaded module source should install the root module entry");
-            assert_eq!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .native_module_entry_state(root_entry),
-                crate::module_runtime::ModuleMapEntryState::Compiled
-            );
-            let dep_entry = page_vm
+                .native_module_entry_state(root_entry),
+            crate::module_runtime::ModuleMapEntryState::Compiled
+        );
+        let dep_entry = page_vm
+            .vm()
+            .document_runtime
+            .native_module_entry_id(&dep_key)
+            .expect("loaded module handoff should discover static dependencies immediately");
+        assert_eq!(
+            page_vm
                 .vm()
                 .document_runtime
-                .native_module_entry_id(&dep_key)
-                .expect("loaded module handoff should discover static dependencies immediately");
-            assert_eq!(
-                page_vm
-                    .vm()
-                    .document_runtime
-                    .native_module_entry_state(dep_entry),
-                crate::module_runtime::ModuleMapEntryState::Fetching
-            );
-            assert_eq!(
-                page_vm
-                    .vm_mut()
-                    .eval("String(globalThis.readyModuleShouldNotRunYet)")
-                    .expect("read module side effect before page task"),
-                "undefined",
-                "prestarted loaded-source graph must not evaluate before its ordered page task"
-            );
-        });
+                .native_module_entry_state(dep_entry),
+            crate::module_runtime::ModuleMapEntryState::Fetching
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("String(globalThis.readyModuleShouldNotRunYet)")
+                .expect("read module side effect before page task"),
+            "undefined",
+            "prestarted loaded-source graph must not evaluate before its ordered page task"
+        );
+    });
 }
 #[test]
 fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_backend() {
@@ -1066,7 +1067,7 @@ fn parser_owned_inline_importmap_handoff_registers_parser_owned_handle_on_live_b
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><head><script type=\"importmap\">{\"imports\":{\"fixture\":\"/module.mjs\"}}</script></head></html>",
@@ -1177,63 +1178,63 @@ fn external_blocking_classic_handoff_is_stylesheet_gated_on_live_backend() {
         .expect("current-thread runtime should build");
 
     runtime.block_on(async move {
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-            let mut state =
-                ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            let driver = ParserDriver {
-                loader: &loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let mut state =
+            ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
+        let driver = ParserDriver {
+            loader: &loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
 
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
-                "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
-            );
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at external classic script handoff");
-            };
-            let ParserScriptHandoff::BlockingClassic {
-                node_id: _handle,
-                start_line: _,
-                start_column: _,
-                blocking_signatures_before,
-                script: _script,
-            } = *handoff
-            else {
-                panic!("external parser-blocking classic should already be prepared");
-            };
-            assert!(
-                !blocking_signatures_before.is_empty(),
-                "parser-owned blocking classic handoff should carry blocking stylesheet signatures discovered before the script"
-            );
-            let parser_stream_snapshot = state.parser_session.stream_handle().borrow().snapshot_parser_stream_document();
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
+            "<!doctype html><html><head><link rel=\"stylesheet\" href=\"/app.css\"><script src=\"/app.js\"></script></head></html>",
+        );
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at external classic script handoff");
+        };
+        let ParserScriptHandoff::BlockingClassic {
+            node_id: _handle,
+            start_line: _,
+            start_column: _,
+            blocking_signatures_before,
+            script: _script,
+        } = *handoff
+        else {
+            panic!("external parser-blocking classic should already be prepared");
+        };
+        assert!(
+            !blocking_signatures_before.is_empty(),
+            "parser-owned blocking classic handoff should carry blocking stylesheet signatures discovered before the script"
+        );
+        let parser_stream_snapshot = state.parser_session.stream_handle().borrow().snapshot_parser_stream_document();
 
-            let mut live_runtime = DocumentRuntime::new_networked(
-                &parser_stream_snapshot.clone().into_document(),
-                &loader,
-            );
-            let stylesheet_gated =
-                blocking_classic_is_stylesheet_gated_for_testing(
-                &mut live_runtime,
-                &discovered_blocking_stylesheet_inputs,
-                &blocking_signatures_before,
-            );
+        let mut live_runtime = DocumentRuntime::new_networked(
+            &parser_stream_snapshot.clone().into_document(),
+            &loader,
+        );
+        let stylesheet_gated =
+            blocking_classic_is_stylesheet_gated_for_testing(
+            &mut live_runtime,
+            &discovered_blocking_stylesheet_inputs,
+            &blocking_signatures_before,
+        );
 
-            assert!(
-                stylesheet_gated,
-                "stylesheet discovered before a parser-blocking classic script should gate execution on the parser-stream backend"
-            );
-        });
+        assert!(
+            stylesheet_gated,
+            "stylesheet discovered before a parser-blocking classic script should gate execution on the parser-stream backend"
+        );
+    });
 }
 #[test]
 fn parser_owner_style_import_handoff_is_stylesheet_gated_on_live_page_vm() {

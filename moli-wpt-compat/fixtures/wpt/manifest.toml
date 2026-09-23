@@ -20962,3 +20962,20 @@ timeout_ms = 5000
 suite = "broad"
 tags = ["testharness", "domexception", "cross-realm"]
 notes = "Local harness canary for implicit and explicit DOMException constructors, cross-realm exceptions, and rejection of incorrect constructors or missing exceptions."
+
+[[test]]
+id = "upstream-preload-preload-link-cached-stylesheet-different-doc"
+upstream = "web-platform-tests/preload/preload-link-cached-stylesheet-different-doc.html"
+upstream_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+local_path = "upstream/preload/preload-link-cached-stylesheet-different-doc.html"
+type = "testharness"
+global = "window"
+status = "pass"
+wait_until = "load"
+timeout_ms = 5000
+suite = "broad"
+source = "upstream-wpt"
+source_path = "preload/preload-link-cached-stylesheet-different-doc.html"
+source_commit = "db95fafd1fcef8428805e41eb5705d444e8c67ce"
+tags = ["preload", "iframe"]
+notes = "A stylesheet preload must complete in a srcdoc child even when the same resource has already been loaded as a stylesheet in another document."

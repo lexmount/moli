@@ -88,6 +88,7 @@ impl JsContextHost {
             let _ = self.retire_child_document_script_ready_tasks_for_handle(handle);
             self.pending_child_modulepreload_work_awaiting_realm
                 .retain(|task| task.child_handle() != handle);
+            self.discard_child_parser_preloads(handle, None);
             self.cancel_child_classic_document_script_work(handle);
         }
     }
@@ -126,6 +127,7 @@ impl JsContextHost {
         self.child_document_parsers.clear(document_owner);
         self.pending_child_modulepreload_work_awaiting_realm
             .retain(|task| task.child_handle() != handle || task.owner() != owner);
+        self.discard_child_parser_preloads(handle, Some(owner));
         self.cancel_child_classic_document_script_work(handle);
     }
 

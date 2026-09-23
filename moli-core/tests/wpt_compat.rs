@@ -42,6 +42,7 @@ wpt_explicit_default_excluded_cases! {
 }
 
 wpt_compat_cases! {
+    wpt_compat_case_upstream_preload_preload_link_cached_stylesheet_different_doc => "upstream-preload-preload-link-cached-stylesheet-different-doc",
     wpt_compat_case_eventtarget_basic => "eventtarget-basic",
     wpt_compat_case_event_internal_dispatch_regression_basic => "event-internal-dispatch-regression-basic",
     wpt_compat_case_urlsearchparams_basic => "urlsearchparams-basic",
