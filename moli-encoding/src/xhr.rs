@@ -27,7 +27,7 @@ impl XhrResponseDecoder {
                 .map(|encoding| {
                     vec![(
                         "content-type".to_owned(),
-                        format!("text/html;charset={}", encoding.name()),
+                        format!("text/html;charset={}", encoding.name()).into_bytes(),
                     )]
                 })
                 .unwrap_or_default();

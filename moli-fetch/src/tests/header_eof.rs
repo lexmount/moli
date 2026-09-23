@@ -72,7 +72,7 @@ async fn header_eof_delivers_complete_fields_on_every_transport() -> Result<()> 
             let (head, body) = fetch_in_mode(&client, Request::new(method, &url, None, vec![])?, mode)
                 .await.with_context(|| format!("{mode}: {response:?}"))?;
             assert_eq!(head.status, status, "{mode}");
-            assert_eq!(head.headers, headers.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect::<Vec<_>>(), "{mode}");
+            assert_eq!(head.headers, crate::headers_from_byte_strings(&headers.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect::<Vec<_>>())?, "{mode}");
             assert!(body.is_empty(), "{mode}: {body:?}");
         }
         assert_eq!(server.await??.len(), 3);

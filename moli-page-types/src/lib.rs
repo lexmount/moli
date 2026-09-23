@@ -3536,7 +3536,7 @@ mod tests {
                 "body".to_owned(),
             );
             response.status_text = status_text.map(str::to_owned);
-            let headers = vec![("x-overridden".to_owned(), "true".to_owned())];
+            let headers = vec![("x-overridden".to_owned(), b"true".to_vec())];
             let overridden =
                 NavigationResponse::with_status_headers_from(&response, 200, headers.clone());
             assert_eq!(overridden.headers, headers);

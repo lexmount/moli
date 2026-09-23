@@ -22,7 +22,7 @@ pub(crate) fn ensure_worker_json_module_mime(
 }
 
 pub(super) fn ensure_worker_json_module_mime_from_headers(
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> Result<(), String> {
     crate::module_runtime::validate_json_module_response_mime(headers)
 }
