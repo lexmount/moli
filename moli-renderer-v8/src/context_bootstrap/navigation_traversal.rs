@@ -33,7 +33,8 @@ use super::navigation_result::{
 };
 use super::navigation_traversal_execution::queue_navigation_traversal_with_result;
 use super::navigation_traversal_plan::{
-    JointTraversalPlan, NavigationTraversalPlan, history_delta_traversal_plan,
+    HistoryDeltaTraversalPlan, JointTraversalPlan, NavigationTraversalPlan,
+    history_delta_traversal_target,
     navigation_delta_traversal_plan, navigation_index_traversal_plan,
 };
 use super::navigation_window::{
@@ -540,86 +541,32 @@ fn history_traverse<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) {
-    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
-        queue_browser_owned_top_level_history_traversal(scope, history, delta);
-        return;
-    };
-    let source_owner = runtime_window_owner(scope, history);
-    if let Some(source_handle) =
-        super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-            scope,
-            source_owner,
-        )
-        && plan.targets.iter().any(|target| {
-            super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
-                scope,
-                source_handle,
-                target.owner,
-            )
-        })
-    {
-        return;
-    }
-    super::navigation_traversal_coordinator::queue_plan(scope, plan);
-}
-
-fn queue_browser_owned_top_level_history_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    delta: i64,
-) {
-    let owner = runtime_window_owner(scope, history);
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let host = unsafe { &mut *host_ptr };
-    let binding = super::session_history::binding(scope, host, owner);
-    if binding.popup.is_some() {
-        return;
-    }
-    // Failure to project a browser-owned entry and an out-of-range delta
-    // both reach this fallback. Only the former may supersede a navigation.
-    let model = host.session_histories.get_mut(binding.popup).clone();
-    let source = host
-        .pending_joint_history_step(&model)
-        .unwrap_or_else(|| model.current_step());
-    if model.step_by_delta_from(source, delta).is_none() {
-        return;
-    }
-    let top_owner = super::navigation_window::runtime_top_window_owner(scope, owner);
-    if let Some(source_handle) =
-        super::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, owner)
-        && super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
-            scope,
-            source_handle,
-            top_owner,
-        )
-    {
-        return;
-    }
-    host.record_pending_top_level_history_traversal(delta);
+    super::navigation_traversal_execution::queue_history_traversal_by_delta(scope, history, delta);
 }
 
 fn top_level_history_delta_traversal_plan<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     delta: i64,
-) -> Option<JointTraversalPlan<'s>> {
+) -> Option<(v8::Local<'s, v8::Object>, JointTraversalPlan<'s>)> {
     let global = scope.get_current_context().global(scope);
     let history = window_history_for_holder(scope, global)?;
-    history_delta_traversal_plan(scope, history, delta)
+    match history_delta_traversal_target(scope, history, delta, None)? {
+        HistoryDeltaTraversalPlan::Traverse(plan) => Some((history, plan)),
+        HistoryDeltaTraversalPlan::Denied => None,
+    }
 }
 
 pub(crate) fn queue_top_level_history_traversal_by_delta(
     scope: &mut v8::PinScope<'_, '_>,
     delta: i64,
 ) -> bool {
-    let Some(plan) = top_level_history_delta_traversal_plan(scope, delta) else {
+    let Some((history, plan)) = top_level_history_delta_traversal_plan(scope, delta) else {
         return false;
     };
     if plan.cross_document_root_index(scope).is_some() {
         return false;
     }
-    super::navigation_traversal_coordinator::queue_plan(scope, plan);
+    history_traverse(scope, history, delta);
     true
 }
 
@@ -628,7 +575,7 @@ pub(crate) fn queue_viewport_history_traversal_by_delta(
     scope: &mut v8::PinScope<'_, '_>,
     delta: i64,
 ) -> bool {
-    let Some(plan) = top_level_history_delta_traversal_plan(scope, delta) else {
+    let Some((_, plan)) = top_level_history_delta_traversal_plan(scope, delta) else {
         return false;
     };
     if let Some(index) = plan.cross_document_root_index(scope) {

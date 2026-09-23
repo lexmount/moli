@@ -127,12 +127,14 @@ mod shared_event_targets;
 pub(crate) use shared_event_targets::resolve_event_target;
 #[cfg(test)]
 pub(crate) use shared_event_targets::{bind_dispatch_target, bind_shared_target};
+mod session_history_traversal;
 mod world_wrappers;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,
 };
 pub(crate) use session_history::prune_joint_session_history;
+pub(crate) use session_history_traversal::finish_without_document_commit as finish_joint_history_without_document_commit;
 mod notification_runtime;
 mod observer_template;
 mod opfs;
