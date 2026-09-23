@@ -488,7 +488,7 @@ pub(in crate::context_bootstrap) fn worker_constructor_callback<'s>(
                                 lineno: 0,
                                 colno: 0,
                                 event_kind: crate::worker::WorkerParentErrorEventKind::Event,
-                                phase: crate::worker::WorkerErrorPhase::Runtime,
+                                phase: crate::worker::WorkerErrorPhase::Bootstrap,
                                 source: crate::worker::WorkerErrorSource::Runtime,
                             }),
                         },

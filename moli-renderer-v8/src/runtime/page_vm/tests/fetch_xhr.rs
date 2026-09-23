@@ -6337,7 +6337,7 @@ async fn worker_url_fetch_failure_dispatches_error_event() {
         let mut page_vm = test_page_vm_with_document_url(document_url);
         let local_executor = page_vm.local_executor.clone();
 
-        let error_message = local_executor
+        let error_event = local_executor
             .run(async move {
                 page_vm.vm_mut().eval(
                     r#"
@@ -6346,7 +6346,13 @@ async fn worker_url_fetch_failure_dispatches_error_event() {
                         globalThis.__workerDone = false;
                         const worker = new Worker("/missing-worker.js");
                         worker.onerror = (event) => {
-                            globalThis.__workerError = event.message;
+                            globalThis.__workerError = [
+                                event.type,
+                                Object.getPrototypeOf(event) === Event.prototype,
+                                event.target === worker,
+                                event.bubbles, event.cancelable, event.composed, event.isTrusted,
+                                ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
+                            ];
                             globalThis.__workerDone = true;
                         };
                     })()
@@ -6358,7 +6364,7 @@ async fn worker_url_fetch_failure_dispatches_error_event() {
                     "worker url load failure should dispatch an error event",
                 )
                 .await?;
-                page_vm.vm_mut().eval("String(globalThis.__workerError)")
+                page_vm.vm_mut().eval("JSON.stringify(globalThis.__workerError)")
             })
             .await
             .expect("worker url failure test should run on owner lane");
@@ -6366,11 +6372,9 @@ async fn worker_url_fetch_failure_dispatches_error_event() {
         server
             .await
             .expect("worker script failure server should finish");
-        assert!(
-            error_message.contains("HTTP request")
-                && error_message.contains("404")
-                && error_message.contains("/missing-worker.js"),
-            "unexpected worker load error: {error_message}"
+        assert_eq!(
+            error_event,
+            r#"["error",true,true,false,false,false,true,false]"#
         );
     })
     .await;

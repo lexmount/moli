@@ -9335,17 +9335,25 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
     let mut handle = spawn_worker(
         r#"
         let result = "not-run";
+        let globalErrors = 0;
+        onerror = () => { ++globalErrors; return true; };
         try {
             const child = new Worker("missing-child.js");
             child.onerror = event => {
                 event.preventDefault();
-                postMessage({
+                const observation = {
                     constructed: result === "constructed",
                     type: event.type,
-                    messageIsNonEmpty: event.message.length > 0,
-                    filename: event.filename
-                });
-                close();
+                    intrinsicEvent: Object.getPrototypeOf(event) === Event.prototype,
+                    target: event.target === child,
+                    trusted: event.isTrusted,
+                    flags: [event.bubbles, event.cancelable, event.composed, event.defaultPrevented],
+                    hasErrorDetails: ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
+                };
+                setTimeout(() => {
+                    postMessage({ ...observation, globalErrors });
+                    close();
+                }, 0);
             };
             result = "constructed";
         } catch (error) {
@@ -9363,14 +9371,54 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        format!(
-            r#"{{"constructed":true,"type":"error","messageIsNonEmpty":true,"filename":"{base_url}/missing-child.js"}}"#
-        )
+        r#"{"constructed":true,"type":"error","intrinsicEvent":true,"target":true,"trusted":true,"flags":[false,false,false,false],"hasErrorDetails":false,"globalErrors":0}"#
     );
     timeout(TIMEOUT, server)
         .await
         .expect("timed out waiting for nested worker script request")
         .expect("nested worker script server should finish");
+}
+
+#[tokio::test]
+async fn nested_worker_parse_errors_use_intrinsic_events_without_global_propagation() {
+    ensure_v8();
+    for child_type in ["classic", "module"] {
+        let mut handle = spawn_worker(
+            r#"
+            const originalEvent = Event;
+            let globalErrors = 0;
+            let authorReads = 0;
+            onerror = () => { ++globalErrors; return true; };
+            const child = new Worker("data:text/javascript,function%20(", { type: "CHILD_TYPE" });
+            child.onerror = event => {
+                event.preventDefault();
+                const observation = {
+                    type: event.type,
+                    intrinsicEvent: Object.getPrototypeOf(event) === originalEvent.prototype,
+                    target: event.target === child,
+                    trusted: event.isTrusted,
+                    flags: [event.bubbles, event.cancelable, event.composed, event.defaultPrevented],
+                    hasErrorDetails: ['message', 'filename', 'lineno', 'colno', 'error'].some(name => name in event)
+                };
+                setTimeout(() => {
+                    postMessage({ ...observation, globalErrors, authorReads });
+                    close();
+                }, 0);
+            };
+            Object.defineProperty(globalThis, "Event", {
+                configurable: true,
+                get() { ++authorReads; throw new Error("author Event getter"); }
+            });
+            "#
+            .replace("CHILD_TYPE", child_type),
+            "test://nested_worker_parse_error".into(),
+        );
+        assert_eq!(
+            recv_post_json(&mut handle).await,
+            r#"{"type":"error","intrinsicEvent":true,"target":true,"trusted":true,"flags":[false,false,false,false],"hasErrorDetails":false,"globalErrors":0,"authorReads":0}"#,
+            "{child_type} child bootstrap must not invoke author hooks or parent onerror"
+        );
+    }
 }
 
 #[tokio::test]

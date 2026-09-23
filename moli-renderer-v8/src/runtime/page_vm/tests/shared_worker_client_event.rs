@@ -171,6 +171,95 @@ async fn shared_worker_error_body_leaves_reactions_for_selected_completion() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn shared_worker_bootstrap_error_uses_intrinsic_event_without_author_hooks() {
+    run_page_vm_async_test(async move {
+        for (setup, remaining_clients) in [
+            (r#"
+globalThis.__bootstrapEventWorker = new SharedWorker(
+  "data:text/javascript," + encodeURIComponent("function ("),
+  "intrinsic-bootstrap-event"
+);
+"#, 0),
+            (r#"
+const url = "data:text/javascript,onconnect = () => {}";
+globalThis.__runningSharedWorker = new SharedWorker(url, "intrinsic-connection-event");
+globalThis.__bootstrapEventWorker = new SharedWorker(url, {
+  name: "intrinsic-connection-event", type: "module"
+});
+"#, 1),
+        ] {
+            let loader =
+                crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+            let (mut page_vm, _resource_source, mut page_wake_rx) =
+                page_vm_with_bound_task_sources_and_owner_wake(
+                    &loader,
+                    Url::parse("https://shared-worker-bootstrap-event.test/").unwrap(),
+                );
+            let mut shared_worker_wake_rx = install_shared_worker_service_wake(&page_vm);
+            page_vm.vm_mut().eval(setup)?;
+            page_vm.vm_mut().eval(
+                r#"
+(() => {
+  const originalEvent = Event;
+  const originalEventDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Event');
+  const flags = ['bubbles', 'cancelable', 'composed'];
+  const originalFlags = flags.map(name => Object.getOwnPropertyDescriptor(Object.prototype, name));
+  let reads = 0;
+  const poison = {configurable: true, get() { ++reads; throw new Error('author event hook'); }};
+  globalThis.__bootstrapEventFailures = 'pending';
+  __bootstrapEventWorker.onerror = function(event) {
+    const failures = [];
+    try {
+      if (Object.getPrototypeOf(event) !== originalEvent.prototype) failures.push('wrong Event prototype');
+      if (event.type !== 'error' || event.isTrusted !== true) failures.push('wrong type or trust');
+      if (event.target !== __bootstrapEventWorker || event.currentTarget !== this || this !== __bootstrapEventWorker) failures.push('wrong dispatch target');
+      if (arguments.length !== 1) failures.push('wrong callback arguments');
+      for (const name of flags) if (event[name] !== false) failures.push(name);
+      for (const name of ['message', 'filename', 'lineno', 'colno', 'error']) {
+        if (name in event) failures.push('unexpected ' + name);
+      }
+      if (event.defaultPrevented) failures.push('initially canceled');
+      event.preventDefault();
+      if (event.defaultPrevented) failures.push('cancelable bootstrap event');
+      if (reads !== 0) failures.push('called author event hooks');
+      globalThis.__bootstrapEventFailures = JSON.stringify(failures);
+    } finally {
+      Object.defineProperty(globalThis, 'Event', originalEventDescriptor);
+      flags.forEach((name, index) => {
+        if (originalFlags[index]) Object.defineProperty(Object.prototype, name, originalFlags[index]);
+        else delete Object.prototype[name];
+      });
+    }
+  };
+  Object.defineProperty(globalThis, 'Event', poison);
+  for (const name of flags) Object.defineProperty(Object.prototype, name, poison);
+})()
+            "#,
+            )?;
+            wait_for_shared_worker_client_event(
+                &mut page_vm,
+                &mut shared_worker_wake_rx,
+                &mut page_wake_rx,
+            )
+            .await?;
+            assert!(
+                page_vm
+                    .run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::SharedWorkerClientEvent,
+                        &loader,
+                    )
+                    .await?
+            );
+            assert_eq!(page_vm.vm_mut().eval("__bootstrapEventFailures")?, "[]");
+            assert_eq!(page_vm.vm().shared_worker_client_count_for_test(), remaining_clients);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("SharedWorker bootstrap errors should use the intrinsic Event");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn shared_worker_nonterminal_error_runs_through_selected_completion_and_retains_endpoint() {
     run_page_vm_async_test(async move {
         let loader =

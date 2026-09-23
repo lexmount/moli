@@ -266,7 +266,7 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
             page_vm
                 .vm_mut()
                 .eval("__dedicatedWorkerErrorPhases.join('|')")?,
-            "worker:Event:bootstrap syntax:true",
+            "worker:Event:undefined:false",
             "initial script errors must stop after the Worker error event"
         );
 
@@ -296,7 +296,7 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
             page_vm
                 .vm_mut()
                 .eval("__dedicatedWorkerErrorPhases.join('|')")?,
-            "worker:Event:bootstrap syntax:true|worker:ErrorEvent:runtime boom:true|window:ErrorEvent:runtime boom",
+            "worker:Event:undefined:false|worker:ErrorEvent:runtime boom:true|window:ErrorEvent:runtime boom",
             "uncanceled runtime errors must retain their owning Window propagation"
         );
 
@@ -304,6 +304,87 @@ __dedicatedWorkerErrorPhaseWorker.onerror = event => {
     })
     .await
     .expect("DedicatedWorker bootstrap/runtime error propagation test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dedicated_worker_bootstrap_error_uses_intrinsic_event_without_author_hooks() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://worker-bootstrap-event.test/").unwrap(),
+            );
+        page_vm.vm_mut().eval(
+            r#"
+globalThis.__bootstrapEventWorker = new Worker("data:text/javascript,onmessage = () => {}");
+(() => {
+  const originalEvent = Event;
+  const originalEventDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'Event');
+  const flags = ['bubbles', 'cancelable', 'composed'];
+  const originalFlags = flags.map(name => Object.getOwnPropertyDescriptor(Object.prototype, name));
+  let reads = 0;
+  const poison = {configurable: true, get() { ++reads; throw new Error('author event hook'); }};
+  globalThis.__bootstrapEventFailures = 'pending';
+  __bootstrapEventWorker.onerror = function(event) {
+    const failures = [];
+    try {
+      if (Object.getPrototypeOf(event) !== originalEvent.prototype) failures.push('wrong Event prototype');
+      if (event.type !== 'error' || event.isTrusted !== true) failures.push('wrong type or trust');
+      if (event.target !== __bootstrapEventWorker || event.currentTarget !== this || this !== __bootstrapEventWorker) failures.push('wrong dispatch target');
+      if (arguments.length !== 1) failures.push('wrong callback arguments');
+      for (const name of flags) if (event[name] !== false) failures.push(name);
+      for (const name of ['message', 'filename', 'lineno', 'colno', 'error']) {
+        if (name in event) failures.push('unexpected ' + name);
+      }
+      if (event.defaultPrevented) failures.push('initially canceled');
+      event.preventDefault();
+      if (event.defaultPrevented) failures.push('cancelable bootstrap event');
+      if (reads !== 0) failures.push('called author event hooks');
+      globalThis.__bootstrapEventFailures = JSON.stringify(failures);
+    } finally {
+      Object.defineProperty(globalThis, 'Event', originalEventDescriptor);
+      flags.forEach((name, index) => {
+        if (originalFlags[index]) Object.defineProperty(Object.prototype, name, originalFlags[index]);
+        else delete Object.prototype[name];
+      });
+    }
+  };
+  Object.defineProperty(globalThis, 'Event', poison);
+  for (const name of flags) Object.defineProperty(Object.prototype, name, poison);
+})()
+"#,
+        )?;
+        let (_worker_id, producer) = page_vm
+            .vm()
+            .only_dedicated_worker_client_event_producer_for_test()?;
+        producer
+            .send(RendererDedicatedWorkerClientEvent::Message(
+                RendererDedicatedWorkerMessageEvent::Error {
+                    message: "bootstrap parse error".to_owned(),
+                    filename: "https://worker-bootstrap-event.test/broken.js".to_owned(),
+                    lineno: 3,
+                    colno: 5,
+                    event_kind: WorkerParentErrorEventKind::Event,
+                    phase: WorkerErrorPhase::Bootstrap,
+                    source: WorkerErrorSource::InitialScriptEvaluation,
+                },
+            ))
+            .expect("bootstrap error should enter the typed Worker source");
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
+                    &loader,
+                )
+                .await?
+        );
+        assert_eq!(page_vm.vm_mut().eval("__bootstrapEventFailures")?, "[]");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("Worker bootstrap errors should use the intrinsic Event");
 }
 
 #[tokio::test(flavor = "current_thread")]

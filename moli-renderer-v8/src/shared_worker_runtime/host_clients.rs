@@ -140,7 +140,7 @@ impl RendererSharedWorkerHost {
             client_id,
             "Failed to connect SharedWorker: worker runtime is unavailable.",
             failure_filename,
-            WorkerParentErrorEventKind::ErrorEvent,
+            WorkerParentErrorEventKind::Event,
         );
         false
     }
@@ -156,7 +156,7 @@ impl RendererSharedWorkerHost {
                     client_id,
                     "Failed to connect SharedWorker: worker runtime is unavailable.",
                     "",
-                    WorkerParentErrorEventKind::ErrorEvent,
+                    WorkerParentErrorEventKind::Event,
                 );
                 failed.push(client_id);
             }

@@ -1,7 +1,7 @@
 use super::{
     CHILD_BROWSING_CONTEXT_HANDLE_SLOT, MessagePortRealmBinding,
     ensure_message_port_wrapper_for_id_in_realm,
-    events::{clear_event_dispatch_fields, set_event_dispatch_fields},
+    events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
     invoke_simple_event_listener,
     navigation_serialize::{
         current_document_content_security_policies, current_document_referrer_policy,
@@ -89,22 +89,6 @@ struct SharedWorkerObjectDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
-struct SharedWorkerHostEventInitDeclaration {
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
-struct SharedWorkerHostEventFallbackDeclaration {
-    #[webapi(data_property, enumerable)]
-    r#type: String,
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
 struct SharedWorkerHostErrorEventInitDeclaration<'scope> {
     #[webapi(data_property, enumerable)]
     message: v8::Local<'scope, v8::String>,
@@ -134,16 +118,6 @@ struct SharedWorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     #[webapi(data_property, enumerable)]
     colno: u32,
     #[webapi(data_property, enumerable)]
-    error: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, scope_lifetime = 'scope, data_properties, enumerable)]
-struct SharedWorkerHostErrorEventDetailsDeclaration<'scope, 'text> {
-    message: &'text str,
-    filename: &'text str,
-    lineno: u32,
-    colno: u32,
     error: v8::Local<'scope, v8::Value>,
 }
 
@@ -785,15 +759,16 @@ fn dispatch_shared_worker_error_event<'s>(
     event_kind: crate::worker::WorkerParentErrorEventKind,
 ) -> bool {
     let event = match event_kind {
+        // Fetch/parse failures fire a plain Event with the default flags.
         crate::worker::WorkerParentErrorEventKind::Event => {
-            let event = new_event(scope, "error", true);
-            set_error_event_details(scope, event, message, filename, lineno, colno, error);
-            event
+            construct_original_event(scope, "error")
         }
-        crate::worker::WorkerParentErrorEventKind::ErrorEvent => {
-            new_error_event(scope, message, filename, lineno, colno, error)
-        }
+        crate::worker::WorkerParentErrorEventKind::ErrorEvent => Some(new_error_event(
+            scope, message, filename, lineno, colno, error,
+        )),
     };
+    let Some(event) = event else { return false };
+    crate::context_bootstrap::mark_event_trusted(scope, event);
     set_event_dispatch_fields(scope, worker, event);
 
     let listeners = simple_object_event_listeners_snapshot(
@@ -815,7 +790,8 @@ fn dispatch_shared_worker_error_event<'s>(
             &[event.into()],
             event,
         );
-        if listener.handler_slot.as_deref() == Some(SHARED_WORKER_ONERROR_SLOT)
+        if event_kind == crate::worker::WorkerParentErrorEventKind::ErrorEvent
+            && listener.handler_slot.as_deref() == Some(SHARED_WORKER_ONERROR_SLOT)
             && let Some(returned) = callback_result
             && v8::Local::new(scope, &returned).boolean_value(scope)
         {
@@ -843,35 +819,6 @@ fn dispatch_shared_worker_error_event<'s>(
 
     clear_event_dispatch_fields(scope, event);
     dispatched
-}
-
-fn new_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    cancelable: bool,
-) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let init = SharedWorkerHostEventInitDeclaration::new(cancelable)
-            .bind(scope)
-            .expect("SharedWorker host Event init declaration should bind");
-        if let Some(event) = event_ctor.new_instance(
-            scope,
-            &[
-                v8::String::new(scope, event_type).unwrap().into(),
-                init.into(),
-            ],
-        ) {
-            return event;
-        }
-    }
-
-    SharedWorkerHostEventFallbackDeclaration::new(event_type.to_owned(), cancelable)
-        .bind(scope)
-        .expect("SharedWorker host Event fallback declaration should bind")
 }
 
 fn new_error_event<'s>(
@@ -910,18 +857,4 @@ fn new_error_event<'s>(
     )
     .bind(scope)
     .expect("SharedWorker host ErrorEvent fallback declaration should bind")
-}
-
-fn set_error_event_details<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    message: &str,
-    filename: &str,
-    lineno: u32,
-    colno: u32,
-    error: v8::Local<'s, v8::Value>,
-) {
-    SharedWorkerHostErrorEventDetailsDeclaration::new(message, filename, lineno, colno, error)
-        .initialize(scope, event)
-        .expect("SharedWorker host ErrorEvent details declaration should initialize");
 }

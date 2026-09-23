@@ -6,29 +6,13 @@ use moli_webapi_declare::WebApiObject;
 use super::{WORKER_LISTENERS_SLOT, WORKER_ONERROR_SLOT};
 use crate::context_bootstrap::{
     dispatch_simple_event_target_event,
-    events::{clear_event_dispatch_fields, set_event_dispatch_fields},
+    events::{clear_event_dispatch_fields, construct_original_event, set_event_dispatch_fields},
     invoke_simple_event_listener, simple_object_event_listeners_snapshot,
     simple_object_event_remove_listener_value_for_type,
 };
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::util::v8str;
 use crate::worker::{WorkerParentErrorEventKind, WorkerToParentMessage};
-
-#[derive(WebApiObject)]
-#[webapi(plain)]
-struct WorkerHostEventInitDeclaration {
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::Event, prototype = "Object")]
-struct WorkerHostEventFallbackDeclaration {
-    #[webapi(data_property, enumerable)]
-    r#type: String,
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-}
 
 #[derive(WebApiObject)]
 #[webapi(plain)]
@@ -81,16 +65,6 @@ struct WorkerHostErrorEventFallbackDeclaration<'scope, 'text> {
     #[webapi(data_property, enumerable)]
     colno: u32,
     #[webapi(data_property, enumerable)]
-    error: v8::Local<'scope, v8::Value>,
-}
-
-#[derive(WebApiObject)]
-#[webapi(plain, scope_lifetime = 'scope, data_properties, enumerable)]
-struct WorkerHostErrorEventDetailsDeclaration<'scope, 'text> {
-    message: &'text str,
-    filename: &'text str,
-    lineno: u32,
-    colno: u32,
     error: v8::Local<'scope, v8::Value>,
 }
 
@@ -255,27 +229,6 @@ pub(crate) fn flush_pending_worker_messages_for_listener<'s>(
     let _ = (scope, worker);
 }
 
-pub(crate) fn dispatch_worker_error_event_with_error<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    worker: v8::Local<'s, v8::Object>,
-    message: &str,
-    filename: &str,
-    lineno: u32,
-    colno: u32,
-    error: v8::Local<'s, v8::Value>,
-) -> bool {
-    dispatch_worker_error_event_with_kind(
-        scope,
-        worker,
-        message,
-        filename,
-        lineno,
-        colno,
-        error,
-        WorkerParentErrorEventKind::ErrorEvent,
-    )
-}
-
 pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     worker: v8::Local<'s, v8::Object>,
@@ -287,15 +240,14 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
     event_kind: WorkerParentErrorEventKind,
 ) -> bool {
     let event = match event_kind {
-        WorkerParentErrorEventKind::Event => {
-            let event = new_event(scope, "error", true);
-            set_error_event_details(scope, event, message, filename, lineno, colno, error);
-            event
-        }
-        WorkerParentErrorEventKind::ErrorEvent => {
-            new_error_event(scope, message, filename, lineno, colno, error)
-        }
+        // Fetch/parse failures fire a plain Event with the default flags.
+        WorkerParentErrorEventKind::Event => construct_original_event(scope, "error"),
+        WorkerParentErrorEventKind::ErrorEvent => Some(new_error_event(
+            scope, message, filename, lineno, colno, error,
+        )),
     };
+    let Some(event) = event else { return false };
+    crate::context_bootstrap::mark_event_trusted(scope, event);
     set_event_dispatch_fields(scope, worker, event);
 
     let listeners =
@@ -311,7 +263,8 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
             &[event.into()],
             event,
         );
-        if listener.handler_slot.as_deref() == Some(WORKER_ONERROR_SLOT)
+        if event_kind == WorkerParentErrorEventKind::ErrorEvent
+            && listener.handler_slot.as_deref() == Some(WORKER_ONERROR_SLOT)
             && let Some(returned) = callback_result
             && v8::Local::new(scope, &returned).boolean_value(scope)
         {
@@ -349,35 +302,6 @@ pub(crate) fn dispatch_worker_error_event_with_kind<'s>(
         .get(scope, v8str(scope, "defaultPrevented").into())
         .is_some_and(|value| value.boolean_value(scope));
     !default_prevented
-}
-
-fn new_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event_type: &str,
-    cancelable: bool,
-) -> v8::Local<'s, v8::Object> {
-    let global = scope.get_current_context().global(scope);
-    if let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
-    {
-        let init = WorkerHostEventInitDeclaration::new(cancelable)
-            .bind(scope)
-            .expect("worker host Event init declaration should bind");
-        if let Some(event) = event_ctor.new_instance(
-            scope,
-            &[
-                v8::String::new(scope, event_type).unwrap().into(),
-                init.into(),
-            ],
-        ) {
-            return event;
-        }
-    }
-
-    WorkerHostEventFallbackDeclaration::new(event_type.to_owned(), cancelable)
-        .bind(scope)
-        .expect("worker host Event fallback declaration should bind")
 }
 
 fn new_message_event<'s>(
@@ -440,18 +364,4 @@ fn new_error_event<'s>(
     WorkerHostErrorEventFallbackDeclaration::new("error", message, filename, lineno, colno, error)
         .bind(scope)
         .expect("worker host ErrorEvent fallback declaration should bind")
-}
-
-fn set_error_event_details<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    event: v8::Local<'s, v8::Object>,
-    message: &str,
-    filename: &str,
-    lineno: u32,
-    colno: u32,
-    error: v8::Local<'s, v8::Value>,
-) {
-    WorkerHostErrorEventDetailsDeclaration::new(message, filename, lineno, colno, error)
-        .initialize(scope, event)
-        .expect("worker host ErrorEvent details declaration should initialize");
 }

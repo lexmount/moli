@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function worker_url(source) {
   return "data:text/javascript," + encodeURIComponent(source);
@@ -23,7 +24,7 @@ function wait_for(promise, description) {
   ]);
 }
 
-async function assert_module_link_failure(source, expectedFragments, description) {
+async function assert_module_link_failure(source, description) {
   const previousOnerror = window.onerror;
   let messageSeen = false;
   const worker = new Worker(worker_url(source), { type: "module" });
@@ -46,11 +47,7 @@ async function assert_module_link_failure(source, expectedFragments, description
       "module worker " + description + " link error",
     );
 
-    assert_equals(event.type, "error", "module link failure should dispatch an error event");
-    const lowerMessage = String(event.message).toLowerCase();
-    assert_true(expectedFragments.some(function (fragment) {
-      return lowerMessage.indexOf(fragment.toLowerCase()) !== -1;
-    }), "link failure should expose a syntax/link error message");
+    assert_worker_bootstrap_error(event, worker);
     assert_false(messageSeen, "module evaluation should not continue after the link failure");
   } finally {
     window.onerror = previousOnerror;
@@ -67,7 +64,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_link_failure(
     missingNamedSource,
-    ["missing export", "syntaxerror"],
     "missing named import",
   );
 
@@ -77,7 +73,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_link_failure(
     missingDefaultSource,
-    ["missing export", "syntaxerror"],
     "missing default import",
   );
 
@@ -90,7 +85,6 @@ promise_test(async function () {
   ].join("\n");
   await assert_module_link_failure(
     missingReexportSource,
-    ["missing export", "syntaxerror"],
     "missing re-export",
   );
 }, "Dedicated module workers reject missing static import exports before evaluation");

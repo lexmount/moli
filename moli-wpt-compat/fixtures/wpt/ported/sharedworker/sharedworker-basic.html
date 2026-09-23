@@ -3,6 +3,7 @@
 <script src="/wpt/resources/testharness.js"></script>
 <script src="/wpt/resources/testharnessreport.js"></script>
 <script src="/wpt/resources/moli-wpt-adapter.js"></script>
+<script src="/wpt/ported/worker/resources/assert-bootstrap-error.js"></script>
 <script>
 function shared_worker_url(source) {
   return "data:text/javascript," + encodeURIComponent(source);
@@ -295,8 +296,7 @@ promise_test(async function () {
   new SharedWorker(url, { name: "type-check", type: "classic" });
   const worker = new SharedWorker(url, { name: "type-check", type: "module" });
   const event = await next_worker_error(worker);
-  assert_equals(event.type, "error");
-  assert_true(String(event.message).includes("script type"));
+  assert_worker_bootstrap_error(event, worker);
 }, "SharedWorker type mismatch for an existing key dispatches error");
 
 promise_test(async function () {
@@ -304,8 +304,7 @@ promise_test(async function () {
   new SharedWorker(url, { name: "credentials-check", credentials: "same-origin" });
   const worker = new SharedWorker(url, { name: "credentials-check", credentials: "include" });
   const event = await next_worker_error(worker);
-  assert_equals(event.type, "error");
-  assert_true(String(event.message).includes("credentials"));
+  assert_worker_bootstrap_error(event, worker);
 }, "SharedWorker credentials mismatch for an existing key dispatches error");
 
 promise_test(async function () {
@@ -313,8 +312,7 @@ promise_test(async function () {
   let onerrorCalled = false;
   worker.onerror = function (event) {
     onerrorCalled = true;
-    assert_equals(event.type, "error");
-    assert_true(String(event.message).includes("shared worker script"));
+    assert_worker_bootstrap_error(event, worker);
   };
   await next_worker_error(worker);
   assert_true(onerrorCalled, "onerror handler is invoked for script load failure");
@@ -326,8 +324,7 @@ promise_test(async function () {
     "invalid-data-url-script",
   );
   const event = await next_worker_error(worker);
-  assert_equals(event.type, "error");
-  assert_true(String(event.message).includes("data URL"));
+  assert_worker_bootstrap_error(event, worker);
 }, "SharedWorker invalid data URL script dispatches an async error event");
 
 test(function () {
