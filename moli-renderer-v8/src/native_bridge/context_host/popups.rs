@@ -194,6 +194,7 @@ pub(super) struct PendingLightweightPopupDocumentLoad {
     pub(super) target: LightweightPopupDocumentFetchTarget,
     pub(super) document_state: LightweightPopupDocumentState,
     pub(super) resource_loader: Option<crate::network::navigation::NavigationResourceLoader>,
+    history_traversal: bool,
 }
 
 struct LightweightPopupClassicScriptContinuation {
@@ -1436,6 +1437,14 @@ impl JsContextHost {
             .any(|pending| pending.target.task().popup_id() == popup_id)
     }
 
+    pub(crate) fn lightweight_popup_has_pending_history_traversal(&self, popup_id: u64) -> bool {
+        self.pending_lightweight_popup_document_loads
+            .values()
+            .any(|pending| {
+                pending.target.task().popup_id() == popup_id && pending.history_traversal
+            })
+    }
+
     pub(crate) fn lightweight_popup_is_open(&self, popup_id: u64) -> bool {
         self.lightweight_popup_record(popup_id)
             .is_some_and(LightweightPopupBrowsingContextRecord::is_open)
@@ -1694,15 +1703,19 @@ impl JsContextHost {
             self.queue_lightweight_popup_load_event(navigation_task);
             return true;
         }
-        if self
-            .start_lightweight_popup_document_load(
-                navigation_task,
-                target_url,
-                previous_url,
-                navigation_state,
-            )
-            .is_none()
-        {
+        if let Some(load_id) = self.start_lightweight_popup_document_load(
+            navigation_task,
+            target_url,
+            previous_url,
+            navigation_state,
+        ) {
+            if let Some(pending) = self
+                .pending_lightweight_popup_document_loads
+                .get_mut(&load_id)
+            {
+                pending.history_traversal = true;
+            }
+        } else {
             self.queue_lightweight_popup_load_event(navigation_task);
         }
         true
@@ -2203,6 +2216,7 @@ impl JsContextHost {
                 target,
                 document_state: document_state.clone(),
                 resource_loader: resource_loader.clone(),
+                history_traversal: false,
             },
         );
         if let Some(snapshot) = local_snapshot {

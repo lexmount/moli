@@ -1,7 +1,8 @@
 use super::navigation_activation::navigation_activation_value;
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_document_id,
-    navigation_entry_referrer_policy_value, navigation_entry_url_value,
+    navigation_entry_id_value, navigation_entry_key_value, navigation_entry_referrer_policy_value,
+    navigation_entry_url_value,
 };
 use super::navigation_entry_state::{
     history_entry_state_snapshot, navigation_entry_state_snapshot,
@@ -100,16 +101,10 @@ pub(super) fn serialize_navigation_entry_object<'s>(
     entry: v8::Local<'s, v8::Object>,
     history_entries: &[NavigationHistorySerializedEntry],
 ) -> NavigationHistorySerializedEntry {
-    let id = get_own_static_property(scope, entry, "id")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
+    let id = navigation_entry_id_value(scope, entry)
         .map(NavigationHistoryEntryId::from_serialized)
         .unwrap_or_else(NavigationHistoryEntryId::allocate);
-    let key = get_own_static_property(scope, entry, "key")
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|value| !value.is_empty())
+    let key = navigation_entry_key_value(scope, entry)
         .map(NavigationHistoryEntryKey::from_serialized)
         .unwrap_or_else(NavigationHistoryEntryKey::allocate);
     if let Some(snapshot) = history_entries
@@ -230,16 +225,13 @@ pub(super) fn serialize_history_entries<'s>(
             .filter(|value| *value >= 0)
             .map(|value| value as u32)
             .unwrap_or(index);
-        let id = get_own_static_property(scope, entry, "id")
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| !value.is_empty())
+        // Public Navigation getters may hide entries from an inactive view.
+        // Persist their stored identities so restoration still matches the
+        // shared session history, including a popup's forward entries.
+        let id = navigation_entry_id_value(scope, entry)
             .map(NavigationHistoryEntryId::from_serialized)
             .unwrap_or_else(NavigationHistoryEntryId::allocate);
-        let key = get_own_static_property(scope, entry, "key")
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .filter(|value| !value.is_empty())
+        let key = navigation_entry_key_value(scope, entry)
             .map(NavigationHistoryEntryKey::from_serialized)
             .unwrap_or_else(NavigationHistoryEntryKey::allocate);
         let document_id = navigation_entry_document_id(scope, entry)

@@ -171,6 +171,14 @@ pub(super) fn history_delta_traversal_plan<'s>(
     let owner = runtime_window_owner(scope, history);
     let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
     let binding = super::session_history::binding(scope, host, owner);
+    // Further requests made through the outgoing popup Document's History
+    // are discarded when that Document is replaced. Do not rebase them onto
+    // the destination's projected history while its resource load waits.
+    if let Some(popup_id) = binding.popup
+        && host.lightweight_popup_has_pending_history_traversal(popup_id)
+    {
+        return None;
+    }
     let model = host.session_histories.get_mut(binding.popup).clone();
     let source = host
         .pending_joint_history_step(&model)

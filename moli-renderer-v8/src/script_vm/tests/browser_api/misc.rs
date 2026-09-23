@@ -24891,6 +24891,147 @@ JSON.stringify({
 }
 
 #[tokio::test]
+async fn window_open_popup_history_forward_from_restored_load() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/page.html", &loader);
+    vm.eval(
+        r#"
+        globalThis.popupHistoryLoads = [];
+        globalThis.popupHistoryRestoring = false;
+        globalThis.popupFirstUrl = URL.createObjectURL(new Blob([`<!doctype html><script>
+            onload = () => {
+                opener.popupHistoryLoads.push('first');
+                if (opener.popupHistoryRestoring) history.forward();
+            };
+        <\/script>`], {type:'text/html'}));
+        globalThis.popupSecondUrl = URL.createObjectURL(new Blob([`<!doctype html><script>
+            onload = () => opener.popupHistoryLoads.push('second');
+        <\/script>`], {type:'text/html'}));
+        globalThis.historyPopup = open(popupFirstUrl, 'historyForwardPopup');
+        "#,
+    )
+    .expect("popup setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "popupHistoryLoads.join(',')",
+        "first",
+        "first popup load",
+    )
+    .await;
+    vm.eval("open(popupSecondUrl, 'historyForwardPopup')")
+        .expect("second popup navigation should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "popupHistoryLoads.join(',')",
+        "first,second",
+        "second popup load",
+    )
+    .await;
+    vm.eval("popupHistoryRestoring = true; historyPopup.history.back()")
+        .expect("popup back traversal should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "popupHistoryLoads.join(',')",
+        "first,second,first,second",
+        "restored popup load should be able to traverse forward",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            "[historyPopup.location.href === popupSecondUrl, historyPopup.history.length].join('|')"
+        )
+        .expect("restored popup history should evaluate"),
+        "true|2"
+    );
+}
+
+#[tokio::test]
+async fn popup_history_back_from_departing_document_keeps_first_traversal() {
+    assert_popup_consecutive_history_back(true).await;
+}
+
+#[tokio::test]
+async fn popup_history_back_from_opener_keeps_first_traversal() {
+    assert_popup_consecutive_history_back(false).await;
+}
+
+async fn assert_popup_consecutive_history_back(from_popup: bool) {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/page.html", &loader);
+    vm.eval(&format!("globalThis.traverseFromPopup = {from_popup}"))
+        .expect("traversal initiator should evaluate");
+    vm.eval(
+        r#"
+        globalThis.popupTraversalLoads = [];
+        globalThis.popupTraversalUrls = [0, 1, 2].map(index =>
+            URL.createObjectURL(new Blob([`<!doctype html><script>
+                onload = () => {
+                    opener.popupTraversalLoads.push(${index});
+                    if (${index} === 2 && opener.traverseFromPopup) {
+                        history.go(-10);
+                        history.back();
+                        history.back();
+                    }
+                };
+            <\/script>`], {type:'text/html'})));
+        "#,
+    )
+    .expect("popup traversal fixtures should evaluate");
+    for index in 0..3 {
+        vm.eval(&format!(
+            "globalThis.traversalPopup = open(popupTraversalUrls[{index}], 'consecutiveHistoryPopup')"
+        ))
+        .expect("popup navigation should evaluate");
+        let expected = match index {
+            0 => "0",
+            1 => "0,1",
+            _ if from_popup => "0,1,2,1",
+            _ => "0,1,2",
+        };
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "popupTraversalLoads.join(',')",
+            expected,
+            "popup documents should load in traversal order",
+        )
+        .await;
+    }
+    if !from_popup {
+        vm.eval("traversalPopup.history.back(); traversalPopup.history.back()")
+            .expect("the opener should request both traversals through the outgoing History");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "popupTraversalLoads.join(',')",
+            "0,1,2,1",
+            "only the first traversal from the outgoing popup History should commit",
+        )
+        .await;
+    }
+    assert_eq!(
+        vm.eval("String(traversalPopup.location.href === popupTraversalUrls[1])")
+            .expect("popup traversal destination should evaluate"),
+        "true"
+    );
+    vm.eval("traversalPopup.history.back()")
+        .expect("the restored Document's History should allow another traversal");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "popupTraversalLoads.join(',')",
+        "0,1,2,1,0",
+        "completed popup loads must release the pending traversal",
+    )
+    .await;
+}
+
+#[tokio::test]
 async fn lightweight_popup_cross_document_navigation_clears_old_onload_handler() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
