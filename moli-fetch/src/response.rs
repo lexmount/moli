@@ -4,6 +4,18 @@ use url::Url;
 
 use crate::{StreamingHtmlResponse, StreamingRawResponse};
 
+/// Fetch's response cache state, retained separately from the legacy
+/// `from_cache` flag so Resource Timing can distinguish a 304 validation from
+/// a response served without a network request.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ResponseCacheState {
+    #[default]
+    None,
+    Local,
+    Validated,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NegotiatedHttpVersion {
     Http09,
@@ -51,6 +63,7 @@ pub struct ResponseHead {
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
+    pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
 
@@ -327,6 +340,7 @@ pub struct Response {
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
+    pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -347,6 +361,7 @@ impl Clone for Response {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
         }
@@ -401,6 +416,7 @@ impl Response {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -439,6 +455,7 @@ impl Response {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -457,6 +474,7 @@ impl Response {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -473,6 +491,7 @@ impl Response {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         let (body, body_bytes) = self
@@ -510,6 +529,7 @@ impl Response {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)
@@ -536,6 +556,7 @@ pub struct RawResponse {
     pub redirected: bool,
     pub redirect_chain: Vec<RedirectInfo>,
     pub from_cache: bool,
+    pub cache_state: crate::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
 }
@@ -556,6 +577,7 @@ impl Clone for RawResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
             network_request_extra_info: self.network_request_extra_info.clone(),
         }
@@ -604,6 +626,7 @@ impl RawResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -628,6 +651,7 @@ impl RawResponse {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -646,6 +670,7 @@ impl RawResponse {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info: None,
         })
@@ -662,6 +687,7 @@ impl RawResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain,
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)

@@ -892,6 +892,7 @@ impl ScriptVm {
             response_headers: response.headers.clone(),
             response_body: SubresourceResponseBody::from_navigation_response(&response),
             from_cache: response.from_cache,
+            cache_state: response.cache_state,
         };
         self._context_host
             .borrow_mut()
@@ -1148,6 +1149,7 @@ impl ScriptVm {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         };
         let pending = match continuation {
@@ -1894,6 +1896,7 @@ impl ScriptVm {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: pending.response.from_cache,
+                cache_state: pending.response.cache_state,
                 negotiated_http_version: pending.response.negotiated_http_version,
             });
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
@@ -1958,6 +1961,7 @@ impl ScriptVm {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: pending.response.from_cache,
+                cache_state: pending.response.cache_state,
                 negotiated_http_version: pending.response.negotiated_http_version,
             });
             let result = if pending.pending.request_mode == moli_fetch::RequestMode::NoCors {
@@ -2031,6 +2035,7 @@ impl ScriptVm {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: pending.response.from_cache,
+                    cache_state: pending.response.cache_state,
                     negotiated_http_version: pending.response.negotiated_http_version,
                 }),
             ),

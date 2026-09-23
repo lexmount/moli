@@ -179,6 +179,7 @@ fn xhr_null_body_statuses_discard_buffered_and_streamed_bytes() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 if streaming {
@@ -344,6 +345,7 @@ fn xhr_null_body_late_completion_preserves_a_replacement_requests_progress() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 network_request_headers: None,

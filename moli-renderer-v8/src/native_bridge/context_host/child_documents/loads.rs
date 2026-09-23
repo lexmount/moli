@@ -888,6 +888,7 @@ fn child_document_load_outcome_from_response(
                 encoded_data_length,
                 response_body: Some(response_body),
                 from_cache: head.from_cache,
+                cache_state: head.cache_state,
             }),
         },
     )))
@@ -956,6 +957,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             moli_fetch::ResponseBody::materialized_bytes(body_bytes.clone()),
