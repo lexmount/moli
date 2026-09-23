@@ -17,6 +17,11 @@ async fn font_faces_enforce_document_csp_before_initial_and_redirect_requests() 
     run_font_probe(include_str!("../fixtures/font-csp.js"), 4).await
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn font_face_sets_validate_load_and_check_queries_with_css_shorthand_syntax() -> Result<()> {
+    run_font_probe(include_str!("../fixtures/font-query.js"), 24).await
+}
+
 async fn run_font_probe(probe: &str, count: usize) -> Result<()> {
     run_font_probe_with_argument(probe, count, None).await
 }
