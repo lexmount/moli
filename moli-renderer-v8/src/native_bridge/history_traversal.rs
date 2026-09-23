@@ -44,6 +44,7 @@ pub(crate) struct HistoryTraversalParticipant {
     pub(crate) history: v8::Global<v8::Object>,
     pub(crate) navigation: Option<v8::Global<v8::Object>>,
     pub(crate) source: SessionHistoryEntry,
+    pub(crate) source_url: String,
     pub(crate) destination: SessionHistoryEntry,
     pub(crate) outcome: TraversalParticipantOutcome,
 }

@@ -24,15 +24,31 @@ pub(super) fn project_traversal_participants<'s>(
 ) -> Option<Vec<TraversalTarget<'s>>> {
     let mut targets = super::session_history::project_traversal(scope, owner, core)?;
         let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
-        let replacing = targets.iter().filter_map(|target| {
-            super::navigation_seed::history_entry_seed_for_traversal(scope, target.owner, target.current_index, target.target_index)?;
-            super::navigation_window::runtime_window_dispatch_scope(scope, target.owner)
-        }).collect::<Vec<_>>();
+        let replacing = targets
+            .iter()
+            .filter_map(|target| {
+                super::navigation_seed::history_entry_seed_for_traversal(
+                    scope,
+                    target.owner,
+                    target.current_index,
+                    target.target_index,
+                )?;
+                super::navigation_window::runtime_window_dispatch_scope(scope, target.owner)
+            })
+            .collect::<Vec<_>>();
         targets.retain(|target| {
-            let Some(mut dispatch) = super::navigation_window::runtime_window_dispatch_scope(scope, target.owner) else { return false; };
+            let Some(mut dispatch) =
+                super::navigation_window::runtime_window_dispatch_scope(scope, target.owner)
+            else {
+                return false;
+            };
             while let crate::native_bridge::OwnerDispatchScope::Child(handle) = dispatch {
-                let Some(parent) = host.owner_dispatch_scope_for_node(handle) else { break; };
-                if replacing.contains(&parent) { return false; }
+                let Some(parent) = host.owner_dispatch_scope_for_node(handle) else {
+                    break;
+                };
+                if replacing.contains(&parent) {
+                    return false;
+                }
                 dispatch = parent;
             }
             true
@@ -199,7 +215,7 @@ pub(super) fn history_delta_traversal_target<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     delta: i64,
-    from: Option<moli_page_types::SessionHistoryStepId>,
+    from: Option<moli_session_history::SessionHistoryStepId>,
 ) -> Option<HistoryDeltaTraversalPlan<'s>> {
     let owner = runtime_window_owner(scope, history);
     let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
@@ -211,5 +227,7 @@ pub(super) fn history_delta_traversal_target<'s>(
     if !super::session_history::traversal_is_allowed(scope, owner, step) {
         return Some(HistoryDeltaTraversalPlan::Denied);
     }
-    Some(HistoryDeltaTraversalPlan::Traverse(JointTraversalPlan::resolve(scope, owner, step)?))
+    Some(HistoryDeltaTraversalPlan::Traverse(
+        JointTraversalPlan::resolve(scope, owner, step)?,
+    ))
 }

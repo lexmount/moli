@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
 use moli_page_types::{
-    JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryStepId,
-};
-use moli_page_types::{
     NavigationHistoryMutation, cross_document_navigation_seed, reload_navigation_seed,
     traversal_navigation_seed_candidate,
+};
+use moli_session_history::{
+    JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryStepId,
 };
 use parking_lot::Mutex;
 use url::Url;
@@ -82,7 +82,7 @@ impl RendererNavigationHistory {
         let joint = self.joint.lock().clone().and_then(|mut joint| {
             let current = current_entry(seed)?;
             let entry = SessionHistoryEntry {
-                key: moli_page_types::NavigationHistoryEntryKey::from_serialized(
+                key: moli_session_history::NavigationHistoryEntryKey::from_serialized(
                     crate::context_bootstrap::navigation_entry_public_token(current.key.as_str()),
                 ),
                 document: current.document_id.clone(),
@@ -97,7 +97,8 @@ impl RendererNavigationHistory {
                         .or_else(|| {
                             joint.step_for_entry(SessionHistoryContextId::ROOT, &entry.key)
                         })?;
-                    joint.traverse(step)?;
+                    let plan = joint.plan_traversal(step)?;
+                    joint.commit_traversal(&plan)?;
                 }
                 _ => joint.replace(SessionHistoryContextId::ROOT, entry),
             }
