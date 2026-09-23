@@ -93,6 +93,8 @@ impl PreloadServer {
                                     cache = query.get("cache").cloned().unwrap_or(cache);
                                     if query.get("as").is_some_and(|kind| kind == "image") {
                                         ("image/svg+xml", "<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1'/></svg>".to_owned())
+                                    } else if query.get("as").is_some_and(|kind| kind == "style") {
+                                        ("text/css", "body { --preload-value: loaded; }".to_owned())
                                     } else { ("text/javascript", SCRIPT.to_owned()) }
                                 }
                                 "/probe-started" | "/probe-release" | "/probe-stats" => {
@@ -116,6 +118,60 @@ impl PreloadServer {
         });
         Ok(Self { origin, task })
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_preloads_supply_pending_and_completed_consumers_and_integrity_failures()
+-> Result<()> {
+    let server = PreloadServer::spawn().await?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let probe = include_str!("../fixtures/preload-consumption-style.js");
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        page.evaluate_runtime_expression_with_await_async(
+            &format!("({probe})().then(JSON.stringify)"),
+            true,
+        ),
+    )
+    .await??;
+    let value: serde_json::Value = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .context("stylesheet preload consumption results")?,
+    )?;
+    assert_eq!(value["rows"].as_array().unwrap().len(), 72);
+    assert_eq!(value["failures"], serde_json::json!([]));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stylesheet_preload_consumption_preserves_service_worker_filters_without_redispatch()
+-> Result<()> {
+    let server = PreloadServer::spawn().await?;
+    let mut config = AppConfig::default();
+    config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
+    let browser = Browser::new(config)?;
+    let mut page = browser.fetch(&server.origin).await?;
+    let probe = include_str!("../fixtures/preload-consumption-style-sw.js");
+    let result = tokio::time::timeout(
+        Duration::from_secs(30),
+        page.evaluate_runtime_expression_with_await_async(
+            &format!("({probe})().then(JSON.stringify)"),
+            true,
+        ),
+    )
+    .await??;
+    let value: serde_json::Value = serde_json::from_str(
+        result["value"]
+            .as_str()
+            .context("Service Worker stylesheet preload results")?,
+    )?;
+    assert_eq!(value["rows"].as_array().unwrap().len(), 24);
+    assert_eq!(value["failures"], serde_json::json!([]));
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]

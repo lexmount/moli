@@ -28,7 +28,7 @@ use crate::types::{
 pub struct StylesheetBlockingState {
     owner_fetches: HashMap<NodeId, StylesheetFetchEntry>,
     blocking_entries: HashMap<NodeId, StylesheetBlockingEntry>,
-    url_fetches: HashMap<(u64, Url, StylesheetResourceKey), StylesheetFetch>,
+    url_fetches: HashMap<(u64, Url, StylesheetResourceKey, bool), StylesheetFetch>,
     completion_source: OwnerTaskSource<StylesheetCompletion>,
     ready_network_results: VecDeque<StylesheetFetchNetworkResult>,
     // The stylesheet queue is local to document processing, not the renderer
@@ -358,10 +358,12 @@ impl StylesheetBlockingState {
     {
         let resource_cache_scope = fetcher.resource_cache_scope();
         let resource_key = options.resource_key(url.clone());
+        let is_link_preload = fetcher.is_document_preload(&url);
         if let Some(url_fetch) = self.url_fetches.get(&(
             resource_cache_scope,
             document_url.clone(),
             resource_key.clone(),
+            is_link_preload,
         )) {
             return url_fetch.clone();
         }
@@ -380,27 +382,40 @@ impl StylesheetBlockingState {
             .or_else(|| self.completion_publisher.clone());
         let completion_fetch = fetch.clone();
         self.url_fetches.insert(
-            (resource_cache_scope, document_url.clone(), resource_key),
+            (
+                resource_cache_scope,
+                document_url.clone(),
+                resource_key,
+                is_link_preload,
+            ),
             fetch.clone(),
         );
-        let task_fetcher = fetcher.clone();
+        let prepared = fetcher.prepare_stylesheet_resource(document_url, request_url, options);
+        let response = match prepared.response {
+            crate::fetcher::PreparedStylesheetResponse::Reused(terminal) => {
+                fetch.finish(Arc::new(terminal));
+                return fetch;
+            }
+            crate::fetcher::PreparedStylesheetResponse::Pending(response) => response,
+        };
         fetcher.spawn_stylesheet_task(Box::pin(async move {
-            let terminal = task_fetcher
-                .fetch_stylesheet_resource(document_url, request_url, options)
-                .await;
+            let terminal = response.await;
             let completion = StylesheetCompletion::fetch(StylesheetFetchCompletion {
                 fetch: completion_fetch,
-                terminal,
+                terminal: terminal.clone(),
             });
             if let Some(publisher) = completion_publisher {
                 publisher(completion);
-                return;
+            } else {
+                let sent = sender.send(completion);
+                if sent.is_ok()
+                    && let Some(wake) = completion_wake
+                {
+                    wake();
+                }
             }
-            let sent = sender.send(completion);
-            if sent.is_ok()
-                && let Some(wake) = completion_wake
-            {
-                wake();
+            if let Some(on_published) = prepared.on_published {
+                on_published(&terminal);
             }
         }));
         fetch
