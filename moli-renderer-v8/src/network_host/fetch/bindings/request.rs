@@ -74,7 +74,8 @@ pub(super) fn prepare_window_fetch_request<'s>(
     let cors_preflight_request_headers = request_headers.clone();
     let request_headers =
         merge_byte_string_request_headers(host.extra_http_headers(), &request_headers);
-    let resolved_url = resolve_context_url(&base_url, &parsed.url, None)?;
+    let resolved_url =
+        resolve_context_url(&base_url, &parsed.url, None).map_err(|error| error.to_string())?;
 
     Ok(PreparedWindowFetchRequest {
         frame_id,

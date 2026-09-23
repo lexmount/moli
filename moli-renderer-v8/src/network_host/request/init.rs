@@ -9,11 +9,18 @@ use std::str::FromStr;
 /// is consumed or any request is dispatched.
 pub(crate) fn convert_fetch_arguments<'s, T>(
     scope: &mut v8::PinScope<'s, '_>,
-    convert: impl FnOnce(&mut v8::PinScope<'s, '_>) -> Result<T, String>,
+    convert: impl FnOnce(&mut v8::PinScope<'s, '_>) -> Result<T, FetchArgumentError>,
 ) -> Result<T, v8::Local<'s, v8::Value>> {
     let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
     let mut conversion_scope = try_catch.init();
     let result = convert(&mut conversion_scope);
+    if !conversion_scope.has_caught()
+        && let Err(error) = &result
+    {
+        // WebIDL's PendingException already carries an exception through V8;
+        // only ordinary validation failures need a new TypeError here.
+        error.throw(&mut conversion_scope);
+    }
     if conversion_scope.has_caught() {
         let exception = conversion_scope
             .exception()
@@ -21,11 +28,7 @@ pub(crate) fn convert_fetch_arguments<'s, T>(
         conversion_scope.reset();
         return Err(exception);
     }
-    result.map_err(|message| {
-        crate::util::v8_string(&conversion_scope, &message)
-            .map(|message| v8::Exception::type_error(&conversion_scope, message))
-            .unwrap_or_else(|| v8::undefined(&conversion_scope).into())
-    })
+    result.map_err(|_| v8::undefined(&conversion_scope).into())
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +138,7 @@ pub(crate) fn parse_fetch_init<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
-) -> Result<ParsedFetchInit, String> {
+) -> Result<ParsedFetchInit, webidl::WebIdlError> {
     if args.length() <= index {
         return Ok(ParsedFetchInit::default());
     }
@@ -144,31 +147,32 @@ pub(crate) fn parse_fetch_init<'s>(
         return Ok(ParsedFetchInit::default());
     };
 
-    let init = webidl::parse_dictionary_object::<RequestInitMembers>(scope, init_object)
-        .map_err(|error| error.to_string())?;
+    let init = webidl::parse_dictionary_object::<RequestInitMembers>(scope, init_object)?;
     let priority = init.priority.map(|value| value.0);
     let method_present = init_object
         .has(scope, v8str(scope, "method").into())
-        .unwrap_or(false);
+        .ok_or_else(|| {
+            webidl::WebIdlError::pending_exception(webidl::Context::member("RequestInit", "method"))
+        })?;
     let method = init
         .method
-        .map(|s| normalize_request_method(&s).map_err(str::to_owned))
+        .map(|s| normalize_request_method(&s).map_err(webidl::WebIdlError::custom_message))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 
     let body_present = init_object
         .has(scope, v8str(scope, "body").into())
-        .unwrap_or(false);
+        .ok_or_else(|| {
+            webidl::WebIdlError::pending_exception(webidl::Context::member("RequestInit", "body"))
+        })?;
     let prepared_body = webidl::property_result(
         scope,
         init_object,
         "body",
         webidl::Context::member("RequestInit", "body"),
-    )
-    .map_err(|error| error.to_string())?
+    )?
     .map(|value| body_init(scope, value, webidl::Context::member("RequestInit", "body")))
-    .transpose()
-    .map_err(|error| error.to_string())?
+    .transpose()?
     .flatten();
     let body = prepared_body.as_ref().map(|body| body.bytes.clone());
     let body_content_type = prepared_body
@@ -177,12 +181,19 @@ pub(crate) fn parse_fetch_init<'s>(
     if body.as_ref().is_some_and(|body| !body.is_empty())
         && matches!(method.as_str(), "GET" | "HEAD")
     {
-        return Err("Request with GET/HEAD method cannot have body".to_owned());
+        return Err(webidl::WebIdlError::custom_message(
+            "Request with GET/HEAD method cannot have body",
+        ));
     }
 
     let headers_present = init_object
         .has(scope, v8str(scope, "headers").into())
-        .unwrap_or(false);
+        .ok_or_else(|| {
+            webidl::WebIdlError::pending_exception(webidl::Context::member(
+                "RequestInit",
+                "headers",
+            ))
+        })?;
     let mut extra_headers = init.headers.unwrap_or_default();
     append_default_body_content_type(&mut extra_headers, body_content_type.as_deref());
 
@@ -216,14 +227,13 @@ pub(crate) fn parse_fetch_init<'s>(
 pub(crate) fn request_object_credentials_mode<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-) -> Result<Option<moli_fetch::RequestCredentialsMode>, String> {
+) -> Result<Option<moli_fetch::RequestCredentialsMode>, webidl::WebIdlError> {
     if is_branded_request_object(scope, object) {
         return Ok(request_slot_string(scope, object, REQUEST_CREDENTIALS_SLOT)
             .and_then(|value| RequestCredentialsMode::from_str(&value).ok()));
     }
     webidl::parse_dictionary_object::<RequestInitMembers>(scope, object)
         .map(|parsed| parsed.credentials_mode.map(|value| value.0))
-        .map_err(|error| error.to_string())
 }
 
 pub(in crate::network_host) fn request_credentials_mode_label(

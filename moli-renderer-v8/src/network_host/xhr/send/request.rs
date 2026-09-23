@@ -78,8 +78,8 @@ pub(super) fn prepare_xhr_send_request<'s>(
     } = environment;
     let policy_context = effective_subresource_policy_context(scope, host, owner);
     let network_partition_key = active_subresource_network_partition_key(host, owner);
-    let resolved_url =
-        resolve_context_url(&base_url, &url_str, None).map_err(XhrSendPrepareError::Url)?;
+    let resolved_url = resolve_context_url(&base_url, &url_str, None)
+        .map_err(|error| XhrSendPrepareError::Url(error.to_string()))?;
     let (request_headers, cors_preflight_request_headers) =
         xhr_request_headers(scope, host, xhr, prepared_body.default_content_type);
     let credentials_mode =

@@ -7074,7 +7074,7 @@ async fn blob_url_revocation_uses_window_and_worker_creator_storage_keys() {
 }
 
 #[tokio::test]
-async fn request_init_exceptions_preserve_identity_without_fetching_or_consuming_input() {
+async fn request_and_fetch_argument_errors_preserve_exceptions_without_side_effects() {
     run_page_vm_async_test(async move {
         for worker in [false, true] {
             let mut page_vm = test_page_vm();
@@ -7083,7 +7083,7 @@ async fn request_init_exceptions_preserve_identity_without_fetching_or_consuming
                 const check = (value, message) => { if (!value) throw new Error(message); };
                 const url = 'data:text/plain,must-not-fetch';
                 for (const api of ['Request', 'fetch']) {
-                    for (const member of ['method', 'headers', 'signal']) {
+                    for (const member of ['method', 'headers', 'signal', 'body']) {
                         for (const sentinel of [undefined, null, false, 0, 'sentinel', {}, new Error('sentinel')]) {
                             const input = new Request(url, {method:'POST', body:'kept'});
                             const init = {};
@@ -7103,6 +7103,52 @@ async fn request_init_exceptions_preserve_identity_without_fetching_or_consuming
                         }
                     }
                 }
+                const rejection = async promise => {
+                    check(promise instanceof Promise, 'fetch conversion must return a Promise');
+                    let rejected = false, caught;
+                    await promise.then(() => {}, error => { rejected = true; caught = error; });
+                    check(rejected, 'invalid arguments must reject');
+                    return caught;
+                };
+                for (const sentinel of [undefined, null, false, 0, 'sentinel', {}, new Error('sentinel')]) {
+                    const throwSentinel = () => { throw sentinel; };
+                    const inits = [
+                        {method: {toString: throwSentinel}},
+                        {headers: {[Symbol.iterator]: throwSentinel}},
+                        ...['method', 'body', 'headers', 'signal'].map(member => new Proxy({}, {
+                            has(target, key) {
+                                if (key === member) throw sentinel;
+                                return Reflect.has(target, key);
+                            },
+                        })),
+                    ];
+                    for (const init of inits) {
+                        const input = new Request(url, {method: 'POST', body: 'kept'});
+                        check(Object.is(await rejection(fetch(input, init)), sentinel), 'nested conversion exception identity');
+                        check(!input.bodyUsed, 'nested conversion failure consumed input body');
+                    }
+                    check(Object.is(await rejection(fetch({toString: throwSentinel})), sentinel), 'URL conversion exception identity');
+                }
+                const interfaceName = typeof document === 'undefined' ? 'DedicatedWorkerGlobalScope' : 'Window';
+                const noCorsInterface = typeof document === 'undefined' ? " on 'DedicatedWorkerGlobalScope'" : '';
+                for (const [init, message] of [
+                    [{method: 'TRACE'}, 'Request method is forbidden'],
+                    [{method: 'GET', body: 'invalid'}, 'Request with GET/HEAD method cannot have body'],
+                    [{mode: 'invalid'}, 'RequestInit: mode is not a valid enum value of type RequestMode'],
+                    [{signal: false}, `Failed to execute 'fetch' on '${interfaceName}': signal must be an AbortSignal.`],
+                    [{signal: {}}, `Failed to execute 'fetch' on '${interfaceName}': signal must be an AbortSignal.`],
+                    [{mode: 'no-cors', method: 'PATCH'}, `Failed to execute 'fetch'${noCorsInterface}: method \`PATCH\` is unsupported in no-cors mode.`],
+                ]) {
+                    const input = new Request(url, {method: 'POST', body: 'kept'});
+                    const error = await rejection(fetch(input, init));
+                    check(error instanceof TypeError, 'validation must reject with a TypeError');
+                    check(error.message === message, 'validation message: ' + error.message);
+                    check(!input.bodyUsed, 'validation failure consumed input body');
+                }
+                const missing = await rejection(fetch());
+                check(missing instanceof TypeError && missing.message === 'fetch: Argument 1 is required', 'missing argument validation');
+                const badUrl = await rejection(fetch('http://['));
+                check(badUrl instanceof TypeError && badUrl.message.startsWith('failed to resolve url `http://[`:'), 'invalid URL validation');
                 if (typeof document !== 'undefined') {
                     const frame = document.createElement('iframe');
                     document.body.appendChild(frame);
@@ -7113,6 +7159,10 @@ async fn request_init_exceptions_preserve_identity_without_fetching_or_consuming
                     let caught;
                     await promise.catch(error => { caught = error; });
                     check(caught === sentinel, 'cross-realm exception identity');
+                    const invalidSignal = other.fetch.call(window, url, {signal: false});
+                    check(invalidSignal instanceof other.Promise, 'validation rejection must belong to function realm');
+                    await invalidSignal.catch(error => { caught = error; });
+                    check(caught instanceof other.TypeError, 'validation TypeError must belong to function realm');
                     frame.remove();
                 }
                 return 'ok';

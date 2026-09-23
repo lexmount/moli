@@ -1,18 +1,59 @@
+use std::fmt;
+
+#[derive(Debug)]
+pub(crate) enum ResolveContextUrlError {
+    Base {
+        input: String,
+        source: url::ParseError,
+    },
+    Url {
+        input: String,
+        source: url::ParseError,
+    },
+}
+
+impl fmt::Display for ResolveContextUrlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Base { input, source } => {
+                write!(f, "failed to resolve base url `{input}`: {source}")
+            }
+            Self::Url { input, source } => {
+                write!(f, "failed to resolve url `{input}`: {source}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ResolveContextUrlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Base { source, .. } | Self::Url { source, .. } => Some(source),
+        }
+    }
+}
+
 pub(crate) fn resolve_context_url(
     document_url: &url::Url,
     input: &str,
     base: Option<&str>,
-) -> std::result::Result<url::Url, String> {
+) -> Result<url::Url, ResolveContextUrlError> {
     let resolved_base = match base {
         Some(base) => url::Url::parse(base)
             .or_else(|_| document_url.join(base))
-            .map_err(|error| format!("failed to resolve base url `{base}`: {error}"))?,
+            .map_err(|source| ResolveContextUrlError::Base {
+                input: base.to_owned(),
+                source,
+            })?,
         None => document_url.clone(),
     };
 
     url::Url::parse(input)
         .or_else(|_| resolved_base.join(input))
-        .map_err(|error| format!("failed to resolve url `{input}`: {error}"))
+        .map_err(|source| ResolveContextUrlError::Url {
+            input: input.to_owned(),
+            source,
+        })
 }
 
 pub(in crate::network_host) fn merge_subresource_request_headers(

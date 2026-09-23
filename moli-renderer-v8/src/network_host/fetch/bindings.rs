@@ -353,23 +353,25 @@ fn window_fetch_callback_in_relevant_realm<'s>(
 fn window_fetch_signal_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<Option<v8::Local<'s, v8::Value>>, String> {
+) -> Result<Option<v8::Local<'s, v8::Value>>, crate::webidl::WebIdlError> {
     let signal_key = v8str(scope, "signal");
     if args.length() > 1 {
         let init_arg = args.get(1);
         if !init_arg.is_null_or_undefined()
             && let Ok(init) = v8::Local::<v8::Object>::try_from(init_arg)
-            && init
-                .has(scope, signal_key.into())
-                .ok_or("Failed to read RequestInit.signal")?
+            && init.has(scope, signal_key.into()).ok_or_else(|| {
+                crate::webidl::WebIdlError::pending_exception(crate::webidl::Context::member(
+                    "RequestInit",
+                    "signal",
+                ))
+            })?
         {
             return crate::webidl::property_result(
                 scope,
                 init,
                 "signal",
                 crate::webidl::Context::member("RequestInit", "signal"),
-            )
-            .map_err(|error| error.to_string());
+            );
         }
     }
 
@@ -383,8 +385,7 @@ fn window_fetch_signal_value<'s>(
             request_like,
             "signal",
             crate::webidl::Context::member("Request", "signal"),
-        )
-        .map_err(|error| error.to_string());
+        );
     }
 
     Ok(None)
@@ -394,19 +395,19 @@ fn validate_window_fetch_signal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &mut JsContextHost,
     value: v8::Local<'s, v8::Value>,
-) -> Result<Option<v8::Local<'s, v8::Object>>, String> {
+) -> Result<Option<v8::Local<'s, v8::Object>>, crate::webidl::WebIdlError> {
     if value.is_null_or_undefined() {
         return Ok(None);
     }
     let Ok(signal) = v8::Local::<v8::Object>::try_from(value) else {
-        return Err(
-            "Failed to execute 'fetch' on 'Window': signal must be an AbortSignal.".to_owned(),
-        );
+        return Err(crate::webidl::WebIdlError::custom_message(
+            "Failed to execute 'fetch' on 'Window': signal must be an AbortSignal.",
+        ));
     };
     if !host.is_abort_signal(scope, signal) {
-        return Err(
-            "Failed to execute 'fetch' on 'Window': signal must be an AbortSignal.".to_owned(),
-        );
+        return Err(crate::webidl::WebIdlError::custom_message(
+            "Failed to execute 'fetch' on 'Window': signal must be an AbortSignal.",
+        ));
     }
     Ok(Some(signal))
 }

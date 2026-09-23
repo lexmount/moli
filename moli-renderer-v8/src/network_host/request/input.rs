@@ -350,7 +350,9 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
         return Ok(input.to_owned());
     }
     if let Some(base_url) = base_url {
-        return resolve_context_url(&base_url, input, None).map(|url| url.to_string());
+        return resolve_context_url(&base_url, input, None)
+            .map(|url| url.to_string())
+            .map_err(|error| error.to_string());
     }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
@@ -363,12 +365,16 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
                 let (_, document_url, _) = effective_subresource_request_scope(scope, host, None);
                 document_url
             });
-        resolve_context_url(&document_url, input, None).map(|url| url.to_string())
+        resolve_context_url(&document_url, input, None)
+            .map(|url| url.to_string())
+            .map_err(|error| error.to_string())
     } else if let Some(worker_url) = crate::context_bootstrap::current_worker_script_url(scope) {
         if worker_url.scheme() == "blob" {
             return Err(format!("Failed to parse URL from {input}"));
         }
-        resolve_context_url(&worker_url, input, None).map(|url| url.to_string())
+        resolve_context_url(&worker_url, input, None)
+            .map(|url| url.to_string())
+            .map_err(|error| error.to_string())
     } else {
         Ok(input.to_owned())
     }

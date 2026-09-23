@@ -22,15 +22,14 @@ pub(super) struct ParsedWindowFetchInput {
 pub(super) fn parse_window_fetch_input<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
-) -> Result<ParsedWindowFetchInput, String> {
+) -> Result<ParsedWindowFetchInput, FetchArgumentError> {
     if args.length() < 1 {
         return Err(
-            webidl::WebIdlError::missing_required(webidl::Context::argument("fetch", 1))
-                .to_string(),
+            webidl::WebIdlError::missing_required(webidl::Context::argument("fetch", 1)).into(),
         );
     }
     let arg0 = args.get(0);
-    let inherited = request_input_snapshot(scope, arg0).map_err(|error| error.to_string())?;
+    let inherited = request_input_snapshot(scope, arg0)?;
     if let Some(inherited) = inherited {
         let req_obj = v8::Local::<v8::Object>::try_from(arg0).expect("request-like object");
         let url = inherited.url.clone();
@@ -130,13 +129,14 @@ pub(super) fn parse_window_fetch_input<'s>(
 fn validate_no_cors_method(
     request_mode: moli_fetch::RequestMode,
     method: &str,
-) -> Result<(), String> {
+) -> Result<(), FetchArgumentError> {
     if request_mode == moli_fetch::RequestMode::NoCors
         && !moli_fetch::is_cors_safelisted_method(method)
     {
-        return Err(format!(
-            "Failed to execute 'fetch': method `{method}` is unsupported in no-cors mode."
-        ));
+        return Err(FetchArgumentError::UnsupportedNoCorsMethod {
+            method: method.to_owned(),
+            interface: None,
+        });
     }
     Ok(())
 }
@@ -144,8 +144,7 @@ fn validate_no_cors_method(
 fn fetch_request_info_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     value: v8::Local<'s, v8::Value>,
-) -> Result<String, String> {
+) -> Result<String, webidl::WebIdlError> {
     webidl::convert::<webidl::UsvString>(scope, value, webidl::Context::argument("fetch", 1))
         .map(Into::into)
-        .map_err(|error| error.to_string())
 }
