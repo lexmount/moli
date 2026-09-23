@@ -8,7 +8,6 @@ use crate::{
     context_bootstrap::{EventHandlerType, apply_event_handler_return_value},
     exception_reporting::CallbackExceptionLogLevel,
     host::report_event_callback_exception,
-    native_bridge::lightweight_popup_id_from_window,
     util::context_host_ptr_from_global_bridge,
     web_api_interfaces,
 };
@@ -340,41 +339,18 @@ fn invoke_simple_event_listener_collecting_errors<'s>(
             value: None,
         };
     };
-    // Lightweight popup Window shells alias the opener's concrete V8 realm.
-    // Retain the callback's exact registration-time Window only for popup
-    // `load`: this is where a top-realm WPT callback must keep scheduling work
-    // on the opener after it calls `popup.close()`. Other synthetic popup
-    // events deliberately execute in their target owner scope until those
-    // Window shells gain distinct V8 realms.
-    let captured_relevant_identity = if event_type == "load"
-        && v8::Local::<v8::Object>::try_from(callback_this)
-            .ok()
-            .and_then(|target| lightweight_popup_id_from_window(scope, target))
-            .is_some()
-    {
-        listener.relevant_identity().filter(|identity| {
-            !matches!(
-                identity.dispatch_scope(),
-                crate::native_bridge::OwnerDispatchScope::LightweightPopup(_)
-            )
-        })
-    } else {
-        // A retired callback realm can no longer be resolved through the host's
-        // live realm table. Preserve its registration identity for currentness.
-        listener.relevant_identity().filter(|_| {
-            v8::Local::<v8::Object>::try_from(callback_this)
-                .ok()
-                .and_then(|target| lightweight_popup_id_from_window(scope, target))
-                .is_none()
-        })
-    };
+    // Keep the callback's captured Window identity for every event. A popup
+    // aliases its opener's V8 realm, so resolving that realm during dispatch
+    // would instead adopt the event target's active popup scope. The captured
+    // identity also preserves retirement checks after its realm leaves the
+    // live registry.
     invoke_simple_event_callback_with_invocation(
         scope,
         event_type,
         callback_name,
         callback_this,
         listener.relevant_context(),
-        captured_relevant_identity,
+        listener.relevant_identity(),
         invocation,
         callback_errors,
     )
