@@ -12791,6 +12791,156 @@ child.location.href = "about:blank#2";
 
     assert_eq!(result, "about:blank#2|1|about:blank|");
 }
+
+#[test]
+fn initial_about_blank_iframe_assign_replaces_history_after_same_document_update() {
+    for update_fragment in [false, true] {
+        let mut vm = new_storage_test_vm("https://initial-blank-history.test/");
+        vm.exec(
+            r#"
+const frame = document.createElement('iframe');
+(document.body || document.documentElement || document).appendChild(frame);
+const initialDocument = frame.contentDocument;
+"#,
+            None,
+        )
+        .expect("initial about:blank frame should be created");
+        if update_fragment {
+            vm.exec("frame.contentWindow.location.hash = 'updated';", None)
+                .expect("initial document fragment should update");
+        }
+        assert_eq!(
+            vm.eval(
+                r#"[
+  frame.contentDocument === initialDocument,
+  frame.contentDocument.readyState,
+  history.length,
+  frame.contentWindow.history.length
+].join('|')"#,
+            )
+            .expect("initial document state should evaluate"),
+            "true|complete|1|1"
+        );
+
+        vm.exec(
+            "frame.contentWindow.location.assign('about:blank?next');",
+            None,
+        )
+        .expect("initial document navigation should queue");
+        vm.drain_pending_child_frame_work_for_test();
+
+        assert_eq!(
+            vm.eval(
+                r#"[
+  frame.contentWindow.location.href,
+  frame.contentDocument.readyState,
+  history.length,
+  frame.contentWindow.history.length,
+  frame.contentDocument === initialDocument
+].join('|')"#,
+            )
+            .expect("initial document replacement should evaluate"),
+            "about:blank?next|complete|1|1|false",
+            "same-document fragment update: {update_fragment}"
+        );
+    }
+}
+
+#[test]
+fn non_initial_about_blank_iframe_assign_appends_history_after_replace() {
+    for initial_srcdoc in [false, true] {
+        let mut vm = new_storage_test_vm("https://non-initial-blank-history.test/");
+        vm.exec(
+            r#"
+const frame = document.createElement('iframe');
+const historySnapshot = () => [
+  frame.contentWindow.location.href,
+  frame.contentDocument.readyState,
+  history.length,
+  frame.contentWindow.history.length
+].join('|');
+"#,
+            None,
+        )
+        .expect("frame should be created");
+        if initial_srcdoc {
+            vm.exec("frame.srcdoc = '<!doctype html><body>loaded';", None)
+                .expect("srcdoc should be set before connecting the frame");
+        }
+        vm.exec(
+            "(document.body || document.documentElement || document).appendChild(frame);",
+            None,
+        )
+        .expect("frame should connect");
+        vm.drain_pending_child_frame_work_for_test();
+        assert_eq!(
+            vm.eval("historySnapshot()")
+                .expect("loaded frame state should evaluate"),
+            if initial_srcdoc {
+                "about:srcdoc|complete|1|1"
+            } else {
+                "about:blank|complete|1|1"
+            }
+        );
+
+        vm.exec(
+            r#"
+const documentBeforeReplace = frame.contentDocument;
+frame.contentWindow.location.replace('about:blank');
+"#,
+            None,
+        )
+        .expect("document replacement should queue");
+        vm.drain_pending_child_frame_work_for_test();
+        assert_eq!(
+            vm.eval(
+                "[historySnapshot(), frame.contentDocument === documentBeforeReplace].join('|')"
+            )
+            .expect("loaded non-initial about:blank state should evaluate"),
+            "about:blank|complete|1|1|false"
+        );
+
+        let (handle, previous_entry_id) = {
+            let host = vm._context_host.borrow();
+            let handle = host.child_browsing_context_handles_in_document_order()[0];
+            let seed = host
+                .child_browsing_context_navigation_seed_snapshot(handle)
+                .expect("loaded child should have a navigation seed")
+                .committed_navigation_entry_seed;
+            let current_entry = seed
+                .entries
+                .iter()
+                .find(|entry| entry.history_index == seed.current_index)
+                .expect("loaded child should have a current history entry");
+            (handle, current_entry.id.clone())
+        };
+        vm.exec(
+            "frame.contentWindow.location.assign('about:blank?next');",
+            None,
+        )
+        .expect("non-initial document navigation should queue");
+        vm.drain_pending_child_frame_work_for_test();
+        assert_eq!(
+            vm.eval("historySnapshot()")
+                .expect("non-initial document history should evaluate"),
+            "about:blank?next|complete|2|2",
+            "initial srcdoc: {initial_srcdoc}"
+        );
+        let seed = vm
+            ._context_host
+            .borrow()
+            .child_browsing_context_navigation_seed_snapshot(handle)
+            .expect("navigated child should have a navigation seed")
+            .committed_navigation_entry_seed;
+        assert!(
+            seed.entries.iter().any(|entry| {
+                entry.id == previous_entry_id && entry.history_index < seed.current_index
+            }),
+            "assign must retain the previous history step; initial srcdoc: {initial_srcdoc}"
+        );
+    }
+}
+
 #[test]
 fn contextual_fragment_scripts_run_when_inserted() {
     let mut vm = new_storage_test_vm("https://contextual-fragment-scripts.test/");

@@ -305,7 +305,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         };
         let replaces_initial_about_blank = child_handle.is_some_and(|handle| {
             context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
-                unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+                unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle)
             })
         });
         let effective_kind = match kind {
@@ -574,7 +574,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         let replaces_initial_empty_document = !is_javascript_url
             && matches!(kind, LocationNavigationKind::Assign)
             && host_ptr.is_some_and(|host_ptr| {
-                unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+                unsafe { &*host_ptr }.child_current_document_is_initial_empty(handle)
             });
         let kind = if replaces_initial_empty_document {
             LocationNavigationKind::Replace

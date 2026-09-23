@@ -22,8 +22,7 @@ impl JsContextHost {
             handle,
             "The navigation was canceled.".to_owned(),
         );
-        let replace_initial_empty_document =
-            self.child_browsing_context_is_on_initial_about_blank_entry(handle);
+        let replace_initial_empty_document = self.child_current_document_is_initial_empty(handle);
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             if replace_initial_empty_document {
                 entry.replace_navigation_in_entry_seed(&url);
@@ -44,8 +43,7 @@ impl JsContextHost {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
-        let replace_initial_empty_document =
-            self.child_browsing_context_is_on_initial_about_blank_entry(handle);
+        let replace_initial_empty_document = self.child_current_document_is_initial_empty(handle);
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             if replace_initial_empty_document {
                 entry.replace_navigation_in_entry_seed(&request.url);

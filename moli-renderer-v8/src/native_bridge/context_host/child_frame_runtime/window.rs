@@ -846,6 +846,9 @@ impl JsContextHost {
         Some(request)
     }
 
+    // This is a property of the committed Document, independent of its URL or
+    // history entries. Same-document URL updates preserve the creation kind;
+    // a later navigation to about:blank installs a non-initial Document.
     pub(crate) fn child_current_document_is_initial_empty(&self, handle: DomHandle) -> bool {
         self.frame_owner_store
             .current_child_document_creation_kind(handle)

@@ -302,11 +302,13 @@ async fn assert_child_location_navigation_stays_window_local(
         "{}",
         page.serialize_html_async().await.unwrap()
     );
+    // The iframe's src navigation has not committed when the fixture navigates
+    // its Window. Replacing the initial empty Document keeps joint history stable.
     assert!(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-top-history-unchanged=\"false\""),
+            .contains("data-top-history-unchanged=\"true\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -314,13 +316,13 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-history-advanced=\"true\"")
+            .contains("data-child-history-unchanged=\"true\"")
     );
     assert!(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-current-entry-index=\"1\""),
+            .contains("data-child-current-entry-index=\"0\""),
         "{}",
         page.serialize_html_async().await.unwrap()
     );

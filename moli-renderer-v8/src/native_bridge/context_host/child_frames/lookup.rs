@@ -18,20 +18,6 @@ impl JsContextHost {
             .len()
     }
 
-    pub(crate) fn child_browsing_context_is_on_initial_about_blank_entry(
-        &self,
-        handle: DomHandle,
-    ) -> bool {
-        let seed_is_initial_about_blank = self
-            .child_browsing_contexts
-            .get(&handle)
-            .is_some_and(ChildBrowsingContextEntry::navigation_seed_is_initial_about_blank_commit);
-        seed_is_initial_about_blank
-            && self
-                .child_browsing_context_current_url(handle)
-                .is_some_and(|url| moli_url::is_about_blank(&url))
-    }
-
     pub(crate) fn child_browsing_context_handles_in_document_order(&self) -> Vec<DomHandle> {
         let mut handles = Vec::new();
         self.collect_child_browsing_context_handles_in_document_order_from_document(
