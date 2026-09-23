@@ -3550,6 +3550,67 @@ async fn service_worker_extendable_message_event_constructor_surface() {
 }
 
 #[tokio::test]
+async fn service_worker_script_created_extendable_events_support_dispatch() {
+    ensure_v8();
+    let mut handle = spawn_service_worker_for_test(
+        r#"
+        self.addEventListener("message", () => {
+            for (const Constructor of [ExtendableEvent, ExtendableMessageEvent]) {
+                const event = new Constructor(Constructor.name, {
+                    bubbles: true, cancelable: true, composed: true
+                });
+                let calls = 0;
+                self.addEventListener(Constructor.name, received => {
+                    calls++;
+                    if (received !== event || received.isTrusted ||
+                        received.target !== self || received.currentTarget !== self ||
+                        received.eventPhase !== Event.AT_TARGET ||
+                        received.composedPath()[0] !== self) {
+                        throw new Error("incorrect dispatched event state");
+                    }
+                    for (const action of [
+                        () => self.dispatchEvent(received),
+                        () => received.waitUntil(Promise.resolve())
+                    ]) {
+                        let errorName;
+                        try { action(); } catch (error) { errorName = error.name; }
+                        if (errorName !== "InvalidStateError") {
+                            throw new Error("expected InvalidStateError, got " + errorName);
+                        }
+                    }
+                    received.preventDefault();
+                });
+                for (let attempt = 1; attempt <= 2; attempt++) {
+                    const result = self.dispatchEvent(event);
+                    if (result !== false || calls !== attempt || !event.defaultPrevented ||
+                        !event.bubbles || !event.composed || event.isTrusted ||
+                        event.currentTarget !== null || event.eventPhase !== Event.NONE ||
+                        event.composedPath().length !== 0) {
+                        throw new Error("incorrect completed event state");
+                    }
+                }
+            }
+            let fakeError;
+            try { self.dispatchEvent({type: "fake"}); }
+            catch (error) { fakeError = error.name; }
+            if (fakeError !== "TypeError") {
+                throw new Error("dispatchEvent accepted a non-Event");
+            }
+        });
+        "#,
+    );
+
+    let completion = dispatch_service_worker_message_event_for_test(
+        &mut handle,
+        30,
+        serialize_test_string("go"),
+    )
+    .await;
+    assert_eq!(completion.result, Ok(()));
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn service_worker_message_event_source_uses_client_snapshot() {
     ensure_v8();
     let mut handle = spawn_service_worker_for_test(

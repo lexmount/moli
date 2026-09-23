@@ -860,36 +860,9 @@ struct WorkerNavigationPreloadStateDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::ExtendableEvent, prototype = "Object")]
-struct InitializedExtendableEventStateDeclaration<'scope> {
-    #[webapi(data_property = "type", enumerable)]
-    event_type: String,
-
-    #[webapi(data_property, enumerable)]
-    bubbles: bool,
-
-    #[webapi(data_property, enumerable)]
-    cancelable: bool,
-
+struct ExtendableEventStateDeclaration {
     #[webapi(data_property, enumerable)]
     composed: bool,
-
-    #[webapi(data_property = "defaultPrevented", enumerable)]
-    default_prevented: bool,
-
-    #[webapi(data_property, enumerable)]
-    target: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "currentTarget", enumerable)]
-    current_target: v8::Local<'scope, v8::Value>,
-
-    #[webapi(data_property = "eventPhase", enumerable)]
-    event_phase: i32,
-
-    #[webapi(data_property = "isTrusted", enumerable)]
-    is_trusted: bool,
-
-    #[webapi(data_property = "timeStamp", enumerable)]
-    time_stamp: f64,
 }
 
 #[derive(WebApiObject)]
@@ -5847,24 +5820,14 @@ fn initialize_extendable_event_object<'s>(
     cancelable: bool,
     composed: bool,
 ) {
-    let timestamp_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs_f64() * 1000.0)
-        .unwrap_or(0.0);
-    let null_value: v8::Local<'_, v8::Value> = v8::null(scope).into();
-    let _ = InitializedExtendableEventStateDeclaration::new(
-        event_type.to_owned(),
-        bubbles,
-        cancelable,
-        composed,
-        false,
-        null_value,
-        null_value,
-        0,
-        false,
-        timestamp_ms,
-    )
-    .initialize(scope, event);
+    // EventTarget dispatch and inherited Event methods require the base
+    // event's internal state, in addition to its visible properties.
+    crate::context_bootstrap::initialize_event_object(
+        scope, event, event_type, bubbles, cancelable,
+    );
+    ExtendableEventStateDeclaration::new(composed)
+        .initialize(scope, event)
+        .expect("extendable event state should initialize");
 }
 
 fn extendable_message_event_data<'s>(
