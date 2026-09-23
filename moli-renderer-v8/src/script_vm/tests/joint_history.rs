@@ -4,6 +4,51 @@ const JOINT_HISTORY_TRAVERSAL: &str =
     include_str!("../../../tests/fixtures/joint-history-traversal.js");
 
 #[tokio::test]
+async fn joint_history_handlers_and_commit_reactions_precede_target_realm_popstate() {
+    let script = include_str!("../../../tests/fixtures/joint-history-event-order.js");
+    for initiator in ["first", "last", "top"] {
+        for intercept in ["none", "resolve", "reject", "stop"] {
+            if initiator == "top" && intercept == "stop" {
+                // Top-level stop also cancels descendant navigations; this
+                // matrix isolates cancellation of the initiating Navigation.
+                continue;
+            }
+            let server = StaticHttpServer::spawn(2).await;
+            let base = server.base_url().origin().ascii_serialization();
+            let loader = static_http_loader([]);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                &format!("{base}/parent"),
+                &loader,
+            );
+            vm.eval(&format!(
+                "{script}\nglobalThis.jointOrderResult = 'pending';\n\
+                 jointHistoryEventOrder({base:?}, {initiator:?}, {intercept:?}).then(\n\
+                   value => jointOrderResult = value, error => jointOrderResult = String(error));"
+            ))
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(jointOrderResult !== 'pending')",
+                "true",
+                &format!("{initiator}/{intercept}"),
+            )
+            .await;
+            let result: serde_json::Value =
+                serde_json::from_str(&vm.eval("JSON.stringify(jointOrderResult)").unwrap())
+                    .unwrap();
+            assert_eq!(
+                result["failures"],
+                serde_json::json!([]),
+                "{initiator}/{intercept}: {result}"
+            );
+            assert!(result["checks"].as_u64().is_some_and(|count| count >= 15));
+            assert_eq!(server.finish_targets().await.len(), 2);
+        }
+    }
+}
+
+#[tokio::test]
 async fn popup_joint_history_tracks_children_without_mutating_the_opener() {
     for mode in ["fork", "cross-document"] {
         let child_requests = if mode == "cross-document" { 10 } else { 2 };
