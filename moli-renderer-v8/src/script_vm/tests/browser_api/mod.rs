@@ -66,3 +66,4 @@ mod webrtc;
 mod webrtc_events;
 mod window_event_target;
 mod window_onerror;
+mod window_open_empty_url;
