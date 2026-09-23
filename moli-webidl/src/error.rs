@@ -64,6 +64,10 @@ impl WebIdlError {
         Self::new(context, WebIdlErrorKind::MissingRequired)
     }
 
+    pub fn cannot_convert(context: Context, target_type: &'static str) -> Self {
+        Self::new(context, WebIdlErrorKind::CannotConvert(target_type))
+    }
+
     pub fn custom_message(message: &'static str) -> Self {
         Self::new(
             Context::argument("", 1),

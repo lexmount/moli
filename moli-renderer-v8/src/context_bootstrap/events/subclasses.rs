@@ -10,6 +10,7 @@ mod basic;
 mod constructor;
 mod data;
 mod keyboard;
+mod navigation_init;
 mod pointer;
 
 pub(in crate::context_bootstrap::events) use basic::initialize_text_event;
