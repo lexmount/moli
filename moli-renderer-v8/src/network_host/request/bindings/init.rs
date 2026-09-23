@@ -191,8 +191,7 @@ pub(super) fn apply_request_init_overrides<'s>(
     if let Some(signal) = parsed.signal {
         state.signal = signal;
     }
-    if let Some(referrer) = validation.validate(scope, &state.mode, &state.cache)?
-    {
+    if let Some(referrer) = validation.validate(scope, &state.mode, &state.cache)? {
         state.referrer = referrer;
     }
     if state.mode == "no-cors" && !moli_fetch::is_cors_safelisted_method(&state.method) {
