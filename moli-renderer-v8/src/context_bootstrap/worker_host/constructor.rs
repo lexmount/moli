@@ -699,7 +699,7 @@ fn worker_event_handler_setter<'s>(
         return;
     };
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -711,9 +711,9 @@ fn worker_event_handler_setter<'s>(
         WORKER_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_function(),
+        stored.is_object(),
     );
-    if handler.event_type == "message" && stored.is_function() {
+    if handler.event_type == "message" && stored.is_object() {
         super::flush_pending_worker_messages_for_listener(scope, args.this());
     }
 }

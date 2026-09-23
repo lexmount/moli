@@ -22500,12 +22500,13 @@ fn window_event_source_constructor_exposes_connecting_instance() {
                 () => new EventSource("/events")
               );
               const source = new EventSource("/events", { withCredentials: true });
-              source.onerror = { handleEvent() {} };
+              const handlerObject = { handleEvent() {} };
+              source.onerror = handlerObject;
               const state = [
                 source.url,
                 source.withCredentials,
                 source.readyState,
-                source.onerror === null,
+                source.onerror === handlerObject,
                 Object.hasOwn(source, "addEventListener"),
                 source.addEventListener.length,
                 source.removeEventListener.length,

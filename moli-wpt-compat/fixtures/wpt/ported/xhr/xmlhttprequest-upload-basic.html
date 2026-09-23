@@ -46,7 +46,8 @@ function send_upload_case(sendMode, payload) {
       uploadOrder.push("listener-after:" + event.type);
     });
   });
-  xhr.upload.onerror = {};
+  const errorHandlerObject = {};
+  xhr.upload.onerror = errorHandlerObject;
 
   return new Promise(function (resolve, reject) {
     xhr.onload = function () {
@@ -54,7 +55,7 @@ function send_upload_case(sendMode, payload) {
     };
     xhr.onloadend = function () {
       xhrEvents.push("loadend");
-      resolve({ xhr, uploadEvents, uploadOrder, xhrEvents });
+      resolve({ xhr, uploadEvents, uploadOrder, xhrEvents, errorHandlerObject });
     };
     xhr.onerror = function () {
       reject(new Error("XMLHttpRequest failed"));
@@ -163,7 +164,9 @@ promise_test(async function () {
   assert_array_equals(result.xhrEvents, ["load", "loadend"], "XHR should still complete normally");
   assert_equals(result.xhr.status, 200, "upload POST status");
   assert_equals(result.xhr.response.body, payload, "upload POST should still send the body");
-  assert_equals(result.xhr.upload.onerror, null, "non-callable upload event handler should store null");
+  assert_equals(result.xhr.upload.onerror, result.errorHandlerObject, "object upload event handler should retain its identity");
+  result.xhr.upload.onerror = 42;
+  assert_equals(result.xhr.upload.onerror, null, "primitive upload event handler should store null");
   assert_array_equals(
     Object.getOwnPropertyNames(result.xhr.upload),
     [],

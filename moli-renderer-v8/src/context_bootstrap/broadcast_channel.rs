@@ -531,7 +531,7 @@ fn broadcast_channel_event_handler_setter_callback<'s>(
         return;
     };
     let value = args.get(0);
-    let stored = if value.is_function() {
+    let stored = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -543,7 +543,7 @@ fn broadcast_channel_event_handler_setter_callback<'s>(
         BROADCAST_CHANNEL_LISTENERS_SLOT,
         handler.event_type,
         handler.slot_name,
-        stored.is_function(),
+        stored.is_object(),
     );
 }
 

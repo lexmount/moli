@@ -434,7 +434,7 @@ fn xhr_value_setter(
         v8::undefined(scope).into()
     };
     let stored = if xhr_event_type_for_handler_slot(key).is_some() {
-        if value.is_function() {
+        if value.is_object() {
             value
         } else {
             v8::null(scope).into()
@@ -451,7 +451,7 @@ fn xhr_value_setter(
             XHR_SIMPLE_EVENT_TARGET_LISTENERS_SLOT,
             event_type,
             key,
-            stored.is_function(),
+            stored.is_object(),
         );
     }
 }

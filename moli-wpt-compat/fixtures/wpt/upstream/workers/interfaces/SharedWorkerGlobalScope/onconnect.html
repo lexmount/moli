@@ -7,7 +7,7 @@
 async_test(function() {
   var w1 = new SharedWorker('onconnect.js', '');
   w1.port.addEventListener('message', this.step_func_done(function(e) {
-    assert_array_equals(e.data, ['null', 'null', 'function', '']);
+    assert_array_equals(e.data, ['null', true, 'function', '']);
   }), false);
   w1.port.start();
 });

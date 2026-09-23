@@ -137,7 +137,7 @@ fn on_resource_timing_buffer_full_getter<'s>(
         performance,
         PERFORMANCE_ON_RESOURCE_TIMING_BUFFER_FULL_SLOT,
     )
-    .filter(|value| value.is_function())
+    .filter(|value| value.is_object())
     .unwrap_or_else(|| v8::null(scope).into());
     rv.set(handler);
 }
@@ -151,7 +151,7 @@ fn on_resource_timing_buffer_full_setter<'s>(
         return;
     };
     let value = args.get(0);
-    let handler = if value.is_function() {
+    let handler = if value.is_object() {
         value
     } else {
         v8::null(scope).into()
@@ -168,7 +168,7 @@ fn on_resource_timing_buffer_full_setter<'s>(
         PERFORMANCE_EVENT_LISTENERS_SLOT,
         RESOURCE_TIMING_BUFFER_FULL_EVENT,
         PERFORMANCE_ON_RESOURCE_TIMING_BUFFER_FULL_SLOT,
-        handler.is_function(),
+        handler.is_object(),
     );
 }
 
