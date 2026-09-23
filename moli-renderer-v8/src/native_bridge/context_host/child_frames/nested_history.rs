@@ -1,7 +1,9 @@
 use super::*;
 use crate::context_bootstrap::navigation_entry_public_token;
 use crate::native_bridge::OwnerDispatchScope;
-use moli_page_types::{JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryStepId};
+use moli_page_types::{
+    JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryStepId,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct NavigableHistory {
@@ -10,9 +12,21 @@ pub(crate) struct NavigableHistory {
 }
 
 impl NavigableHistory {
-    fn contains(&self, key: &str) -> bool { self.entries.iter().any(|(_, entry)| entry.key.as_str() == key) }
-    fn entry_at(&self, step: SessionHistoryStepId) -> Option<&SessionHistoryEntry> { self.entries.iter().find(|(id, _)| *id == step).map(|(_, entry)| entry) }
-    fn retain_in(&mut self, history: &JointSessionHistory) { self.entries.retain(|(id, _)| history.entries_at(*id).is_some()); }
+    fn contains(&self, key: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|(_, entry)| entry.key.as_str() == key)
+    }
+    fn entry_at(&self, step: SessionHistoryStepId) -> Option<&SessionHistoryEntry> {
+        self.entries
+            .iter()
+            .find(|(id, _)| *id == step)
+            .map(|(_, entry)| entry)
+    }
+    fn retain_in(&mut self, history: &JointSessionHistory) {
+        self.entries
+            .retain(|(id, _)| history.entries_at(*id).is_some());
+    }
 }
 
 use parking_lot::Mutex;
@@ -47,7 +61,11 @@ pub(crate) struct NestedHistoryStore {
 }
 
 impl NestedHistoryStore {
-    pub(crate) fn prune(&self, history: &JointSessionHistory, roots: &[NavigationHistoryDocumentId]) {
+    pub(crate) fn prune(
+        &self,
+        history: &JointSessionHistory,
+        roots: &[NavigationHistoryDocumentId],
+    ) {
         let mut records = self.records.lock();
         for record in records.values_mut() {
             record.positions.retain_in(history);
@@ -179,7 +197,10 @@ impl JsContextHost {
             return None;
         }
         let root = self.nested_history_root(handle)?;
-        let popup = match root { OwnerDispatchScope::LightweightPopup(id) => Some(id), _ => None };
+        let popup = match root {
+            OwnerDispatchScope::LightweightPopup(id) => Some(id),
+            _ => None,
+        };
         let step = self.session_histories.get_mut(popup).current_step();
         let store = self.nested_history_store(root);
         let mut record = store.records.lock().get(identity)?.clone();
@@ -213,12 +234,22 @@ impl JsContextHost {
             return;
         };
         let url = target.url.clone();
-        let root = self.nested_history_root(handle).unwrap_or(OwnerDispatchScope::Top);
-        let popup = match root { OwnerDispatchScope::LightweightPopup(id) => Some(id), _ => None };
+        let root = self
+            .nested_history_root(handle)
+            .unwrap_or(OwnerDispatchScope::Top);
+        let popup = match root {
+            OwnerDispatchScope::LightweightPopup(id) => Some(id),
+            _ => None,
+        };
         let parent = self.owner_dispatch_scope_for_node(handle).unwrap_or(root);
         let parent = self.session_histories.context(parent);
-        self.session_histories.bind_context(OwnerDispatchScope::Child(handle), record.positions.context);
-        self.session_histories.get_mut(popup).restore_context(record.positions.context, parent, &record.positions.entries);
+        self.session_histories
+            .bind_context(OwnerDispatchScope::Child(handle), record.positions.context);
+        self.session_histories.get_mut(popup).restore_context(
+            record.positions.context,
+            parent,
+            &record.positions.entries,
+        );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.srcdoc_history = record.resources;
             entry.restored_history_positions = Some(record.positions);
@@ -237,9 +268,17 @@ impl JsContextHost {
             return;
         };
         let store = self.nested_history_store(root);
-        let context = self.session_histories.context(OwnerDispatchScope::Child(handle));
-        let popup = match root { OwnerDispatchScope::LightweightPopup(id) => Some(id), _ => None };
-        let live_positions = self.session_histories.get_mut(popup).context_entries(context);
+        let context = self
+            .session_histories
+            .context(OwnerDispatchScope::Child(handle));
+        let popup = match root {
+            OwnerDispatchScope::LightweightPopup(id) => Some(id),
+            _ => None,
+        };
+        let live_positions = self
+            .session_histories
+            .get_mut(popup)
+            .context_entries(context);
         let Some(entry) = self.child_browsing_contexts.get(&handle) else {
             return;
         };
@@ -247,9 +286,19 @@ impl JsContextHost {
             return;
         };
         let seed = entry.committed_navigation_entry_seed();
-        let positions = (!live_positions.is_empty()).then_some(NavigableHistory { context, entries: live_positions })
+        let positions = (!live_positions.is_empty())
+            .then_some(NavigableHistory {
+                context,
+                entries: live_positions,
+            })
             .or_else(|| entry.restored_history_positions.clone())
-            .or_else(|| store.records.lock().get(&identity).map(|record| record.positions.clone()));
+            .or_else(|| {
+                store
+                    .records
+                    .lock()
+                    .get(&identity)
+                    .map(|record| record.positions.clone())
+            });
         let Some(positions) = positions else {
             return;
         };
@@ -284,9 +333,8 @@ impl JsContextHost {
             self.remember_child_history(handle);
         }
         if root == OwnerDispatchScope::Top {
-            self.top_level_navigation_history.publish_joint_history(
-                Some(self.session_histories.get_mut(None).clone()),
-            );
+            self.top_level_navigation_history
+                .publish_joint_history(Some(self.session_histories.get_mut(None).clone()));
         }
     }
 }
