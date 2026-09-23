@@ -83,6 +83,7 @@ XHR_RESPONSE_RESOURCE_PATHS = {
     "/xhr/resources/status.py",
     "/xhr/resources/last-modified.py",
 }
+COMMON_ECHO_PATH = "/common/echo.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
 FETCH_ABORT_RESOURCE_PATHS = {
     "/fetch/api/resources/stash-put.py",
@@ -807,6 +808,7 @@ _REQUEST_TEMPLATE_RE = re.compile(
 _UUID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*):uuid\(\)\}\}")
 _ID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+_TRICKLE_DELAY_RE = re.compile(r"d([0-9]+(?:\.[0-9]+)?)")
 _MAX_TRICKLE_DELAY_SECONDS = 10.0
 _LEGACY_WPT_RESOURCE_ALIASES = {
     "/resources/WebIDLParser.js": "resources/webidl2/lib/webidl2.js",
@@ -1699,6 +1701,8 @@ def _make_handler(
             self._serve(emit_body=False)
 
         def do_OPTIONS(self) -> None:  # noqa: N802
+            if self._serve_common_echo_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if self._serve_xhr_response_resource():
@@ -1731,6 +1735,8 @@ def _make_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if self._serve_common_echo_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if self._serve_xhr_response_resource():
@@ -1784,6 +1790,8 @@ def _make_handler(
             self.end_headers()
 
         def _serve_fetch_resource_method(self) -> None:
+            if self._serve_common_echo_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if self._serve_xhr_response_resource():
@@ -1815,6 +1823,8 @@ def _make_handler(
         do_DELETE = _serve_fetch_resource_method
 
         def do_YO(self) -> None:  # noqa: N802 (WPT custom method)
+            if self._serve_common_echo_resource():
+                return
             if self._serve_empty_location_resource(emit_body=self.command != "HEAD"):
                 return
             if unquote(urlparse(self.path).path) in {
@@ -1950,6 +1960,81 @@ def _make_handler(
             except (TimeoutError, BrokenPipeError, ConnectionResetError, OSError):
                 return
 
+        def _substitute_response_template(
+            self, body: bytes, path: str, query: str, *, escape_type: str,
+        ) -> bytes:
+            port = int(getattr(self.server, "wpt_primary_port", self.server.server_address[1]))
+            alternate_port = int(getattr(self.server, "wpt_alternate_port", port))
+            remote_port = int(getattr(self.server, "wpt_remote_port", alternate_port))
+            hostname = _host_header_hostname(self.headers.get("Host"))
+            return _substitute_wpt_template_variables(
+                body,
+                port=port,
+                alternate_port=alternate_port,
+                remote_port=remote_port,
+                query=query,
+                request_path=path,
+                request_hostname=hostname,
+                primary_hostname=str(getattr(self.server, "wpt_primary_hostname", hostname)),
+                request_headers=self.headers,
+                escape_type=escape_type,
+            )
+
+        def _serve_common_echo_resource(self) -> bool:
+            parsed = urlsplit(self.path)
+            if unquote(parsed.path) != COMMON_ECHO_PATH:
+                return False
+            # The handler only reads GET parameters, even for POST. Close the
+            # connection instead of waiting for an unused request body.
+            self.close_connection = True
+            try:
+                params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                # wptserve's Request.GET preserves percent-decoded bytes and
+                # MultiDict.first selects the first value, including an empty one.
+                body = params["content"][0].encode("latin-1")
+                headers = [("Content-Type", "text/html"), ("X-XSS-Protection", "0")]
+                status, delay, auto_content_length = 200, 0.0, True
+                for name, args in parse_pipe_commands(parsed.query):
+                    if name == "header":
+                        header_name, value = args[:2]
+                        value = value.replace("\r", " ").replace("\n", " ")
+                        if _valid_static_response_header(header_name, value):
+                            headers = _apply_header_operations(headers, [(
+                                header_name, value,
+                                len(args) == 3 and args[2].lower() in {"true", "1"},
+                            )])
+                    elif name == "status":
+                        status = int(args[0])
+                    elif name == "sub":
+                        body = self._substitute_response_template(
+                            body, COMMON_ECHO_PATH, parsed.query,
+                            escape_type=args[0] if args else "html",
+                        )
+                    elif name == "trickle":
+                        auto_content_length = False
+                        if not any(_headers_include(headers, name)
+                                   for name in ("Cache-Control", "Pragma", "Expires")):
+                            headers.extend([
+                                ("Cache-Control", "no-cache, no-store, must-revalidate"),
+                                ("Pragma", "no-cache"),
+                                ("Expires", "0"),
+                            ])
+                        match = _TRICKLE_DELAY_RE.fullmatch(args[0])
+                        if match is not None:
+                            delay = max(delay, float(match.group(1)))
+            except (KeyError, WptPipeError):
+                self.send_error(500)
+                return True
+            if delay:
+                time.sleep(min(delay, _MAX_TRICKLE_DELAY_SECONDS))
+            self._send_bytes(
+                None, body, emit_body=self.command != "HEAD",
+                extra_headers=[*headers, ("Connection", "close")],
+                status_code=status, cache_control=None,
+                auto_content_length=auto_content_length,
+            )
+            return True
+
         def _serve(self, *, emit_body: bool) -> None:
             try:
                 self._serve_response(emit_body=emit_body)
@@ -1957,6 +2042,8 @@ def _make_handler(
                 self.send_error(500, "Invalid WPT template or pipe")
 
         def _serve_response(self, *, emit_body: bool) -> None:
+            if self._serve_common_echo_resource():
+                return
             if self._serve_empty_location_resource(emit_body=emit_body):
                 return
             if self._serve_xhr_response_resource(emit_body=emit_body):
@@ -2166,32 +2253,8 @@ def _make_handler(
                 )
                 return
             if _needs_wpt_template_substitution(file_path.name, body, parsed.query):
-                port = int(
-                    getattr(
-                        self.server,
-                        "wpt_primary_port",
-                        self.server.server_address[1],
-                    )
-                )
-                alternate_port = int(getattr(self.server, "wpt_alternate_port", port))
-                remote_port = int(getattr(self.server, "wpt_remote_port", alternate_port))
-                primary_hostname = str(
-                    getattr(
-                        self.server,
-                        "wpt_primary_hostname",
-                        _host_header_hostname(self.headers.get("Host")),
-                    )
-                )
-                body = _substitute_wpt_template_variables(
-                    body,
-                    port=port,
-                    alternate_port=alternate_port,
-                    remote_port=remote_port,
-                    query=parsed.query,
-                    request_path=path,
-                    request_hostname=_host_header_hostname(self.headers.get("Host")),
-                    primary_hostname=primary_hostname,
-                    request_headers=self.headers,
+                body = self._substitute_response_template(
+                    body, path, parsed.query,
                     escape_type=_template_escape_type(file_path.name, parsed.query),
                 )
             static_header_context = {
@@ -2516,6 +2579,8 @@ def _make_handler(
             )
 
         def __getattr__(self, name: str):
+            if name.startswith("do_") and unquote(urlsplit(self.path).path) == COMMON_ECHO_PATH:
+                return self._serve_common_echo_resource
             if name.startswith("do_") and unquote(urlparse(self.path).path) == NAVIGATION_SECOND_VISIT_PATH:
                 return self._serve_navigation_second_visit
             if name.startswith("do_") and unquote(urlparse(self.path).path) == FETCH_EMPTY_LOCATION_PATH:
@@ -2935,6 +3000,7 @@ def _make_handler(
             status_code: int = 200,
             status_text: str | None = None,
             cache_control: str | None = "no-store",
+            auto_content_length: bool = True,
         ) -> None:
             content_type, extra_headers = _response_content_type_and_extra_headers(
                 content_type,
@@ -2944,7 +3010,7 @@ def _make_handler(
             header_block = _static_response_header_block(content_type, extra_headers)
             for name, value in header_block:
                 self.send_header(name, value)
-            if not _headers_include(header_block, "Content-Length"):
+            if auto_content_length and not _headers_include(header_block, "Content-Length"):
                 self.send_header("Content-Length", str(len(body)))
             if cache_control is not None:
                 self.send_header("Cache-Control", cache_control)
