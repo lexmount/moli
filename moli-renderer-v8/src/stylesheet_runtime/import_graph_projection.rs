@@ -36,6 +36,7 @@ pub(in crate::document_runtime) async fn fetch_observed_stylesheet_import_graph(
             ConnectedLoadNetworkResult {
                 network_observed: terminal.network_was_observed(),
                 resource_timing_initiator_type: "css",
+                consumed_preload_error: terminal.is_consumed_preload_error(),
                 document_owner: None,
                 stylesheet_fetch: None,
                 blocking_operation: None,

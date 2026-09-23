@@ -173,6 +173,68 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
             .page_network_policy()
             .cache_disabled()
     }
+
+    fn is_document_preload(&self, url: &Url) -> bool {
+        self.link_preload && matches!(url.scheme(), "http" | "https")
+    }
+
+    fn prepare_stylesheet_resource(
+        &self,
+        document_url: Url,
+        url: Url,
+        options: StylesheetFetchOptions,
+    ) -> moli_stylesheet_blocking::PreparedStylesheetFetch {
+        let request_origin = self.loader.fetch_context().request_origin();
+        let request = stylesheet_readiness_request(
+            &document_url,
+            &request_origin,
+            &url,
+            &options,
+            self.request_resource_type,
+            self.link_preload,
+            None,
+        );
+        if !self.loader.request_client().author_styles_disabled()
+            && let Some(consumer) = self
+                .loader
+                .request_client()
+                .consume_document_preload(&request)
+        {
+            return if let Some(response) = consumer.try_response() {
+                moli_stylesheet_blocking::PreparedStylesheetFetch::reused(
+                    stylesheet_terminal_from_preload(&request_origin, &url, &options, response),
+                )
+            } else {
+                moli_stylesheet_blocking::PreparedStylesheetFetch::new(Box::pin(async move {
+                    stylesheet_terminal_from_preload(
+                        &request_origin,
+                        &url,
+                        &options,
+                        consumer.response().await,
+                    )
+                }))
+            };
+        }
+        let producer = self
+            .link_preload
+            .then(|| {
+                self.loader
+                    .request_client()
+                    .register_document_preload(&request)
+            })
+            .flatten();
+        let prepared = moli_stylesheet_blocking::PreparedStylesheetFetch::new(
+            self.fetch_stylesheet_resource(document_url, url, options.clone()),
+        );
+        if let Some(producer) = producer {
+            prepared.with_published_callback(move |terminal| {
+                producer.complete(stylesheet_preload_response(terminal, &options));
+            })
+        } else {
+            prepared
+        }
+    }
+
     fn spawn_stylesheet_task(&self, task: Pin<Box<dyn Future<Output = ()> + Send + 'static>>) {
         self.loader.spawn_resource_task(task);
     }
@@ -305,6 +367,26 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
             loader.web_security_disabled(),
         )
     };
+    if let Some(preload) = loader.consume_document_preload(&request) {
+        let preload = preload.response().await;
+        if let Ok(preload) = &preload {
+            let response = &preload.response;
+            if let Some(check) = &csp_check {
+                for (index, redirect) in response.redirect_chain.iter().enumerate() {
+                    if let Err(error) = check(&redirect.to_url, index + 1) {
+                        return StylesheetFetchTerminal::network_error(error.to_string());
+                    }
+                }
+                if response.redirected
+                    && let Err(error) =
+                        check(&response.final_url, response.redirect_chain.len().max(1))
+                {
+                    return StylesheetFetchTerminal::network_error(error.to_string());
+                }
+            }
+        }
+        return stylesheet_terminal_from_preload(&request_origin, &url, &options, preload);
+    }
     if let Some(context) = service_worker_context {
         match context
             .browser_context_runtime
@@ -320,13 +402,23 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
             .await
         {
             Ok(Some(response)) => {
-                let response_provenance = StylesheetResponseProvenance::ServiceWorker {
-                    filter: response.response_filter,
+                let response_provenance = if response.from_network_fallback {
+                    StylesheetResponseProvenance::Network
+                } else {
+                    StylesheetResponseProvenance::ServiceWorker {
+                        filter: response.response_filter,
+                    }
                 };
                 return terminal_from_response(*response.response, response_provenance);
             }
             Ok(None) => {}
             Err(error) => {
+                if error
+                    .downcast_ref::<crate::network::preloads::ConsumedPreloadError>()
+                    .is_some()
+                {
+                    return StylesheetFetchTerminal::consumed_preload_error(error.to_string());
+                }
                 return StylesheetFetchTerminal::network_error(format!(
                     "failed to fetch stylesheet `{url}` through service worker: {error}"
                 ));
@@ -414,6 +506,33 @@ pub(crate) async fn fetch_stylesheet_readiness_with_service_worker(
         Err(error) => StylesheetFetchTerminal::network_error(format!(
             "failed to fetch stylesheet `{url}`: {error}"
         )),
+    }
+}
+
+fn stylesheet_terminal_from_preload(
+    request_origin: &moli_url::WebOrigin,
+    url: &Url,
+    options: &StylesheetFetchOptions,
+    result: Result<crate::network::preloads::DocumentPreloadResponse, String>,
+) -> StylesheetFetchTerminal {
+    match result {
+        Ok(preload) => {
+            let provenance = if preload.from_service_worker {
+                StylesheetResponseProvenance::ServiceWorker {
+                    filter: preload.response_filter,
+                }
+            } else {
+                StylesheetResponseProvenance::Network
+            };
+            stylesheet_terminal_from_response(
+                request_origin,
+                url,
+                options,
+                preload.response,
+                provenance,
+            )
+        }
+        Err(error) => StylesheetFetchTerminal::consumed_preload_error(error),
     }
 }
 
@@ -516,6 +635,28 @@ fn stylesheet_terminal_from_response(
     response_provenance: StylesheetResponseProvenance,
     web_security_disabled: bool,
 ) -> StylesheetFetchTerminal {
+    let terminal = classify_stylesheet_response(
+        request_origin,
+        request_url,
+        options,
+        response,
+        &response_provenance,
+    );
+    match response_provenance {
+        StylesheetResponseProvenance::Network => terminal,
+        StylesheetResponseProvenance::ServiceWorker { filter } => {
+            terminal.with_service_worker_response(filter.map(Into::into))
+        }
+    }
+}
+
+fn classify_stylesheet_response(
+    request_origin: &moli_url::WebOrigin,
+    request_url: &Url,
+    options: &StylesheetFetchOptions,
+    response: crate::protocol_types::NavigationResponse,
+    response_provenance: &StylesheetResponseProvenance,
+) -> StylesheetFetchTerminal {
     let (request_mode, credentials_mode) = options.request_mode_and_credentials();
     let head = response.head();
     let cors_usability =
@@ -577,15 +718,44 @@ pub(crate) fn stylesheet_preload_fetch_is_successful(
     terminal: &StylesheetFetchTerminal,
     options: &StylesheetFetchOptions,
 ) -> bool {
-    let moli_stylesheet_blocking::StylesheetPhysicalOutcome::Response(response) =
-        terminal.physical()
-    else {
-        return false;
+    validated_stylesheet_preload_response(terminal, options).is_ok()
+}
+
+fn stylesheet_preload_response(
+    terminal: &StylesheetFetchTerminal,
+    options: &StylesheetFetchOptions,
+) -> Result<crate::network::preloads::DocumentPreloadResponse, String> {
+    let response =
+        validated_stylesheet_preload_response(terminal, options).map_err(str::to_owned)?;
+    // MIME interpretation and HTTP success belong to the stylesheet consumer.
+    // Preserve the fetch response even when it cannot be installed as CSS.
+    Ok(crate::network::preloads::DocumentPreloadResponse {
+        response: response.clone(),
+        from_service_worker: terminal.from_service_worker(),
+        response_filter: terminal.response_filter().cloned().map(Into::into),
+    })
+}
+
+fn validated_stylesheet_preload_response<'a>(
+    terminal: &'a StylesheetFetchTerminal,
+    options: &StylesheetFetchOptions,
+) -> Result<&'a crate::protocol_types::NavigationResponse, &'a str> {
+    if terminal.failed_integrity() {
+        return Err("preload response failed its integrity check");
+    }
+    if options.request_mode_and_credentials().0 == moli_fetch::RequestMode::Cors
+        && terminal.origin_clean() == Some(false)
+    {
+        return Err("preload response failed its CORS check");
+    }
+    let response = match terminal.physical() {
+        StylesheetPhysicalOutcome::Response(response) => response,
+        StylesheetPhysicalOutcome::NetworkError(error) => return Err(error),
     };
-    !terminal.failed_integrity()
-        && (options.request_mode_and_credentials().0 != moli_fetch::RequestMode::Cors
-            || terminal.origin_clean() != Some(false))
-        && !should_response_be_blocked_due_to_nosniff(&response.headers, FetchDestination::Style)
+    if should_response_be_blocked_due_to_nosniff(&response.headers, FetchDestination::Style) {
+        return Err("preload response blocked by X-Content-Type-Options nosniff");
+    }
+    Ok(response)
 }
 
 pub(crate) fn validate_stylesheet_response(

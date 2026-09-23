@@ -9,5 +9,6 @@ self.addEventListener('fetch', e=>{
  const kind=u.searchParams.get('source');
  const target=new URL('/probe-asset'+u.search,self.location.href);
  if(kind==='cors'||kind==='opaque')target.hostname=target.hostname==='localhost'?'127.0.0.1':'localhost';
- e.respondWith(kind==='default'?new Response('globalThis.preloadExecuted=(globalThis.preloadExecuted||0)+1;',{headers:{'Content-Type':'text/javascript'}}):fetch(target,{mode:kind==='opaque'?'no-cors':'cors'}));
+ const style=u.searchParams.get('as')==='style';
+ e.respondWith(kind==='default'?new Response(style?'body { --preload-value: loaded; }':'globalThis.preloadExecuted=(globalThis.preloadExecuted||0)+1;',{headers:{'Content-Type':style?'text/css':'text/javascript'}}):fetch(target,{mode:kind==='opaque'?'no-cors':'cors'}));
 });

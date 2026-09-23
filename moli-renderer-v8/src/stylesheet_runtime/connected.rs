@@ -1270,6 +1270,7 @@ impl DocumentRuntime {
                         resource_timing_initiator_type: preload_like_resource_initiator_type(
                             resource_type,
                         ),
+                        consumed_preload_error: false,
                         document_owner,
                         stylesheet_fetch: None,
                         blocking_operation: None,
@@ -4631,7 +4632,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pending_style_preload_and_stylesheet_clients_share_one_typed_fetch() {
+    async fn pending_style_preload_supplies_a_distinct_stylesheet_consumer() {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
             .expect("stylesheet server");
@@ -4696,20 +4697,36 @@ mod tests {
             .expect("stylesheet client");
         assert!(stylesheet_client.installs_stylesheet());
         assert!(
-            preload_client.fetch().ptr_eq(stylesheet_client.fetch()),
-            "pending preload and stylesheet clients must join the exact typed resource"
+            !preload_client.fetch().ptr_eq(stylesheet_client.fetch()),
+            "the producer and consumer retain distinct stylesheet validation and ownership"
         );
 
         release_tx.send(()).expect("release stylesheet response");
-        assert!(
-            runtime.wait_for_stylesheet_networking_task_for_test().await,
-            "shared typed fetch should publish one Networking terminal"
-        );
-        runtime.drain_ready_connected_style_load_completions();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while preload_client.fetch().terminal().is_none()
+                || stylesheet_client.fetch().terminal().is_none()
+            {
+                assert!(runtime.wait_for_stylesheet_networking_task_for_test().await);
+                runtime.drain_ready_connected_style_load_completions();
+            }
+        })
+        .await
+        .expect("preload and consumer should both settle");
         server.await.expect("stylesheet server should finish");
 
         let physical = runtime.take_ready_stylesheet_network_results();
-        assert_eq!(physical.len(), 1);
+        assert_eq!(physical.len(), 2);
+        assert_eq!(
+            physical
+                .iter()
+                .filter(|result| result
+                    .result
+                    .as_ref()
+                    .is_ok_and(|response| !response.preload_state.is_consumed()))
+                .count(),
+            1,
+            "only the producer performed a physical request"
+        );
         let terminals = runtime.take_ready_stylesheet_link_client_terminals();
         assert_eq!(terminals.len(), 2);
         assert_eq!(
@@ -4737,11 +4754,11 @@ mod tests {
         assert_eq!(
             ready_owners,
             vec![preload.index(), stylesheet.index()],
-            "shared resource clients must be notified in registration order"
+            "preload publication must precede its waiting consumer"
         );
         assert!(
             !runtime.apply_ready_stylesheet_networking_tasks_for_test(),
-            "shared clients must not leave a second physical completion"
+            "both producer and consumer completions must be drained"
         );
     }
 
