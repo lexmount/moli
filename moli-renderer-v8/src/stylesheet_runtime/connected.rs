@@ -773,13 +773,19 @@ impl DocumentRuntime {
             .node(handle)
             .and_then(Node::as_element)
             .is_some_and(|element| {
-                element.is_html_element("link") && !link_rel_starts_resource_load(element)
+                element.is_html_element("link")
+                    && (!link_rel_starts_resource_load(element)
+                        || !preload_link_media_matches(
+                            element,
+                            self.dom_host.owner_document_handle(handle),
+                            host_ptr,
+                        ))
             })
         {
             self.settle_connected_style_load_admission(
                 host_ptr,
                 event_admission,
-                "link no longer has a supported resource destination",
+                "link no longer has matching resource attributes",
             );
             self.invalidate_stylesheet_owner_operations(handle);
             return result;
@@ -1023,6 +1029,18 @@ impl DocumentRuntime {
                 if let Some(client) = self.promote_stylesheet_link_client_if_ready(load) {
                     result.push_completed_stylesheet_client(client);
                 }
+                return result;
+            }
+            if resource_type == SubresourceResourceType::Stylesheet {
+                // Another rel token can admit this owner even when the CSS
+                // preload hint is unsupported. A rejected typed stylesheet
+                // request must never fall through to generic resource work.
+                self.settle_connected_style_load_binding(
+                    host_ptr,
+                    load_event_binding,
+                    "stylesheet preload attributes were rejected",
+                );
+                self.invalidate_stylesheet_owner_operations(handle);
                 return result;
             }
             let fetch_options = element
@@ -1431,8 +1449,19 @@ impl DocumentRuntime {
                     {
                         continue;
                     }
+                    let media_reprocesses_preload = local_name == "media"
+                        && self
+                            .dom_host
+                            .node(change.owner())
+                            .and_then(Node::as_element)
+                            .and_then(|element| element.attribute("rel"))
+                            .is_some_and(|rel| {
+                                link_rel_includes_token(rel, "preload")
+                                    && !link_rel_loads_without_preload(rel)
+                            });
                     if namespace.is_some()
-                        || !super::attribute_reprocesses_connected_stylesheet(local_name)
+                        || !(super::attribute_reprocesses_connected_stylesheet(local_name)
+                            || media_reprocesses_preload)
                     {
                         continue;
                     }
@@ -1915,12 +1944,49 @@ fn connected_style_owner_kind(
 
 fn link_rel_starts_resource_load(element: &crate::dom::native::Element) -> bool {
     let rel = element.attribute("rel").unwrap_or_default();
+    link_rel_loads_without_preload(rel)
+        || (link_rel_includes_token(rel, "preload")
+            && link_as_destination(element.attribute("as"))
+                .preload_type_matches(element.attribute("type")))
+}
+
+fn link_rel_loads_without_preload(rel: &str) -> bool {
     link_rel_includes_token(rel, "stylesheet")
         || link_rel_includes_token(rel, "modulepreload")
         || link_rel_includes_token(rel, "prefetch")
         || link_rel_includes_token(rel, "compression-dictionary")
-        || (link_rel_includes_token(rel, "preload")
-            && link_as_destination(element.attribute("as")).is_preload_destination())
+}
+
+fn preload_link_media_matches(
+    element: &crate::dom::native::Element,
+    document: Option<DomHandle>,
+    host_ptr: *mut JsContextHost,
+) -> bool {
+    let rel = element.attribute("rel").unwrap_or_default();
+    if !link_rel_includes_token(rel, "preload") || link_rel_loads_without_preload(rel) {
+        return true;
+    }
+    let Some(media) = element.attribute("media").filter(|value| !value.is_empty()) else {
+        return true;
+    };
+    // Production commits provide the Document's host. Runtime-only callers
+    // have no host and use the default environment, as the stylesheet tests do.
+    let host = unsafe { host_ptr.as_ref() };
+    let viewport = host
+        .map(|host| {
+            document.map_or_else(
+                || host.style_viewport(),
+                |document| {
+                    crate::native_bridge::element::style_viewport_for_document(host, document)
+                },
+            )
+        })
+        .unwrap_or_default();
+    crate::style_engine::media_list::evaluate_media_query_list(
+        media,
+        host.map(JsContextHost::emulated_media),
+        viewport,
+    )
 }
 
 fn preload_like_link_resource_type(
@@ -3537,6 +3603,27 @@ mod tests {
         runtime.prime_pending_connected_style_loads();
         assert!(!runtime.has_pending_style_loads());
         assert!(runtime.pop_ready_connected_style_load().is_none());
+    }
+
+    #[test]
+    fn preload_type_and_media_are_rechecked_after_owner_admission() {
+        for (attribute, value) in [("type", "text/html"), ("media", "not all")] {
+            let document = HtmlParser::SCRIPTING_ENABLED.parse(
+                Url::parse("https://example.test/page").unwrap(),
+                "<!doctype html><link rel=preload as=style href='data:text/css,body{}'>".to_owned(),
+            );
+            let link = first_link_handle(&document);
+            let mut runtime = DocumentRuntime::new(&document);
+            runtime.queue_initial_connected_style_loads();
+            assert!(runtime.has_pending_style_loads());
+            assert!(runtime.dom_host_mut().set_attribute(link, attribute, value));
+            runtime.prime_pending_connected_style_loads();
+            assert!(!runtime.has_pending_style_loads(), "{attribute}");
+            assert!(
+                runtime.pop_ready_connected_style_load().is_none(),
+                "{attribute}"
+            );
+        }
     }
 
     #[test]
