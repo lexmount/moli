@@ -94,7 +94,8 @@ pub(super) fn apply_step(
         }
         return;
     };
-    host.session_histories.begin_traversal(binding.popup, step, targets);
+    host.session_histories
+        .begin_traversal(binding.popup, step, targets);
     host.retain_active_history_delta_position(binding.popup);
     let accepted = if let Some(index) = root {
         let target = &plan.targets[index];
@@ -118,7 +119,8 @@ pub(super) fn apply_step(
             false
         }
     } else {
-        let history = window_history_for_holder(scope, owner).expect("admitted traversal has a history");
+        let history =
+            window_history_for_holder(scope, owner).expect("admitted traversal has a history");
         let traversal = method.unwrap_or_else(|| PendingHistoryTraversal {
             joint_step: Some(step),
             target: source,
@@ -139,10 +141,15 @@ pub(super) fn cancel_step<'s>(
     owner: v8::Local<'s, v8::Object>,
     step: SessionHistoryStepId,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else { return; };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
     let host = unsafe { &mut *host_ptr };
     let binding = session_history::binding(scope, host, owner);
-    if let Some(current) = host.session_histories.cancel_traversal_step(binding.popup, step) {
+    if let Some(current) = host
+        .session_histories
+        .cancel_traversal_step(binding.popup, step)
+    {
         finish(scope, host, owner, binding.popup, current);
     }
 }
@@ -191,16 +198,23 @@ pub(crate) fn finish_without_document_commit(
         return;
     }
     let context = host.session_histories.context(owner);
-    if let Some(step) = host
+    if let Some((step, delta)) = host
         .session_histories
-        .finish_traversal_entry(popup, context, None)
+        .finish_traversal_without_document_commit(popup, context)
         && let Some(root) = session_history::owner_for_context(
             scope,
             host,
-            moli_page_types::SessionHistoryContextId::ROOT,
+            moli_session_history::SessionHistoryContextId::ROOT,
             popup,
         )
     {
+        if let Some(delta) = delta.filter(|delta| *delta != 0) {
+            session_history::publish(
+                scope,
+                root,
+                moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
+            );
+        }
         // A retiring child must never materialize its Window again.
         finish(scope, host_ptr, root, popup, step);
     }

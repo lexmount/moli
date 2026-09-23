@@ -18,7 +18,7 @@ use super::navigation_traversal_execution::{
 use super::navigation_traversal_plan::JointTraversalPlan;
 use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_has_opaque_origin,
-    navigation_document_is_active, window_location_for_holder,
+    navigation_document_is_active,
     window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use crate::document_runtime::DomHandle;
@@ -101,6 +101,10 @@ fn capture_participants<'s>(
                 history: v8::Global::new(scope, target.history),
                 navigation: navigation.map(|value| v8::Global::new(scope, value)),
                 source: entry_reference(scope, target.history, target.current_index)?,
+                source_url: history_entries(scope, target.history)
+                    .and_then(|entries| entries.get(target.current_index as usize).cloned())
+                    .map(|entry| entry.borrow().url.clone())
+                    .unwrap_or_default(),
                 destination: entry_reference(scope, target.history, target.target_index)?,
                 outcome: Default::default(),
             })
@@ -151,6 +155,14 @@ pub(super) fn execute<'s>(
                 unsafe { &mut *host_ptr }.dispatch_child_document_tree_beforeunload_for_traversal(scope, handle);
             } else {
                 dispatch_beforeunload_for_runtime_owner(scope, target.owner);
+            }
+            if validate(scope, &admission).is_none() {
+                abort(scope, &admission, None);
+                return;
+            }
+            if let Some(navigation) = &admission.participants[index].navigation {
+                let navigation = v8::Local::new(scope, navigation);
+                super::navigation_result::cancel_active_cross_document_navigation(scope, navigation, None);
             }
         }
         if validate(scope, &admission).is_none() {
@@ -327,6 +339,10 @@ fn settle_aborted_admission<'s>(
     });
     let mut results_rejected = false;
     for participant in &admission.participants {
+        // A participant that has not dispatched navigate has no event to abort.
+        if participant.outcome.signal.is_none() {
+            continue;
+        }
         let navigation = participant.navigation.as_ref().map(|value| v8::Local::new(scope, value));
         let transition_resolver = participant.outcome.event.as_ref().and_then(|event| {
             let event = v8::Local::new(scope, event);
@@ -346,18 +362,8 @@ fn settle_aborted_admission<'s>(
             results_rejected = true;
         }
         if let Some(navigation) = navigation {
-            let filename = if canceled {
-                let owner = super::navigation_window::runtime_window_owner(scope, navigation);
-                window_location_for_holder(scope, owner)
-                    .and_then(|location| {
-                        super::location_runtime::location_href_slot(scope, location)
-                    })
-                    .unwrap_or_default()
-            } else {
-                String::new()
-            };
             super::navigation_lifecycle::finish_navigation_error_events(
-                scope, navigation, error, &filename,
+                scope, navigation, error, &participant.source_url,
             );
             if let Some(resolver) = committed_resolver {
                 let _ = resolver.reject(scope, error);
