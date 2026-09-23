@@ -13,7 +13,7 @@ pub use moli_v8_util::{
     object_own_static_string_property, object_property_as_array, object_property_as_object,
     object_string_property, private_key, register_ecmascript_intrinsic,
     registered_ecmascript_constructor, registered_ecmascript_prototype, set_null_prototype,
-    set_private_value, throw_range_error, throw_type_error, v8_json_parse, v8_string, v8str,
+    set_private_value, set_symbol_to_string_tag, throw_range_error, throw_type_error, v8_json_parse, v8_string, v8str,
     walk_object_chain,
 };
 use moli_webapi_declare::WebApiValue;
