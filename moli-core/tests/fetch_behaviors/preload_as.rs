@@ -88,7 +88,10 @@ async fn preload_type_and_media_admission_uses_child_document_viewport() -> Resu
     Ok(())
 }
 
-async fn evaluate_preload_probe(page: &mut Page, fixture: &str) -> Result<serde_json::Value> {
+pub(super) async fn evaluate_preload_probe(
+    page: &mut Page,
+    fixture: &str,
+) -> Result<serde_json::Value> {
     let result = tokio::time::timeout(
         Duration::from_secs(15),
         page.evaluate_runtime_expression_with_await_async(

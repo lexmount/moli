@@ -1,4 +1,4 @@
-use super::preload_lifecycle::evaluate_preload_probe;
+use super::preload_as::evaluate_preload_probe;
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
