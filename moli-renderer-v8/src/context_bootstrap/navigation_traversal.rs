@@ -33,8 +33,8 @@ use super::navigation_result::{
 };
 use super::navigation_traversal_execution::queue_navigation_traversal_with_result;
 use super::navigation_traversal_plan::{
-    NavigationTraversalPlan, history_delta_traversal_plan, navigation_delta_traversal_plan,
-    navigation_index_traversal_plan,
+    HistoryDeltaTraversalPlan, NavigationTraversalPlan, history_delta_traversal_target,
+    navigation_delta_traversal_plan, navigation_index_traversal_plan,
 };
 use super::navigation_window::{
     navigation_can_update_current_entry, navigation_document_is_active,
@@ -540,64 +540,7 @@ fn history_traverse<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) {
-    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
-        queue_browser_owned_top_level_history_traversal(scope, history, delta);
-        return;
-    };
-    let source_owner = runtime_window_owner(scope, history);
-    if let Some(source_handle) =
-        super::navigation_window::child_browsing_context_handle_for_runtime_owner(
-            scope,
-            source_owner,
-        )
-        && plan.targets.iter().any(|target| {
-            super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
-                scope,
-                source_handle,
-                target.owner,
-            )
-        })
-    {
-        return;
-    }
-    super::navigation_traversal_coordinator::queue_plan(scope, plan);
-}
-
-fn queue_browser_owned_top_level_history_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    delta: i64,
-) {
-    let owner = runtime_window_owner(scope, history);
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let host = unsafe { &mut *host_ptr };
-    let binding = super::session_history::binding(scope, host, owner);
-    if binding.popup.is_some() {
-        return;
-    }
-    // Failure to project a browser-owned entry and an out-of-range delta
-    // both reach this fallback. Only the former may supersede a navigation.
-    let model = host.session_histories.get_mut(binding.popup).clone();
-    let source = host
-        .pending_joint_history_step(&model)
-        .unwrap_or_else(|| model.current_step());
-    if model.step_by_delta_from(source, delta).is_none() {
-        return;
-    }
-    let top_owner = super::navigation_window::runtime_top_window_owner(scope, owner);
-    if let Some(source_handle) =
-        super::navigation_window::child_browsing_context_handle_for_runtime_owner(scope, owner)
-        && super::location_navigation::sandbox_blocks_ancestor_or_top_navigation_from_source(
-            scope,
-            source_handle,
-            top_owner,
-        )
-    {
-        return;
-    }
-    host.record_pending_top_level_history_traversal(delta);
+    super::navigation_traversal_execution::queue_history_traversal_by_delta(scope, history, delta);
 }
 
 pub(crate) fn queue_top_level_history_traversal_by_delta(
@@ -608,13 +551,15 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     let Some(history) = window_history_for_holder(scope, global) else {
         return false;
     };
-    let Some(plan) = history_delta_traversal_plan(scope, history, delta) else {
+    let Some(HistoryDeltaTraversalPlan::Traverse(plan)) =
+        history_delta_traversal_target(scope, history, delta, None)
+    else {
         return false;
     };
     if plan.has_cross_document_root(scope) {
         return false;
     }
-    super::navigation_traversal_coordinator::queue_plan(scope, plan);
+    history_traverse(scope, history, delta);
     true
 }
 
