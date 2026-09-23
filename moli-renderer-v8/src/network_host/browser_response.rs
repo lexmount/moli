@@ -15,7 +15,9 @@ impl fmt::Display for LocalUrlError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BlobMethod { method } => write!(f, "blob URL fetch requires GET, got `{method}`"),
-            Self::BlobRange => f.write_str("blob URL fetch has an invalid or unsatisfiable Range header"),
+            Self::BlobRange => {
+                f.write_str("blob URL fetch has an invalid or unsatisfiable Range header")
+            }
             Self::MediaSource => f.write_str("MediaSource object URLs cannot be fetched"),
             Self::BlobUnavailable { url } => write!(f, "blob URL `{url}` is unavailable"),
             Self::InvalidData { url } => write!(f, "data URL `{url}` is invalid"),
@@ -189,7 +191,9 @@ pub(crate) fn local_url_response_with_blob_entry(
     entry: Option<&CapturedBlobUrl>,
 ) -> Option<Result<Response, LocalUrlError>> {
     let result = match url.scheme() {
-        "blob" if method != "GET" => Some(Err(LocalUrlError::BlobMethod { method: method.to_owned() })),
+        "blob" if method != "GET" => Some(Err(LocalUrlError::BlobMethod {
+            method: method.to_owned(),
+        })),
         "blob" => {
             let response = match entry.filter(|entry| entry.matches(url)) {
                 Some(entry) => entry.response(url, request_headers),
@@ -201,9 +205,9 @@ pub(crate) fn local_url_response_with_blob_entry(
                     .unwrap_or_else(|| Err(LocalUrlError::BlobUnavailable { url: url.clone() })),
             )
         }
-        "data" => Some(data_url_response(url).ok_or_else(|| {
-            LocalUrlError::InvalidData { url: url.clone() }
-        })),
+        "data" => Some(
+            data_url_response(url).ok_or_else(|| LocalUrlError::InvalidData { url: url.clone() }),
+        ),
         _ => None,
     }?;
     Some(result.map(|response| {

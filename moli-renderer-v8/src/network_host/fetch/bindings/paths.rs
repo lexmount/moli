@@ -151,7 +151,9 @@ pub(super) enum LocalFetchError {
 
 pub(super) fn local_fetch_error_text(error: &LocalFetchError) -> String {
     match error {
-        LocalFetchError::Url(LocalUrlError::BlobUnavailable { .. }) => FILE_NOT_FOUND_ERROR_TEXT.to_owned(),
+        LocalFetchError::Url(error) if error.is_unavailable_blob() => {
+            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
+        }
         LocalFetchError::Url(error) => error.to_string(),
         LocalFetchError::Integrity(message) => message.clone(),
     }
@@ -189,7 +191,8 @@ pub(super) fn resolve_local_fetch(
                     response.status,
                     &filter,
                     response.body_bytes(),
-                ).map_err(LocalFetchError::Integrity)?;
+                )
+                .map_err(LocalFetchError::Integrity)?;
             }
             Ok(response)
         })
@@ -238,7 +241,7 @@ pub(super) fn spawn_network_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) -> u64 {
+) -> anyhow::Result<u64> {
     let loader = prepared.resource_loader.request_client().clone();
     let mut request = Request::new_browser(
         &prepared.method,
@@ -254,8 +257,7 @@ pub(super) fn spawn_network_fetch(
     .with_redirect_mode(prepared.redirect_mode)
     .with_cache_mode(window_fetch_cache_mode(&prepared.cache))
     .with_fetch_priority_hint(prepared.priority)
-    .with_fetch_referrer(&prepared.referrer)
-    .map_err(|error| error.to_string())?;
+    .with_fetch_referrer(&prepared.referrer)?;
     if let Some(metadata) = window_fetch_script_metadata(&prepared) {
         request = request.with_script_fetch_metadata(metadata);
     }
@@ -337,7 +339,7 @@ pub(super) fn spawn_network_fetch(
         prepared.request_headers,
         request_body_text(&prepared.body),
     );
-    internal_id
+    Ok(internal_id)
 }
 
 fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {
