@@ -19,7 +19,7 @@ fn native_element_click_initializes_layout_once() {
 }
 
 #[test]
-fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
+fn native_element_click_refreshes_stale_layout_after_dom_and_style_changes() {
     for mutation in [
         "target.style.left='300px'",
         "const veil=document.createElement('div');veil.style.cssText='position:fixed;inset:0;z-index:999';document.body.appendChild(veil)",
@@ -54,17 +54,36 @@ fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
             vm.eval(&format!(
                 "(()=>{{const target=document.getElementById('target');{mutation}}})()"
             ))
-            .expect("mutate live DOM/style without requesting a fresh snapshot");
-            let RendererElementClickTarget::Pointer(click) =
-                vm.prepare_element_click(target).unwrap()
-            else {
+            .expect("mutate live DOM/style before preparing another click");
+            let prepared = vm.prepare_element_click(target);
+            let prepared_passes = vm.layout_pass_observability_for_test().1;
+            assert!(
+                prepared_passes > before + 1,
+                "a changed DOM or style must refresh the shared geometry snapshot: {mutation}"
+            );
+            if mutation != "target.style.left='300px'" {
+                assert!(
+                    matches!(
+                        prepared,
+                        Err(crate::runtime::RendererElementClickError::Obscured)
+                    ),
+                    "{mutation}"
+                );
+                continue;
+            }
+            let RendererElementClickTarget::Pointer(click) = prepared.unwrap() else {
                 panic!("real layout must prepare pointer input");
             };
-            assert_eq!((click.root_x, click.root_y), (first.root_x, first.root_y));
+            assert_eq!((first.root_x, first.root_y), (100.0, 75.0));
+            assert_eq!((click.root_x, click.root_y), (360.0, 75.0));
+            assert!(matches!(
+                vm.prepare_element_click(target).unwrap(),
+                RendererElementClickTarget::Pointer(_)
+            ));
             assert_eq!(
                 vm.layout_pass_observability_for_test().1,
-                before + 1,
-                "warm preparation must reuse the frozen tree: {mutation}"
+                prepared_passes,
+                "unchanged preparation must reuse the snapshot"
             );
             if native_sequence {
                 vm.dispatch_prepared_element_click(click).unwrap();
