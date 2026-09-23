@@ -330,8 +330,12 @@ fn window_fetch_callback_in_relevant_realm<'s>(
 
     let internal_id = match spawn_network_fetch(scope, host, resolver, prepared) {
         Ok(internal_id) => internal_id,
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
+        Err(error) => {
+            let message =
+                v8_string(scope, &error.to_string()).unwrap_or_else(|| v8::String::empty(scope));
+            let exception = v8::Exception::type_error(scope, message);
+            resolver.reject(scope, exception);
+            rv.set(promise.into());
             return;
         }
     };
