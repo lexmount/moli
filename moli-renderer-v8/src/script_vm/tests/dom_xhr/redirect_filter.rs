@@ -51,7 +51,7 @@ fn redirect_filter_completion_keeps_status_text_and_explicit_filters() {
                                     final_url: request.url.clone(),
                                     status,
                                     status_text: Some("Original Text".to_owned()),
-                                    headers: vec![("X-Visible".to_owned(), "present".to_owned())],
+                                    headers: vec![("X-Visible".to_owned(), b"present".to_vec())],
                                     request_cookie_report: None,
                                     cookie_set_reports: Vec::new(),
                                     redirected: false,

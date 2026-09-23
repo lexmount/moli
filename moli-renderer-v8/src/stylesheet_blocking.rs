@@ -534,12 +534,12 @@ mod tests {
             let mut response = stylesheet_response(&stylesheet_url, Some("text/css"), body);
             response.headers.push((
                 "Access-Control-Allow-Origin".to_owned(),
-                "https://page.example.test".to_owned(),
+                b"https://page.example.test".to_vec(),
             ));
             if credentials_allowed {
                 response.headers.push((
                     "Access-Control-Allow-Credentials".to_owned(),
-                    "true".to_owned(),
+                    b"true".to_vec(),
                 ));
             }
             let terminal = stylesheet_terminal_from_response(
@@ -572,7 +572,7 @@ mod tests {
             if let Some(allow_origin) = allow_origin {
                 response.headers.push((
                     "Access-Control-Allow-Origin".to_owned(),
-                    allow_origin.to_owned(),
+                    allow_origin.as_bytes().to_vec(),
                 ));
             }
             let terminal = stylesheet_terminal_from_response(
