@@ -677,6 +677,7 @@ fn dedicated_worker_navigation_response_eq(
         && left.redirected == right.redirected
         && left.redirect_chain == right.redirect_chain
         && left.from_cache == right.from_cache
+        && left.cache_state == right.cache_state
         && left.negotiated_http_version == right.negotiated_http_version
         && left.network_request_headers() == right.network_request_headers()
 }

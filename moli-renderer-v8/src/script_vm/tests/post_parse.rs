@@ -357,6 +357,7 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
             redirected: true,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         "globalThis.__redirectScriptRan = true;".to_owned(),

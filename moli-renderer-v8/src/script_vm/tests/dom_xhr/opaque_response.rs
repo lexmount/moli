@@ -64,6 +64,7 @@ fn window_service_worker_response_filter_survives_streaming_clone_and_cache() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 };
                 let response_filter = Some(if cors {
@@ -233,6 +234,7 @@ fn window_filtered_fetch_preserves_internal_head_through_clone_and_cache() {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             };
             if streaming {
