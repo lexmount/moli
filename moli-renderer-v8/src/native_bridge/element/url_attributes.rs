@@ -2,8 +2,7 @@ mod helpers;
 mod iframe;
 
 pub(super) use self::helpers::{
-    default_port_for_scheme, normalize_url_default_port, parsed_url_like_attribute,
-    resolve_url_like_attribute, set_resolved_url_attribute,
+    parsed_url_like_attribute, resolve_url_like_attribute, set_resolved_url_attribute,
     should_block_dangling_markup_subresource,
 };
 pub(in crate::native_bridge) use self::iframe::update_iframe_snapshot_navigation;
