@@ -1464,7 +1464,7 @@ fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
                     redirected: false,
                     redirect_chain: Vec::new(),
                     from_cache: false,
-                        cache_state: Default::default(),
+                    cache_state: Default::default(),
                     negotiated_http_version: None,
                 },
             },
