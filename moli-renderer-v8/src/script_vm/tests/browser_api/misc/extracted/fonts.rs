@@ -141,14 +141,12 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
     );
     assert_eq!(vm.eval("fakeLoadedResult").unwrap(), "rejected:TypeError");
 }
-#[test]
-fn font_face_variation_settings_use_stylo_descriptor_serialization() {
-    let mut vm = new_storage_test_vm("https://font-face-variation-settings.test/");
-
-    let result = vm
-        .eval(
-            r#"
-(() => {
+#[tokio::test]
+async fn font_face_variation_settings_use_stylo_descriptor_serialization() {
+    let result = eval_font_loading_fixture(
+        "https://font-face-variation-settings.test/",
+        r#"
+(async () => {
   const face = new FontFace('Variable', 'url(variable.woff2)', {
     variationSettings: "'wght' 850"
   });
@@ -185,8 +183,8 @@ fn font_face_variation_settings_use_stylo_descriptor_serialization() {
   });
 })()
 "#,
-        )
-        .expect("FontFace variationSettings serialization should evaluate");
+    )
+    .await;
 
     assert_eq!(
         result,
@@ -1600,4 +1598,46 @@ async fn font_face_string_sources_follow_load_state_and_connected_style_use() {
         result,
         r#"{"remote":{"before":"unloaded","stablePromise":true,"loadReturnsLoaded":true,"after":"loading","settlement":"resolved-self"},"invalid":{"status":"error","settlement":"SyntaxError"},"local":{"beforeStyle":"unloaded","afterDetachedStyle":"unloaded","afterConnection":"loading","settlement":"NetworkError"}}"#
     );
+}
+
+#[tokio::test]
+async fn font_face_descriptors_parse_css_and_convert_dictionaries_in_main_and_child_realms() {
+    let result = eval_font_loading_fixture(
+        "https://font-face-descriptors.test/",
+        &format!(
+            r#"(async () => {{
+                {}
+                const frame = (document.body || document.documentElement || document)
+                    .appendChild(document.createElement('iframe'));
+                const child = frame.contentWindow;
+                const mainFace = new FontFace('Main', 'url(unused.ttf)');
+                const childFace = new child.FontFace('Child', 'url(unused.ttf)');
+                const mainSetter = Object.getOwnPropertyDescriptor(FontFace.prototype, 'ascentOverride').set;
+                const childSetter = Object.getOwnPropertyDescriptor(child.FontFace.prototype, 'ascentOverride').set;
+                childSetter.call(mainFace, '20%');
+                mainSetter.call(childFace, '30%');
+                let borrowedError = false;
+                try {{ childSetter.call(mainFace, 'invalid'); }}
+                catch (error) {{
+                    borrowedError = error instanceof child.DOMException &&
+                        !(error instanceof DOMException) && error.name === 'SyntaxError';
+                }}
+                return JSON.stringify({{
+                    main: await fontFaceDescriptorsProbe(window),
+                    child: await fontFaceDescriptorsProbe(child),
+                    borrowedValues: [mainFace.ascentOverride, childFace.ascentOverride],
+                    borrowedError,
+                }});
+            }})()"#,
+            include_str!("../../../../../../tests/fixtures/fontface-descriptors.js"),
+        ),
+    )
+    .await;
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    for realm in ["main", "child"] {
+        assert_eq!(result[realm]["failures"], serde_json::json!([]), "{result}");
+        assert_eq!(result[realm]["checks"], 420, "{result}");
+    }
+    assert_eq!(result["borrowedValues"], serde_json::json!(["20%", "30%"]));
+    assert_eq!(result["borrowedError"], true, "{result}");
 }
