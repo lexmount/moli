@@ -106,6 +106,25 @@ async fn preload_crossorigin_controls_fetch_mode_in_top_and_child_documents() ->
     assert_eq!(observed["context"], "dynamic");
     assert_eq!(observed["observations"].as_array().unwrap().len(), 75);
     assert_eq!(observed["failures"], serde_json::json!([]), "child dynamic");
+    let observed = evaluate_preload_probe(
+        &mut page,
+        &format!(
+            r#"(async () => {{
+        const frame = document.createElement('iframe');
+        frame.srcdoc = {markup};
+        await new Promise(resolve => {{ frame.onload = resolve; document.body.append(frame); }});
+        const result = await frame.contentWindow.eval({fixture});
+        frame.remove();
+        return result;
+    }})()"#,
+            markup = serde_json::to_string(markup)?,
+            fixture = serde_json::to_string(fixture)?
+        ),
+    )
+    .await?;
+    assert_eq!(observed["context"], "parser");
+    assert_eq!(observed["observations"].as_array().unwrap().len(), 75);
+    assert_eq!(observed["failures"], serde_json::json!([]), "child parser");
     let _ = shutdown.send(());
     assets.await??;
     server.shutdown().await;
