@@ -15,9 +15,17 @@ use super::{
 };
 use crate::util::context_host_ptr_from_global_bridge;
 
+pub(crate) enum NavigationCancellationReason {
+    WindowStop,
+    /// Native retirement has already invalidated and extracted traversal
+    /// admissions; their JS settlement belongs to the owning ScriptVm.
+    LocalWindowRetirement,
+}
+
 pub(crate) fn inform_about_canceled_navigation_for_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
+    reason: NavigationCancellationReason,
 ) {
     let owner = runtime_window_owner(scope, window);
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
@@ -26,7 +34,9 @@ pub(crate) fn inform_about_canceled_navigation_for_window<'s>(
     let _ = cancel_active_navigation_event(scope, navigation);
     cancel_active_intercepted_same_document_navigation(scope, navigation);
     cancel_active_cross_document_navigation(scope, navigation, None);
-    cancel_pending_precommit_history_traversal(scope, navigation);
+    if matches!(reason, NavigationCancellationReason::WindowStop) {
+        cancel_pending_precommit_history_traversal(scope, navigation);
+    }
     cancel_pending_precommit_same_document_navigation_for_window_stop(scope, navigation);
     cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
     if runtime_window_is_global(scope, owner)

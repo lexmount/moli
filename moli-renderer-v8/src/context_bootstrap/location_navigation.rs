@@ -798,10 +798,8 @@ fn finish_location_navigation_canceled<'s>(
     href: &str,
 ) {
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if let Some(signal) = outcome.signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = outcome.signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, href);
 }

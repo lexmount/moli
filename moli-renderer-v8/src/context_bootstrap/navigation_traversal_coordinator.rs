@@ -310,16 +310,22 @@ fn abort<'s>(
         return;
     }
     deactivate(scope, admission);
+    settle_aborted_admission(scope, admission, error);
+}
+
+fn settle_aborted_admission<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    admission: &PendingHistoryTraversalAdmission,
+    error: Option<v8::Local<'s, v8::Value>>,
+) {
     let error = error.unwrap_or_else(|| {
         navigation_dom_exception(scope, "History traversal was canceled", "AbortError")
     });
     results::reject_pending_navigation_results(scope, &admission.results, error);
     for participant in &admission.participants {
-        if let Some(signal) = &participant.outcome.signal
-            && let Some(host) = context_host_ptr_from_global_bridge(scope)
-        {
+        if let Some(signal) = &participant.outcome.signal {
             let signal = v8::Local::new(scope, signal);
-            unsafe { &mut *host }.abort_signal(scope, signal, error);
+            crate::native_bridge::abort::abort_signal(scope, signal, error);
         }
         if let Some(navigation) = &participant.navigation {
             let navigation = v8::Local::new(scope, navigation);
@@ -352,20 +358,15 @@ fn callback_id(value: v8::Local<'_, v8::Value>) -> Option<HistoryTraversalId> {
     Some(HistoryTraversalId::from_raw(value.u64_value().0))
 }
 
-/// LocalWindow retirement must settle surviving callers before releasing handles.
-/// Drain first: rejecting promises and dispatching abort/error events can reenter.
-pub(crate) fn cancel_history_traversals_for_retiring_window(
+/// The caller has removed and invalidated the entire batch under a short native
+/// borrow. Neither extraction nor further native retirement happens around JS.
+pub(crate) fn abort_history_traversal_admissions(
     scope: &mut v8::PinScope<'_, '_>,
-    owner: crate::native_bridge::WindowExecutionContextOwner,
+    admissions: Vec<std::rc::Rc<PendingHistoryTraversalAdmission>>,
 ) {
-    let Some(host) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let admissions = unsafe { &mut *host }
-        .pending_history_traversal_admissions
-        .take_for_owner(owner);
     for admission in admissions {
-        abort(scope, &admission, None);
+        debug_assert!(!admission.active.get());
+        settle_aborted_admission(scope, &admission, None);
     }
 }
 

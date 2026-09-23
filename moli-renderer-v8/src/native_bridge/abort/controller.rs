@@ -87,6 +87,6 @@ pub(crate) fn abort_controller_abort_callback<'s>(
         rv.set_undefined();
         return;
     }
-    host.abort_signal(scope, signal, reason);
+    crate::native_bridge::abort::abort_signal(scope, signal, reason);
     rv.set_undefined();
 }

@@ -685,10 +685,8 @@ fn navigation_canceled_after_dispatch_result<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
     super::super::navigation_events::mark_navigation_outcome_default_prevented(scope, outcome);
-    if let Some(signal) = outcome.signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = outcome.signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, href);
     navigation_rejected_value_result(scope, error)
@@ -1010,10 +1008,8 @@ pub(in crate::context_bootstrap) fn cancel_pending_precommit_same_document_navig
     };
     let error =
         navigation_dom_exception(scope, "Navigation was canceled before commit", "AbortError");
-    if let Some(signal) = data.signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = data.signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
     let receiver = v8::undefined(scope).into();
@@ -1294,10 +1290,8 @@ fn precommit_commit_rejected_callback<'s>(
         .filter(|promise| promise.state() == v8::PromiseState::Rejected)
         .map(|promise| promise.result(scope))
         .unwrap_or_else(|| args.get(0));
-    if let Some(signal) = data.signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = data.signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, data.navigation, error, &data.current_href);
     let receiver = v8::undefined(scope).into();
@@ -1594,10 +1588,8 @@ pub(in crate::context_bootstrap) fn cancel_active_intercepted_same_document_navi
         return false;
     };
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, &filename);
     let receiver = v8::undefined(scope).into();
@@ -1850,10 +1842,8 @@ fn finish_intercepted_navigation_rejected<'s>(
     error: v8::Local<'s, v8::Value>,
     filename: &str,
 ) {
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, filename);
     if let Some(committed_resolve) = committed_resolve {

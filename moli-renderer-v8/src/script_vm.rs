@@ -3595,7 +3595,9 @@ impl ScriptVm {
                         context.detach_global();
                         Ok(())
                     })?;
-                None
+                // Cancellation can synchronously install a successor realm or
+                // detach the frame. Resolve both owner and pending context anew.
+                return self.create_new_child_default_world(frame_id, child_handle);
             }
             None => None,
         };
@@ -3742,6 +3744,14 @@ impl ScriptVm {
                     Ok(())
                 });
         }
+        let refreshed_live;
+        let live = if stale_prebootstrapped_contexts.is_empty() {
+            live
+        } else {
+            // Retirement callbacks may have materialized successor realms.
+            refreshed_live = self.live_child_default_context_entries();
+            &refreshed_live
+        };
         let stale_context_ids = self
             .child_frame_realm_store
             .iter_by_execution_context_id()

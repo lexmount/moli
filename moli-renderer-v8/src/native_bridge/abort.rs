@@ -51,6 +51,12 @@ struct AbortLinkedTargetListener {
     capture: bool,
 }
 
+struct AbortSignalDispatch {
+    algorithms: Vec<v8::Global<v8::Function>>,
+    linked_target_listeners: Vec<AbortLinkedTargetListener>,
+    dependent_signals: Vec<u32>,
+}
+
 impl AbortStore {
     fn alloc_signal_id(&mut self) -> u32 {
         self.next_signal_id = self
@@ -257,48 +263,24 @@ impl AbortStore {
         }
     }
 
-    pub(super) fn abort_signal<'s>(
+    fn take_signal_abort<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
-        host: &mut super::JsContextHost,
         signal: v8::Local<'s, v8::Object>,
         reason: v8::Local<'s, v8::Value>,
-    ) {
-        let Some(signal_id) = Self::signal_id_from_object(scope, signal) else {
-            return;
-        };
-        let Some((abort_algorithms, linked_target_listeners, dependent_signals)) = ({
-            let Some(state) = self.signal_state_mut(signal_id) else {
-                return;
-            };
-            if state.aborted {
-                return;
-            }
-            state.aborted = true;
-            state.reason = Some(v8::Global::new(scope, reason));
-            let abort_algorithms = std::mem::take(&mut state.abort_algorithms);
-            let linked_target_listeners = std::mem::take(&mut state.linked_target_listeners);
-            let dependent_signals = state.dependent_signals.clone();
-            Some((abort_algorithms, linked_target_listeners, dependent_signals))
-        }) else {
-            return;
-        };
-        event::invoke_abort_algorithms(scope, signal, reason, abort_algorithms);
-        abort_signal_events::dispatch_abort(scope, signal);
-        for linked in linked_target_listeners {
-            host.remove_registered_event_listener_by_id(
-                linked.target,
-                &linked.event_type,
-                linked.callback_id,
-                linked.capture,
-            );
+    ) -> Option<AbortSignalDispatch> {
+        let signal_id = Self::signal_id_from_object(scope, signal)?;
+        let state = self.signal_state_mut(signal_id)?;
+        if state.aborted {
+            return None;
         }
-        for dependent_signal_id in dependent_signals {
-            let Some(dependent_signal) = self.signal_object(scope, dependent_signal_id) else {
-                continue;
-            };
-            host.abort_signal(scope, dependent_signal, reason);
-        }
+        state.aborted = true;
+        state.reason = Some(v8::Global::new(scope, reason));
+        Some(AbortSignalDispatch {
+            algorithms: std::mem::take(&mut state.abort_algorithms),
+            linked_target_listeners: std::mem::take(&mut state.linked_target_listeners),
+            dependent_signals: state.dependent_signals.clone(),
+        })
     }
 
     pub(super) fn link_dependent_signal(
@@ -311,6 +293,45 @@ impl AbortStore {
         };
         if !state.dependent_signals.contains(&dependent_signal_id) {
             state.dependent_signals.push(dependent_signal_id);
+        }
+    }
+}
+
+/// Aborting a signal invokes author algorithms and listeners synchronously.
+/// Only owned dispatch data may cross those calls; neither the host nor its
+/// AbortStore can remain borrowed, including while aborting dependent signals.
+pub(crate) fn abort_signal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    signal: v8::Local<'s, v8::Object>,
+    reason: v8::Local<'s, v8::Value>,
+) {
+    let Some(host_ptr) = crate::util::context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let dispatch = unsafe { &mut *host_ptr }
+        .native_bridge_mut()
+        .abort
+        .take_signal_abort(scope, signal, reason);
+    let Some(dispatch) = dispatch else {
+        return;
+    };
+    event::invoke_abort_algorithms(scope, signal, reason, dispatch.algorithms);
+    abort_signal_events::dispatch_abort(scope, signal);
+    for linked in dispatch.linked_target_listeners {
+        unsafe { &mut *host_ptr }.remove_registered_event_listener_by_id(
+            linked.target,
+            &linked.event_type,
+            linked.callback_id,
+            linked.capture,
+        );
+    }
+    for dependent_signal_id in dispatch.dependent_signals {
+        let signal = unsafe { &mut *host_ptr }
+            .native_bridge_mut()
+            .abort
+            .signal_object(scope, dependent_signal_id);
+        if let Some(signal) = signal {
+            abort_signal(scope, signal, reason);
         }
     }
 }

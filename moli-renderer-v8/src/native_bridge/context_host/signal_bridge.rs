@@ -94,19 +94,4 @@ impl JsContextHost {
             self.release_event_callback(callback_id);
         }
     }
-
-    pub(crate) fn abort_signal<'s>(
-        &mut self,
-        scope: &mut v8::PinScope<'s, '_>,
-        signal: v8::Local<'s, v8::Object>,
-        reason: v8::Local<'s, v8::Value>,
-    ) {
-        let host_ptr = self as *mut Self;
-        unsafe {
-            (*host_ptr)
-                .bridge
-                .abort
-                .abort_signal(scope, &mut *host_ptr, signal, reason);
-        }
-    }
 }

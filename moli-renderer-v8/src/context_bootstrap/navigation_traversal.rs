@@ -390,10 +390,8 @@ fn reload_canceled_after_dispatch_result<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
     super::navigation_events::mark_navigation_outcome_default_prevented(scope, outcome);
-    if let Some(signal) = outcome.signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = outcome.signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, href);
     navigation_rejected_value_result(scope, error)

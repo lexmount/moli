@@ -105,7 +105,7 @@ pub(crate) fn abort_signal_any_callback<'s>(
         else {
             continue;
         };
-        host.abort_signal(scope, signal, reason);
+        crate::native_bridge::abort::abort_signal(scope, signal, reason);
         rv.set(signal.into());
         return;
     }
@@ -150,6 +150,6 @@ fn abort_signal_timeout_fire_native_callback(
         return;
     };
     let reason = timeout_error_value(scope);
-    host.abort_signal(scope, signal, reason);
+    crate::native_bridge::abort::abort_signal(scope, signal, reason);
     rv.set_undefined();
 }

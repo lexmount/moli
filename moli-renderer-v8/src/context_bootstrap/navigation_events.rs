@@ -563,10 +563,8 @@ pub(super) fn cancel_active_navigation_event<'s>(
     }
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
     set_private_value(scope, event, NAVIGATE_EVENT_ABORT_ERROR_SLOT, error);
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, &href);
     Some(error)

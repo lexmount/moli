@@ -38,7 +38,9 @@ const RAW_GLOBAL_FUNCTION_ALLOWLIST: &[(&str, usize)] = &[
     ("host/timers.rs", 1),
     // AbortSignal listeners and onabort now use the shared typed EventTarget
     // registry. These remaining roots own browser-created abort algorithms.
-    ("native_bridge/abort.rs", 1),
+    // Native abort algorithms reside in the store or its extracted dispatch
+    // batch. Dispatch moves the roots; it does not add a Web IDL callback store.
+    ("native_bridge/abort.rs", 2),
     ("native_bridge/abort/event.rs", 1),
     ("native_bridge/history_queue.rs", 3),
     ("script_vm/frame_script_jobs.rs", 3),

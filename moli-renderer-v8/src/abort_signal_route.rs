@@ -67,10 +67,7 @@ impl<'s> ResolvedAbortSignal<'s> {
     pub(crate) fn abort(self, scope: &mut v8::PinScope<'s, '_>, reason: v8::Local<'s, v8::Value>) {
         match self.owner {
             AbortSignalOwner::Window => {
-                let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-                    return;
-                };
-                unsafe { &mut *host_ptr }.abort_signal(scope, self.signal, reason);
+                crate::native_bridge::abort::abort_signal(scope, self.signal, reason);
             }
             AbortSignalOwner::Worker => {
                 let Some(signal_id) =

@@ -243,10 +243,8 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
     if let Some(error) = error {
         finish_navigation_error_events(scope, navigation, error, &applied.url);
         reject_resolver_array(scope, finished_resolvers, error, true);
-        if let Some(signal) = outcome.signal
-            && let Some(host) = context_host_ptr_from_global_bridge(scope)
-        {
-            unsafe { &mut *host }.abort_signal(scope, signal, error);
+        if let Some(signal) = outcome.signal {
+            crate::native_bridge::abort::abort_signal(scope, signal, error);
         }
         return;
     }
@@ -467,10 +465,8 @@ pub(in crate::context_bootstrap) fn cancel_active_history_traversal_intercept_se
     };
     set_traversal_intercept_inactive(scope, navigation, data.into());
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, &url);
     reject_resolver_array(scope, finished_resolvers, error, true);
@@ -491,10 +487,8 @@ fn traversal_intercept_fulfilled_callback<'s>(
     let owner = runtime_window_owner(scope, navigation);
     if !navigation_document_is_active(scope, owner) {
         let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-        if let Some(signal) = signal
-            && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        {
-            unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+        if let Some(signal) = signal {
+            crate::native_bridge::abort::abort_signal(scope, signal, error);
         }
         let top_owner = runtime_top_window_owner(scope, owner);
         let filename = window_location_for_holder(scope, top_owner)
@@ -526,10 +520,8 @@ fn traversal_intercept_rejected_callback<'s>(
         .filter(|promise| promise.state() == v8::PromiseState::Rejected)
         .map(|promise| promise.result(scope))
         .unwrap_or_else(|| args.get(0));
-    if let Some(signal) = signal
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        unsafe { &mut *host_ptr }.abort_signal(scope, signal, error);
+    if let Some(signal) = signal {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, &url);
     reject_resolver_array(scope, finished_resolvers, error, true);

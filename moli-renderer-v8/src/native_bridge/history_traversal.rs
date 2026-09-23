@@ -63,11 +63,13 @@ pub(crate) struct PendingHistoryTraversalAdmission {
 #[derive(Default)]
 pub(crate) struct PendingHistoryTraversalAdmissions {
     entries: HashMap<HistoryTraversalId, Rc<PendingHistoryTraversalAdmission>>,
+    retired: Vec<Rc<PendingHistoryTraversalAdmission>>,
 }
 
 impl PendingHistoryTraversalAdmissions {
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
-        self.entries.is_empty()
+        self.entries.is_empty() && self.retired.is_empty()
     }
 
     pub(crate) fn insert(
@@ -127,8 +129,24 @@ impl PendingHistoryTraversalAdmissions {
                         .iter()
                         .any(|participant| participant.execution_owner == owner)
             })
-            .map(|(_, admission)| admission)
+            .map(|(_, admission)| {
+                // Invalidate even an Rc already held by an executing callback.
+                admission.active.set(false);
+                admission
+            })
             .collect()
+    }
+
+    /// Native retirement cannot run author script while borrowing JsContextHost.
+    /// Remove callbacks' tokens now; the VM settles the owned batch after the
+    /// native stack has returned. No cleanup of a successor runs after events.
+    pub(crate) fn retire_owner(&mut self, owner: WindowExecutionContextOwner) {
+        let admissions = self.take_for_owner(owner);
+        self.retired.extend(admissions);
+    }
+
+    pub(crate) fn take_retired(&mut self) -> Vec<Rc<PendingHistoryTraversalAdmission>> {
+        std::mem::take(&mut self.retired)
     }
 
     pub(crate) fn clear(&mut self) {
@@ -136,6 +154,7 @@ impl PendingHistoryTraversalAdmissions {
             admission.active.set(false);
         }
         self.entries.clear();
+        self.retired.clear();
     }
 
     #[cfg(test)]

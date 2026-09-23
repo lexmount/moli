@@ -8,20 +8,39 @@ use super::perform_microtask_checkpoint_and_report_pending_promise_rejections;
 use crate::{frame_owner_model::FrameRealmId, native_bridge::JsContextHost};
 
 impl ScriptVm {
+    pub(super) fn settle_retired_history_traversals(&mut self) {
+        loop {
+            let admissions = self
+                ._context_host
+                .borrow_mut()
+                .pending_history_traversal_admissions
+                .take_retired();
+            if admissions.is_empty() {
+                return;
+            }
+            let _ = self.with_default_context_scope(|scope, _| {
+                // Neither a host borrow nor native retirement stack crosses JS.
+                // Reentrant retirement is extracted by the next loop iteration.
+                crate::context_bootstrap::abort_history_traversal_admissions(scope, admissions);
+                Self::perform_microtask_checkpoints(scope, None)
+            });
+        }
+    }
+
     pub(super) fn cancel_history_traversals_for_retiring_window(
         &mut self,
         owner: crate::native_bridge::WindowExecutionContextOwner,
     ) {
-        if self
+        let admissions = self
             ._context_host
-            .borrow()
+            .borrow_mut()
             .pending_history_traversal_admissions
-            .is_empty()
-        {
+            .take_for_owner(owner);
+        if admissions.is_empty() {
             return;
         }
         let _ = self.with_default_context_scope(|scope, _| {
-            crate::context_bootstrap::cancel_history_traversals_for_retiring_window(scope, owner);
+            crate::context_bootstrap::abort_history_traversal_admissions(scope, admissions);
             Ok(())
         });
     }

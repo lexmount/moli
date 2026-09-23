@@ -73,7 +73,11 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    inform_about_canceled_navigation_for_window(scope, args.this());
+    inform_about_canceled_navigation_for_window(
+        scope,
+        args.this(),
+        super::super::NavigationCancellationReason::WindowStop,
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_confirm_callback<'s>(

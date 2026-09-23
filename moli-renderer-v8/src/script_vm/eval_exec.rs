@@ -1254,6 +1254,7 @@ impl ScriptVm {
     ) -> T {
         self.apply_pending_main_document_owner_transitions();
         self.apply_pending_child_document_owner_retirements();
+        self.settle_retired_history_traversals();
         self.drain_pending_style_invalidations_for_turn_exit(boundary);
         let runtime_continuation_is_ready =
             self.runtime_script_work_should_signal_immediate_progress();

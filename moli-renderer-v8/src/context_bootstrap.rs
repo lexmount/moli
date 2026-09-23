@@ -139,7 +139,9 @@ pub(crate) use location_navigation::{
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser,
 };
-pub(crate) use navigation_cancellation::inform_about_canceled_navigation_for_window;
+pub(crate) use navigation_cancellation::{
+    NavigationCancellationReason, inform_about_canceled_navigation_for_window,
+};
 pub(crate) use navigation_events::dispatch_cross_document_navigation_navigate_event_for_window_with_form_data;
 pub(crate) use navigation_events::{
     construct_original_hash_change_event, dispatch_beforeunload_for_runtime_owner,
@@ -152,7 +154,7 @@ pub(crate) use navigation_history_pruning::{
 pub(crate) use navigation_result::{
     NavigationFinishedResultApplication, apply_pending_navigation_finished_result,
 };
-pub(crate) use navigation_traversal_coordinator::cancel_history_traversals_for_retiring_window;
+pub(crate) use navigation_traversal_coordinator::abort_history_traversal_admissions;
 pub(crate) use navigation_traversal_execution::apply_authorized_history_traversal_task;
 pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;

@@ -1905,7 +1905,7 @@ impl JsContextHost {
             );
         }
         if let Some(retired_local_window_id) = transition.retired_local_window_id {
-            self.retire_lightweight_popup_local_window(scope, popup_id, retired_local_window_id);
+            self.retire_lightweight_popup_local_window(popup_id, retired_local_window_id);
         }
         self.refresh_lightweight_popup_indexed_db_factory(scope, popup_id, window);
         tracing::debug!(
@@ -1929,7 +1929,6 @@ impl JsContextHost {
 
     fn retire_lightweight_popup_local_window(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
         local_window_id: LightweightPopupLocalWindowId,
     ) {
@@ -1937,10 +1936,8 @@ impl JsContextHost {
             popup_id,
             local_window_id,
         };
-        crate::context_bootstrap::cancel_history_traversals_for_retiring_window(
-            scope,
-            execution_context_owner,
-        );
+        self.pending_history_traversal_admissions
+            .retire_owner(execution_context_owner);
         let retired_timer_count = unsafe { &mut *self.runtime }
             .cancel_window_execution_context_timers(execution_context_owner);
         let retired_webcrypto_count =
@@ -4321,7 +4318,7 @@ fn lightweight_popup_close_callback<'s>(
         host.clear_custom_element_registry_associations_for_document(document_handle);
     }
     host.retire_lightweight_popup_document_owner(transition.retired_owner);
-    host.retire_lightweight_popup_local_window(scope, popup_id, transition.retired_local_window_id);
+    host.retire_lightweight_popup_local_window(popup_id, transition.retired_local_window_id);
     host.lightweight_popup_window_names
         .retain(|_, named_popup_id| *named_popup_id != popup_id);
 }

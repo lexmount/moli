@@ -1,6 +1,165 @@
 use super::*;
 
 #[tokio::test]
+async fn history_traversal_retirement_reentry_preserves_reattached_frame_and_sibling_state() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+    vm.eval(r#"
+        globalThis.frame = document.createElement('iframe');
+        globalThis.sibling = document.createElement('iframe');
+        const container = document.body || document.documentElement || document;
+        container.appendChild(frame); container.appendChild(sibling);
+        globalThis.oldChild = frame.contentWindow;
+        history.replaceState(0, ''); oldChild.history.replaceState(0, '');
+        history.pushState(1, ''); oldChild.history.pushState(1, '');
+        globalThis.log = [];
+        navigation.onnavigate = event => {
+            event.signal.addEventListener('abort', () => {
+                sibling.contentWindow.history.pushState('from-abort', '');
+                log.push('abort');
+            });
+            event.intercept({precommitHandler: () => new Promise(resolve => globalThis.release = resolve)});
+        };
+        navigation.addEventListener('navigateerror', () => {
+            log.push('error');
+            sibling.contentWindow.history.pushState('from-error', '');
+            container.appendChild(frame);
+            frame.contentWindow.history.replaceState('successor', '');
+            release();
+        }, {once:true});
+        const result = navigation.back();
+        result.committed.catch(error => log.push('committed:' + error.name));
+        result.finished.catch(error => log.push('finished:' + error.name));
+    "#).unwrap();
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .len(),
+        1
+    );
+    // Detach during a Promise reaction also exercises retirement discovered
+    // during a checkpoint, not only the outer script body's retirement batch.
+    vm.eval("Promise.resolve().then(() => frame.remove());")
+        .unwrap();
+    let snapshot = r#"JSON.stringify([
+        history.state, sibling.contentWindow.history.state,
+        frame.isConnected, frame.contentWindow.history.state, log
+    ])"#;
+    let expected = r#"[1,"from-error",true,"successor",["abort","error","committed:AbortError","finished:AbortError"]]"#;
+    assert_eq!(vm.eval(snapshot).unwrap(), expected);
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .is_empty()
+    );
+    vm.eval("release();").unwrap();
+    assert_eq!(vm.eval(snapshot).unwrap(), expected);
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .is_empty()
+    );
+    assert_eq!(
+        vm.eval("frame.contentWindow.document.readyState").unwrap(),
+        "complete"
+    );
+}
+
+#[tokio::test]
+async fn history_traversal_retirement_error_can_start_successor_admission() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+    vm.eval(
+        r#"
+        globalThis.frame = document.createElement('iframe');
+        (document.body || document.documentElement || document).appendChild(frame);
+        history.replaceState(0, ''); frame.contentWindow.history.replaceState(0, '');
+        history.pushState(1, ''); frame.contentWindow.history.pushState(1, '');
+        globalThis.gates = []; globalThis.log = [];
+        navigation.onnavigate = event => {
+            if (event.navigationType === 'traverse') event.intercept({
+                precommitHandler: () => new Promise(resolve => gates.push(resolve))
+            });
+        };
+        navigation.addEventListener('navigateerror', () => {
+            history.pushState(2, '');
+            const next = navigation.back();
+            next.committed.then(() => log.push('newCommitted'));
+            next.finished.then(() => log.push('newFinished'));
+        }, {once:true});
+        const result = navigation.back();
+        result.committed.catch(error => log.push('oldCommitted:' + error.name));
+        result.finished.catch(error => log.push('oldFinished:' + error.name));
+    "#,
+    )
+    .unwrap();
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .len(),
+        1
+    );
+    vm.eval("frame.remove();").unwrap();
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .is_empty()
+    );
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .len(),
+        1
+    );
+    vm.eval("gates[0]();").unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([history.state, log])").unwrap(),
+        r#"[2,["oldCommitted:AbortError","oldFinished:AbortError"]]"#
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .len(),
+        1
+    );
+    vm.eval("gates[1]();").unwrap();
+    assert_eq!(
+        vm.eval("JSON.stringify([history.state, log])").unwrap(),
+        r#"[1,["oldCommitted:AbortError","oldFinished:AbortError","newCommitted","newFinished"]]"#
+    );
+    assert!(
+        vm._context_host
+            .borrow()
+            .pending_history_traversal_admissions
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn history_traversal_canceled_precommit_callback_cannot_complete_successor() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm =
