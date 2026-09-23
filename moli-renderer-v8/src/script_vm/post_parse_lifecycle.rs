@@ -2285,6 +2285,36 @@ impl ScriptVm {
         &mut self,
         ready: crate::document_runtime::ReadyConnectedStyleLoad,
     ) -> bool {
+        if let Some(owner) = ready.document_owner()
+            && Some(owner)
+                != self
+                    ._context_host
+                    .borrow()
+                    .current_main_document_task_owner()
+        {
+            let realm = self
+                ._context_host
+                .borrow()
+                .connected_style_document_realm(owner);
+            let Some(realm) = realm else {
+                return false;
+            };
+            return self
+                .with_frame_realm_document_scope(realm, |scope, host_ptr, document_runtime| {
+                    if ready.load_event_binding().is_some_and(|binding| {
+                        !unsafe { &*host_ptr }.main_style_load_event_is_current(binding)
+                    }) {
+                        return Ok(false);
+                    }
+                    Ok(document_runtime.dispatch_pending_style_load(scope, host_ptr, ready))
+                })
+                .unwrap_or_else(|error| {
+                    self.record_runtime_warning(format_args!(
+                        "child style handler dispatch failed: {error}"
+                    ));
+                    false
+                });
+        }
         if self.current_main_world().is_none() {
             let host_ptr = (*self._context_host).as_ptr();
             if ready.load_event_binding().is_some_and(|binding| {
@@ -2511,6 +2541,7 @@ impl ScriptVm {
             let crate::document_runtime::ConnectedLoadNetworkResult {
                 network_observed,
                 resource_timing_initiator_type,
+                document_owner,
                 stylesheet_fetch,
                 blocking_operation: _,
                 source_operation: _,
@@ -2538,14 +2569,15 @@ impl ScriptVm {
             } else {
                 !source_owners.is_empty()
             };
-            performance_entries.push(
+            performance_entries.push((
+                document_owner,
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
                     request_url.as_str(),
                     resource_timing_initiator_type,
                     start_unix_millis,
                     &result,
                 ),
-            );
+            ));
             if resource_type == SubresourceResourceType::Stylesheet && stylesheet_fetch.is_none() {
                 let validated_response = result
                     .as_ref()
@@ -2640,9 +2672,25 @@ impl ScriptVm {
                     }
                 }
             }
-            if !network_observed {
+            if network_observed {
+                continue;
+            }
+            let frame_id =
+                document_owner.and_then(|owner| host.connected_style_network_frame_id(owner));
+            if document_owner
+                .is_some_and(|owner| !host.connected_style_document_owner_is_current(owner))
+            {
+                host.record_historical_get_subresource_network_result_with_initiator(
+                    frame_id,
+                    document_url,
+                    request_url,
+                    resource_type,
+                    SubresourceRequestInitiatorType::Parser,
+                    &result,
+                );
+            } else {
                 host.record_get_subresource_network_result_with_initiator(
-                    None,
+                    frame_id,
                     document_url,
                     request_url,
                     resource_type,
@@ -2709,10 +2757,44 @@ impl ScriptVm {
         self.settle_stylesheet_link_clients(client_terminals);
         self.apply_pending_stylesheet_source_css_projections();
         self.start_stylesheet_subresource_fetches(css_subresources);
-        self.record_resource_performance_entries(performance_entries);
+        let mut entries_by_realm = std::collections::BTreeMap::<_, Vec<_>>::new();
+        for (owner, entry) in performance_entries {
+            let realm = if let Some(owner) = owner {
+                let host = self._context_host.borrow();
+                if let Some(pending) = self.main_world.pending_mut()
+                    && host.current_main_document_task_owner() == Some(owner)
+                {
+                    pending.resource_performance_entries.push(entry);
+                    continue;
+                }
+                let Some(realm) = host.connected_style_resource_timing_realm(owner) else {
+                    continue;
+                };
+                Some(realm)
+            } else {
+                None
+            };
+            entries_by_realm.entry(realm).or_default().push(entry);
+        }
+        for (realm, entries) in entries_by_realm {
+            let Some(realm) = realm else {
+                self.record_resource_performance_entries(entries);
+                continue;
+            };
+            if let Err(error) = self.with_frame_realm_scope(realm, |scope, _| {
+                for entry in entries {
+                    crate::context_bootstrap::record_resource_performance_entry(scope, entry);
+                }
+                Ok(())
+            }) {
+                self.record_runtime_warning(format_args!(
+                    "failed to record Document-owned stylesheet resource timing: {error}"
+                ));
+            }
+        }
     }
 
-    fn record_resource_performance_entries(
+    pub(super) fn record_resource_performance_entries(
         &mut self,
         entries: Vec<crate::context_bootstrap::ResourcePerformanceEntry>,
     ) {

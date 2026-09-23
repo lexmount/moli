@@ -444,7 +444,11 @@ impl DocumentRuntime {
                     return None;
                 }
                 let event_plan = if self.connected_owner_uses_non_blocking_link_identity(handle) {
-                    ConnectedStyleLoadEventPlan::non_blocking_link(handle)
+                    let document = self
+                        .dom_host
+                        .owner_document_handle(handle)
+                        .filter(|document| *document != self.document_handle());
+                    ConnectedStyleLoadEventPlan::non_blocking_link(handle, document)
                 } else {
                     ConnectedStyleLoadEventPlan::load_delaying(handle)
                 };
@@ -486,7 +490,7 @@ impl DocumentRuntime {
                 handle,
                 self.connected_style_event_element_kind(handle),
                 false,
-                event_admission.load_event_binding(),
+                Some(event_admission),
             );
             return ConnectedStyleLoadPrimeResult::default();
         }
@@ -510,7 +514,7 @@ impl DocumentRuntime {
                         ),
                     )
                 }
-                ConnectedStyleLoadEventPlan::NonBlockingLink { element } => {
+                ConnectedStyleLoadEventPlan::NonBlockingLink { element, .. } => {
                     ConnectedStyleLoadEventAdmission::NonBlockingLink(
                         crate::frame_owner_model::DocumentLinkEventOwner::unowned_for_document_runtime_test(
                             element,
@@ -653,11 +657,7 @@ impl DocumentRuntime {
     }
 
     pub(super) fn push_ready_connected_style_load(&mut self, ready: ReadyConnectedStyleLoad) {
-        let producer = self
-            .stylesheet_lifecycle
-            .task_producer
-            .as_ref()
-            .expect("a live Document must bind its stylesheet Page task producer");
+        let producer = self.connected_style_task_producer(ready.document_owner());
         let sent = producer.send_connected_style_event(ready);
         assert!(
             sent.is_ok(),
@@ -665,22 +665,36 @@ impl DocumentRuntime {
         );
     }
 
+    fn connected_style_task_producer(
+        &self,
+        owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    ) -> crate::page_task_queue::RendererPageStylesheetTaskProducer {
+        owner
+            .map(|owner| self.stylesheet_lifecycle.task_sender.bind_producer(owner))
+            .unwrap_or_else(|| {
+                self.stylesheet_lifecycle
+                    .task_producer
+                    .clone()
+                    .expect("a live Document must bind its stylesheet Page task producer")
+            })
+    }
+
     fn complete_immediate_owner_processing(
         &mut self,
         handle: DomHandle,
         element_kind: ConnectedStyleEventElementKind,
         successful: bool,
-        load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
+        event_admission: Option<ConnectedStyleLoadEventAdmission>,
     ) {
         self.stylesheet_lifecycle
             .owner_states
             .clear_async_operations(handle);
-        let operation = ConnectedLoadOperation::new_with_load_event_binding(
+        let operation = ConnectedLoadOperation::new_with_event_admission(
             handle,
             element_kind,
             ConnectedLoadParameters::ImmediateOwnerProcessing,
             None,
-            load_event_binding,
+            event_admission,
         );
         self.stylesheet_lifecycle
             .owner_states
@@ -1012,12 +1026,12 @@ impl DocumentRuntime {
                 result.push_runtime_warning(format!(
                     "<link rel=modulepreload> has an invalid `as` value {invalid_as}"
                 ));
-                let operation = ConnectedLoadOperation::new_with_load_event_binding(
+                let operation = ConnectedLoadOperation::new_with_event_admission(
                     handle,
                     element_kind,
                     ConnectedLoadParameters::ImmediateOwnerProcessing,
                     None,
-                    load_event_binding,
+                    event_admission,
                 );
                 self.stylesheet_lifecycle
                     .owner_states
@@ -1043,7 +1057,10 @@ impl DocumentRuntime {
                     .unwrap_or(RequestResourceType::CssStyleSheet);
                 let fetcher = self
                     .stylesheet_fetcher_for_owner(handle, host_ptr)
-                    .with_preload_metadata(request_resource_type, true);
+                    .with_preload_metadata(request_resource_type, true)
+                    .with_completion_producer(self.connected_style_task_producer(
+                        event_admission.map(ConnectedStyleLoadEventAdmission::document_owner),
+                    ));
                 let document_url = fetcher
                     .resource_loader()
                     .fetch_context()
@@ -1055,11 +1072,11 @@ impl DocumentRuntime {
                     request.url().clone(),
                     request.options().clone(),
                 );
-                let load = StylesheetLinkClient::new_preload_with_load_event_binding(
+                let load = StylesheetLinkClient::new_preload_with_event_admission(
                     handle,
                     request.url().clone(),
                     fetch,
-                    load_event_binding,
+                    event_admission,
                 );
                 self.install_stylesheet_link_state(
                     handle,
@@ -1113,12 +1130,12 @@ impl DocumentRuntime {
             if unchanged {
                 return result;
             }
-            let operation = ConnectedLoadOperation::new_with_load_event_binding(
+            let operation = ConnectedLoadOperation::new_with_event_admission(
                 handle,
                 element_kind,
                 parameters,
                 None,
-                load_event_binding,
+                event_admission,
             );
             self.stylesheet_lifecycle
                 .owner_states
@@ -1136,11 +1153,7 @@ impl DocumentRuntime {
                 ));
                 return result;
             }
-            let task_producer = self
-                .stylesheet_lifecycle
-                .task_producer
-                .clone()
-                .expect("connected stylesheet fetch requires a bound Page task producer");
+            let task_producer = self.connected_style_task_producer(operation.document_owner());
             let service_worker_context = if host_ptr.is_null() {
                 self.stylesheet_lifecycle
                     .service_worker_connected_link_context
@@ -1159,6 +1172,7 @@ impl DocumentRuntime {
             let start_unix_millis = moli_time::unix_epoch_millis();
             let resource_task_runner = resource_loader.task_runner();
             let request_origin = resource_loader.fetch_context().request_origin();
+            let document_owner = operation.document_owner();
             resource_loader.spawn_resource_task(async move {
                 let result = fetch_connected_link_readiness_with_service_worker(
                     loader,
@@ -1180,6 +1194,7 @@ impl DocumentRuntime {
                         resource_timing_initiator_type: preload_like_resource_initiator_type(
                             resource_type,
                         ),
+                        document_owner,
                         stylesheet_fetch: None,
                         blocking_operation: None,
                         source_operation: None,

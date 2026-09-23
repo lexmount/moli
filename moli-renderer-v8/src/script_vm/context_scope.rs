@@ -188,6 +188,19 @@ impl ScriptVm {
         })
     }
 
+    pub(super) fn with_frame_realm_document_scope<T>(
+        &mut self,
+        realm_id: FrameRealmId,
+        op: impl FnOnce(
+            &mut v8::PinScope<'_, '_>,
+            *mut PageScriptHost,
+            &mut DocumentRuntime,
+        ) -> Result<T>,
+    ) -> Result<T> {
+        let context_ptr = self.frame_realm_context_ptr(realm_id)?;
+        self.with_document_context_scope_by_ptr(context_ptr, op)
+    }
+
     /// Enters the exact main/child frame realm without declaring task completion.
     pub(super) fn with_frame_realm_scope<T>(
         &mut self,
