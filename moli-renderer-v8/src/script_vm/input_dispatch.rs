@@ -20,7 +20,7 @@ use crate::native_bridge::element::{
     TouchEventPoint, activate_default_submit_button_via_keyboard,
     activate_handle_after_pointer_release, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
-    construct_drag_event, construct_keyboard_event,
+    construct_beforeinput_event, construct_drag_event, construct_keyboard_event,
     construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
     construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
@@ -1965,7 +1965,7 @@ impl ScriptVm {
             let runtime = unsafe { &mut *runtime_ptr };
             let target = key_target_info(runtime, handle);
 
-            let is_enter_key = key_lower == "enter" || (should_insert_text && text.contains('\r'));
+            let is_enter_key = key_lower == "enter" || (should_insert_text && text == "\r");
             if is_enter_key {
                 let is_character_phase =
                     should_insert_text && matches!(event_name, "keydown" | "keypress");
@@ -1978,6 +1978,17 @@ impl ScriptVm {
                     )));
                 }
                 if input_blocks_implicit_submission(runtime, handle) && is_character_phase {
+                    // Enter's editing default action must remain cancelable before
+                    // activating a default submit button (and firing its click).
+                    let Some(before_input) = construct_beforeinput_event(scope, "insertLineBreak")
+                    else {
+                        return Ok(input_dispatch_outcome(false));
+                    };
+                    if !dispatch_public_event(scope, runtime_ptr, handle, before_input)
+                        .allows_default()
+                    {
+                        return Ok(input_dispatch_outcome(false));
+                    }
                     return Ok(perform_implicit_form_submission(
                         scope,
                         runtime_ptr,

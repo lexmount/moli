@@ -124,6 +124,15 @@ struct KeyboardEventInitDeclaration<'scope> {
     repeat: bool,
 }
 
+#[derive(WebApiObject)]
+#[webapi(plain, data_properties, enumerable)]
+struct InputEventInitDeclaration<'scope> {
+    bubbles: bool,
+    cancelable: bool,
+    composed: bool,
+    input_type: v8::Local<'scope, v8::String>,
+}
+
 fn keyboard_event_legacy_codes(event_type: &str, key: &str, code: &str) -> (u32, u32, u32) {
     let char_code = keyboard_event_char_code(event_type, key);
     let mut key_code = keyboard_event_key_code(key, code);
@@ -750,6 +759,17 @@ pub(crate) fn construct_focus_event<'s>(
     .bind(scope)
     .ok()?;
     construct_event(scope, "FocusEvent", event_type, init)
+}
+
+pub(crate) fn construct_beforeinput_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    input_type: &str,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let input_type = v8_string(scope, input_type)?;
+    let init = InputEventInitDeclaration::new(true, true, true, input_type)
+        .bind(scope)
+        .ok()?;
+    construct_event(scope, "InputEvent", "beforeinput", init)
 }
 
 pub(crate) fn construct_simple_event<'s>(

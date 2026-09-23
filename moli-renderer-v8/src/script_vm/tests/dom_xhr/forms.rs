@@ -5097,6 +5097,90 @@ query.focus();
 }
 
 #[test]
+fn enter_beforeinput_precedes_implicit_submission_and_can_cancel_it() {
+    for with_button in [false, true] {
+        for (event_name, key, code) in [
+            ("keydown", "Enter", "Enter"),
+            ("keypress", "Enter", "Enter"),
+            ("keypress", "", ""),
+        ] {
+            for cancel_beforeinput in [false, true] {
+                let mut vm = new_parsed_test_vm(
+                    "https://implicit-beforeinput.test/",
+                    r#"<html><body><form>
+                        <input id="query" name="q" value="moli">
+                        <button id="submitter" type="submit">Search</button>
+                    </form></body></html>"#,
+                );
+                vm.eval(&format!(
+                    r#"
+window.__events = [];
+window.__beforeInput = null;
+const query = document.getElementById('query');
+const submitter = document.getElementById('submitter');
+if (!{with_button}) submitter.remove();
+for (const type of ['keydown', 'keypress', 'keyup', 'input']) {{
+  query.addEventListener(type, () => __events.push(type));
+}}
+query.addEventListener('beforeinput', event => {{
+  __events.push('beforeinput');
+  __beforeInput = [event instanceof InputEvent, event.target === query,
+    event.inputType, event.data, event.bubbles, event.cancelable,
+    event.composed, event.isTrusted];
+  if ({cancel_beforeinput}) event.preventDefault();
+}});
+submitter.addEventListener('click', () => __events.push('click'));
+document.querySelector('form').addEventListener('submit', event => {{
+  __events.push('submit');
+  event.preventDefault();
+}});
+query.focus();
+"#
+                ))
+                .expect("implicit beforeinput fixture should initialize");
+
+                let outcome = vm
+                    .dispatch_key_event(event_name, key, code, "\r", 0, false, true)
+                    .expect("Enter character phase should dispatch");
+                vm.dispatch_key_event("keyup", "Enter", "Enter", "", 0, false, false)
+                    .expect("Enter keyup should dispatch");
+
+                let mut expected = Vec::new();
+                if event_name == "keydown" {
+                    expected.push("keydown");
+                }
+                expected.extend(["keypress", "beforeinput"]);
+                if !cancel_beforeinput {
+                    if with_button {
+                        expected.push("click");
+                    }
+                    expected.push("submit");
+                }
+                expected.push("keyup");
+                assert_eq!(
+                    vm.eval("__events.join('|')")
+                        .expect("implicit beforeinput event order should evaluate"),
+                    expected.join("|"),
+                    "with_button={with_button}, event_name={event_name}, key={key:?}, cancel_beforeinput={cancel_beforeinput}"
+                );
+                assert_eq!(
+                    vm.eval("JSON.stringify(__beforeInput)")
+                        .expect("Enter beforeinput properties should evaluate"),
+                    r#"[true,true,"insertLineBreak",null,true,true,true,true]"#
+                );
+                assert_eq!(
+                    vm.eval("query.value")
+                        .expect("input value should remain unchanged"),
+                    "moli"
+                );
+                assert!(!outcome.triggered_top_level_navigation);
+                assert!(vm.take_pending_location_navigation_with_seed().is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn canceled_raw_keydown_suppresses_only_its_following_implicit_submit_char_phase() {
     let mut vm = new_parsed_test_vm(
         "https://implicit-canceled-raw-keydown.test/",
@@ -5207,6 +5291,109 @@ editor.setSelectionRange(1, 1);
         "x\n|0"
     );
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
+}
+
+#[test]
+fn carriage_return_in_character_text_preserves_text_without_implicit_submission() {
+    for (control, expected_value) in [
+        (r#"<input id="editor">"#, "a b"),
+        (r#"<textarea id="editor"></textarea>"#, "a\nb"),
+    ] {
+        for (event_name, key, code) in [
+            ("keydown", "a", "KeyA"),
+            ("keydown", "", ""),
+            ("keypress", "a", ""),
+            ("keypress", "", ""),
+        ] {
+            for text in ["a\rb", "a\r\nb"] {
+                let mut vm = new_parsed_test_vm(
+                    "https://carriage-return-character-text.test/",
+                    &format!(
+                        r#"<html><body><form>{control}
+                            <button id="submitter" type="submit">Submit</button>
+                        </form></body></html>"#
+                    ),
+                );
+                vm.eval(
+                    r#"
+window.__events = [];
+const editor = document.getElementById('editor');
+for (const type of ['beforeinput', 'input']) {
+  editor.addEventListener(type, () => __events.push(type));
+}
+document.getElementById('submitter').addEventListener('click', () => __events.push('click'));
+document.querySelector('form').addEventListener('submit', event => {
+  __events.push('submit');
+  event.preventDefault();
+});
+editor.focus();
+"#,
+                )
+                .expect("carriage return text fixture should initialize");
+
+                let outcome = vm
+                    .dispatch_key_event(event_name, key, code, text, 0, false, true)
+                    .expect("character text should dispatch");
+
+                assert_eq!(
+                    vm.eval("editor.value")
+                        .expect("control value should evaluate"),
+                    expected_value,
+                    "control={control}, event_name={event_name}, key={key:?}, text={text:?}"
+                );
+                assert_eq!(
+                    vm.eval("__events.join('|')")
+                        .expect("text insertion events should evaluate"),
+                    "beforeinput|input"
+                );
+                assert!(!outcome.triggered_top_level_navigation);
+                assert!(vm.take_pending_location_navigation_with_seed().is_none());
+            }
+        }
+    }
+}
+
+#[test]
+fn standalone_carriage_return_character_preserves_enter_default_actions() {
+    for (control, expected_value, expected_submit_count) in [
+        (r#"<input id="editor">"#, "", 1),
+        (r#"<textarea id="editor"></textarea>"#, "\n", 0),
+    ] {
+        let mut vm = new_parsed_test_vm(
+            "https://standalone-carriage-return.test/",
+            &format!(r#"<html><body><form>{control}</form></body></html>"#),
+        );
+        vm.eval(
+            r#"
+window.__submitCount = 0;
+document.querySelector('form').addEventListener('submit', event => {
+  __submitCount++;
+  event.preventDefault();
+});
+document.getElementById('editor').focus();
+"#,
+        )
+        .expect("standalone carriage return fixture should initialize");
+
+        let outcome = vm
+            .dispatch_key_event("keypress", "", "", "\r", 0, false, true)
+            .expect("keyless Enter character phase should dispatch");
+
+        assert_eq!(
+            vm.eval("document.getElementById('editor').value")
+                .expect("control value should evaluate"),
+            expected_value,
+            "control={control}"
+        );
+        assert_eq!(
+            vm.eval("String(__submitCount)")
+                .expect("submit count should evaluate"),
+            expected_submit_count.to_string(),
+            "control={control}"
+        );
+        assert!(!outcome.triggered_top_level_navigation);
+        assert!(vm.take_pending_location_navigation_with_seed().is_none());
+    }
 }
 
 #[test]
