@@ -48,8 +48,8 @@ impl Asset {
     }
 }
 
-struct PreloadServer {
-    origin: String,
+pub(super) struct PreloadServer {
+    pub(super) origin: String,
     task: JoinHandle<()>,
 }
 
@@ -60,7 +60,7 @@ impl Drop for PreloadServer {
 }
 
 impl PreloadServer {
-    async fn spawn() -> Result<Self> {
+    pub(super) async fn spawn() -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let origin = format!("http://{}", listener.local_addr()?);
         let task = tokio::spawn(async move {
@@ -86,7 +86,7 @@ impl PreloadServer {
                             let mut cache = "no-store".to_owned();
                             let (mime, body) = match url.path() {
                                 "/probe-worker.js" => ("text/javascript", include_str!("../fixtures/preload-consumption-worker.js").to_owned()),
-                                "/probe-asset" => {
+                                "/probe-asset" | "/probe-font-final" => {
                                     asset.count.fetch_add(1, Ordering::AcqRel);
                                     asset.started.notify_waiters();
                                     asset.wait(true).await;
@@ -107,9 +107,21 @@ impl PreloadServer {
                                 }
                                 _ => ("text/html", "<!doctype html><body>preload consumption".to_owned()),
                             };
+                            let font = matches!(url.path(), "/probe-asset" | "/probe-font-final") && query.get("as").is_some_and(|kind| kind == "font");
+                            let body = if font {
+                                if query.contains_key("invalid") { b"\0\x01\0\0".to_vec() }
+                                else { include_bytes!("../../../moli-layout/tests/fixtures/moli-ahem.ttf").to_vec() }
+                            } else { body.into_bytes() };
+                            let mime = if font { "font/ttf" } else { mime };
+                            let status = query.get("status").map(String::as_str).unwrap_or("200");
+                            let location = query.get("redirect").map(|url| format!("Location: {url}\r\n")).unwrap_or_default();
                             let origin = request.lines().find_map(|line| line.split_once(':').filter(|(name,_)| name.eq_ignore_ascii_case("Origin")).map(|(_,value)| value.trim())).unwrap_or("*");
-                            let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nCache-Control: {cache}\r\nAccess-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Credentials: true\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+                            let cors = if query.get("cors").is_some_and(|value| value == "none") { String::new() }
+                                else { format!("Access-Control-Allow-Origin: {origin}\r\nAccess-Control-Allow-Credentials: true\r\n") };
+                            let policy = query.get("reportPolicy").map(|policy| format!("Content-Security-Policy-Report-Only: {policy}\r\n")).unwrap_or_default();
+                            let response = format!("HTTP/1.1 {status} OK\r\nContent-Type: {mime}\r\nCache-Control: {cache}\r\n{cors}{location}{policy}Content-Length: {}\r\nConnection: close\r\n\r\n", body.len());
                             let _ = stream.write_all(response.as_bytes()).await;
+                            let _ = stream.write_all(&body).await;
                         });
                     }
                     _ = connections.join_next(), if !connections.is_empty() => {}

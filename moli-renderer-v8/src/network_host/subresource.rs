@@ -223,7 +223,11 @@ impl SubresourceRequestDispatch {
         request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
         cancel_handle: FetchCancelHandle,
     ) {
-        let request = self.request;
+        let redirect_check = host.window_fetch_redirect_check(internal_id);
+        let request = match redirect_check.clone() {
+            Some(check) => self.request.with_redirect_check(check),
+            None => self.request,
+        };
         let request_url = request.url.clone();
         let request_method = request.method.clone();
         let request_headers = request.request_headers.clone();
@@ -241,7 +245,7 @@ impl SubresourceRequestDispatch {
                 .is_some()
         {
             let dispatch = ServiceWorkerFetchDispatch {
-                redirect_check: None,
+                redirect_check,
                 internal_id,
                 request: host.service_worker_fetch_request(
                     self.client_id,
