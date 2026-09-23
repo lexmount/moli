@@ -68,6 +68,7 @@ impl RendererPreparedNetworkResourceLoad {
                 cookie_set_reports: head.cookie_set_reports,
                 redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
                 from_cache: head.from_cache,
+                cache_state: head.cache_state,
                 negotiated_http_version: head.negotiated_http_version,
                 network_request_headers,
             },
@@ -90,6 +91,7 @@ pub struct RendererNetworkResourceLoadResponse {
     pub cookie_set_reports: Vec<StoredCookieSetReport>,
     pub redirect_chain: Vec<NavigationRedirect>,
     pub from_cache: bool,
+    pub cache_state: moli_fetch::ResponseCacheState,
     pub negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
     pub network_request_headers: Option<Vec<(String, String)>>,
 }
@@ -111,6 +113,7 @@ impl RendererNetworkResourceLoadResponse {
                 .map(Into::into)
                 .collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }

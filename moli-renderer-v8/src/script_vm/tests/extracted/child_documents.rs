@@ -655,6 +655,7 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
     })

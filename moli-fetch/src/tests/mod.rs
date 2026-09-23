@@ -74,6 +74,7 @@ fn sample_response_head() -> ResponseHead {
         redirected: false,
         redirect_chain: Vec::new(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     }
 }
@@ -4405,11 +4406,19 @@ fn network_metadata_keeps_raw_304_separate_from_merged_cached_response() {
         fetch_raw_with_network_metadata_for_test(&client, Request::get(&server.url()).unwrap())
             .unwrap();
     assert_eq!(first.response().status, 200);
+    assert_eq!(
+        first.response().cache_state,
+        crate::ResponseCacheState::None
+    );
     let second =
         fetch_raw_with_network_metadata_for_test(&client, Request::get(&server.url()).unwrap())
             .unwrap();
 
     assert_eq!(second.response().status, 200);
+    assert_eq!(
+        second.response().cache_state,
+        crate::ResponseCacheState::Validated
+    );
     assert_eq!(second.response().body_bytes(), b"cached");
     let exchange = second
         .observation_journal()
@@ -4812,6 +4821,9 @@ fn fetch_client_cache_updates_freshness_after_not_modified() {
     assert_eq!(first.body_text(), "hit-1");
     assert_eq!(second.body_text(), "hit-1");
     assert_eq!(third.body_text(), "hit-1");
+    assert_eq!(first.cache_state, crate::ResponseCacheState::None);
+    assert_eq!(second.cache_state, crate::ResponseCacheState::Validated);
+    assert_eq!(third.cache_state, crate::ResponseCacheState::Local);
     for response in [&first, &second, &third] {
         assert_eq!(response.status, 200);
         assert_eq!(
