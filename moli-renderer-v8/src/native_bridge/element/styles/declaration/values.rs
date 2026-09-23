@@ -12,8 +12,8 @@ use crate::{
         },
         document_runtime::DomHandle,
         native_bridge::element::geometry::{
-            ClientRect, observable_bounding_client_rect, observable_bounding_client_rects,
-            observable_used_grid_tracks,
+            ClientRect, observable_bounding_client_rects, observable_used_grid_tracks,
+            read_bounding_client_rect,
         },
         style_engine::{
             ComputedDisplayKind, ComputedRenderedStyleFacts, FullStyleWorldSnapshot, StyleViewport,
@@ -6206,7 +6206,7 @@ fn runtime_static_position_offset(
 }
 
 fn computed_style_geometry_rect(runtime: &JsContextHost, handle: DomHandle) -> Option<ClientRect> {
-    observable_bounding_client_rect(
+    read_bounding_client_rect(
         runtime,
         handle,
         moli_layout::LayoutFlushReason::SynchronousGeometry,

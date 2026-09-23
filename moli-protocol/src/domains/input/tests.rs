@@ -5,6 +5,7 @@ use moli_core::LayoutPolicy;
 
 mod element_click;
 mod keyboard_events;
+mod mouse_snapshot;
 
 const INPUT_HIT_X: u32 = 20;
 const INPUT_HIT_Y: u32 = 20;
@@ -171,6 +172,7 @@ async fn coordinate_mouse_commands_hit_test_real_layout_and_dispatch_dom_events(
                </body></html>"#,
     )
     .await;
+    assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
     let commands = [
         json!({
@@ -221,6 +223,7 @@ async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
                </body></html>"#,
             )
             .await;
+            assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
             ctx.enable_page_events_for_test(None);
 
             ctx.process_and_wait_for_response_async(json!({
@@ -270,6 +273,7 @@ async fn coordinate_mouse_release_acknowledges_real_link_navigation() {
 async fn completed_mouse_event_does_not_restore_replaced_page_state() {
     let mut ctx = TestContext::new();
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
+    assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
     let original_owner = ctx
         .conn
@@ -1488,13 +1492,14 @@ async fn dispatch_key_event_selects_and_replaces_contenteditable_text() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn coordinate_mouse_event_completes_through_pending_layout_dispatch() {
+async fn coordinate_mouse_event_completes_through_pending_renderer_dispatch() {
     let mut ctx = TestContext::new();
     with_loaded_document(
         &mut ctx,
         r#"<body style='margin:0'><button style='width:80px;height:80px' onclick="window.__clicked = true">go</button></body>"#,
     )
     .await;
+    assert!(evaluate_bool(&mut ctx, "document.elementFromPoint(0, 0) !== null").await);
 
     for (id, event_type, buttons) in [(4001, "mousePressed", 1), (4002, "mouseReleased", 0)] {
         let raw = json!({
@@ -1512,7 +1517,7 @@ async fn coordinate_mouse_event_completes_through_pending_layout_dispatch() {
         let pending = match ctx.conn.start_command_dispatch(&raw) {
             CdpCommandTaskStep::Pending(pending) => pending,
             CdpCommandTaskStep::Complete(_) => {
-                panic!("coordinate mouse dispatch should wait for renderer layout")
+                panic!("coordinate mouse dispatch should wait for the renderer")
             }
         };
         let outcome = ctx

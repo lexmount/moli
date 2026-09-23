@@ -146,6 +146,11 @@ impl DocumentLayoutState {
         self.mark_visual_state_dirty();
     }
 
+    pub(super) fn invalidate_latest_layout_for_demand(&mut self) {
+        self.latest_layout.invalidate_for_demand();
+        self.mark_visual_state_dirty();
+    }
+
     pub(super) fn frame_viewport(&self, frame: DomHandle) -> Option<LayoutViewport> {
         self.frame_viewports.get(&frame).copied()
     }

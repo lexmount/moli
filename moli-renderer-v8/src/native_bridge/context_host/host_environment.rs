@@ -1960,9 +1960,9 @@ impl JsContextHost {
                 old_state,
             );
         }
-        // Hover selectors may change box generation or geometry. The next hit
-        // test must observe that new tree instead of waiting for a paint pass
-        // to replace the latest owned layout snapshot.
+        // Hover changes the source style, not the published rendered world.
+        // Explicit geometry/paint demands may refresh it; subsequent pointer
+        // phases continue consuming the retained snapshot.
         self.invalidate_layout_after_interaction_state_change();
         true
     }

@@ -86,8 +86,8 @@ fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
             if native_sequence {
                 vm.dispatch_prepared_element_click(click).unwrap();
             } else {
-                // Compare to the existing independent pointer phases. Their hover
-                // transitions can invalidate layout; preparation must not add more.
+                // Both native sequences and individual mouse commands consume
+                // the prepared snapshot without adding a layout demand.
                 for (event, buttons) in [("mousemove", 0), ("mousedown", 1), ("mouseup", 0)] {
                     vm.dispatch_mouse_event_at_point_with_pointer(
                         click.root_x,
@@ -104,6 +104,10 @@ fn native_element_click_reuses_frozen_layout_after_dom_and_style_changes() {
                 }
             }
             let passes = vm.layout_pass_observability_for_test().1 - before;
+            assert_eq!(
+                passes, 1,
+                "the entire mouse sequence must reuse one snapshot: {mutation}"
+            );
             let events = vm.eval("JSON.stringify([clicks,events])").unwrap();
             if let Some((existing_passes, existing_events)) = &reference {
                 assert!(passes <= *existing_passes, "extra layout for {mutation}");

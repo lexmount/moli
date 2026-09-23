@@ -35,12 +35,13 @@ impl InputModifiers {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CurrentInputEventKind {
     MouseUp { button: i32 },
+    Mouse,
     EnterKey,
     Other,
 }
 
-/// The navigation-relevant subset of the real platform input currently being
-/// handled. DOM events are deliberately not stored here: synthetic events may
+/// The native default-action context of the real platform input currently
+/// being handled. DOM events are deliberately not stored here: synthetic events may
 /// describe modifiers, but cannot manufacture the corresponding user intent.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct CurrentInputEvent {
@@ -54,10 +55,17 @@ impl CurrentInputEvent {
             kind: if event_name == "mouseup" {
                 CurrentInputEventKind::MouseUp { button }
             } else {
-                CurrentInputEventKind::Other
+                CurrentInputEventKind::Mouse
             },
             modifiers: InputModifiers::from_bits(modifiers),
         }
+    }
+
+    pub(crate) fn is_mouse(self) -> bool {
+        matches!(
+            self.kind,
+            CurrentInputEventKind::Mouse | CurrentInputEventKind::MouseUp { .. }
+        )
     }
 
     pub(crate) fn keyboard(key: &str, modifiers: u8) -> Self {
@@ -75,7 +83,9 @@ impl CurrentInputEvent {
         let button = match self.kind {
             CurrentInputEventKind::MouseUp { button } => button,
             CurrentInputEventKind::EnterKey => 0,
-            CurrentInputEventKind::Other => return InputNavigationPolicy::Current,
+            CurrentInputEventKind::Mouse | CurrentInputEventKind::Other => {
+                return InputNavigationPolicy::Current;
+            }
         };
         navigation_policy_from_modifiers(button, self.modifiers)
     }

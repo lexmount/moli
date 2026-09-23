@@ -5069,6 +5069,9 @@ fn mouse_dragstart_bubbles_to_window_once() {
     )
     .expect("dragstart listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
@@ -5114,6 +5117,9 @@ fn mouse_drop_requires_prevented_dragover() {
 "#,
     )
     .expect("drag listener setup should evaluate");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("first mousedown should dispatch");
@@ -5182,6 +5188,9 @@ fn mouse_dragstart_prevent_default_cancels_drag_session() {
     )
     .expect("drag cancel listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousemove", 0, Some(1), 0.0, 0.0)
@@ -5230,6 +5239,9 @@ fn mouse_dispatch_emits_pointer_event_properties() {
 "#,
     )
     .expect("pointer listener setup should evaluate");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer(
         20.0,
@@ -5305,6 +5317,9 @@ fn canceled_pointerdown_suppresses_compat_mouse_events_but_keeps_click() {
     )
     .expect("compat suppression listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch pointerdown");
     vm.dispatch_mouse_event_at_point(20.0, 20.0, "mouseup", 0, None, 0.0, 0.0)
@@ -5352,6 +5367,9 @@ fn pointer_capture_routes_mouse_pointer_until_pointerup() {
     )
     .expect("pointer capture listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch pointerdown");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mousemove", -1, None, 0.0, 0.0)
@@ -5392,6 +5410,9 @@ fn pointer_capture_lost_dispatches_before_compat_mouseup() {
     )
     .expect("pointer capture mouseup order listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch pointerdown");
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mouseup", 0, None, 0.0, 0.0)
@@ -5429,6 +5450,9 @@ fn pointer_capture_mouse_events_preserve_modifiers() {
 "#,
     )
     .expect("pointer capture modifier listener setup should evaluate");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point_with_pointer_and_modifiers(
         10.0,
@@ -5623,6 +5647,9 @@ fn pointer_raw_update_dispatches_after_pointer_boundary_before_mouse_boundary() 
     )
     .expect("pointer raw update listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousemove", -1, None, 0.0, 0.0)
         .expect("initial mousemove should establish previous hover target");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mousemove", -1, None, 0.0, 0.0)
@@ -5673,6 +5700,9 @@ fn pointer_raw_update_flushes_capture_before_pointermove() {
 "#,
     )
     .expect("pointer raw update capture listener setup should evaluate");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should set pending capture");
@@ -5729,6 +5759,9 @@ fn release_pointer_capture_clears_pending_capture_before_got_event() {
     )
     .expect("release capture listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should dispatch pointerdown");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mousemove", -1, None, 0.0, 0.0)
@@ -5784,6 +5817,9 @@ fn removing_got_pointer_capture_target_dispatches_lost_on_document() {
     )
     .expect("capture removal listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should set pending pointer capture");
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mouseup", 0, None, 0.0, 0.0)
@@ -5837,6 +5873,9 @@ fn lost_pointer_capture_can_remove_pending_target_before_got() {
     )
     .expect("pending capture removal listener setup should evaluate");
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should set first pending capture");
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousemove", -1, None, 0.0, 0.0)
@@ -5886,6 +5925,9 @@ fn removed_pending_pointer_capture_target_is_cleared_immediately() {
 "#,
     )
     .expect("pending capture hook listener setup should evaluate");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should set then clear pending pointer capture");
@@ -5937,6 +5979,9 @@ fn removed_active_pointer_capture_target_loses_capture_on_next_event() {
 "#,
     )
     .expect("active capture hook listener setup should evaluate");
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
 
     vm.dispatch_mouse_event_at_point(10.0, 11.0, "mousedown", 0, None, 0.0, 0.0)
         .expect("mousedown should set pending pointer capture");
@@ -5995,6 +6040,9 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
         tilt_y: 0.0,
         twist: 0.0,
     };
+
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
     vm.dispatch_mouse_event_at_point_with_pointer(
         10.0,
         10.0,
@@ -6030,7 +6078,7 @@ fn mouse_hover_dispatches_pointer_boundary_before_mouse_boundary() {
 }
 
 #[test]
-fn mouse_hover_persists_stylo_state_and_reflows_dropdown_before_next_hit_test() {
+fn mouse_hover_persists_stylo_state_and_reflows_dropdown_on_geometry_demand() {
     let mut vm = new_parsed_test_vm(
         "https://hover-dropdown.test/",
         r#"
@@ -6091,6 +6139,9 @@ fn mouse_hover_persists_stylo_state_and_reflows_dropdown_before_next_hit_test() 
         "false|none"
     );
 
+    vm.eval("document.elementFromPoint(0, 0)")
+        .expect("publish geometry before coordinate input");
+
     vm.dispatch_mouse_event_at_point(10.0, 10.0, "mousemove", -1, Some(0), 0.0, 0.0)
         .expect("mousemove should establish hover state");
     assert_eq!(
@@ -6099,6 +6150,8 @@ fn mouse_hover_persists_stylo_state_and_reflows_dropdown_before_next_hit_test() 
         "true|true|true|true|block"
     );
 
+    vm.eval("document.getElementById('submenu').getBoundingClientRect()")
+        .expect("explicit geometry demand publishes the displayed submenu");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mousedown", 0, Some(1), 0.0, 0.0)
         .expect("mousedown should hit the newly displayed submenu");
     vm.dispatch_mouse_event_at_point(10.0, 35.0, "mouseup", 0, Some(0), 0.0, 0.0)

@@ -392,13 +392,13 @@ pub use geometry::ClientRect;
 #[cfg(test)]
 pub(crate) use geometry::observable_scrollbar_hit_test;
 pub(crate) use geometry::{
-    apply_scroll_observable_effects, observable_bounding_client_rect, observable_caret_position,
+    InputSurfaceHit, apply_scroll_observable_effects, observable_caret_position,
     observable_deep_hit_test, observable_event_offset, observable_geometry_batch,
     observable_hit_test, observable_hit_test_all, observable_input_hit_test,
-    observable_input_surface_hit_test, observable_scroll_adjusted_client_rect,
-    observable_sources_with_fragments, perform_scrollbar_scroll_default_action,
-    perform_wheel_scroll_default_action, queue_scroll_observable_effects,
-    scroll_node_into_view_at_center, scroll_node_into_view_at_start,
+    observable_scroll_adjusted_client_rect, observable_sources_with_fragments,
+    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    queue_scroll_observable_effects, scroll_node_into_view_at_center,
+    scroll_node_into_view_at_start, snapshot_input_surface_hit_test,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,
@@ -7562,4 +7562,4 @@ pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_ha
         .and_then(|candidate| runtime.dom_host().resolve_reference_target_chain(candidate))
 }
 
-pub(crate) use geometry::observable_client_rects;
+pub(crate) use geometry::read_client_rects;

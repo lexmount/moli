@@ -25,12 +25,12 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
     contenteditable_editing_host, dispatch_public_event, is_text_control,
-    observable_input_hit_test, observable_input_surface_hit_test,
-    perform_auxiliary_link_default_action, perform_drop_default_action,
+    observable_input_hit_test, perform_auxiliary_link_default_action, perform_drop_default_action,
     perform_implicit_submission_from_control, perform_mouse_focus_default_action,
     perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
     replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    select_contenteditable_contents, snapshot_input_surface_hit_test,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -378,6 +378,7 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
     ) -> Result<RendererInputDispatchOutcome> {
+        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
         let _current_input_event = CurrentInputEventScope::enter(
             Rc::clone(&self._context_host),
@@ -388,6 +389,7 @@ impl ScriptVm {
             y,
             event_name,
             prepared,
+            surface_hit,
             click_count,
             delta_x,
             delta_y,
@@ -447,6 +449,7 @@ impl ScriptVm {
         pointer: RendererPointerEventProperties,
         modifiers: u8,
     ) -> Result<RendererInputDispatchOutcome> {
+        let surface_hit = self.mouse_input_surface_hit(x, y, event_name)?;
         let prepared = self.prepare_mouse_input_dispatch(event_name, button, buttons);
         let _current_input_event = CurrentInputEventScope::enter(
             Rc::clone(&self._context_host),
@@ -457,12 +460,28 @@ impl ScriptVm {
             y,
             event_name,
             prepared,
+            surface_hit,
             click_count,
             delta_x,
             delta_y,
             pointer,
             modifiers,
         )
+    }
+
+    pub(crate) fn mouse_input_surface_hit(
+        &self,
+        x: f64,
+        y: f64,
+        event_name: &str,
+    ) -> Result<crate::native_bridge::element::InputSurfaceHit> {
+        Ok(snapshot_input_surface_hit_test(
+            &self._context_host.borrow(),
+            self.document_runtime.document_handle(),
+            moli_layout::LayoutPoint::new(x as f32, y as f32),
+            false,
+            matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
+        )?)
     }
 
     fn prepare_mouse_input_dispatch(
@@ -531,6 +550,7 @@ impl ScriptVm {
         y: f64,
         event_name: &str,
         prepared: PreparedMouseInputDispatch,
+        surface_hit: crate::native_bridge::element::InputSurfaceHit,
         click_count: i32,
         delta_x: f64,
         delta_y: f64,
@@ -550,13 +570,6 @@ impl ScriptVm {
         }
 
         let root_point = moli_layout::LayoutPoint::new(x as f32, y as f32);
-        let surface_hit = observable_input_surface_hit_test(
-            &self._context_host.borrow(),
-            self.document_runtime.document_handle(),
-            root_point,
-            false,
-            matches!(event_name, "mousedown" | "mouseup" | "mousemove"),
-        )?;
         if let Some(control) = surface_hit.control {
             return match control {
                 moli_layout::LayoutControlSurfaceHit::Scrollbar(scrollbar) => {
@@ -1132,11 +1145,25 @@ impl ScriptVm {
 
     fn dispatch_native_scrollbar_hit(
         &mut self,
-        hit: moli_layout::LayoutScrollbarHit<DomHandle>,
+        mut hit: moli_layout::LayoutScrollbarHit<DomHandle>,
         event_name: &str,
         button: i32,
     ) -> Result<RendererInputDispatchOutcome> {
         if event_name == "mousedown" && button == 0 {
+            // Geometry and range come from the rendered snapshot. Apply each
+            // new scroll action to the live offset, even before the next paint.
+            if let Some(element) = self
+                ._context_host
+                .borrow()
+                .dom_host()
+                .node(hit.source)
+                .and_then(Node::as_element)
+            {
+                hit.scrollbar.current_offset = match hit.scrollbar.axis {
+                    moli_layout::LayoutScrollbarAxis::Horizontal => element.scroll_left() as f32,
+                    moli_layout::LayoutScrollbarAxis::Vertical => element.scroll_top() as f32,
+                };
+            }
             match hit.part {
                 moli_layout::LayoutScrollbarPart::Thumb => {
                     self.active_scrollbar_drag = Some(ActiveScrollbarDrag {

@@ -538,7 +538,7 @@ impl JsContextHost {
         self.clear_layout_rect_cache();
         self.document_layout_state
             .borrow_mut()
-            .clear_latest_layout();
+            .invalidate_latest_layout_for_demand();
     }
 
     pub(crate) fn document_web_font_resources_are_current(

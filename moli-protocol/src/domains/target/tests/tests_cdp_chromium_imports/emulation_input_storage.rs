@@ -457,6 +457,14 @@ async fn rust_cdp_capability_input_dispatch_mouse_event_uses_layout_hit_testing(
         "data:text/html,<button id='btn' onclick='window.__clicked = true' style='position:absolute;left:0;top:0;width:100px;height:100px'>go</button>".to_owned(),
     )
     .await;
+    let geometry = evaluate_return_by_value(
+        &mut ctx,
+        &attached.session_id,
+        120_004,
+        "document.elementFromPoint(0, 0) !== null",
+    )
+    .await;
+    assert_eq!(geometry["result"]["result"]["value"], true);
     for (offset, event_type, buttons) in [(0, "mousePressed", 1), (1, "mouseReleased", 0)] {
         ctx.process_async(json!({
             "id": 120_006 + offset,

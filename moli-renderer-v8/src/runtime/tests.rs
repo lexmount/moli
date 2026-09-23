@@ -1325,6 +1325,13 @@ async fn mouse_input_completion_preserves_standalone_and_child_navigation_scope(
             Some(serde_json::json!("target")),
             "{case}"
         );
+        page.run_async_command(RendererPageCommand::EvaluateExpression {
+            expression: "document.elementFromPoint(0, 0); true".to_owned(),
+            await_promise: false,
+        })
+        .await
+        .expect("publish root geometry before mouse input");
+
         output_rx.drain();
         let (reply, _) = page
             .run_async_command(RendererPageCommand::DispatchMouseEventAtPoint {
@@ -12461,6 +12468,13 @@ addEventListener("wheel", event => {
     .await
     .expect("capture barrier viewport should update");
 
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "document.elementFromPoint(0, 0); true".to_owned(),
+        await_promise: false,
+    })
+    .await
+    .expect("publish root geometry before mouse input");
+
     assert!(
         dispatch_wheel_for_action_window_test(&page, 10.0)
             .await
@@ -12540,6 +12554,13 @@ document.addEventListener("wheel", event => {
 </script>"#,
     )
     .await;
+
+    page.run_async_command(RendererPageCommand::EvaluateExpression {
+        expression: "document.elementFromPoint(0, 0); true".to_owned(),
+        await_promise: false,
+    })
+    .await
+    .expect("publish root geometry before mouse input");
 
     for delta_y in [10.0, 20.0, 30.0] {
         assert!(

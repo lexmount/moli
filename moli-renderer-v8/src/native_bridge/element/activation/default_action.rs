@@ -28,7 +28,7 @@ use super::super::{
     construct_input_event, construct_simple_event, contenteditable_editing_host,
     dispatch_beforeinput, dispatch_popover_toggle_events, dispatch_public_event, element_attribute,
     element_has_attribute, form_associated_form_owner, is_disabled_form_control, is_focusable,
-    is_valid_submit_button, label_activation_control_handle, observable_bounding_client_rect,
+    is_valid_submit_button, label_activation_control_handle,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
     replace_text_control_selection, resolve_url_like_attribute,
     resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
@@ -1701,10 +1701,10 @@ fn image_submitter_coordinate(
     client_x: f64,
     client_y: f64,
 ) -> Result<(u32, u32), moli_layout::LayoutError> {
-    let rect = observable_bounding_client_rect(
+    let rect = super::super::geometry::read_bounding_client_rect(
         runtime,
         handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
+        super::super::geometry::GeometryRead::for_default_action(runtime),
     )?;
     Ok((
         image_submitter_coordinate_component(client_x - rect.left, rect.width),

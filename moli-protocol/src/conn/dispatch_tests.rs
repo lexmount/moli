@@ -5416,6 +5416,28 @@ async fn devtools_command_dispatches_coordinate_mouse_input_for_target() {
     .await
     .expect("navigation should succeed");
 
+    execute_direct_devtools_command_through_renderer_fence_for_test(
+        &mut ctx,
+        DevToolsCommand::EvaluateScript(DevToolsEvaluateScriptCommand {
+            context: DevToolsCommandContext {
+                target_id: Some(target_id.clone()),
+                ..context.clone()
+            },
+            realm_id: None,
+            world_name: None,
+            expression: "document.elementFromPoint(0, 0); true".to_owned(),
+            await_promise: true,
+            user_gesture: false,
+            webdriver_bidi_file_prompt_handler: None,
+            result_ownership: DevToolsResultOwnership::None,
+            preserve_remote_metadata: false,
+            materialize_bidi_script_result: false,
+            serialization_options: None,
+        }),
+    )
+    .await
+    .expect("publish geometry before coordinate input");
+
     for (event_type, buttons) in [
         (DevToolsMouseEventType::Pressed, Some(1)),
         (DevToolsMouseEventType::Released, Some(0)),

@@ -2,7 +2,7 @@ use super::super::super::node::{
     node_runtime_and_handle_from_args_or_detached, require_element_method_receiver,
     throw_incompatible_method_receiver,
 };
-use super::{ClientRect, observable_bounding_client_rect, observable_client_rects};
+use super::{ClientRect, read_bounding_client_rect, read_client_rects};
 use crate::context_bootstrap::build_dom_rect_object;
 use crate::util::{serialize_v8_array, v8_string};
 
@@ -57,7 +57,7 @@ pub(in crate::native_bridge) fn node_get_bounding_client_rect_callback(
     ) {
         return;
     };
-    let rect = match observable_bounding_client_rect(
+    let rect = match read_bounding_client_rect(
         unsafe { &*runtime_ptr },
         handle,
         moli_layout::LayoutFlushReason::SynchronousGeometry,
@@ -89,7 +89,7 @@ pub(in crate::native_bridge) fn node_get_client_rects_callback(
     if !require_element_method_receiver(scope, unsafe { &*runtime_ptr }, handle, "getClientRects") {
         return;
     };
-    let rects = match observable_client_rects(
+    let rects = match read_client_rects(
         unsafe { &*runtime_ptr },
         handle,
         moli_layout::LayoutFlushReason::SynchronousGeometry,

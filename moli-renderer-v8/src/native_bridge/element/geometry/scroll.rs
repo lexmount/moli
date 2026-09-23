@@ -1,7 +1,7 @@
 use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
 
 use super::super::{queue_revealed_lazy_image_loads, queue_revealed_lazy_media_loads};
-use super::provider::{observable_element_metrics, observable_scroll_into_view_geometry};
+use super::provider::{GeometryRead, read_element_metrics, read_scroll_into_view_geometry};
 
 pub(super) fn node_scroll_position(runtime: &JsContextHost, handle: DomHandle) -> (f64, f64) {
     runtime
@@ -151,8 +151,8 @@ pub(crate) fn apply_scroll_observable_effects(
     }
     // Native lazy loading deliberately combines the retained pre-scroll
     // projection with live element offsets, so admit those requests before
-    // retiring the sampled projection. Observable geometry and author
-    // IntersectionObservers, on the other hand, must see a fresh projection.
+    // invalidating it for subsequent geometry demands. Coordinate input
+    // retains this projection until such a demand publishes a replacement.
     for effects in &effects {
         if let Some(document) = effects.document() {
             queue_revealed_lazy_image_loads(scope, runtime_ptr, document);
@@ -205,11 +205,8 @@ pub(crate) fn perform_wheel_scroll_default_action(
     let Some(target) = resolve_scroll_target(runtime, handle) else {
         return Ok(false);
     };
-    let Some(mut geometry) = observable_scroll_into_view_geometry(
-        runtime,
-        target,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )?
+    let Some(mut geometry) =
+        read_scroll_into_view_geometry(runtime, target, GeometryRead::Snapshot)?
     else {
         return Ok(false);
     };
@@ -217,11 +214,8 @@ pub(crate) fn perform_wheel_scroll_default_action(
     // ScrollIntoView geometry begins at the target's parent. Include the
     // target itself so an empty overflow scroller still responds when its own
     // background is the hit-test result.
-    if let Some(metrics) = observable_element_metrics(
-        runtime,
-        target,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    )? && metrics.is_scroll_container
+    if let Some(metrics) = read_element_metrics(runtime, target, GeometryRead::Snapshot)?
+        && metrics.is_scroll_container
         && geometry
             .scroll_containers
             .iter()
