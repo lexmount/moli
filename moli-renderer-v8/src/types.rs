@@ -673,6 +673,8 @@ pub(super) enum AsyncSubresourceFetchResult {
         encoded: moli_parkable_image::ParkableImage,
     },
     Failure(String),
+    /// The preload producer already reported this failed fetch.
+    PreloadFailure(String),
 }
 
 impl AsyncSubresourceFetchResult {
@@ -702,7 +704,7 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn into_result(self) -> std::result::Result<NavigationResponse, String> {
         match self {
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
+            Self::Failure(error) | Self::PreloadFailure(error) => Err(error),
         }
     }
 
@@ -710,7 +712,7 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn as_ref(&self) -> std::result::Result<&NavigationResponse, &String> {
         match self {
             Self::Response(response) | Self::Image { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
+            Self::Failure(error) | Self::PreloadFailure(error) => Err(error),
         }
     }
 
@@ -718,19 +720,19 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
         match self {
             Self::Image { encoded, .. } => Some(encoded),
-            Self::Response(_) | Self::Failure(_) => None,
+            Self::Response(_) | Self::Failure(_) | Self::PreloadFailure(_) => None,
         }
     }
 
     #[cfg(test)]
     pub(super) fn is_ok(&self) -> bool {
-        !matches!(self, Self::Failure(_))
+        !matches!(self, Self::Failure(_) | Self::PreloadFailure(_))
     }
 
     #[cfg(test)]
     pub(super) fn err(self) -> Option<String> {
         match self {
-            Self::Failure(error) => Some(error),
+            Self::Failure(error) | Self::PreloadFailure(error) => Some(error),
             Self::Response(_) | Self::Image { .. } => None,
         }
     }
@@ -739,14 +741,14 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn expect(self, message: &str) -> NavigationResponse {
         match self {
             Self::Response(response) | Self::Image { response, .. } => response,
-            Self::Failure(error) => panic!("{message}: {error:?}"),
+            Self::Failure(error) | Self::PreloadFailure(error) => panic!("{message}: {error:?}"),
         }
     }
 
     #[cfg(test)]
     pub(super) fn expect_err(self, message: &str) -> String {
         match self {
-            Self::Failure(error) => error,
+            Self::Failure(error) | Self::PreloadFailure(error) => error,
             Self::Response(response) | Self::Image { response, .. } => {
                 panic!("{message}: {response:?}")
             }
@@ -763,19 +765,7 @@ impl From<std::result::Result<NavigationResponse, String>> for AsyncSubresourceF
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum AsyncSubresourceFetchResponseFilter {
-    Basic,
-    Cors(Vec<String>),
-    Opaque,
-    OpaqueRedirect,
-}
-
-impl AsyncSubresourceFetchResponseFilter {
-    pub(super) fn is_readable(&self) -> bool {
-        matches!(self, Self::Basic | Self::Cors(_))
-    }
-}
+pub(super) use moli_fetch::FetchResponseFilter as AsyncSubresourceFetchResponseFilter;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SubresourcePolicyContext {

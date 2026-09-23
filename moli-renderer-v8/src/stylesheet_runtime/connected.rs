@@ -21,22 +21,29 @@ struct ConnectedLinkReadinessFetchResponse {
     response: crate::protocol_types::NavigationResponse,
     origin_clean: bool,
     load_event_successful: bool,
+    response_filter: Option<AsyncSubresourceFetchResponseFilter>,
+    integrity_matches: bool,
+    from_service_worker: bool,
 }
 
 impl ConnectedLinkReadinessFetchResponse {
     fn from_response(
         response: crate::protocol_types::NavigationResponse,
-        origin_clean: bool,
+        response_filter: Option<AsyncSubresourceFetchResponseFilter>,
         load_event_successful: bool,
         integrity: Option<&str>,
+        from_service_worker: bool,
     ) -> Self {
         // Hash the original body, including binary responses. A matching digest
         // must not make an opaque response eligible, including SW responses to
         // an otherwise same-origin request.
         // Retain the network response even on integrity failure: its downloaded
         // bytes still contribute to the preload's Resource Timing entry.
-        let load_event_successful = load_event_successful
-            && crate::subresource_integrity::response_matches_subresource_integrity_metadata(
+        let origin_clean = response_filter
+            .as_ref()
+            .is_none_or(|filter| filter.is_readable());
+        let integrity_matches =
+            crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                 response.body_bytes(),
                 integrity,
                 origin_clean,
@@ -44,8 +51,24 @@ impl ConnectedLinkReadinessFetchResponse {
         Self {
             response,
             origin_clean,
-            load_event_successful,
+            load_event_successful: load_event_successful && integrity_matches,
+            response_filter,
+            integrity_matches,
+            from_service_worker,
         }
+    }
+
+    fn preload_response(
+        &self,
+    ) -> Result<crate::network::preloads::DocumentPreloadResponse, String> {
+        if !self.integrity_matches {
+            return Err("preload response failed its integrity check".to_owned());
+        }
+        Ok(crate::network::preloads::DocumentPreloadResponse {
+            response: self.response.clone(),
+            from_service_worker: self.from_service_worker,
+            response_filter: self.response_filter.clone(),
+        })
     }
 }
 
@@ -1179,6 +1202,18 @@ impl DocumentRuntime {
             let start_unix_millis = moli_time::unix_epoch_millis();
             let resource_task_runner = resource_loader.task_runner();
             let request_origin = resource_loader.fetch_context().request_origin();
+            let preload = fetch_options
+                .link_preload
+                .then(|| {
+                    let request = connected_link_readiness_request(
+                        &document_url,
+                        &request_origin,
+                        &url,
+                        &fetch_options,
+                    );
+                    loader.register_document_preload(&request)
+                })
+                .flatten();
             let document_owner = operation.document_owner();
             resource_loader.spawn_resource_task(async move {
                 let result = fetch_connected_link_readiness_with_service_worker(
@@ -1191,6 +1226,13 @@ impl DocumentRuntime {
                     service_worker_context,
                 )
                 .await;
+                let preload = preload.map(|producer| {
+                    let response = result
+                        .as_ref()
+                        .map_err(Clone::clone)
+                        .and_then(ConnectedLinkReadinessFetchResponse::preload_response);
+                    (producer, response)
+                });
                 let completion = ConnectedLoadCompletion {
                     operation,
                     successful: result
@@ -1212,6 +1254,9 @@ impl DocumentRuntime {
                     }],
                 };
                 let _ = task_producer.send_connected_completion(completion);
+                if let Some((producer, response)) = preload {
+                    producer.complete(response);
+                }
             });
             return result;
         }
@@ -2302,19 +2347,16 @@ async fn fetch_connected_link_readiness_with_service_worker(
             .await
         {
             Ok(Some(response)) => {
-                let origin_clean = response
-                    .response_filter
-                    .as_ref()
-                    .is_none_or(|filter| filter.is_readable());
                 let load_event_successful = connected_link_load_event_successful(
                     &response.response,
-                    response.response_filter,
+                    response.response_filter.clone(),
                 );
                 return Ok(ConnectedLinkReadinessFetchResponse::from_response(
                     *response.response,
-                    origin_clean,
+                    response.response_filter,
                     load_event_successful,
                     integrity,
+                    !response.from_network_fallback,
                 ));
             }
             Ok(None) => {}
@@ -2330,18 +2372,18 @@ async fn fetch_connected_link_readiness_with_service_worker(
         .await
         .map(|response| {
             let load_event_successful = connected_link_load_event_successful(&response, None);
-            let origin_clean = crate::network_host::network_response_filter(
+            let response_filter = crate::network_host::network_response_filter(
                 &request_origin,
                 &response.head(),
                 request_mode,
                 moli_fetch::RequestRedirectMode::Follow,
-            )
-            .is_none_or(|filter| filter.is_readable());
+            );
             ConnectedLinkReadinessFetchResponse::from_response(
                 response,
-                origin_clean,
+                response_filter,
                 load_event_successful,
                 integrity,
+                false,
             )
         })
 }

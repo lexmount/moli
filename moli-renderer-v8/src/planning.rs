@@ -352,11 +352,13 @@ pub(crate) async fn load_prepared_script_source_outcome_with_document_character_
                     )
                 }
                 Err(error) => {
+                    let consumed_preload =
+                        error.is::<crate::network::preloads::ConsumedPreloadError>();
                     let error = format!("failed to fetch script `{}`: {error}", script.url);
                     PreparedScriptSourceLoadOutcome {
                         source_result: Err(error.clone()),
                         source_bytes: None,
-                        network_result: Some(Arc::new(Err(error))),
+                        network_result: (!consumed_preload).then(|| Arc::new(Err(error))),
                         muted_errors: false,
                     }
                 }
@@ -450,11 +452,12 @@ pub(crate) async fn load_service_worker_aware_external_script_source_outcome(
             .await
         }
         Err(error) => {
+            let consumed_preload = error.is::<crate::network::preloads::ConsumedPreloadError>();
             let message = format!("failed to fetch script `{}`: {error}", script.url);
             PreparedScriptSourceLoadOutcome {
                 source_result: Err(message.clone()),
                 source_bytes: None,
-                network_result: Some(Arc::new(Err(message))),
+                network_result: (!consumed_preload).then(|| Arc::new(Err(message))),
                 muted_errors: false,
             }
         }

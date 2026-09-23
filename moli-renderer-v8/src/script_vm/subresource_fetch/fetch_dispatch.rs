@@ -411,12 +411,21 @@ impl ScriptVm {
         network_error_text: Option<String>,
         completion_result: AsyncSubresourceFetchResult,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
+        let consumed_preload = match &completion_result {
+            AsyncSubresourceFetchResult::PreloadFailure(_) => true,
+            AsyncSubresourceFetchResult::Response(response)
+            | AsyncSubresourceFetchResult::Image { response, .. } => {
+                response.preload_state.is_consumed()
+            }
+            AsyncSubresourceFetchResult::Failure(_) => false,
+        };
         let (supplied_parkable_image, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error)
+            | AsyncSubresourceFetchResult::PreloadFailure(error) => (None, Err(error)),
         };
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
         let trace_fields = async_subresource_trace_fields_for_pending(
@@ -889,7 +898,7 @@ impl ScriptVm {
                             sequence,
                             pending.info.internal_id,
                             &pending.info.url,
-                            ImageSubresourceTerminal::Failure,
+                            if consumed_preload { ImageSubresourceTerminal::PreloadFailure } else { ImageSubresourceTerminal::Failure },
                         ),
                         PendingSubresourceContinuation::Media {
                             media_handle,

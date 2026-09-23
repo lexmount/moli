@@ -326,6 +326,7 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
     })
