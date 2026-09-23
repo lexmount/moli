@@ -1255,7 +1255,7 @@ impl JsContextHost {
     pub(crate) fn record_async_font_face_fetch(
         &mut self,
         context: v8::Global<v8::Context>,
-        face: v8::Global<v8::Object>,
+        font: crate::types::PendingFontFaceFetch,
         owner: OwnerDispatchScope,
         cancel_handle: moli_fetch::FetchCancelHandle,
         network_partition_key: Option<String>,
@@ -1285,10 +1285,11 @@ impl JsContextHost {
                 request_mode: moli_fetch::RequestMode::Cors,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::FontFace(face),
+                continuation: PendingSubresourceContinuation::FontFace(Box::new(font)),
                 request_origin,
                 redirect_headers: None,
                 deferred_request_started: false,
+                blob_url_entry: None,
             },
         );
         self.note_subresource_activity();
@@ -1660,14 +1661,25 @@ impl JsContextHost {
                     .get(&internal_id)
                     .map(|state| &state.pending)
             })?;
-        let fetch = pending.continuation.window_fetch()?;
-        if !fetch.connect_policy().has_policies() {
+        let (policy, redirect_state, report_context) =
+            if let Some(fetch) = pending.continuation.window_fetch() {
+                (
+                    fetch.connect_policy(),
+                    fetch.redirect_csp_state(),
+                    fetch.csp_report_context(),
+                )
+            } else if let PendingSubresourceContinuation::FontFace(font) = &pending.continuation {
+                (&font.policy, &font.redirect_state, &font.report_context)
+            } else {
+                return None;
+            };
+        if !policy.has_policies() {
             return None;
         }
-        let report_context = fetch.csp_report_context().clone();
+        let report_context = report_context.clone();
         let completion_tx = self.resource_completion_sender();
-        fetch.redirect_csp_state().redirect_check(
-            fetch.connect_policy().clone(),
+        redirect_state.redirect_check(
+            policy.clone(),
             pending.info.document_url.clone(),
             pending.info.url.clone(),
             move |violation| {
