@@ -256,6 +256,17 @@ impl RendererBrowserContextRuntime {
         destination: ServiceWorkerRequestDestination,
         resource_type: SubresourceResourceType,
     ) -> Result<Option<ServiceWorkerDirectFetchResponse>> {
+        if let Some(preload) = request_client.consume_document_preload(request) {
+            let preload = preload
+                .response()
+                .await
+                .map_err(crate::network::preloads::ConsumedPreloadError)?;
+            return Ok(Some(ServiceWorkerDirectFetchResponse {
+                response: Box::new(preload.response),
+                response_filter: preload.response_filter,
+                from_network_fallback: !preload.from_service_worker,
+            }));
+        }
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(None);
         }

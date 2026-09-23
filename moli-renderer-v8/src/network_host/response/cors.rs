@@ -628,6 +628,7 @@ mod tests {
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         }
     }
@@ -661,6 +662,7 @@ mod tests {
                 }],
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             };
             let document_url = url("https://document.test/page.html");

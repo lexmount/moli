@@ -24,6 +24,9 @@ impl FetchResponseRequest<'_> {
         head: &moli_fetch::ResponseHead,
         credentials_mode: moli_fetch::RequestCredentialsMode,
     ) -> crate::types::AsyncSubresourceFetchResponseFilter {
+        if let Some(filter) = head.preload_state.response_filter() {
+            return filter.clone();
+        }
         use crate::types::AsyncSubresourceFetchResponseFilter as Filter;
         let filter = response_filter(request_origin, head, self);
         match compute_fetch_response_type(request_origin, head, filter) {
@@ -122,6 +125,10 @@ pub(crate) fn network_response_filter(
 ) -> Option<crate::types::AsyncSubresourceFetchResponseFilter> {
     let request_origin = request_origin.into();
     use crate::types::AsyncSubresourceFetchResponseFilter;
+
+    if let Some(filter) = head.preload_state.response_filter() {
+        return Some(filter.clone());
+    }
 
     if redirect_mode == RequestRedirectMode::Manual && is_redirect_status(head.status) {
         Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)

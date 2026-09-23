@@ -2627,6 +2627,7 @@ pub(in crate::worker) fn worker_response_from_body(
         redirect_chain: Vec::new(),
         from_cache: false,
         cache_state: Default::default(),
+        preload_state: Default::default(),
         negotiated_http_version: None,
     })
 }
@@ -3042,6 +3043,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         response_body,
                         response_from_cache: response_head.from_cache,
                         response_cache_state: response_head.cache_state,
+                        response_preload_state: response_head.preload_state.clone(),
                     })
                 } else {
                     None
@@ -3077,6 +3079,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         response_body: response_body.clone(),
                         from_cache: response_head.from_cache,
                         cache_state: response_head.cache_state,
+                        preload_state: response_head.preload_state.clone(),
                     };
                     pending.paused_response = Some(PausedWorkerSubresourceResponse {
                         response_filter: completion.response_filter.clone(),
