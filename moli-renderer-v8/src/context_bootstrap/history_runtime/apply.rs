@@ -108,15 +108,18 @@ pub(in crate::context_bootstrap) fn commit_prepared_history_entry<'s>(
         applied.owner,
         &applied.url,
         protocol_navigation_type.unwrap_or("fragment"),
-        protocol_navigation_type.is_some() && applied.previous_history_index != applied.history_index,
+        protocol_navigation_type.is_some()
+            && applied.previous_history_index != applied.history_index,
     );
     applied
 }
 
 pub(in crate::context_bootstrap) fn finish_history_entry_commit<'s>(
-    scope: &mut v8::PinScope<'s, '_>, applied: &AppliedHistoryEntry<'s>,
+    scope: &mut v8::PinScope<'s, '_>,
+    applied: &AppliedHistoryEntry<'s>,
 ) {
-    let key = super::super::session_history::entry_reference(scope, applied.entry).map(|entry| entry.key);
+    let key =
+        super::super::session_history::entry_reference(scope, applied.entry).map(|entry| entry.key);
     super::super::session_history_traversal::finish_entry(scope, applied.owner, key.as_ref());
 }
 

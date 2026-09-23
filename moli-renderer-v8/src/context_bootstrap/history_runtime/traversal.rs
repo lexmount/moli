@@ -192,7 +192,9 @@ pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
     outcome: &NavigationDispatchOutcome<'s>,
     finished_resolvers: v8::Local<'s, v8::Array>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    if !outcome.intercepted { return None; }
+    if !outcome.intercepted {
+        return None;
+    }
     let navigation = window_navigation_for_holder(scope, applied.owner)?;
     let transition_resolver = outcome
         .precommit_event
@@ -258,8 +260,13 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         return;
     };
     let (error, result) = if outcome.intercepted {
-        outcome.precommit_event.map_or((outcome.intercept_error, outcome.intercept_result), |event| run_navigation_precommit_deferred_handlers(scope, event))
-    } else { (None, None) };
+        outcome.precommit_event.map_or(
+            (outcome.intercept_error, outcome.intercept_result),
+            |event| run_navigation_precommit_deferred_handlers(scope, event),
+        )
+    } else {
+        (None, None)
+    };
     suppress_intercept_result_unhandled_rejection(scope, result);
     dispatch_history_entry_post_commit_events(scope, applied, true);
     let Some(data) = settlement else {

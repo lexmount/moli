@@ -124,14 +124,23 @@ pub(super) fn restore<'s>(
     {
         if seed.session_history.admitted_entry.is_none()
             && let Some(plan) = plan_traversal(scope, owner, step)
-            && let Some(delta) = commit_traversal(scope, owner, &plan).filter(|delta| *delta != 0) {
+            && let Some(delta) = commit_traversal(scope, owner, &plan).filter(|delta| *delta != 0)
+        {
             publish(
                 scope,
                 owner,
                 moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
             );
         }
-        super::session_history_traversal::finish_entry(scope, owner, Some(&entry.key));
+        // Document ownership can commit before a preserved Window installs its
+        // new history view. Release the barrier only once that view is current.
+        if super::navigation_entry::navigation_current_entry(scope, owner)
+            .and_then(|entry| entry_reference(scope, entry))
+            .as_ref()
+            == Some(&entry)
+        {
+            super::session_history_traversal::finish_entry(scope, owner, Some(&entry.key));
+        }
         let root = binding.popup.map_or(
             OwnerDispatchScope::Top,
             OwnerDispatchScope::LightweightPopup,
@@ -521,7 +530,8 @@ pub(super) fn traversal_is_allowed<'s>(
         OwnerDispatchScope::Top,
         OwnerDispatchScope::LightweightPopup,
     );
-    match plan_traversal(scope, owner, step).and_then(|plan| project_traversal(scope, owner, &plan)) {
+    match plan_traversal(scope, owner, step).and_then(|plan| project_traversal(scope, owner, &plan))
+    {
         Some(targets) => targets.iter().all(|target| {
             host.sandbox_allows_history_traversal(
                 source,
