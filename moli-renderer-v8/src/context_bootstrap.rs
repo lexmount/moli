@@ -185,6 +185,7 @@ pub(crate) use navigation_result::{
 pub(crate) use navigation_traversal_coordinator::abort_history_traversal_admissions;
 pub(crate) use navigation_traversal_execution::{
     apply_authorized_history_traversal_task, reject_canceled_history_traversal_results,
+    resume_pending_history_traversals,
 };
 pub(crate) use performance_runtime::PERFORMANCE_TIME_ORIGIN_SLOT;
 pub(crate) use performance_runtime::performance_slot_number;

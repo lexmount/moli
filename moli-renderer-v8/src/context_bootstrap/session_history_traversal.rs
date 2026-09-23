@@ -3,7 +3,9 @@
 use super::history_runtime::{
     apply_pending_history_traversal, history_traversal_target_window, route_history_traversal_task,
 };
-use super::navigation_entry::{history_entries, history_index};
+use super::navigation_entry::{
+    history_entries, history_index, navigation_current_entry, navigation_entry_key_value,
+};
 use super::navigation_events::dispatch_navigation_entry_dispose;
 use super::navigation_seed::history_entry_seed_for_traversal;
 use super::navigation_traversal_execution::{
@@ -29,6 +31,22 @@ pub(super) fn apply_entry(
         reject_canceled_history_traversal_results(scope, &traversal.results);
         return;
     };
+    // An earlier traversal may have committed this entry after the API call
+    // selected it. This queued method never starts a navigation of its own.
+    if !traversal.results.is_empty()
+        && let Some(key) = traversal.target_key.as_deref()
+        && navigation_current_entry(scope, owner)
+            .and_then(|entry| navigation_entry_key_value(scope, entry))
+            .is_some_and(|current| current == key)
+    {
+        let error = super::navigation_result::navigation_dom_exception(
+            scope,
+            "The traversal target is already the active history entry",
+            "InvalidStateError",
+        );
+        super::history_runtime::reject_pending_navigation_results(scope, &traversal.results, error);
+        return;
+    }
     let step = traversal.joint_step.or_else(|| {
         let history = window_history_for_holder(scope, owner)?;
         let entries = history_entries(scope, history)?;

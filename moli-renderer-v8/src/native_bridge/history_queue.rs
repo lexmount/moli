@@ -163,35 +163,7 @@ impl HistoryQueueState {
         target_key: Option<String>,
         info: Option<v8::Global<v8::Value>>,
         result: Option<PendingNavigationResult>,
-    ) -> Option<RendererPageHistoryTraversalTaskId> {
-        // History API requests are ordered steps, including a same-document
-        // traversal followed by a cross-document traversal. Only Navigation
-        // API requests for the same destination key can share a pending task;
-        // a different destination must retain its own position in the queue.
-        if result.is_some()
-            && target_key.is_some()
-            && let Some(pending) =
-                self.pending_history_traversal_tasks
-                    .iter_mut()
-                    .find_map(|queued| match &mut queued.action {
-                        PendingHistoryTraversalAction::SameDocument(pending)
-                            if pending.target == target
-                                && pending.target_key == target_key
-                                && !pending.results.is_empty() =>
-                        {
-                            Some(pending)
-                        }
-                        PendingHistoryTraversalAction::ByDelta { .. }
-                        | PendingHistoryTraversalAction::SameDocument(_)
-                        | PendingHistoryTraversalAction::CrossDocument(_) => None,
-                    })
-        {
-            if let Some(result) = result {
-                pending.results.push(result);
-            }
-            return None;
-        }
-
+    ) -> RendererPageHistoryTraversalTaskId {
         let task_id = self.next_history_traversal_task_id;
         self.next_history_traversal_task_id = task_id
             .checked_next()
@@ -210,7 +182,7 @@ impl HistoryQueueState {
                     results: result.into_iter().collect(),
                 }),
             });
-        Some(task_id)
+        task_id
     }
 
     fn queue_cross_document_history_traversal(
@@ -524,6 +496,12 @@ impl JsContextHost {
                 self.history_queue
                     .pending_history_traversal_tasks
                     .iter()
+                    .chain(
+                        self.history_queue
+                            .deferred_traversals
+                            .iter()
+                            .map(|(_, queued)| queued),
+                    )
                     .find_map(|queued| {
                         let PendingHistoryTraversalAction::ByDelta { position, .. } =
                             &queued.action
@@ -544,11 +522,11 @@ impl JsContextHost {
         }
     }
 
-    pub(crate) fn defer_pending_history_traversal_task(
-        &mut self,
-        queued: QueuedHistoryTraversalTask,
-    ) -> Option<QueuedHistoryTraversalTask> {
-        let popup = match &queued.action {
+    pub(crate) fn history_traversal_popup(
+        &self,
+        action: &PendingHistoryTraversalAction,
+    ) -> Option<u64> {
+        match action {
             PendingHistoryTraversalAction::ByDelta { position, .. } => position.borrow().popup,
             PendingHistoryTraversalAction::SameDocument(traversal) => self
                 .session_histories
@@ -556,7 +534,49 @@ impl JsContextHost {
             PendingHistoryTraversalAction::CrossDocument(traversal) => self
                 .session_histories
                 .popup_for_owner(traversal.target.dispatch_scope()),
+        }
+    }
+
+    pub(crate) fn defer_queued_history_traversal_task(
+        &mut self,
+        task_id: RendererPageHistoryTraversalTaskId,
+    ) -> bool {
+        let Some(index) = self
+            .history_queue
+            .pending_history_traversal_tasks
+            .iter()
+            .position(|queued| queued.task_id == task_id)
+        else {
+            return false;
         };
+        let popup = self.history_traversal_popup(
+            &self.history_queue.pending_history_traversal_tasks[index].action,
+        );
+        let earlier_task = self
+            .history_queue
+            .pending_history_traversal_tasks
+            .iter()
+            .take(index)
+            .any(|queued| self.history_traversal_popup(&queued.action) == popup);
+        if !earlier_task && !self.session_histories.has_pending_traversal(popup) {
+            return false;
+        }
+        let queued = self
+            .history_queue
+            .pending_history_traversal_tasks
+            .remove(index)
+            .expect("queued traversal index was just located");
+        self.history_queue
+            .deferred_traversals
+            .push_back((popup, queued));
+        true
+    }
+
+    pub(crate) fn defer_pending_history_traversal_task(
+        &mut self,
+        queued: QueuedHistoryTraversalTask,
+    ) -> Option<QueuedHistoryTraversalTask> {
+        let popup = self.history_traversal_popup(&queued.action);
         if self.session_histories.has_pending_traversal(popup) {
             self.history_queue
                 .deferred_traversals
@@ -565,6 +585,28 @@ impl JsContextHost {
         } else {
             Some(queued)
         }
+    }
+
+    pub(crate) fn resume_pending_history_traversals(
+        &mut self,
+        popup: Option<u64>,
+    ) -> Vec<RendererPageHistoryTraversalProducer> {
+        if self.session_histories.has_pending_traversal(popup)
+            || self
+                .history_queue
+                .pending_history_traversal_tasks
+                .iter()
+                .any(|queued| self.history_traversal_popup(&queued.action) == popup)
+            || !self
+                .history_queue
+                .deferred_traversals
+                .iter()
+                .any(|(root, _)| *root == popup)
+        {
+            return Vec::new();
+        }
+        let step = self.session_histories.get_mut(popup).current_step();
+        self.finish_pending_history_traversal(popup, step)
     }
 
     pub(crate) fn finish_pending_history_traversal(
@@ -708,23 +750,30 @@ impl JsContextHost {
         Option<RendererPageHistoryTraversalProducer>,
     )> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
-        if target_key.is_some()
-            && let Some(result) = self
-                .history_queue
-                .pending_history_traversal_tasks
-                .iter()
-                .find_map(|queued| match &queued.action {
-                    PendingHistoryTraversalAction::SameDocument(pending)
-                        if pending.target == target && pending.target_key == target_key =>
-                    {
-                        pending.results.first()
-                    }
-                    PendingHistoryTraversalAction::SameDocument(_)
-                    | PendingHistoryTraversalAction::CrossDocument(_) => None,
-                })
+        if target_key.is_some() && let Some(pending) = self
+            .history_queue
+            .pending_history_traversal_tasks
+            .iter()
+            .chain(
+                self.history_queue
+                    .deferred_traversals
+                    .iter()
+                    .map(|(_, queued)| queued),
+            )
+            .find_map(|queued| match &queued.action {
+                PendingHistoryTraversalAction::SameDocument(pending)
+                    if pending.target == target
+                        && pending.target_key == target_key =>
+                {
+                    Some(pending)
+                }
+                _ => None,
+            })
+            && !pending.results.is_empty()
         {
-            // Repeated requests share the original tracker, including its
-            // destination and info, even if a History task also targets it.
+            // Upcoming calls for one key share the original method tracker,
+            // including its info, even while an earlier traversal blocks it.
+            let result = &pending.results[0];
             let committed_resolver = v8::Local::new(scope, &result.committed_resolver);
             let finished_resolver = v8::Local::new(scope, &result.finished_resolver);
             return Some((
@@ -759,15 +808,13 @@ impl JsContextHost {
                 finished_resolver: v8::Global::new(scope, finished_resolver),
             }),
         );
-        let producer = task_id.map(|task_id| {
-            sender.bind_task(
-                execution_context,
-                target,
-                task_id,
-                RendererPageHistoryTraversalTaskKind::SameDocument,
-            )
-        });
-        Some((result, producer))
+        let producer = sender.bind_task(
+            execution_context,
+            target,
+            task_id,
+            RendererPageHistoryTraversalTaskKind::SameDocument,
+        );
+        Some((result, Some(producer)))
     }
 
     pub(crate) fn queue_cross_document_history_traversal_with_result<'s>(

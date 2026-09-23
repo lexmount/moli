@@ -1,6 +1,49 @@
 use super::*;
 
 #[tokio::test]
+async fn reentrant_navigation_traversals_keep_request_identity_and_event_order() {
+    let script = include_str!("../../../../tests/fixtures/navigation-reentrant-traversal.js");
+    for target in ["top", "child", "popup"] {
+        for scenario in ["same", "different", "multiple", "same-then-new", "handler"] {
+            let requests = usize::from(target != "top");
+            let server = StaticHttpServer::spawn(requests).await;
+            let base = server.base_url().origin().ascii_serialization();
+            let loader = static_http_loader([]);
+            let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+                &format!("{base}/parent"),
+                &loader,
+            );
+            vm.eval(&format!(
+                "{script}\nglobalThis.traversalResult = 'pending';\n\
+                 navigationReentrantTraversal({base:?}, {target:?}, {scenario:?}).then(\n\
+                   value => traversalResult = value, error => traversalResult = String(error));"
+            ))
+            .unwrap();
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(traversalResult !== 'pending')",
+                "true",
+                &format!("{target} {scenario}"),
+            )
+            .await;
+            let result: serde_json::Value =
+                serde_json::from_str(&vm.eval("JSON.stringify(traversalResult)").unwrap()).unwrap();
+            assert_eq!(
+                result["failures"],
+                serde_json::json!([]),
+                "{target} {scenario}: {result}"
+            );
+            assert!(
+                result["checks"].as_u64().is_some_and(|count| count >= 13),
+                "{result}"
+            );
+            assert_eq!(server.finish_targets().await.len(), requests);
+        }
+    }
+}
+
+#[tokio::test]
 async fn navigation_event_constructors_convert_webidl_dictionaries_before_initialization() {
     let script = include_str!("../../../../tests/fixtures/navigation-event-init-webidl.js");
     for target in ["top", "child"] {
