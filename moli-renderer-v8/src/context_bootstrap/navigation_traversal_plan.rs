@@ -1,4 +1,3 @@
-use super::history_runtime::pending_history_traversal_target_index;
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_current_entry_index,
 };
@@ -183,17 +182,7 @@ pub(super) fn navigation_index_traversal_plan<'s>(
     if target_index as usize >= entries.len() {
         return Some(NavigationTraversalPlan::RejectInvalidState("Invalid key"));
     }
-    let pending_target_index = pending_history_traversal_target_index(scope, history);
-    if pending_target_index == Some(target_index) {
-        return Some(NavigationTraversalPlan::Traverse(TraversalTarget {
-            owner,
-            history,
-            current_index: history_index(scope, history),
-            target_index,
-            joint_step: None,
-        }));
-    }
-    let current_index = pending_target_index.unwrap_or_else(|| history_index(scope, history));
+    let current_index = history_index(scope, history);
     if current_index == target_index {
         return Some(NavigationTraversalPlan::ResolveCurrentEntry(owner));
     }

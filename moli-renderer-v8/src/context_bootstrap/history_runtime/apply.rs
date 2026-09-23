@@ -192,4 +192,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             );
         }
     }
+    // Release queued traversals only after this document's callbacks have run
+    // and its hashchange notification has entered the DOM-manipulation queue.
+    finish_history_entry_commit(scope, applied);
 }

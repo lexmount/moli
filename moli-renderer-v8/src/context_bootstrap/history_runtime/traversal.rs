@@ -129,27 +129,34 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
     host: &mut JsContextHost,
     producer: crate::page_task_queue::RendererPageHistoryTraversalProducer,
 ) {
-    let task_id = producer.task_id();
-    if producer.send().is_ok() {
-        return;
-    }
-    let Some(queued) = host.take_pending_history_traversal_task(task_id) else {
-        return;
-    };
-    let results = match &queued.action {
-        crate::native_bridge::PendingHistoryTraversalAction::ByDelta { .. } => &[],
-        crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
-            traversal.results.as_slice()
+    let mut producers = std::collections::VecDeque::from([producer]);
+    while let Some(producer) = producers.pop_front() {
+        let task_id = producer.task_id();
+        if host.defer_queued_history_traversal_task(task_id) {
+            continue;
         }
-        crate::native_bridge::PendingHistoryTraversalAction::CrossDocument(traversal) => {
-            traversal.results.as_slice()
+        if producer.send().is_ok() {
+            continue;
         }
-    };
-    if results.is_empty() {
-        return;
+        let Some(queued) = host.take_pending_history_traversal_task(task_id) else {
+            continue;
+        };
+        let popup = host.history_traversal_popup(&queued.action);
+        let results = match &queued.action {
+            crate::native_bridge::PendingHistoryTraversalAction::ByDelta { .. } => &[],
+            crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
+                traversal.results.as_slice()
+            }
+            crate::native_bridge::PendingHistoryTraversalAction::CrossDocument(traversal) => {
+                traversal.results.as_slice()
+            }
+        };
+        if !results.is_empty() {
+            let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
+            reject_pending_navigation_results(scope, results, error);
+        }
+        producers.extend(host.resume_pending_history_traversals(popup));
     }
-    let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    reject_pending_navigation_results(scope, results, error);
 }
 
 pub(in crate::context_bootstrap) fn apply_pending_history_traversal(

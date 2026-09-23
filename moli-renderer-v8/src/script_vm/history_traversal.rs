@@ -117,24 +117,31 @@ impl ScriptVm {
         else {
             return Ok(false);
         };
+        let popup = self
+            ._context_host
+            .borrow()
+            .history_traversal_popup(&queued.action);
         let results = match queued.action {
             PendingHistoryTraversalAction::ByDelta { .. } => Vec::new(),
             PendingHistoryTraversalAction::SameDocument(traversal) => traversal.results,
             PendingHistoryTraversalAction::CrossDocument(traversal) => traversal.results,
         };
-        if results.is_empty() {
-            return Ok(false);
-        }
+        let rejected_results = !results.is_empty();
         // The retired realm owns these Promises and their rejection value.
         // Keep its captured context; looking up a live Window could select a
         // replacement realm or lose the results when the frame was removed.
         let (_, bound_dispatch_scope, _, context) = queued.relevant_context.into_parts();
         let context_ptr: *const v8::Global<v8::Context> = &context;
-        self.with_context_scope_by_ptr(context_ptr, move |scope, _host_ptr| {
+        self.with_context_scope_by_ptr(context_ptr, move |scope, host_ptr| {
             let previous_dispatch_scope = bound_dispatch_scope.enter(scope);
             crate::context_bootstrap::reject_canceled_history_traversal_results(scope, &results);
+            crate::context_bootstrap::resume_pending_history_traversals(
+                scope,
+                unsafe { &mut *host_ptr },
+                popup,
+            );
             bound_dispatch_scope.defer_restore(scope, previous_dispatch_scope);
-            Ok(true)
+            Ok(rejected_results)
         })
     }
 }
