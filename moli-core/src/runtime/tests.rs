@@ -90,6 +90,7 @@ async fn external_raw_bridge_drop_after_body_eof_cancels_pending_fetch_completio
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         body_rx,

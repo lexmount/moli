@@ -3501,6 +3501,7 @@ fn start_service_worker_navigation_preload_response_in_context(
         redirected: started.response_head.redirected,
         redirect_chain: Vec::new(),
         from_cache: false,
+        cache_state: Default::default(),
         negotiated_http_version: None,
     };
     let response_object = build_navigation_preload_response_object_from_stream_for_request_mode(

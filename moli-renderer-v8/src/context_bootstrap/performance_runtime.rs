@@ -298,6 +298,7 @@ impl ResourcePerformanceEntry {
             response.status,
             &response.headers,
             body_size as f64,
+            response.cache_state,
         )
     }
 
@@ -315,6 +316,7 @@ impl ResourcePerformanceEntry {
             response.status,
             &response.headers,
             body_size as f64,
+            response.cache_state,
         )
     }
 
@@ -331,6 +333,7 @@ impl ResourcePerformanceEntry {
             response.status,
             &response.headers,
             response.body_bytes().len() as f64,
+            response.cache_state,
         )
     }
 
@@ -341,11 +344,15 @@ impl ResourcePerformanceEntry {
         response_status: u16,
         response_headers: &[(String, Vec<u8>)],
         body_size: f64,
+        cache_state: moli_fetch::ResponseCacheState,
     ) -> Self {
-        let header_size = response_headers
-            .iter()
-            .map(|(name, value)| name.len() + value.len() + 4)
-            .sum::<usize>() as f64;
+        // Resource Timing deliberately uses a fixed overhead rather than
+        // exposing response-header sizes, which could reveal cookies.
+        let transfer_size = match cache_state {
+            moli_fetch::ResponseCacheState::None => body_size + 300.0,
+            moli_fetch::ResponseCacheState::Local => 0.0,
+            moli_fetch::ResponseCacheState::Validated => 300.0,
+        };
         let content_type = moli_web_mime::response_content_type(response_headers)
             .and_then(|value| moli_web_mime::mime_essence(&value))
             .unwrap_or_default();
@@ -353,7 +360,7 @@ impl ResourcePerformanceEntry {
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             start_unix_millis,
-            transfer_size: (body_size + header_size).max(1.0),
+            transfer_size,
             encoded_body_size: body_size,
             decoded_body_size: body_size,
             // The fetch lifecycle does not yet retain render-blocking metadata.
@@ -370,26 +377,15 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
         network: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
     ) -> Self {
-        let body_size = network.encoded_data_length as f64;
-        let header_size = network
-            .response_headers
-            .iter()
-            .map(|(name, value)| name.len() + value.len() + 4)
-            .sum::<usize>() as f64;
-        let content_type = moli_web_mime::response_content_type(&network.response_headers)
-            .and_then(|value| moli_web_mime::mime_essence(&value))
-            .unwrap_or_default();
-        Self {
-            name: name.into(),
-            initiator_type: initiator_type.to_owned(),
+        Self::from_response_parts(
+            name,
+            initiator_type,
             start_unix_millis,
-            transfer_size: (body_size + header_size).max(1.0),
-            encoded_body_size: body_size,
-            decoded_body_size: body_size,
-            render_blocking_status: "non-blocking".to_owned(),
-            response_status: f64::from(network.status),
-            content_type,
-        }
+            network.status,
+            &network.response_headers,
+            network.encoded_data_length as f64,
+            network.cache_state,
+        )
     }
 
     pub(crate) fn from_network_failure(

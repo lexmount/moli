@@ -1391,6 +1391,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         "void 0;".to_owned(),

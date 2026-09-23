@@ -281,6 +281,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         body_rx,
@@ -1221,6 +1222,8 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
         !second.from_cache,
         "in-flight coalescing should preserve the owner's network provenance"
     );
+    assert_eq!(first.cache_state, moli_fetch::ResponseCacheState::None);
+    assert_eq!(second.cache_state, moli_fetch::ResponseCacheState::None);
 
     let third = loader
         .fetch_cacheable_script_text_stream(request()?)
@@ -1233,6 +1236,7 @@ async fn concurrent_script_text_waiter_preserves_owner_cache_state() -> Result<(
         third.from_cache,
         "completed script text cache hits should still report memory-cache provenance"
     );
+    assert_eq!(third.cache_state, moli_fetch::ResponseCacheState::Local);
 
     server.await?;
     Ok(())
@@ -1598,6 +1602,7 @@ async fn cached_raw_subresource_marks_redirect_hops_from_cache() -> Result<()> {
                 negotiated_http_version: None,
             }],
             from_cache: false,
+            cache_state: Default::default(),
             negotiated_http_version: None,
         },
         b"cached-final-body".to_vec(),

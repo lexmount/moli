@@ -318,6 +318,7 @@ pub struct NavigationResponse {
     pub redirected: bool,
     pub redirect_chain: Vec<NavigationRedirect>,
     pub from_cache: bool,
+    pub cache_state: moli_fetch::ResponseCacheState,
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_headers: Option<Vec<(String, String)>>,
 }
@@ -338,6 +339,7 @@ impl Clone for NavigationResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.clone(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
             network_request_headers: self.network_request_headers.clone(),
         }
@@ -399,6 +401,7 @@ impl NavigationResponse {
                 .map(Into::into)
                 .collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         }
     }
@@ -440,6 +443,7 @@ impl NavigationResponse {
             redirected: head.redirected,
             redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
             from_cache: head.from_cache,
+            cache_state: head.cache_state,
             negotiated_http_version: head.negotiated_http_version,
             network_request_headers: None,
         }
@@ -466,6 +470,7 @@ impl NavigationResponse {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             body,
@@ -498,6 +503,7 @@ impl NavigationResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.into_iter().map(Into::into).collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         let (body, body_bytes) = self
@@ -535,6 +541,7 @@ impl NavigationResponse {
             redirected: self.redirected,
             redirect_chain: self.redirect_chain.into_iter().map(Into::into).collect(),
             from_cache: self.from_cache,
+            cache_state: self.cache_state,
             negotiated_http_version: self.negotiated_http_version,
         };
         (head, self.body)
@@ -2433,6 +2440,7 @@ pub struct PendingSubresourceResponseInfo {
     /// a response-stage Fetch pause is held.
     pub response_body: SubresourceResponseBody,
     pub from_cache: bool,
+    pub cache_state: moli_fetch::ResponseCacheState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2452,6 +2460,7 @@ pub struct PendingSubresourceAuthInfo {
     pub response_headers: Vec<(String, Vec<u8>)>,
     pub response_body: SubresourceResponseBody,
     pub response_from_cache: bool,
+    pub response_cache_state: moli_fetch::ResponseCacheState,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3312,6 +3321,8 @@ pub struct ChildFrameDocumentNetworkSnapshot {
     pub response_body: Option<SubresourceResponseBody>,
     #[serde(default)]
     pub from_cache: bool,
+    #[serde(default)]
+    pub cache_state: moli_fetch::ResponseCacheState,
 }
 
 /// A completed child main-resource request whose Network facts remain
@@ -4035,6 +4046,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             "hello".to_owned(),
@@ -4062,6 +4074,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             "é".to_owned(),
@@ -4100,6 +4113,7 @@ mod tests {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             String::new(),

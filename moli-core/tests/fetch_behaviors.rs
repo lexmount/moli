@@ -10,7 +10,8 @@ use std::time::Instant;
 use support::FixtureServer;
 use tokio::time::Duration;
 
-
+#[path = "fetch_behaviors/cache_timing.rs"]
+mod cache_timing;
 #[path = "fetch_behaviors/preload_as.rs"]
 mod preload_as;
 #[path = "fetch_behaviors/preload_crossorigin.rs"]

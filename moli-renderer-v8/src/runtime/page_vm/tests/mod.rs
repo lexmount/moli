@@ -14198,6 +14198,7 @@ fn module_graph_network_result_records_staged_response_started_with_cache_state(
             redirected: false,
             redirect_chain: Vec::new(),
             from_cache: true,
+            cache_state: moli_fetch::ResponseCacheState::Local,
             negotiated_http_version: None,
         },
         "export default 1;".to_owned(),

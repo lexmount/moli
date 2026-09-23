@@ -79,7 +79,7 @@ pub use request::{
 pub use request_policy::{is_bad_port, should_request_be_blocked_due_to_bad_port};
 pub use response::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RawResponse,
-    RedirectInfo, RedirectSource, Response, ResponseBody, ResponseHead,
+    RedirectInfo, RedirectSource, Response, ResponseBody, ResponseCacheState, ResponseHead,
 };
 pub use runtime::PendingStreamingRawResponse;
 pub use runtime::{

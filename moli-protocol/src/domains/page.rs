@@ -4182,6 +4182,7 @@ mod producer_tests {
                         0x00, 0xff, b'a',
                     ])),
                     from_cache: true,
+                    cache_state: moli_fetch::ResponseCacheState::Local,
                 }),
             }],
             "https://example.test".to_owned(),
@@ -4320,6 +4321,7 @@ mod producer_tests {
                         b"historical child body".to_vec(),
                     )),
                     from_cache: false,
+                    cache_state: Default::default(),
                 },
             }],
             Vec::new(),
@@ -4426,6 +4428,7 @@ mod producer_tests {
             encoded_data_length: 0,
             response_body: None,
             from_cache: false,
+            cache_state: Default::default(),
         };
         let mut background_events = Vec::new();
 

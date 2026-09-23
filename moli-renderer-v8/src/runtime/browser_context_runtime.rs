@@ -304,6 +304,7 @@ impl DetachedParserScriptFetchContinuation {
                 redirected: false,
                 redirect_chain: Vec::new(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: None,
             },
             ResponseBody::materialized_text(text, response_body),

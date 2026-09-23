@@ -537,6 +537,7 @@ impl StreamingResponseCollector {
                 redirected: !self.redirect_chain.is_empty(),
                 redirect_chain: self.redirect_chain.clone(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: self.negotiated_http_version,
                 network_request_extra_info: self.network_request_extra_info.clone(),
             }));
@@ -940,6 +941,7 @@ impl RawStreamingResponseCollector {
                 redirected: !self.redirect_chain.is_empty(),
                 redirect_chain: self.redirect_chain.clone(),
                 from_cache: false,
+                cache_state: Default::default(),
                 negotiated_http_version: self.negotiated_http_version,
                 network_request_extra_info: self.network_request_extra_info.clone(),
             }));
