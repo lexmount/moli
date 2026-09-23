@@ -2811,6 +2811,7 @@ dependencies = [
  "moli-image",
  "moli-system-fonts",
  "parley",
+ "read-fonts",
  "stylo",
  "stylo_taffy",
  "taffy",

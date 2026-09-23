@@ -9,6 +9,16 @@ const URLS: &str = "__moliFontFaceUrls";
 const NEXT_URL: &str = "__moliFontFaceNextUrl";
 const DATA: &str = "__moliFontFaceData";
 
+pub(super) fn store_font_face_binary_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    face: v8::Local<'s, v8::Object>,
+    bytes: Vec<u8>,
+) {
+    let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
+    let data = v8::ArrayBuffer::with_backing_store(scope, &backing);
+    set_private_value(scope, face, DATA, data.into());
+}
+
 pub(super) fn capture_font_face_sources<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     face: v8::Local<'s, v8::Object>,

@@ -185,16 +185,16 @@ struct FontFacePrototypeAccessorsDeclaration {
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "FontFace")]
-struct FontFaceConstructorArgs {
+struct FontFaceConstructorArgs<'s> {
     #[webidl(required)]
     family: String,
     #[webidl(required, with = font_face_constructor_source_arg)]
-    source: FontFaceConstructorSource,
+    source: FontFaceConstructorSource<'s>,
 }
 
-enum FontFaceConstructorSource {
+enum FontFaceConstructorSource<'s> {
     Css(String),
-    Binary(Vec<u8>),
+    Binary(v8::Local<'s, v8::Value>),
 }
 
 pub(in crate::context_bootstrap) fn install_font_face_template_accessors<'s>(
@@ -319,7 +319,7 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         size_adjust,
     ] = descriptors;
     let this = args.this();
-    let (source, status, error) = if invalid_descriptors {
+    let (source, status, error, data) = if invalid_descriptors {
         let source = match parsed.source {
             FontFaceConstructorSource::Css(source) => source,
             FontFaceConstructorSource::Binary(_) => String::new(),
@@ -329,13 +329,13 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
             "Invalid FontFace descriptor.",
             "SyntaxError",
         );
-        (source, "error", Some(error))
+        (source, "error", Some(error), None)
     } else {
         match parsed.source {
         FontFaceConstructorSource::Css(source)
             if moli_css_parse::normalize_font_face_src(&source).is_some() =>
         {
-            (source, "unloaded", None)
+            (source, "unloaded", None, None)
         }
         FontFaceConstructorSource::Css(source) => {
             let error = crate::context_bootstrap::new_dom_exception_value(
@@ -343,20 +343,33 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
                 "Invalid FontFace source descriptor.",
                 "SyntaxError",
             );
-            (source, "error", Some(error))
+            (source, "error", Some(error), None)
         }
-        FontFaceConstructorSource::Binary(bytes)
-            if moli_web_mime::sniff_font_mime_type(&bytes).is_some() =>
-        {
-            (String::new(), "loaded", None)
-        }
-        FontFaceConstructorSource::Binary(_) => {
-            let error = crate::context_bootstrap::new_dom_exception_value(
+        FontFaceConstructorSource::Binary(value) => {
+            // BufferSource conversion retains the native buffer; copying its
+            // bytes belongs to the operation, after descriptor conversion.
+            // A descriptor getter may have modified or detached the buffer.
+            let bytes = match webidl::convert::<webidl::BufferSource>(
                 scope,
-                "Invalid font data in ArrayBuffer.",
-                "SyntaxError",
-            );
-            (String::new(), "error", Some(error))
+                value,
+                webidl::Context::argument("FontFace", 2),
+            ) {
+                Ok(bytes) => bytes.into_bytes(),
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return;
+                }
+            };
+            if moli_layout::validate_web_font_bytes(&bytes).is_ok() {
+                (String::new(), "loaded", None, Some(bytes))
+            } else {
+                let error = crate::context_bootstrap::new_dom_exception_value(
+                    scope,
+                    "Invalid font data in ArrayBuffer.",
+                    "SyntaxError",
+                );
+                (String::new(), "error", Some(error), None)
+            }
         }
     }
     };
@@ -382,7 +395,11 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
     )
     .initialize(scope, this)
     .expect("FontFace declaration should initialize object");
-    super::font_loading::capture_font_face_sources(scope, this);
+    if let Some(data) = data {
+        super::font_loading::store_font_face_binary_data(scope, this, data);
+    } else {
+        super::font_loading::capture_font_face_sources(scope, this);
+    }
     rv.set(this.into());
 }
 
@@ -390,7 +407,7 @@ fn font_face_constructor_source_arg<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
-) -> Result<FontFaceConstructorSource, webidl::WebIdlError> {
+) -> Result<FontFaceConstructorSource<'s>, webidl::WebIdlError> {
     if args.length() <= index {
         return Err(webidl::WebIdlError::custom_message(
             "Failed to construct 'FontFace': 2 arguments required, but only 1 present.",
@@ -398,11 +415,20 @@ fn font_face_constructor_source_arg<'s>(
     }
     let value = args.get(index);
     let context = webidl::Context::argument("FontFace", (index + 1) as usize);
+    // This BufferSource union has neither AllowShared nor AllowResizable.
+    // Reject those native buffer inputs before reading the descriptors or
+    // attempting the CSSOMString alternative of the union.
+    if value.is_shared_array_buffer()
+        || crate::blob::buffer_source_has_shared_or_resizable_backing_store(value)
+    {
+        return Err(webidl::WebIdlError::custom_message(
+            "Failed to construct 'FontFace': shared and resizable buffers are not allowed.",
+        ));
+    }
     if v8::Local::<v8::ArrayBuffer>::try_from(value).is_ok()
         || v8::Local::<v8::ArrayBufferView>::try_from(value).is_ok()
     {
-        return webidl::convert::<webidl::BufferSource>(scope, value, context)
-            .map(|source| FontFaceConstructorSource::Binary(source.into_bytes()));
+        return Ok(FontFaceConstructorSource::Binary(value));
     }
     webidl::convert::<webidl::DomString>(scope, value, context)
         .map(|source| FontFaceConstructorSource::Css(source.into()))
