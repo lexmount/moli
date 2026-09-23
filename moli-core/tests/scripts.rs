@@ -6845,9 +6845,6 @@ async fn parse_time_lifecycle_queue_can_stop_cleanly_at_load_stage_after_load_mi
     Ok(())
 }
 
-#[path = "scripts/document_write_errors.rs"]
-mod document_write_errors;
-
 #[path = "scripts/child_markup_insertion.rs"]
 mod child_markup_insertion;
 
@@ -6892,3 +6889,6 @@ async fn windowless_media_tasks_use_their_documents_owning_window() -> Result<()
     assert_eq!(value["value"], "true");
     Ok(())
 }
+
+#[path = "scripts/preload_consumption.rs"]
+mod preload_consumption;

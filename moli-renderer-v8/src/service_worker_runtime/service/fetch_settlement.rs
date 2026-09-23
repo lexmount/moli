@@ -125,6 +125,7 @@ fn service_worker_fetch_stream_response_head(
         redirect_chain: job.request.redirect_chain().to_vec(),
         from_cache: false,
         cache_state: Default::default(),
+        preload_state: Default::default(),
         negotiated_http_version: None,
     }
 }
@@ -674,6 +675,7 @@ impl ServiceWorkerRuntimeService {
                 redirect_chain: job.request.redirect_chain().to_vec(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version: None,
             },
             String::from_utf8_lossy(&response.body).into_owned(),

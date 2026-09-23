@@ -441,12 +441,22 @@ impl ScriptVm {
         mut supplied_network_record: Option<crate::types::SubresourceNetworkRecord>,
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result = completion_result.bind_child_body(&mut pending.continuation);
+        let consumed_preload = match &completion_result {
+            AsyncSubresourceFetchResult::PreloadFailure(_) => true,
+            AsyncSubresourceFetchResult::Response(response)
+            | AsyncSubresourceFetchResult::Image { response, .. }
+            | AsyncSubresourceFetchResult::ChildDocumentResponse { response, .. } => {
+                response.preload_state.is_consumed()
+            }
+            AsyncSubresourceFetchResult::Failure(_) => false,
+        };
         let (supplied_parkable_image, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error)
+            | AsyncSubresourceFetchResult::PreloadFailure(error) => (None, Err(error)),
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }
@@ -1013,7 +1023,7 @@ impl ScriptVm {
                             sequence,
                             pending.info.internal_id,
                             &pending.info.url,
-                            ImageSubresourceTerminal::Failure,
+                            if consumed_preload { ImageSubresourceTerminal::PreloadFailure } else { ImageSubresourceTerminal::Failure },
                         ),
                         PendingSubresourceContinuation::Media {
                             media_handle,

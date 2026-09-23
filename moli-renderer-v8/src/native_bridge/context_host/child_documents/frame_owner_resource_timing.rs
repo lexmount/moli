@@ -143,6 +143,7 @@ impl PageScriptHost {
             Some(timing.start_unix_millis()),
             response_status,
             network.cache_state,
+            network.preload_state.clone(),
         );
         self.record_frame_owner_resource_timing(scope, timing, entry);
     }

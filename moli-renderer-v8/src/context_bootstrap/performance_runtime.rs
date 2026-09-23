@@ -183,6 +183,7 @@ fn resource_timing_content_type(headers: &[(String, Vec<u8>)]) -> String {
 }
 
 pub(crate) struct ResourcePerformanceEntry {
+    preload_state: moli_fetch::ResponsePreloadState,
     name: String,
     initiator_type: String,
     initiator_url: String,
@@ -240,6 +241,7 @@ impl ResourcePerformanceEntry {
             &response.headers,
             body_size as f64,
             response.cache_state,
+            response.preload_state.clone(),
         )
     }
 
@@ -258,23 +260,7 @@ impl ResourcePerformanceEntry {
             &response.headers,
             body_size as f64,
             response.cache_state,
-        )
-    }
-
-    pub(crate) fn from_fetch_response(
-        name: impl Into<String>,
-        initiator_type: &'static str,
-        start_unix_millis: Option<f64>,
-        response: &moli_fetch::Response,
-    ) -> Self {
-        Self::from_response_parts(
-            name,
-            initiator_type,
-            start_unix_millis,
-            response.status,
-            &response.headers,
-            response.body_bytes().len() as f64,
-            response.cache_state,
+            response.preload_state.clone(),
         )
     }
 
@@ -291,6 +277,7 @@ impl ResourcePerformanceEntry {
         response_headers: &[(String, Vec<u8>)],
         body_size: f64,
         cache_state: moli_fetch::ResponseCacheState,
+        preload_state: moli_fetch::ResponsePreloadState,
     ) -> Self {
         // Resource Timing deliberately uses a fixed overhead rather than
         // exposing response-header sizes, which could reveal cookies.
@@ -301,6 +288,7 @@ impl ResourcePerformanceEntry {
         };
         let content_type = resource_timing_content_type(response_headers);
         Self {
+            preload_state,
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             initiator_url: String::new(),
@@ -330,6 +318,7 @@ impl ResourcePerformanceEntry {
             &network.response_headers,
             network.encoded_data_length as f64,
             network.cache_state,
+            network.preload_state.clone(),
         )
     }
 
@@ -339,6 +328,7 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
         response_status: u16,
         cache_state: moli_fetch::ResponseCacheState,
+        preload_state: moli_fetch::ResponsePreloadState,
     ) -> Self {
         Self::from_response_parts(
             name,
@@ -348,6 +338,7 @@ impl ResourcePerformanceEntry {
             &[],
             0.0,
             cache_state,
+            preload_state,
         )
     }
 
@@ -365,6 +356,7 @@ impl ResourcePerformanceEntry {
         start_unix_millis: Option<f64>,
     ) -> Self {
         Self {
+            preload_state: Default::default(),
             name: name.into(),
             initiator_type: initiator_type.to_owned(),
             initiator_url: String::new(),
@@ -377,12 +369,28 @@ impl ResourcePerformanceEntry {
             content_type: String::new(),
         }
     }
+
+    pub(crate) fn mark_aborted(&mut self, transfer_complete: bool) {
+        self.response_status = 0.0;
+        self.content_type.clear();
+        self.content_encoding.clear();
+        if !transfer_complete {
+            self.encoded_body_size = 0.0;
+            self.decoded_body_size = 0.0;
+            if self.transfer_size > 0.0 {
+                self.transfer_size = 300.0;
+            }
+        }
+    }
 }
 
 pub(crate) fn record_resource_performance_entry(
     scope: &mut v8::PinScope<'_, '_>,
     entry: ResourcePerformanceEntry,
 ) {
+    if entry.preload_state.is_consumed() {
+        return;
+    }
     if !url::Url::parse(&entry.name).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
         return;
     }

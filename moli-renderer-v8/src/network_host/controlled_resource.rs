@@ -586,6 +586,7 @@ impl ControlledResourceLoad {
                 let pause = pause.with_response_body(response.body.clone());
                 if !self.interception.publish_continue(
                     PendingSubresourceContinueEvent::AuthRequired(PendingSubresourceAuthInfo {
+                        response_preload_state: response.head.preload_state.clone(),
                         internal_id: self.info.internal_id,
                         url: self.request.url.clone(),
                         method: self.request.method.clone(),
@@ -631,6 +632,7 @@ impl ControlledResourceLoad {
                 if !self.interception.publish_continue(
                     PendingSubresourceContinueEvent::ResponsePaused(
                         PendingSubresourceResponseInfo {
+                            preload_state: response.head.preload_state.clone(),
                             internal_id: self.info.internal_id,
                             url: self.request.url.clone(),
                             final_url: response.head.final_url.clone(),

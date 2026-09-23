@@ -43,6 +43,7 @@ fn redirected_head(allow_redirect_timing: bool) -> ResponseHead {
         ],
         from_cache: false,
         cache_state: Default::default(),
+        preload_state: Default::default(),
         negotiated_http_version: None,
     }
 }

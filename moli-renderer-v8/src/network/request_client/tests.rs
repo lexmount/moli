@@ -78,6 +78,7 @@ fn cached_script_completion_unlocks_and_updates_cache_before_notifying_consumers
             from_cache: false,
             cache_state: Default::default(),
             negotiated_http_version: None,
+            preload_state: Default::default(),
         },
         "loaded".into(),
     );
@@ -384,6 +385,7 @@ async fn memory_cache_tee_drop_after_body_eof_cancels_pending_completion_and_rel
             redirect_chain: Vec::new(),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
         body_rx,
@@ -1962,6 +1964,7 @@ async fn cached_subresource_clears_transport_observations_but_preserves_redirect
             }],
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
             negotiated_http_version: None,
         },
         b"cached-final-body".to_vec(),

@@ -115,8 +115,8 @@ pub(crate) fn start_scanned_image_preload(
     let decode_runner = task_runner.clone();
     let cancel_handle = load.cancel_handle();
     task_runner.spawn(async move {
-        let result = match loader
-            .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel_handle)
+        let result = match crate::network_host::fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata(
+            &loader, request, Some(cancel_handle), Vec::new())
             .await
         {
             Ok(observed) => {
