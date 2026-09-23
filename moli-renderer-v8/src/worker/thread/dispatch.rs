@@ -4544,21 +4544,33 @@ pub(super) fn fire_timer_callback(
     parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
     script_url: &str,
 ) {
+    fire_worker_callback(
+        isolate,
+        &timer.callback,
+        &timer.extra_args,
+        parent_tx,
+        script_url,
+    );
+}
+
+pub(super) fn fire_worker_callback(
+    isolate: &mut v8::OwnedIsolate,
+    callback: &super::super::timer_callback::WorkerTimerCallback,
+    extra_args: &[v8::Global<v8::Value>],
+    parent_tx: &mpsc::UnboundedSender<WorkerToParentMessage>,
+    script_url: &str,
+) {
     let scope = pin!(v8::HandleScope::new(isolate));
     let scope = &mut scope.init();
-    let ctx = timer.callback.target_context(scope);
+    let ctx = callback.target_context(scope);
     let scope = &mut v8::ContextScope::new(scope, ctx);
 
     let global = ctx.global(scope);
 
-    let callback_error = match timer.callback.invoke(scope, &timer.extra_args) {
+    let callback_error = match callback.invoke(scope, extra_args) {
         WorkerTimerCallbackOutcome::Returned => None,
         WorkerTimerCallbackOutcome::Threw(report) => {
-            trace!(
-                timer_id = timer.id,
-                message = report.summary.as_str(),
-                "timer callback error"
-            );
+            trace!(message = report.summary.as_str(), "worker callback error");
             Some(report)
         }
     };

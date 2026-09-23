@@ -151,6 +151,8 @@ pub(crate) enum WorkerMessage {
     ServiceWorkerGetNotificationsResult(ServiceWorkerGetNotificationsResult),
     /// Run the worker's queued unhandled promise rejection notification task.
     DispatchPendingPromiseRejections,
+    /// Run one task from the worker's font loading task source.
+    RunFontLoadingTask,
     /// Dispatch a CSP violation queued while the current worker was still evaluating script.
     DispatchContentSecurityPolicyViolation(
         Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,

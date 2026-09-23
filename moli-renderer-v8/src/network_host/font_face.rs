@@ -14,6 +14,9 @@ use moli_fetch::{
 };
 
 pub(crate) fn font_face_base_url(scope: &mut v8::PinScope<'_, '_>) -> Option<url::Url> {
+    if let Some(url) = crate::worker::worker_current_script_url(scope) {
+        return Some(url);
+    }
     let host = unsafe { &*context_host_ptr_from_global_bridge(scope)? };
     let binding = host.current_runtime_window_execution_context_binding(scope)?;
     let loader = host.document_resource_loader_for_dispatch_scope(binding.dispatch_scope())?;
@@ -28,6 +31,9 @@ pub(crate) fn start_font_face_resource_fetch<'s>(
     face: v8::Local<'s, v8::Object>,
     request_url: url::Url,
 ) -> Result<(), String> {
+    if crate::worker::get_worker_state(scope).is_some() {
+        return crate::worker::start_worker_font_face_fetch(scope, face, request_url);
+    }
     let host_ptr =
         context_host_ptr_from_global_bridge(scope).ok_or("FontFace has no resource host")?;
     let host = unsafe { &mut *host_ptr };

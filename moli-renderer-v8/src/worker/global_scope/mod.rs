@@ -120,6 +120,7 @@ use crate::worker::abort::{
 
 mod content_security_policy;
 mod fetch;
+mod font_loading;
 mod import_scripts;
 mod timers;
 mod xhr;
@@ -130,6 +131,7 @@ pub(in crate::worker) use content_security_policy::{
     fulfill_pending_worker_csp_report,
 };
 pub(crate) use fetch::*;
+pub(crate) use font_loading::{queue_worker_font_task, start_worker_font_face_fetch};
 use import_scripts::*;
 use timers::*;
 pub(crate) use xhr::*;
@@ -1081,6 +1083,8 @@ pub(crate) struct WorkerOpfsCompletion {
 }
 
 pub(super) struct PendingWorkerFetch {
+    pub(super) kind: fetch::WorkerFetchKind,
+    pub(super) font_face: Option<v8::Global<v8::Object>>,
     pub(super) resolver: v8::Global<v8::PromiseResolver>,
     pub(super) document_url: Url,
     pub(super) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
@@ -1527,6 +1531,8 @@ pub(crate) struct WorkerGlobalState {
     pub(super) in_error_reporting_mode: bool,
     /// Timer id counter.
     pub(super) next_timer_id: u32,
+    /// Browser font tasks use a separate queue and cannot be canceled by timer IDs.
+    pub(super) font_tasks: std::collections::VecDeque<super::timer_callback::WorkerTimerCallback>,
     /// Inside-settings resource authority for every request owned by this
     /// WorkerGlobalScope. Even data/blob workers retain the creator's browser
     /// backend so later fetch/XHR/module/WebSocket work has an exact owner.
@@ -5851,6 +5857,7 @@ pub(super) fn prepare_worker_global_scope_templates<'s>(
 
     let worker = worker_global_scope_template(scope, "WorkerGlobalScope");
     worker.inherit(event_target);
+    font_loading::install_worker_font_source_template(scope, worker);
     let specific_worker = worker_global_scope_template(scope, interface);
     specific_worker.inherit(worker);
     specific_worker

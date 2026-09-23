@@ -41,7 +41,7 @@ pub(super) fn queue_font_task<'s>(
 ) {
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host_ptr }.queue_font_loading_task(scope, callback);
-    } else {
+    } else if !crate::worker::queue_worker_font_task(scope, callback) {
         scope.enqueue_microtask(callback);
     }
 }

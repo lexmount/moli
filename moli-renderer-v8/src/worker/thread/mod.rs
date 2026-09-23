@@ -57,7 +57,7 @@ use dispatch::{
     dispatch_worker_exception_with_phase_and_source,
     enqueue_service_worker_navigation_preload_stream_chunk,
     fail_service_worker_navigation_preload_response,
-    finish_service_worker_navigation_preload_stream, fire_timer_callback,
+    finish_service_worker_navigation_preload_stream, fire_timer_callback, fire_worker_callback,
     install_worker_promise_rejection_dispatch,
     perform_worker_microtask_checkpoint_and_report_pending_promise_rejections,
     report_exception_to_parent, start_service_worker_navigation_preload_response,
@@ -579,7 +579,8 @@ pub(super) struct ActiveTimer {
 
 fn worker_has_pending_async(state: &Rc<RefCell<WorkerGlobalState>>) -> bool {
     let state = state.borrow();
-    !state.pending_fetches.is_empty()
+    !state.font_tasks.is_empty()
+        || !state.pending_fetches.is_empty()
         || !state.pending_xhrs.is_empty()
         || !state.websockets.is_empty()
         || !state.pending_webcrypto.is_empty()
@@ -1657,6 +1658,7 @@ async fn worker_main(
         closed: false,
         in_error_reporting_mode: false,
         next_timer_id: 0,
+        font_tasks: std::collections::VecDeque::new(),
         loader,
         global_kind,
         script_kind,
@@ -2681,6 +2683,24 @@ async fn worker_main(
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_service_worker_push_unsubscribe_result(scope, &state, result);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(WorkerMessage::RunFontLoadingTask)) => {
+                // Font completion can release top-level await during module bootstrap.
+                let callback = state.borrow_mut().font_tasks.pop_front();
+                if let Some(callback) = callback {
+                    fire_worker_callback(
+                        worker_isolate.worker_isolate_mut(),
+                        &callback,
+                        &[],
+                        &parent_tx,
+                        &script_url,
+                    );
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }
             WorkerLoopWake::Message(Some(WorkerMessage::DispatchPendingPromiseRejections)) => {

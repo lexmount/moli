@@ -7,6 +7,38 @@ use crate::service_worker_runtime::{
 };
 use crate::types::{AsyncSubresourceNetworkContext, SubresourcePolicyContext};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::worker) enum WorkerFetchKind {
+    Fetch,
+    Font,
+}
+
+impl WorkerFetchKind {
+    fn resource_type(self) -> SubresourceResourceType {
+        match self {
+            Self::Fetch => SubresourceResourceType::Fetch,
+            Self::Font => SubresourceResourceType::Font,
+        }
+    }
+
+    fn csp_resource_kind(
+        self,
+    ) -> crate::content_security_policy::ContentSecurityPolicyResourceKind {
+        use crate::content_security_policy::ContentSecurityPolicyResourceKind;
+        match self {
+            Self::Fetch => ContentSecurityPolicyResourceKind::WorkerConnect,
+            Self::Font => ContentSecurityPolicyResourceKind::DocumentFont,
+        }
+    }
+
+    fn browser_metadata(self) -> BrowserRequestMetadata {
+        match self {
+            Self::Fetch => BrowserRequestMetadata::Fetch,
+            Self::Font => BrowserRequestMetadata::Font,
+        }
+    }
+}
+
 pub(in crate::worker) fn record_worker_subresource_failure(
     state: &WorkerGlobalState,
     document_url: Url,
@@ -161,6 +193,7 @@ fn worker_fetch_redirect_check(
 }
 
 pub(in crate::worker) fn spawn_worker_fetch_network(
+    kind: WorkerFetchKind,
     load: ResourceLoadLease,
     completion_tx: mpsc::UnboundedSender<WorkerFetchEvent>,
     fetch_id: u32,
@@ -228,7 +261,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                         .with_cache_mode(worker_fetch_cache_mode(&request_metadata.cache))
                         .with_fetch_priority_hint(priority)
                         .with_network_partition_key(network_partition_key.clone())
-                        .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+                        .with_browser_request_metadata(kind.browser_metadata());
+                    if kind == WorkerFetchKind::Font {
+                        request = request.with_resource_type(moli_fetch::RequestResourceType::Font);
+                    }
                     if let Some(metadata) =
                         worker_fetch_script_metadata(referrer_policy, &request_metadata)
                     {
@@ -259,7 +295,10 @@ pub(in crate::worker) fn spawn_worker_fetch_network(
                             }
                             Err(error) => (Err(format!("fetch: {error}")), None),
                         }
-                    } else if !allow_headers_first || !request_metadata.integrity.is_empty() {
+                    } else if kind == WorkerFetchKind::Font
+                        || !allow_headers_first
+                        || !request_metadata.integrity.is_empty()
+                    {
                         // Worker fetch still resolves after the full response, but ordinary
                         // transfers can keep their body in the same chunked/pooled carrier that
                         // CDP Network capture uses instead of forcing a single buffered Response.
@@ -408,6 +447,7 @@ fn worker_service_worker_controller(
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_worker_fetch_service_worker(
+    kind: WorkerFetchKind,
     runtime: ServiceWorkerRuntimeService,
     client_id: ServiceWorkerClientId,
     load: ResourceLoadLease,
@@ -440,7 +480,10 @@ fn spawn_worker_fetch_service_worker(
             method: method.clone(),
             headers: headers.to_byte_strings(),
             body: body.clone(),
-            destination: ServiceWorkerRequestDestination::Empty,
+            destination: match kind {
+                WorkerFetchKind::Fetch => ServiceWorkerRequestDestination::Empty,
+                WorkerFetchKind::Font => ServiceWorkerRequestDestination::Font,
+            },
             request_mode,
             credentials_mode,
             redirect_mode,
@@ -454,7 +497,7 @@ fn spawn_worker_fetch_service_worker(
             frame_id: None,
             request_origin: moli_url::WebOrigin::from_url(&document_url),
             document_url: document_url.clone(),
-            resource_type: SubresourceResourceType::Fetch,
+            resource_type: kind.resource_type(),
             policy_context,
         },
         completion_tx:
@@ -481,6 +524,7 @@ fn spawn_worker_fetch_service_worker(
     tokio::task::spawn_local(async move {
         match direct_completion_rx.await {
             Ok(ServiceWorkerDirectFetchResult::Fallback) => spawn_worker_fetch_network(
+                kind,
                 load,
                 completion_tx,
                 fetch_id,
@@ -760,7 +804,9 @@ pub(in crate::worker) fn continue_pending_worker_fetch(
         )
     };
 
+    let kind = state.borrow().pending_fetches[&fetch_id].kind;
     spawn_worker_fetch_network(
+        kind,
         load,
         completion_tx,
         fetch_id,
@@ -1927,6 +1973,25 @@ pub(in crate::worker) struct ResolvedWorkerFetchInput<'s> {
     signal: Option<v8::Local<'s, v8::Object>>,
 }
 
+impl ResolvedWorkerFetchInput<'_> {
+    pub(super) fn font(url: Url) -> Self {
+        Self {
+            blob_url_entry: CapturedBlobUrl::capture(&url),
+            resolved_url: url,
+            method: "GET".to_owned(),
+            body: None,
+            body_stream: None,
+            headers: Vec::new(),
+            request_mode: RequestMode::Cors,
+            credentials_mode: RequestCredentialsMode::SameOrigin,
+            redirect_mode: RequestRedirectMode::Follow,
+            priority: None,
+            metadata: ServiceWorkerFetchRequestMetadata::default(),
+            signal: None,
+        }
+    }
+}
+
 pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
@@ -2133,9 +2198,39 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Some(state) = get_worker_state(scope) else {
-        rv.set(make_rejected_promise(scope, "fetch: worker runtime state is unavailable").into());
+    let Some(document_url) = worker_current_script_url(scope) else {
+        rv.set(make_rejected_promise(scope, "fetch: worker script url is unavailable").into());
         return;
+    };
+    let input = match convert_fetch_arguments(scope, |scope| {
+        resolve_worker_fetch_input(scope, &args, &document_url)
+    }) {
+        Ok(input) => input,
+        Err(exception) => {
+            rv.set(make_rejected_promise_with_value(scope, exception).into());
+            return;
+        }
+    };
+    if let Some(promise) = start_worker_resource_fetch(scope, input, None) {
+        rv.set(promise.into());
+    }
+}
+
+pub(super) fn start_worker_resource_fetch<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    input: ResolvedWorkerFetchInput<'s>,
+    font_face: Option<v8::Local<'s, v8::Object>>,
+) -> Option<v8::Local<'s, v8::Promise>> {
+    let kind = if font_face.is_some() {
+        WorkerFetchKind::Font
+    } else {
+        WorkerFetchKind::Fetch
+    };
+    let Some(state) = get_worker_state(scope) else {
+        return Some(make_rejected_promise(
+            scope,
+            "fetch: worker runtime state is unavailable",
+        ));
     };
 
     let (
@@ -2150,8 +2245,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     ) = {
         let state = state.borrow();
         let Some(document_url) = state.current_script_url.clone() else {
-            rv.set(make_rejected_promise(scope, "fetch: worker script url is unavailable").into());
-            return;
+            return Some(make_rejected_promise(
+                scope,
+                "fetch: worker script url is unavailable",
+            ));
         };
         (
             state.loader.clone(),
@@ -2178,15 +2275,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         priority,
         metadata: request_metadata,
         signal,
-    } = match convert_fetch_arguments(scope, |scope| {
-        resolve_worker_fetch_input(scope, &args, &document_url)
-    }) {
-        Ok(resolved) => resolved,
-        Err(exception) => {
-            rv.set(make_rejected_promise_with_value(scope, exception).into());
-            return;
-        }
-    };
+    } = input;
     // Use the same normalized header list as Request before policy checks and
     // context overrides can otherwise discard a repeated Range field.
     let request_headers = normalized_headers_entries(&request_headers);
@@ -2200,12 +2289,12 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
     {
         let reason = worker_abort_signal_reason(scope, signal)
             .unwrap_or_else(|| worker_abort_error_value(scope));
-        rv.set(make_rejected_promise_with_value(scope, reason).into());
+        let rejected = make_rejected_promise_with_value(scope, reason);
         if let Some(stream) = body_stream {
             let stream = v8::Local::new(scope, stream);
             crate::context_bootstrap::cancel_readable_stream_for_fetch(scope, stream, reason);
         }
-        return;
+        return Some(rejected);
     }
 
     let report_only_violation = {
@@ -2214,7 +2303,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             &state_ref,
             &document_url,
             &resolved_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+            kind.csp_resource_kind(),
         )
     };
     let csp_violation = {
@@ -2223,7 +2312,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             &state_ref,
             &document_url,
             &resolved_url,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerConnect,
+            kind.csp_resource_kind(),
         )
     };
     let csp_source_location = if report_only_violation.is_none() && csp_violation.is_none() {
@@ -2250,11 +2339,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             method,
             headers,
             request_body_text(&body),
-            SubresourceResourceType::Fetch,
+            kind.resource_type(),
             message.clone(),
         );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
     }
 
     if let Err(error) = moli_url_policy::route_fetch_url(&resolved_url) {
@@ -2266,11 +2354,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             method,
             headers,
             request_body_text(&body),
-            SubresourceResourceType::Fetch,
+            kind.resource_type(),
             message.clone(),
         );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
     }
 
     if should_request_be_blocked_due_to_bad_port(&resolved_url) {
@@ -2282,18 +2369,16 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             method,
             headers,
             request_body_text(&body),
-            SubresourceResourceType::Fetch,
+            kind.resource_type(),
             message.clone(),
         );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
     }
 
     if let Err(message) = moli_fetch::FetchUrlList::new(&resolved_url, &[])
         .validate_request_mode(request_mode, &moli_url::WebOrigin::from_url(&document_url))
     {
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
     }
 
     if worker_url_blocked(&blocked_url_patterns, &resolved_url) {
@@ -2305,11 +2390,10 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             method,
             headers,
             request_body_text(&body),
-            SubresourceResourceType::Fetch,
+            kind.resource_type(),
             message.clone(),
         );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
     }
 
     if let Err(error) = crate::network_host::validate_no_cors_http_redirect_mode(
@@ -2326,11 +2410,22 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             method,
             headers,
             request_body_text(&body),
-            SubresourceResourceType::Fetch,
+            kind.resource_type(),
             message.clone(),
         );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
+    }
+
+    if kind == WorkerFetchKind::Font
+        && matches!(resolved_url.scheme(), "http" | "https")
+        && !loader
+            .request_client()
+            .optional_resource_fetch_enabled(SubresourceResourceType::Font)
+    {
+        return Some(make_rejected_promise(
+            scope,
+            "Font requests are disabled by the resource policy",
+        ));
     }
 
     let connect_policy = {
@@ -2338,18 +2433,16 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         crate::document_runtime::DocumentConnectPolicySnapshot::from_inherited_policy(
             &super::content_security_policy::worker_policy_snapshot(&state),
         )
+        .for_resource_kind(kind.csp_resource_kind())
     };
     // Local URLs are resolved by the worker fetch task without interception.
     if !matches!(resolved_url.scheme(), "blob" | "data")
         && fetch_subresource_interception_enabled
         && fetch_subresource_interception_resource_type.is_none_or(|expected| {
-            expected.has_same_cdp_fetch_interception_type(SubresourceResourceType::Fetch)
+            expected.has_same_cdp_fetch_interception_type(kind.resource_type())
         })
     {
-        let Some(resolver) = v8::PromiseResolver::new(scope) else {
-            rv.set_undefined();
-            return;
-        };
+        let resolver = v8::PromiseResolver::new(scope)?;
         let promise = resolver.get_promise(scope);
         let signal_id = signal.and_then(|signal| worker_abort_signal_id(scope, signal));
         let cancel_handle = FetchCancelHandle::new();
@@ -2359,12 +2452,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             ResourceLoadDisposition::Ordinary
         };
         let Some(load) = loader.register_load(
-            ResourceLoadKind::Fetch,
+            kind.resource_type().into(),
             disposition,
             Some(cancel_handle.clone()),
         ) else {
-            rv.set(make_rejected_promise(scope, "fetch: worker global is shutting down").into());
-            return;
+            return Some(make_rejected_promise(
+                scope,
+                "fetch: worker global is shutting down",
+            ));
         };
         let request_body = request_body_text(&body);
         let fetch_id = {
@@ -2373,6 +2468,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.pending_fetches.insert(
                 fetch_id,
                 PendingWorkerFetch {
+                    kind,
+                    font_face: font_face.map(|face| v8::Global::new(scope, face)),
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
                     redirect_csp_state: crate::network_host::FetchCspRedirectState::new(
@@ -2412,7 +2509,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             request_headers: headers,
             request_body_bytes: request_body.as_ref().map(|body| body.as_bytes().to_vec()),
             request_body,
-            resource_type: SubresourceResourceType::Fetch,
+            resource_type: kind.resource_type(),
             request_cookie_report: None,
         };
         let _ = state
@@ -2428,8 +2525,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
                     info,
                 },
             ));
-        rv.set(promise.into());
-        return;
+        return Some(promise);
     }
 
     if network_offline {
@@ -2441,18 +2537,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             method,
             headers,
             request_body_text(&body),
-            SubresourceResourceType::Fetch,
+            kind.resource_type(),
             message.clone(),
         );
-        rv.set(make_rejected_promise(scope, &message).into());
-        return;
+        return Some(make_rejected_promise(scope, &message));
     }
 
     let promise = {
-        let Some(resolver) = v8::PromiseResolver::new(scope) else {
-            rv.set_undefined();
-            return;
-        };
+        let resolver = v8::PromiseResolver::new(scope)?;
         let promise = resolver.get_promise(scope);
         let signal_id = signal.and_then(|signal| worker_abort_signal_id(scope, signal));
         let cancel_handle = FetchCancelHandle::new();
@@ -2462,12 +2554,14 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             ResourceLoadDisposition::Ordinary
         };
         let Some(load) = loader.register_load(
-            ResourceLoadKind::Fetch,
+            kind.resource_type().into(),
             disposition,
             Some(cancel_handle.clone()),
         ) else {
-            rv.set(make_rejected_promise(scope, "fetch: worker global is shutting down").into());
-            return;
+            return Some(make_rejected_promise(
+                scope,
+                "fetch: worker global is shutting down",
+            ));
         };
         let request_body = request_body_text(&body);
         let fetch_id = {
@@ -2476,6 +2570,8 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             state.pending_fetches.insert(
                 fetch_id,
                 PendingWorkerFetch {
+                    kind,
+                    font_face: font_face.map(|face| v8::Global::new(scope, face)),
                     resolver: v8::Global::new(scope, resolver),
                     document_url: document_url.clone(),
                     redirect_csp_state: crate::network_host::FetchCspRedirectState::new(
@@ -2518,6 +2614,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         if let Some((service_worker_runtime, service_worker_client_id)) = service_worker_controller
         {
             spawn_worker_fetch_service_worker(
+                kind,
                 service_worker_runtime,
                 service_worker_client_id,
                 load,
@@ -2541,6 +2638,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
             );
         } else {
             spawn_worker_fetch_network(
+                kind,
                 load,
                 completion_tx,
                 fetch_id,
@@ -2568,7 +2666,7 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
 
         promise
     };
-    rv.set(promise.into());
+    Some(promise)
 }
 
 pub(in crate::worker) fn reject_worker_fetches_for_signal(
@@ -2730,9 +2828,7 @@ fn worker_fetch_response_csp_violations(
     if pending.redirect_csp_state.was_checked(&head.final_url) {
         return (None, None);
     }
-    use crate::content_security_policy::{
-        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
-    };
+    use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
     let redirect_status = if head.redirect_chain.is_empty() {
         ContentSecurityPolicyRedirectStatus::NoRedirect
     } else {
@@ -2745,7 +2841,7 @@ fn worker_fetch_response_csp_violations(
                 &pending.document_url,
                 &head.final_url,
                 &pending.request_url,
-                ContentSecurityPolicyResourceKind::WorkerConnect,
+                pending.kind.csp_resource_kind(),
                 redirect_status,
             )
         })
@@ -2756,7 +2852,7 @@ fn worker_fetch_response_csp_violations(
             &pending.document_url,
             &head.final_url,
             &pending.request_url,
-            ContentSecurityPolicyResourceKind::WorkerConnect,
+            pending.kind.csp_resource_kind(),
             redirect_status,
         );
     for violation in report_only.iter_mut().chain(&mut enforced) {
@@ -2930,7 +3026,7 @@ pub(in crate::worker) fn finish_worker_streaming_fetch(
                     record.method,
                     record.request_headers,
                     record.request_body,
-                    SubresourceResourceType::Fetch,
+                    pending.kind.resource_type(),
                     record.initial_network_request_headers,
                     head,
                     body,
@@ -2974,7 +3070,7 @@ pub(in crate::worker) fn record_worker_fetch_failure(
             record.method.clone(),
             record.request_headers.clone(),
             record.request_body.clone(),
-            SubresourceResourceType::Fetch,
+            pending.kind.resource_type(),
             network_error_text,
         );
         let _ = state
@@ -2995,7 +3091,7 @@ pub(in crate::worker) fn record_worker_fetch_failure(
         pending.request_method.clone(),
         pending.request_headers.clone(),
         pending.request_body.clone(),
-        SubresourceResourceType::Fetch,
+        pending.kind.resource_type(),
         network_error_text,
     );
 }
@@ -3080,7 +3176,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
                         request_body: record.request_body.clone(),
-                        resource_type: SubresourceResourceType::Fetch,
+                        resource_type: pending.kind.resource_type(),
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
                         challenge,
@@ -3119,7 +3215,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         method: record.method.clone(),
                         request_headers: record.request_headers.clone(),
                         request_body: record.request_body.clone(),
-                        resource_type: SubresourceResourceType::Fetch,
+                        resource_type: pending.kind.resource_type(),
                         request_cookie_report: response_head.request_cookie_report.clone(),
                         network_request_headers: record.initial_network_request_headers.clone(),
                         response_status: response_head.status,
@@ -3267,7 +3363,7 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                     record.method.clone(),
                     record.request_headers.clone(),
                     record.request_body.clone(),
-                    SubresourceResourceType::Fetch,
+                    pending.kind.resource_type(),
                     record.initial_network_request_headers.clone(),
                     response_head.clone(),
                     response_body.clone(),
@@ -3277,6 +3373,32 @@ pub(in crate::worker) fn drain_worker_fetch_completion_result(
                         internal_id: record.internal_id,
                     },
                 ));
+            }
+            if let Some(face) = pending.font_face.as_ref() {
+                let usable = !opaque_response_blocked
+                    && (200..300).contains(&response_head.status)
+                    && !matches!(
+                        response_filter,
+                        Some(
+                            crate::types::AsyncSubresourceFetchResponseFilter::Opaque
+                                | crate::types::AsyncSubresourceFetchResponseFilter::OpaqueRedirect
+                        )
+                    );
+                let bytes = usable
+                    .then(|| {
+                        response
+                            .subresource_response_body()
+                            .try_bytes()
+                            .ok()
+                            .map(|bytes| bytes.into_owned())
+                    })
+                    .flatten();
+                let face = v8::Local::new(scope, face);
+                crate::context_bootstrap::complete_font_face_resource(scope, face, bytes);
+                // Keep font bytes native: resolving an internal promise with an
+                // ArrayBuffer would observe author ArrayBuffer.prototype.then.
+                let _ = resolver.resolve(scope, v8::undefined(scope).into());
+                return;
             }
             let response_obj = match response.into_fetch_parts() {
                 WorkerFetchResponseParts::Materialized { head, body } => {
