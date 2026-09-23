@@ -553,6 +553,11 @@ pub(super) fn install_constructor_template_bindings<'s>(
     );
 
     match spec.interface.name() {
+        "NavigationDestination" => {
+            crate::context_bootstrap::navigation_events::install_navigation_destination_template_bindings(
+                scope, template,
+            );
+        }
         "HTMLDocument" => {
             let proto = template.prototype_template(scope);
             HtmlDocumentTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);

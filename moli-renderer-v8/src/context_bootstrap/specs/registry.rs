@@ -641,6 +641,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::NavigationHistoryEntry,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::NavigationDestination::DESCRIPTOR,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::NavigationActivation::DESCRIPTOR,
         kind: ConstructorKind::NavigationActivation,
     },

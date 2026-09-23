@@ -201,7 +201,6 @@ pub(in crate::context_bootstrap) fn apply_navigation_navigate_same_document<'s>(
         }
         LocationNavigationKind::Reload => return,
     }
-    refresh_navigation_destination_indexes(scope, navigation, history);
     sync_navigation_entry_seed_from_owner(scope, owner);
 }
 

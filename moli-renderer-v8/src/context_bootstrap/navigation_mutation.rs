@@ -14,7 +14,6 @@ use super::navigation_entry::{
 use super::navigation_entry_state::{copy_navigation_entry_serialized_state, set_navigation_entry_state};
 use super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_entry_dispose,
-    refresh_navigation_destination_indexes,
 };
 use super::navigation_serialize::{
     serialize_history_entries, serialize_navigation_entry_object,
