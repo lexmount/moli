@@ -5,10 +5,12 @@ mod dispatch;
 
 pub(crate) use self::constructors::construct_focus_event;
 pub(crate) use self::constructors::{
-    TextEditInputType, TouchEventPoint, construct_command_event, construct_drag_event, construct_input_event, construct_interest_event, construct_keyboard_event, construct_clipboard_event, construct_editing_input_event,
-    construct_mouse_event_with_detail_and_modifiers, construct_mouse_event_with_modifiers,
-    construct_mouse_event_with_related_target_and_modifiers, construct_pointer_event,
-    construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
+    TextEditInputType, TouchEventPoint, construct_clipboard_event, construct_command_event,
+    construct_drag_event, construct_input_event, construct_interest_event,
+    construct_keyboard_event, construct_mouse_event_with_detail_and_modifiers,
+    construct_mouse_event_with_modifiers, construct_mouse_event_with_related_target_and_modifiers,
+    construct_pointer_event, construct_pointer_event_with_modifiers,
+    construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_submit_event, construct_toggle_event, construct_touch_event,
     construct_touch_event_with_points, construct_wheel_event,
