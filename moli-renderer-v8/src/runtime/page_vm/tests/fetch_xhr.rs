@@ -3703,6 +3703,10 @@ fn spawn_repeated_synchronous_xhr_server(
                     }
                     Err(error) => panic!("accept repeated synchronous XHR: {error}"),
                 };
+                // Accepted sockets inherit nonblocking mode on macOS.
+                stream
+                    .set_nonblocking(false)
+                    .expect("use blocking synchronous XHR request I/O");
                 stream
                     .set_read_timeout(Some(Duration::from_secs(2)))
                     .expect("bound synchronous XHR request read");

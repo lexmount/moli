@@ -788,7 +788,9 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
                     height: length(40.0),
                 },
                 overflow: Point {
-                    x: Overflow::Scroll,
+                    // Only vertical feedback is needed to narrow the text.
+                    // Horizontal overflow depends on platform font advances.
+                    x: Overflow::Hidden,
                     y: Overflow::Scroll,
                 },
                 ..Style::default()
@@ -800,7 +802,7 @@ fn scrollbar_feedback_rebreaks_the_reused_inline_layout_at_its_final_width() {
     assert_eq!(feedback.metrics.numeric_layout_pass_count, 2);
     assert_eq!(
         feedback.element_metrics_for_source(1).unwrap().client_size,
-        moli_layout::LayoutSize::new(85.0, 25.0),
+        moli_layout::LayoutSize::new(85.0, 40.0),
     );
     let feedback_text = feedback.client_rects_for_source(2);
 

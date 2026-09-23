@@ -17,13 +17,10 @@ use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex};
 
-#[cfg(not(test))]
+// Behavior tests use the production budget: native work such as CoreText's
+// first font scan can exceed a shorter test-only deadline. Runaway-script
+// tests select a short timeout explicitly with override_timeout_for_test.
 pub(crate) const SCRIPT_TURN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
-#[cfg(test)]
-// Keep runaway-script tests substantially faster than production without
-// terminating finite debug-build checkpoints merely because workspace
-// nextest is concurrently running other V8-heavy processes.
-pub(crate) const SCRIPT_TURN_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum V8ExecutionWatchdogKind {

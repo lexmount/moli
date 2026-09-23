@@ -519,7 +519,10 @@ mod tests {
 
     #[test]
     fn no_proxy_routes_match_libcurl() {
-        use std::{net::TcpListener, time::Duration};
+        use std::{
+            net::TcpListener,
+            time::{Duration, Instant},
+        };
 
         use curl::easy::{Easy, List};
 
@@ -576,7 +579,23 @@ mod tests {
                 assert!(connected_port == origin_port || connected_port == proxy_port);
                 let curl_uses_proxy = connected_port == proxy_port;
                 let listener = if curl_uses_proxy { &proxy } else { &origin };
-                let _connection = listener.accept().unwrap();
+                // A completed client connect can precede the listener's
+                // accept readiness on macOS. Bound that handoff explicitly.
+                let deadline = Instant::now() + Duration::from_secs(2);
+                let _connection = loop {
+                    match listener.accept() {
+                        Ok(connection) => break connection,
+                        Err(error)
+                            if error.kind() == std::io::ErrorKind::WouldBlock
+                                && Instant::now() < deadline =>
+                        {
+                            std::thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => {
+                            panic!("accept {host} with NO_PROXY={no_proxy:?}: {error}")
+                        }
+                    }
+                };
 
                 for (scheme, proxy_env) in [
                     ("http", "http_proxy"),

@@ -844,6 +844,11 @@ globalThis.__documentWriteVisibleIds = ids.join("|");
 #[test]
 fn document_write_external_runaway_script_is_terminated_and_parser_recovers() {
     super::tests::run_phase_one_large_stack_test("document-write-script-watchdog", || {
+        let _watchdog_timeout =
+            crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+                crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
+                std::time::Duration::from_millis(500),
+            );
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
