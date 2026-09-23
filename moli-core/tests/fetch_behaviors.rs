@@ -15,6 +15,8 @@ use tokio::time::Duration;
 mod preload_as;
 #[path = "fetch_behaviors/preload_lifecycle.rs"]
 mod preload_lifecycle;
+#[path = "fetch_behaviors/preload_parser.rs"]
+mod preload_parser;
 
 #[path = "fetch_behaviors/font_binary.rs"]
 mod font_binary;

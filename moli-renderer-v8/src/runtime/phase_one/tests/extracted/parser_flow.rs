@@ -177,7 +177,7 @@ fn parser_step_without_script_handoff_consumes_live_backend_dom() {
     let crate::parser::ParserPumpOutcome {
         result,
         discovered_async_prefetch_scripts: _,
-        discovered_modulepreload_link_candidates: _,
+        discovered_preload_link_candidates: _,
         discovered_blocking_stylesheet_inputs: _,
     } = driver
         .parser_session
@@ -227,13 +227,13 @@ fn parser_step_with_inline_svg_script_surfaces_shared_script_handoff() {
     };
 
     let crate::parser::ParserPumpOutcome {
-            result,
-            discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
-            discovered_blocking_stylesheet_inputs: _,
-        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
-            "<!doctype html><html><body><svg><script>window.svgAnswer = 42;</script></svg><div>late</div></body></html>",
-        );
+        result,
+        discovered_async_prefetch_scripts: _,
+        discovered_preload_link_candidates: _,
+        discovered_blocking_stylesheet_inputs: _,
+    } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
+        "<!doctype html><html><body><svg><script>window.svgAnswer = 42;</script></svg><div>late</div></body></html>",
+    );
     let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
         panic!("expected parser step to stop at inline SVG script handoff");
     };
@@ -315,93 +315,93 @@ fn parser_defined_autonomous_custom_element_reaches_parser_handoff() {
         .build()
         .expect("runtime");
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader: &'static ResourceRequestClient =
-                Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
-            let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
-            let _js_runtime = crate::JsRuntime::initialize();
-            let mut driver = ParserDriver {
-                loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader: &'static ResourceRequestClient =
+            Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
+        let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
+        let _js_runtime = crate::JsRuntime::initialize();
+        let mut driver = ParserDriver {
+            loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
 
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
-                r#"<!doctype html><script>customElements.define("x-sync", class extends HTMLElement {});</script>"#,
-            );
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at inline customElements.define handoff");
-            };
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
+            r#"<!doctype html><script>customElements.define("x-sync", class extends HTMLElement {});</script>"#,
+        );
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at inline customElements.define handoff");
+        };
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(103),
-                local_executor.clone(),
-                loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one parser custom element definition handoff channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver
-                        .handle_parse_time_script_handoff(page_vm, *handoff, None)
-                        .await
-                },
-            )
-            .await
-            .expect("customElements.define handoff should complete");
-            assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(103),
+            local_executor.clone(),
+            loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one parser custom element definition handoff channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver
+                    .handle_parse_time_script_handoff(page_vm, *handoff, None)
+                    .await
+            },
+        )
+        .await
+        .expect("customElements.define handoff should complete");
+        assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
 
-            let parser_document_owner = page_vm
-                .vm()
-                .current_main_document_task_owner()
-                .expect("custom-element parser test requires a main document owner");
-            let result = driver.pump_parse_step_with_signals(
-                &mut page_vm,
-                parser_document_owner,
-                "<body><x-sync id='candidate' data-probe='yes'></x-sync></body>",
-            );
-            let crate::live_document_parser::LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(
-                handoff,
-            ) = result
-            else {
-                panic!("expected parser-created custom element handoff after define()");
-            };
-            let handoff = &*handoff;
-            assert_eq!(handoff.local_name, "x-sync");
-            assert_eq!(handoff.namespace, "http://www.w3.org/1999/xhtml");
-            assert_eq!(handoff.prefix, None);
-            assert_eq!(handoff.parent_at_creation, None);
-            assert_eq!(handoff.owner_document.index(), 0);
-            assert!(
-                handoff
-                    .attributes
-                    .iter()
-                    .any(|attribute| attribute.name() == "id" && attribute.value() == "candidate")
-            );
-            assert!(handoff.attributes.iter().any(|attribute| {
-                attribute.name() == "data-probe" && attribute.value() == "yes"
-            }));
+        let parser_document_owner = page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("custom-element parser test requires a main document owner");
+        let result = driver.pump_parse_step_with_signals(
+            &mut page_vm,
+            parser_document_owner,
+            "<body><x-sync id='candidate' data-probe='yes'></x-sync></body>",
+        );
+        let crate::live_document_parser::LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(
+            handoff,
+        ) = result
+        else {
+            panic!("expected parser-created custom element handoff after define()");
+        };
+        let handoff = &*handoff;
+        assert_eq!(handoff.local_name, "x-sync");
+        assert_eq!(handoff.namespace, "http://www.w3.org/1999/xhtml");
+        assert_eq!(handoff.prefix, None);
+        assert_eq!(handoff.parent_at_creation, None);
+        assert_eq!(handoff.owner_document.index(), 0);
+        assert!(
+            handoff
+                .attributes
+                .iter()
+                .any(|attribute| attribute.name() == "id" && attribute.value() == "candidate")
+        );
+        assert!(handoff.attributes.iter().any(|attribute| {
+            attribute.name() == "data-probe" && attribute.value() == "yes"
         }));
+    }));
 }
 #[test]
 fn move_before_does_not_prepare_empty_parser_scripts_from_moved_text() {

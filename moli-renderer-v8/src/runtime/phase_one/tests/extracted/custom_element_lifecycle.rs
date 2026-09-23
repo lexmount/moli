@@ -1527,22 +1527,22 @@ fn parser_custom_element_constructor_runs_before_following_siblings() {
         .build()
         .expect("runtime");
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url =
-                Url::parse("https://parser-sync-custom-element.test/").expect("test url");
-            let loader: &'static ResourceRequestClient =
-                Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
-            let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
-            let mut driver = ParserDriver {
-                loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
-            let html = r#"<!doctype html><script>
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url =
+            Url::parse("https://parser-sync-custom-element.test/").expect("test url");
+        let loader: &'static ResourceRequestClient =
+            Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
+        let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
+        let mut driver = ParserDriver {
+            loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
+        let html = r#"<!doctype html><script>
 window.__containerChildNodesInConstructor = [];
 window.__containerNextSiblingInConstructor = "unset";
 window.__attributeCountInConstructor = -1;
@@ -1573,69 +1573,69 @@ document.body.setAttribute('data-result', [
   instance.getAttribute('id')
 ].join('|'));
 </script>"#;
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at initial inline script handoff");
-            };
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at initial inline script handoff");
+        };
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(104),
-                local_executor.clone(),
-                loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor.clone(),
-                "phase-one parser custom element sync setup handoff channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver
-                        .handle_parse_time_script_handoff(page_vm, *handoff, None)
-                        .await
-                },
-            )
-            .await
-            .expect("initial customElements.define handoff should complete");
-            assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(104),
+            local_executor.clone(),
+            loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor.clone(),
+            "phase-one parser custom element sync setup handoff channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver
+                    .handle_parse_time_script_handoff(page_vm, *handoff, None)
+                    .await
+            },
+        )
+        .await
+        .expect("initial customElements.define handoff should complete");
+        assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
 
-            let local_executor = page_vm.local_executor.clone();
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one parser custom element continuation channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver.advance_parser_step(page_vm, "", None).await
-                },
-            )
-            .await
-            .expect("parser continuation should complete");
-            assert!(matches!(outcome, ParserStepAdvanceOutcome::Continue));
+        let local_executor = page_vm.local_executor.clone();
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one parser custom element continuation channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver.advance_parser_step(page_vm, "", None).await
+            },
+        )
+        .await
+        .expect("parser continuation should complete");
+        assert!(matches!(outcome, ParserStepAdvanceOutcome::Continue));
 
-            let snapshot = page_vm.vm().snapshot_live_document();
-            let body = snapshot.document_body_handle().expect("body");
-            let result = snapshot
-                .node(body)
-                .and_then(Node::as_element)
-                .and_then(|element| element.attribute("data-result"));
-            assert_eq!(result, Some("3|true|true|true|true|0|candidate"));
-        }));
+        let snapshot = page_vm.vm().snapshot_live_document();
+        let body = snapshot.document_body_handle().expect("body");
+        let result = snapshot
+            .node(body)
+            .and_then(Node::as_element)
+            .and_then(|element| element.attribute("data-result"));
+        assert_eq!(result, Some("3|true|true|true|true|0|candidate"));
+    }));
 }
 #[test]
 fn parser_custom_element_inserts_constructor_returned_element() {
@@ -1644,22 +1644,22 @@ fn parser_custom_element_inserts_constructor_returned_element() {
         .build()
         .expect("runtime");
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let _js_runtime = crate::JsRuntime::initialize();
-            let final_url =
-                Url::parse("https://parser-returned-custom-element.test/").expect("test url");
-            let loader: &'static ResourceRequestClient =
-                Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
-            let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
-            let mut driver = ParserDriver {
-                loader,
-                final_url: &state.final_url,
-                parser_session: &mut state.parser_session,
-                scheduler: &mut state.scheduler,
-                buffered_document_preloads: &mut state.buffered_document_preloads,
-                service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                input_closed: &state.input_closed,
-            };
-            let html = r#"<!doctype html><script>
+        let _js_runtime = crate::JsRuntime::initialize();
+        let final_url =
+            Url::parse("https://parser-returned-custom-element.test/").expect("test url");
+        let loader: &'static ResourceRequestClient =
+            Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
+        let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
+        let mut driver = ParserDriver {
+            loader,
+            final_url: &state.final_url,
+            parser_session: &mut state.parser_session,
+            scheduler: &mut state.scheduler,
+            buffered_document_preloads: &mut state.buffered_document_preloads,
+            service_worker_preload_context: state.service_worker_preload_context.as_ref(),
+            input_closed: &state.input_closed,
+        };
+        let html = r#"<!doctype html><script>
 let anotherElementCreatedBeforeSuperCall = undefined;
 let elementCreatedBySuperCall = undefined;
 let shouldCreateElementBeforeSuperCall = true;
@@ -1711,72 +1711,72 @@ document.body.setAttribute('data-result', [
   instanceB.getAttribute('id')
 ].join('|'));
 </script>"#;
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
-            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
-                panic!("expected parser step to stop at initial inline script handoff");
-            };
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
+        let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
+            panic!("expected parser step to stop at initial inline script handoff");
+        };
 
-            let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let mut page_vm = PageVm::new(
-                PageId::new_for_testing(105),
-                local_executor.clone(),
-                loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor.clone(),
-                "phase-one parser custom element return setup handoff channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver
-                        .handle_parse_time_script_handoff(page_vm, *handoff, None)
-                        .await
-                },
-            )
-            .await
-            .expect("initial customElements.define handoff should complete");
-            assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
+        let parser_dom_host = driver.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let mut page_vm = PageVm::new(
+            PageId::new_for_testing(105),
+            local_executor.clone(),
+            loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor.clone(),
+            "phase-one parser custom element return setup handoff channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver
+                    .handle_parse_time_script_handoff(page_vm, *handoff, None)
+                    .await
+            },
+        )
+        .await
+        .expect("initial customElements.define handoff should complete");
+        assert!(matches!(outcome, ScriptHandoffOutcome::NoNavigation));
 
-            let local_executor = page_vm.local_executor.clone();
-            let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
-            let outcome = super::access::run_named_owner_local_task(
-                local_executor,
-                "phase-one parser custom element return continuation channel closed",
-                async move {
-                    let page_vm = unsafe { &mut *page_vm_ptr };
-                    let driver = unsafe { &mut *driver_ptr };
-                    driver.advance_parser_step(page_vm, "", None).await
-                },
-            )
-            .await
-            .expect("parser continuation should complete");
-            assert!(matches!(outcome, ParserStepAdvanceOutcome::Continue));
+        let local_executor = page_vm.local_executor.clone();
+        let page_vm_ptr: *mut PageVm = &mut page_vm;
+        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let outcome = super::access::run_named_owner_local_task(
+            local_executor,
+            "phase-one parser custom element return continuation channel closed",
+            async move {
+                let page_vm = unsafe { &mut *page_vm_ptr };
+                let driver = unsafe { &mut *driver_ptr };
+                driver.advance_parser_step(page_vm, "", None).await
+            },
+        )
+        .await
+        .expect("parser continuation should complete");
+        assert!(matches!(outcome, ParserStepAdvanceOutcome::Continue));
 
-            let snapshot = page_vm.vm().snapshot_live_document();
-            let body = snapshot.document_body_handle().expect("body");
-            let result = snapshot
-                .node(body)
-                .and_then(Node::as_element)
-                .and_then(|element| element.attribute("data-result"));
-            assert_eq!(
-                result,
-                Some("true|true|true|true|a|child-a|true|true|true|true|b")
-            );
-        }));
+        let snapshot = page_vm.vm().snapshot_live_document();
+        let body = snapshot.document_body_handle().expect("body");
+        let result = snapshot
+            .node(body)
+            .and_then(Node::as_element)
+            .and_then(|element| element.attribute("data-result"));
+        assert_eq!(
+            result,
+            Some("true|true|true|true|a|child-a|true|true|true|true|b")
+        );
+    }));
 }
 #[test]
 fn document_write_custom_element_direct_constructs_before_token_attributes() {

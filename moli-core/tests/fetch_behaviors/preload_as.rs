@@ -113,6 +113,7 @@ async fn check_preload_admission(fixture: &str, case_count: usize) -> Result<()>
     config.set_optional_resource_fetch_mask(moli_page_types::OptionalResourceFetchMask::ALL);
     let browser = Browser::new(config)?;
     let mut page = browser.fetch(&server.url("/static")).await?;
+    let mut parser_markup = String::new();
     for context in ["top-dynamic", "top-parser"] {
         let observed = evaluate_preload_probe(&mut page, fixture).await?;
         assert_eq!(observed["context"], context);
@@ -123,12 +124,38 @@ async fn check_preload_admission(fixture: &str, case_count: usize) -> Result<()>
         assert_eq!(observed["failures"], serde_json::json!([]), "{context}");
         assert_eq!(observed["recovered"], true, "{}", observed["failures"]);
         if context == "top-dynamic" {
+            parser_markup = observed["parserMarkup"].as_str().unwrap().to_owned();
             let mut url = url::Url::parse(&server.url("/compat/child-dynamic-markup-document"))?;
             url.query_pairs_mut()
                 .append_pair("markup", observed["parserMarkup"].as_str().unwrap());
             page = browser.fetch(url.as_str()).await?;
         }
     }
+    let observed = evaluate_preload_probe(
+        &mut page,
+        &format!(
+            r#"(async () => {{
+      const frame = document.createElement('iframe');
+      frame.width = String(innerWidth);
+      frame.height = String(innerHeight);
+      frame.srcdoc = {markup};
+      await new Promise(resolve => {{ frame.onload=resolve; document.body.append(frame); }});
+      frame.contentWindow.preloadProbeResourcePath = new URL('/static', location.href).href;
+      const result = await frame.contentWindow.eval({fixture});
+      frame.remove();
+      return result;
+    }})()"#,
+            markup = serde_json::to_string(&parser_markup)?,
+            fixture = serde_json::to_string(fixture)?
+        ),
+    )
+    .await?;
+    assert_eq!(
+        observed["observations"].as_array().unwrap().len(),
+        case_count
+    );
+    assert_eq!(observed["failures"], serde_json::json!([]), "child-parser");
+    assert_eq!(observed["recovered"], true, "child-parser");
     server.shutdown().await;
     Ok(())
 }
