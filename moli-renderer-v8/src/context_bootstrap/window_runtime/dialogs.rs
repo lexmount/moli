@@ -207,13 +207,13 @@ pub(crate) fn window_open_callback<'s>(
         entered_window_api_base_url(scope, host)
     };
     let url = if parsed.raw_url.is_empty() {
-        Url::parse("about:blank").expect("about:blank should parse")
+        None
     } else {
         match Url::options()
             .base_url(Some(&entered_base_url))
             .parse(&parsed.raw_url)
         {
-            Ok(url) => url,
+            Ok(url) => Some(url),
             Err(_) => {
                 webidl::throw_dom_exception(
                     scope,
@@ -225,7 +225,12 @@ pub(crate) fn window_open_callback<'s>(
         }
     };
     if special_target == Some(SpecialBrowsingContextTarget::Current) {
-        navigate_window_open_self(scope, entered_window, url.as_str(), &mut rv);
+        navigate_window_open_self(
+            scope,
+            entered_window,
+            url.as_ref().map(Url::as_str),
+            &mut rv,
+        );
         return;
     }
     let parsed_features = WindowOpenFeatures::parse(&parsed.features);
@@ -240,8 +245,10 @@ pub(crate) fn window_open_callback<'s>(
         let host = unsafe { &*host_ptr };
         window_open_entered_document_url(scope, host).to_string()
     };
-    if url.scheme() == "javascript" {
-        let source = crate::javascript_url::csp_source(&url);
+    if let Some(url) = &url
+        && url.scheme() == "javascript"
+    {
+        let source = crate::javascript_url::csp_source(url);
         let host = unsafe { &mut *host_ptr };
         let owner = host.entered_owner_dispatch_scope(scope);
         if !host.allows_inline_javascript_navigation_by_csp(scope, owner, &source) {
@@ -249,12 +256,12 @@ pub(crate) fn window_open_callback<'s>(
             return;
         }
     }
-    let url = url.to_string();
+    let url = url.map(|url| url.to_string());
     if let Some(
         target @ (SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top),
     ) = special_target
     {
-        match navigate_existing_browsing_context_target(scope, host_ptr, target, &url) {
+        match navigate_existing_browsing_context_target(scope, host_ptr, target, url.as_deref()) {
             Some(window) => rv.set(window.into()),
             None => rv.set(v8::null(scope).into()),
         }
@@ -278,14 +285,20 @@ pub(crate) fn window_open_callback<'s>(
             opener_endpoint,
             entered_window,
         );
-        if navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None) {
+        if url.as_deref().is_none_or(|url| {
+            navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, url, None)
+        }) {
             rv.set(target_window.into());
             return;
         }
     }
     let host = unsafe { &mut *host_ptr };
+    // Only a newly selected browsing context defaults an omitted URL to
+    // about:blank. Reusing a target must preserve its current document and any
+    // navigation already in flight.
+    let popup_url = url.as_deref().unwrap_or("about:blank");
     let window_open_event = RendererPendingWindowOpenEvent {
-        url: url.clone(),
+        url: popup_url.to_owned(),
         window_name: if parsed.target_name.is_empty() {
             "_blank".to_owned()
         } else {
@@ -319,14 +332,14 @@ pub(crate) fn window_open_callback<'s>(
         )
         | None => crate::RendererPopupDisposition::Foreground,
     };
-    if popup_target_can_use_lightweight_window(&parsed.target_name, &url)
+    if popup_target_can_use_lightweight_window(&parsed.target_name, popup_url)
         && let Some(opened_popup) = host.open_lightweight_popup_window(
             scope,
             host_ptr,
             opener,
             opener_child_handle,
             &parsed.target_name,
-            &url,
+            url.as_deref(),
             entered_base_url,
             creator_policy_container,
         )
@@ -334,6 +347,13 @@ pub(crate) fn window_open_callback<'s>(
         let popup_id = opened_popup.popup_id;
         if opened_popup.created_new_browsing_context {
             host.set_lightweight_popup_is_popup(popup_id, parsed_features.is_popup());
+        } else if url.is_none() {
+            if suppress_opener {
+                rv.set(v8::null(scope).into());
+            } else {
+                rv.set(opened_popup.window.into());
+            }
+            return;
         }
         let session_storage_store = host.lightweight_popup_session_storage_store(popup_id);
         let initial_empty_document_storage_key =
@@ -347,7 +367,7 @@ pub(crate) fn window_open_callback<'s>(
                 source,
                 !suppress_opener,
                 Some(popup_id),
-                url,
+                popup_url.to_owned(),
                 parsed.target_name,
                 popup_disposition,
             )
@@ -370,7 +390,7 @@ pub(crate) fn window_open_callback<'s>(
             source,
             !suppress_opener,
             None,
-            url,
+            popup_url.to_owned(),
             parsed.target_name,
             popup_disposition,
         )
@@ -484,9 +504,13 @@ fn trackable_named_popup_target_name(target_name: &str) -> Option<&str> {
 fn navigate_window_open_self<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
-    url: &str,
+    url: Option<&str>,
     rv: &mut v8::ReturnValue<'_, v8::Value>,
 ) {
+    let Some(url) = url else {
+        rv.set(receiver.into());
+        return;
+    };
     let Some(location) =
         super::super::navigation_window::window_location_for_holder(scope, receiver)
     else {

@@ -72,6 +72,7 @@ mod webrtc_events;
 mod window_event_target;
 mod window_legacy_objects;
 mod window_onerror;
+mod window_open_empty_url;
 mod worker_listener_invocation;
 
 mod document_domain_lifetime;

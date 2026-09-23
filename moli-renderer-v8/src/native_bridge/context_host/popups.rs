@@ -825,22 +825,25 @@ impl JsContextHost {
         opener: Option<v8::Local<'s, v8::Object>>,
         opener_child_handle: Option<DomHandle>,
         target_name: &str,
-        href: &str,
+        href: Option<&str>,
         creator_base_url: Url,
         creator_policy_container: DocumentPolicyContainer,
     ) -> Option<OpenedLightweightPopup<'s>> {
         if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(popup_id) = self.lightweight_popup_window_names.get(&name).copied()
             && self.lightweight_popup_is_open(popup_id)
-            && let Some(window) = self.reopen_lightweight_popup_window(
-                scope,
-                popup_id,
-                opener,
-                opener_child_handle,
-                href,
-                creator_base_url.clone(),
-                creator_policy_container.clone(),
-            )
+            && let Some(window) = match href {
+                Some(href) => self.reopen_lightweight_popup_window(
+                    scope,
+                    popup_id,
+                    opener,
+                    opener_child_handle,
+                    href,
+                    creator_base_url.clone(),
+                    creator_policy_container.clone(),
+                ),
+                None => self.lightweight_popup_window(scope, popup_id),
+            }
         {
             return Some(OpenedLightweightPopup {
                 window,
@@ -854,7 +857,7 @@ impl JsContextHost {
             opener,
             opener_child_handle,
             target_name,
-            href,
+            href.unwrap_or("about:blank"),
             opener_child_handle
                 .and_then(|handle| self.child_browsing_context_popup_opener_sandbox_policy(handle)),
             creator_base_url,
