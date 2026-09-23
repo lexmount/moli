@@ -553,12 +553,23 @@ impl HtmlTreeSinkStream {
         }
 
         let tokenizer_result = self.parser.feed();
-        let paused_for_custom_element =
-            matches!(tokenizer_result, HtmlParserSessionResult::Script(_))
-                && self.has_pending_custom_element_construction_handoff();
-        let paused_for_stylesheet = matches!(tokenizer_result, HtmlParserSessionResult::Script(_))
-            && !paused_for_custom_element
-            && self.peek_pending_blocking_stylesheet_pause().is_some();
+        let paused_for_custom_element = matches!(
+            &tokenizer_result,
+            HtmlParserSessionResult::Script(handle)
+                if self.peek_pending_custom_element_construction_handoff_placeholder()
+                    == Some(handle.node_id())
+        );
+        let paused_for_stylesheet = !paused_for_custom_element
+            && matches!(
+                &tokenizer_result,
+                HtmlParserSessionResult::Script(handle)
+                    if self.peek_pending_blocking_stylesheet_pause() == Some(handle.node_id())
+            );
+        // Claim this yield before discovery and script-preparation callbacks
+        // can register another stylesheet pause on the same live document.
+        let claimed_stylesheet_pause = paused_for_stylesheet
+            .then(|| self.pop_pending_blocking_stylesheet_pause())
+            .flatten();
         let result = match tokenizer_result {
             HtmlParserSessionResult::OwnerInterrupted => RawParserStep::OwnerInterrupted,
             HtmlParserSessionResult::Script(handle) if paused_for_custom_element => {
@@ -569,10 +580,7 @@ impl HtmlTreeSinkStream {
                 RawParserStep::CustomElementConstruction
             }
             HtmlParserSessionResult::Script(handle) if paused_for_stylesheet => {
-                debug_assert_eq!(
-                    self.peek_pending_blocking_stylesheet_pause(),
-                    Some(handle.node_id())
-                );
+                debug_assert_eq!(claimed_stylesheet_pause, Some(handle.node_id()));
                 RawParserStep::BlockingStylesheet(handle.node_id())
             }
             HtmlParserSessionResult::Script(handle) => RawParserStep::Script(handle.node_id()),
@@ -664,9 +672,8 @@ impl HtmlTreeSinkStream {
                     blocking_signatures_before,
                 ))))
             } else if let RawParserStep::BlockingStylesheet(node_id) = result {
-                let pending_node_id = self.pop_pending_blocking_stylesheet_pause();
                 assert_eq!(
-                    pending_node_id,
+                    claimed_stylesheet_pause,
                     Some(node_id),
                     "tokenizer stylesheet yield must consume its matching pending parser pause"
                 );
@@ -792,12 +799,6 @@ impl HtmlTreeSinkStream {
         self.parser
             .sink()
             .drain_pending_custom_element_construction_handoffs()
-    }
-
-    fn has_pending_custom_element_construction_handoff(&self) -> bool {
-        self.parser
-            .sink()
-            .has_pending_custom_element_construction_handoff()
     }
 
     fn peek_pending_custom_element_construction_handoff_placeholder(&self) -> Option<NativeNodeId> {

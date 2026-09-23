@@ -1,4 +1,7 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 use html5ever::{LocalName, Namespace, QualName};
 use html5ever::{
@@ -43,12 +46,14 @@ enum TokenizerPause {
 
 struct EmbedderPausingTreeBuilder {
     inner: TreeBuilder<ParseHandle, DocumentSink>,
+    deferred_owner_interruption: Cell<bool>,
 }
 
 impl EmbedderPausingTreeBuilder {
     fn new(sink: DocumentSink, opts: TreeBuilderOpts) -> Self {
         Self {
             inner: TreeBuilder::new(sink, opts),
+            deferred_owner_interruption: Cell::new(false),
         }
     }
 
@@ -59,6 +64,7 @@ impl EmbedderPausingTreeBuilder {
     ) -> Self {
         Self {
             inner: TreeBuilder::new_for_fragment(sink, context_handle, None, opts),
+            deferred_owner_interruption: Cell::new(false),
         }
     }
 
@@ -122,22 +128,6 @@ impl EmbedderPausingTreeBuilder {
             // ordinary tokenizer pause contract at this narrow adapter.
             return TokenSinkResult::Script(ParseHandle::new(script, None));
         }
-        if let Some(placeholder) = self
-            .inner
-            .sink
-            .pending_custom_element_construction_handoff_placeholder()
-        {
-            // html5ever has no custom-element pause result. Moli interprets the
-            // script handoff handle as a custom-element handoff when the parser
-            // sink has a matching pending construction record.
-            return TokenSinkResult::Script(ParseHandle::new(placeholder, None));
-        }
-        if let Some(stylesheet) = self.inner.sink.pending_blocking_stylesheet_pause() {
-            // html5ever exposes one generic tokenizer-yield result.  The stream
-            // layer distinguishes this parser-created stylesheet boundary from
-            // actual script and custom-element handoffs using sink-owned state.
-            return TokenSinkResult::Script(ParseHandle::new(stylesheet, None));
-        }
         result
     }
 }
@@ -146,11 +136,46 @@ impl TokenSink for EmbedderPausingTreeBuilder {
     type Handle = TokenizerPause;
 
     fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<Self::Handle> {
+        // html5ever requires character, comment, doctype and EOF tokens to
+        // return Continue. A parser mutation callback may make a stylesheet or
+        // custom-element pause visible only after one of those tokens. Retain
+        // the sink-owned pause until a tag token can yield it safely.
+        let can_pause = matches!(&token, Token::TagToken(_));
         let result = self.process_token_before_callbacks(token, line_number);
-        if self.sink().finish_parser_dom_mutations().is_break() {
+        let current_owner_interruption = self.sink().finish_parser_dom_mutations().is_break();
+        let deferred_owner_interruption = self.deferred_owner_interruption.replace(false);
+        let owner_interrupted = current_owner_interruption || deferred_owner_interruption;
+        if !can_pause {
+            self.deferred_owner_interruption.set(owner_interrupted);
+            return TokenSinkResult::Continue;
+        }
+        if owner_interrupted {
             // A nested parser invocation already handed its blocker to the
             // owner. Stop this outer feed before it consumes another token.
             return TokenSinkResult::Script(TokenizerPause::OwnerInterrupted);
+        }
+        if matches!(
+            &result,
+            TokenSinkResult::Continue | TokenSinkResult::EncodingIndicator(_)
+        ) {
+            if let Some(placeholder) = self
+                .sink()
+                .pending_custom_element_construction_handoff_placeholder()
+            {
+                // html5ever has no custom-element pause result. The stream
+                // distinguishes this handle using sink-owned state.
+                return TokenSinkResult::Script(TokenizerPause::Handoff(ParseHandle::new(
+                    placeholder,
+                    None,
+                )));
+            }
+            if let Some(stylesheet) = self.sink().pending_blocking_stylesheet_pause() {
+                // Query after mutation callbacks so the handle matches
+                // the queue entry consumed by the stream layer.
+                return TokenSinkResult::Script(TokenizerPause::Handoff(ParseHandle::new(
+                    stylesheet, None,
+                )));
+            }
         }
         match result {
             TokenSinkResult::Continue => TokenSinkResult::Continue,

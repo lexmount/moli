@@ -1539,12 +1539,6 @@ impl DocumentSink {
             .drain_pending_custom_element_construction_handoffs()
     }
 
-    pub(super) fn has_pending_custom_element_construction_handoff(&self) -> bool {
-        self.target
-            .borrow()
-            .has_pending_custom_element_construction_handoff()
-    }
-
     pub(super) fn pending_custom_element_construction_handoff_placeholder(
         &self,
     ) -> Option<NativeNodeId> {
