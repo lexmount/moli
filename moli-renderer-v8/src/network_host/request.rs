@@ -9,7 +9,7 @@ use super::headers::{
 use super::*;
 
 pub(crate) use self::bindings::request_constructor_callback;
-pub(crate) use self::error::FetchArgumentError;
+pub(crate) use self::error::{FetchArgumentError, RequestUrlError};
 pub(crate) use self::init::convert_fetch_arguments;
 pub(in crate::network_host) use self::init::request_credentials_mode_label;
 pub(crate) use self::init::{parse_fetch_init, request_object_credentials_mode};

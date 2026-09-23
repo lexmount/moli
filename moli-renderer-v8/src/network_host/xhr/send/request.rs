@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::network_host::url_helpers::ResolveContextUrlError;
 
 const CONTENT_TYPE_HEADER: &str = "Content-Type";
 const URL_SEARCH_PARAMS_CONTENT_TYPE: &str = "application/x-www-form-urlencoded;charset=UTF-8";
@@ -30,7 +31,7 @@ pub(super) struct PreparedXhrSendRequest {
 
 pub(super) enum XhrSendPrepareError {
     ExecutionContext,
-    Url(String),
+    Url(ResolveContextUrlError),
 }
 
 pub(super) fn xhr_dom_debugger_request_url<'s>(
@@ -78,8 +79,8 @@ pub(super) fn prepare_xhr_send_request<'s>(
     } = environment;
     let policy_context = effective_subresource_policy_context(scope, host, owner);
     let network_partition_key = active_subresource_network_partition_key(host, owner);
-    let resolved_url = resolve_context_url(&base_url, &url_str, None)
-        .map_err(|error| XhrSendPrepareError::Url(error.to_string()))?;
+    let resolved_url =
+        resolve_context_url(&base_url, &url_str, None).map_err(XhrSendPrepareError::Url)?;
     let (request_headers, cors_preflight_request_headers) =
         xhr_request_headers(scope, host, xhr, prepared_body.default_content_type);
     let credentials_mode =

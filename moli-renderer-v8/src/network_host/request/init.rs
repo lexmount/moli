@@ -156,7 +156,7 @@ pub(crate) fn parse_fetch_init<'s>(
         })?;
     let method = init
         .method
-        .map(|s| normalize_request_method(&s).map_err(webidl::WebIdlError::custom_message))
+        .map(|s| normalize_request_method(&s))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
 

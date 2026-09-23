@@ -64,7 +64,9 @@ pub(crate) use self::body_source::{
     pending_network_body_stream,
 };
 pub(in crate::network_host) use self::browser_response::http_status_text;
-pub(crate) use self::browser_response::{local_url_response, local_url_response_result};
+pub(crate) use self::browser_response::{
+    LocalUrlError, local_url_response, local_url_response_result,
+};
 pub(crate) use self::csp_reports::{
     WindowCspReportRequestContext, capture_window_csp_report_request_context,
     send_content_security_policy_reports_for_lightweight_popup,
@@ -125,7 +127,7 @@ pub(crate) use self::media::{
 pub(in crate::network_host) use self::preflight_events::CorsPreflightNetworkObserver;
 pub(in crate::network_host) use self::request::normalize_request_method;
 pub(crate) use self::request::request_constructor_callback;
-pub(crate) use self::request::{FetchArgumentError, convert_fetch_arguments};
+pub(crate) use self::request::{FetchArgumentError, RequestUrlError, convert_fetch_arguments};
 pub(crate) use self::request::{
     mark_request_input_body_used_for_fetch, request_input_snapshot,
     try_resolve_request_constructor_url, try_resolve_request_constructor_url_for_base,
@@ -172,7 +174,7 @@ pub(crate) use self::text_track::{
 };
 pub(crate) use self::url_helpers::merge_byte_string_request_headers;
 pub(in crate::network_host) use self::url_helpers::merge_subresource_request_headers;
-pub(crate) use self::url_helpers::resolve_context_url;
+pub(crate) use self::url_helpers::{ResolveContextUrlError, resolve_context_url};
 #[cfg(test)]
 pub(crate) use self::xhr::prepare_xhr_send_body;
 pub(crate) use self::xhr::{

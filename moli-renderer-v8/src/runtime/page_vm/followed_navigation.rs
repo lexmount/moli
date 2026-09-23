@@ -77,7 +77,7 @@ pub(super) async fn load_followed_location_navigation(
         .map(Ok)
         .or_else(|| crate::network_host::local_url_response_result(&url, &request_method))
     {
-        let response = response.map_err(anyhow::Error::msg)?;
+        let response = response?;
         if matches!(response.status, 204 | 205) {
             return Ok(LoadedFollowedLocationNavigation::NoDocument);
         }

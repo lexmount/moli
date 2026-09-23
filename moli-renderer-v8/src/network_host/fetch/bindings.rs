@@ -3,8 +3,9 @@ mod request;
 mod service_worker;
 
 use self::paths::{
-    record_intercepted_fetch, reject_bad_port_fetch, reject_blocked_fetch, reject_csp_fetch,
-    reject_offline_fetch, reject_url_policy_fetch, resolve_local_fetch, spawn_network_fetch,
+    local_fetch_error_text, record_intercepted_fetch, reject_bad_port_fetch, reject_blocked_fetch,
+    reject_csp_fetch, reject_offline_fetch, reject_url_policy_fetch, resolve_local_fetch,
+    spawn_network_fetch,
 };
 use self::request::prepare_window_fetch_request;
 use self::service_worker::dispatch_service_worker_fetch;
@@ -210,8 +211,8 @@ fn window_fetch_callback_in_relevant_realm<'s>(
     let signal = signal.as_ref().map(|signal| v8::Local::new(scope, signal));
     let prepared = match prepare_window_fetch_request(scope, parsed, fetch_context, host) {
         Ok(prepared) => prepared,
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
+        Err(error) => {
+            rv.set(make_rejected_promise(scope, &error.to_string()).into());
             return;
         }
     };
@@ -263,13 +264,13 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    if let Err(message) = validate_no_cors_http_redirect_mode(
+    if let Err(error) = validate_no_cors_http_redirect_mode(
         &prepared.request_origin,
         &prepared.resolved_url,
         prepared.request_mode,
         prepared.redirect_mode,
     ) {
-        let message = reject_url_policy_fetch(host, prepared, message);
+        let message = reject_url_policy_fetch(host, prepared, error.to_string());
         rv.set(make_rejected_promise(scope, &message).into());
         return;
     }
@@ -300,7 +301,8 @@ fn window_fetch_callback_in_relevant_realm<'s>(
             return;
         }
         Ok(None) => {}
-        Err(message) => {
+        Err(error) => {
+            let message = local_fetch_error_text(&error);
             let exception = v8_string(scope, &message)
                 .map(|message| v8::Exception::type_error(scope, message))
                 .unwrap_or_else(|| v8::undefined(scope).into());
@@ -322,28 +324,15 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         return;
     }
 
-    match dispatch_service_worker_fetch(scope, host, resolver, &prepared) {
-        Ok(Some(internal_id)) => {
-            if let Some(signal) = signal {
-                install_window_fetch_abort_listener(scope, signal, internal_id);
-            }
-            rv.set(promise.into());
-            return;
+    if let Some(internal_id) = dispatch_service_worker_fetch(scope, host, resolver, &prepared) {
+        if let Some(signal) = signal {
+            install_window_fetch_abort_listener(scope, signal, internal_id);
         }
-        Ok(None) => {}
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
-            return;
-        }
+        rv.set(promise.into());
+        return;
     }
 
-    let internal_id = match spawn_network_fetch(scope, host, resolver, prepared) {
-        Ok(internal_id) => internal_id,
-        Err(message) => {
-            rv.set(make_rejected_promise(scope, &message).into());
-            return;
-        }
-    };
+    let internal_id = spawn_network_fetch(scope, host, resolver, prepared);
     if let Some(signal) = signal {
         install_window_fetch_abort_listener(scope, signal, internal_id);
     }

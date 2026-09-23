@@ -2,6 +2,36 @@ use crate::network_host::url_helpers::ResolveContextUrlError;
 use crate::webidl;
 use std::fmt;
 
+#[derive(Debug)]
+pub(crate) enum RequestUrlError {
+    Resolve(ResolveContextUrlError),
+    OpaqueWorkerBase { input: String },
+}
+
+impl From<ResolveContextUrlError> for RequestUrlError {
+    fn from(error: ResolveContextUrlError) -> Self {
+        Self::Resolve(error)
+    }
+}
+
+impl fmt::Display for RequestUrlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Resolve(error) => error.fmt(f),
+            Self::OpaqueWorkerBase { input } => write!(f, "Failed to parse URL from {input}"),
+        }
+    }
+}
+
+impl std::error::Error for RequestUrlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Resolve(error) => Some(error),
+            Self::OpaqueWorkerBase { .. } => None,
+        }
+    }
+}
+
 /// Argument conversion failures remain structured until the fetch binding
 /// turns them into a JavaScript rejection.
 #[derive(Debug)]

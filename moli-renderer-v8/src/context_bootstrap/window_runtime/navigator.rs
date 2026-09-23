@@ -1494,7 +1494,7 @@ fn storage_bucket_cache_storage_match_callback<'s>(
             return;
         }
         Err(error) => {
-            reject_type_error(scope, resolver, &error);
+            reject_type_error(scope, resolver, &error.to_string());
             return;
         }
     };
@@ -1673,7 +1673,7 @@ fn storage_bucket_cache_put_callback<'s>(
             return;
         }
         Err(error) => {
-            reject_type_error(scope, resolver, &error);
+            reject_type_error(scope, resolver, &error.to_string());
             return;
         }
     };
@@ -2020,7 +2020,7 @@ fn storage_bucket_cache_match_callback<'s>(
             return;
         }
         Err(error) => {
-            reject_type_error(scope, resolver, &error);
+            reject_type_error(scope, resolver, &error.to_string());
             return;
         }
     };
@@ -2075,7 +2075,7 @@ fn storage_bucket_cache_match_all_callback<'s>(
     let request = match cache_request_info_argument(scope, &args, 0) {
         Ok(request) => request,
         Err(error) => {
-            reject_type_error(scope, resolver, &error);
+            reject_type_error(scope, resolver, &error.to_string());
             return;
         }
     };
@@ -2146,7 +2146,7 @@ fn storage_bucket_cache_keys_callback<'s>(
     let request = match cache_request_info_argument(scope, &args, 0) {
         Ok(request) => request,
         Err(error) => {
-            reject_type_error(scope, resolver, &error);
+            reject_type_error(scope, resolver, &error.to_string());
             return;
         }
     };
@@ -2204,7 +2204,7 @@ fn storage_bucket_cache_delete_callback<'s>(
             return;
         }
         Err(error) => {
-            reject_type_error(scope, resolver, &error);
+            reject_type_error(scope, resolver, &error.to_string());
             return;
         }
     };
@@ -2830,7 +2830,7 @@ fn cache_request_info_argument<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
     index: i32,
-) -> Result<Option<CacheRequestInfo>, String> {
+) -> Result<Option<CacheRequestInfo>, crate::network_host::RequestUrlError> {
     if args.length() <= index {
         return Ok(None);
     }

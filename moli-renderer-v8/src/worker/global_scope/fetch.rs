@@ -2161,12 +2161,13 @@ pub(in crate::worker) fn worker_fetch_callback<'s>(
         return;
     }
 
-    if let Err(message) = crate::network_host::validate_no_cors_http_redirect_mode(
+    if let Err(error) = crate::network_host::validate_no_cors_http_redirect_mode(
         &moli_url::WebOrigin::from_url(&document_url),
         &resolved_url,
         request_mode,
         redirect_mode,
     ) {
+        let message = error.to_string();
         record_worker_subresource_failure(
             &state.borrow(),
             document_url,

@@ -27,8 +27,8 @@ pub(super) fn xhr_open_callback<'s>(
     };
     let method = match normalize_request_method(&parsed.method) {
         Ok(method) => method,
-        Err(message) => {
-            throw_type_error(scope, message);
+        Err(error) => {
+            webidl::throw_error(scope, &error);
             return;
         }
     };

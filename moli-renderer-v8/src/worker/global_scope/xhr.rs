@@ -1,4 +1,5 @@
 use super::*;
+use crate::network_host::ResolveContextUrlError;
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::thread;
@@ -13,8 +14,30 @@ pub(in crate::worker) struct PreparedWorkerXhrSendRequest {
     credentials_mode: RequestCredentialsMode,
 }
 
+#[derive(Debug)]
 pub(in crate::worker) enum WorkerXhrSendPrepareError {
-    Request(String),
+    ScriptUrlUnavailable,
+    Url(ResolveContextUrlError),
+}
+
+impl std::fmt::Display for WorkerXhrSendPrepareError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ScriptUrlUnavailable => {
+                f.write_str("worker xhr: worker script url is unavailable")
+            }
+            Self::Url(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for WorkerXhrSendPrepareError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Url(error) => Some(error),
+            Self::ScriptUrlUnavailable => None,
+        }
+    }
 }
 
 pub(in crate::worker) const WORKER_XHR_TIMEOUT_ERROR_TEXT: &str = "XMLHttpRequest timeout";
@@ -276,8 +299,8 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     let prepared = match prepare_worker_xhr_send_request(scope, &state, xhr, method, prepared_body)
     {
         Ok(prepared) => prepared,
-        Err(WorkerXhrSendPrepareError::Request(message)) => {
-            tracing::debug!("Worker XHR request preparation error: {message}");
+        Err(error) => {
+            tracing::debug!("Worker XHR request preparation error: {error}");
             if async_request {
                 apply_xhr_failure(scope, xhr);
             } else {
@@ -419,7 +442,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
     if !async_request && let Some(result) = local_response {
         match result {
             Ok(response) => apply_xhr_response(scope, xhr, response),
-            Err(message) => {
+            Err(error) => {
                 record_worker_subresource_failure(
                     &state.borrow(),
                     prepared.document_url,
@@ -428,7 +451,7 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
                     prepared.request_headers,
                     request_body_text(&prepared.send_body),
                     SubresourceResourceType::Xhr,
-                    message,
+                    error.to_string(),
                 );
                 throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
             }
@@ -505,7 +528,9 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
         let _ = state.borrow().xhr_completion_tx.send(WorkerXhrCompletion {
             xhr_id,
             network_request_headers: None,
-            result: result.map(|response| WorkerXhrResponse::Materialized(Box::new(response))),
+            result: result
+                .map(|response| WorkerXhrResponse::Materialized(Box::new(response)))
+                .map_err(|error| error.to_string()),
         });
         return true;
     }
@@ -1176,13 +1201,13 @@ pub(in crate::worker) fn prepare_worker_xhr_send_request<'s>(
 ) -> Result<PreparedWorkerXhrSendRequest, WorkerXhrSendPrepareError> {
     let url_str = xhr_state_string_property(scope, xhr, XHR_URL_SLOT).unwrap_or_default();
 
-    let document_url = state.borrow().current_script_url.clone().ok_or_else(|| {
-        WorkerXhrSendPrepareError::Request(
-            "worker xhr: worker script url is unavailable".to_owned(),
-        )
-    })?;
+    let document_url = state
+        .borrow()
+        .current_script_url
+        .clone()
+        .ok_or(WorkerXhrSendPrepareError::ScriptUrlUnavailable)?;
     let resolved_url = resolve_context_url(&document_url, &url_str, None)
-        .map_err(|error| WorkerXhrSendPrepareError::Request(error.to_string()))?;
+        .map_err(WorkerXhrSendPrepareError::Url)?;
     let request_headers =
         xhr_author_request_headers(scope, xhr, prepared_body.default_content_type);
     let credentials_mode =

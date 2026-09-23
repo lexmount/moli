@@ -140,19 +140,21 @@ pub(super) fn reject_bad_port_fetch(
     message
 }
 
+pub(super) fn local_fetch_error_text(error: &LocalUrlError) -> String {
+    match error {
+        LocalUrlError::BlobUnavailable { .. } => FILE_NOT_FOUND_ERROR_TEXT.to_owned(),
+        _ => error.to_string(),
+    }
+}
+
 pub(super) fn resolve_local_fetch(
     host: &mut JsContextHost,
     prepared: &PreparedWindowFetchRequest,
-) -> Result<Option<Response>, String> {
+) -> Result<Option<Response>, LocalUrlError> {
     let Some(result) = local_url_response_result(&prepared.resolved_url, &prepared.method) else {
         return Ok(None);
     };
-    let response = result.map_err(|message| {
-        let message = if prepared.resolved_url.scheme() == "blob" && prepared.method == "GET" {
-            FILE_NOT_FOUND_ERROR_TEXT.to_owned()
-        } else {
-            message
-        };
+    let response = result.inspect_err(|error| {
         host.record_subresource_network(SubresourceNetworkRecord::failure(
             prepared.frame_id.clone(),
             prepared.document_url.clone(),
@@ -161,9 +163,8 @@ pub(super) fn resolve_local_fetch(
             prepared.request_headers.clone(),
             request_body_text(&prepared.body),
             SubresourceResourceType::Fetch,
-            message.clone(),
+            local_fetch_error_text(error),
         ));
-        message
     })?;
     host.record_subresource_network(
         SubresourceNetworkRecord::success_with_body(
@@ -198,7 +199,7 @@ pub(super) fn spawn_network_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
-) -> Result<u64, String> {
+) -> u64 {
     let loader = prepared.resource_loader.request_client().clone();
     let mut request = Request::new_browser(
         &prepared.method,
@@ -292,7 +293,7 @@ pub(super) fn spawn_network_fetch(
         prepared.request_headers,
         request_body_text(&prepared.body),
     );
-    Ok(internal_id)
+    internal_id
 }
 
 fn window_fetch_cache_mode(cache: &str) -> RequestCacheMode {

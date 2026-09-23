@@ -137,8 +137,7 @@ pub(super) fn apply_request_init_overrides<'s>(
 
     let method_overridden = parsed.method.is_some();
     if let Some(method) = parsed.method {
-        state.method = normalize_request_method(&method)
-            .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))?;
+        state.method = normalize_request_method(&method)?;
     }
     let init_body_value = webidl::property_result(
         scope,

@@ -1,5 +1,25 @@
 use super::*;
 use moli_web_mime::data_url_body_and_mime_type;
+use std::fmt;
+
+#[derive(Debug)]
+pub(crate) enum LocalUrlError {
+    BlobMethod { method: String },
+    BlobUnavailable { url: url::Url },
+    InvalidData { url: url::Url },
+}
+
+impl fmt::Display for LocalUrlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BlobMethod { method } => write!(f, "blob URL fetch requires GET, got `{method}`"),
+            Self::BlobUnavailable { url } => write!(f, "blob URL `{url}` is unavailable"),
+            Self::InvalidData { url } => write!(f, "data URL `{url}` is invalid"),
+        }
+    }
+}
+
+impl std::error::Error for LocalUrlError {}
 
 pub(in crate::network_host) fn http_status_text(status: u16) -> &'static str {
     StatusCode::from_u16(status)
@@ -68,17 +88,18 @@ pub(crate) fn local_url_response(url: &url::Url) -> Option<Response> {
 pub(crate) fn local_url_response_result(
     url: &url::Url,
     method: &str,
-) -> Option<Result<Response, String>> {
+) -> Option<Result<Response, LocalUrlError>> {
     match url.scheme() {
-        "blob" if method != "GET" => {
-            Some(Err(format!("blob URL fetch requires GET, got `{method}`")))
-        }
-        "blob" => {
-            Some(blob_url_response(url).ok_or_else(|| format!("blob URL `{url}` is unavailable")))
-        }
-        "data" => {
-            Some(data_url_response(url).ok_or_else(|| format!("data URL `{url}` is invalid")))
-        }
+        "blob" if method != "GET" => Some(Err(LocalUrlError::BlobMethod {
+            method: method.to_owned(),
+        })),
+        "blob" => Some(
+            blob_url_response(url)
+                .ok_or_else(|| LocalUrlError::BlobUnavailable { url: url.clone() }),
+        ),
+        "data" => Some(
+            data_url_response(url).ok_or_else(|| LocalUrlError::InvalidData { url: url.clone() }),
+        ),
         _ => None,
     }
 }
@@ -125,7 +146,7 @@ mod tests {
             .expect_err("an unregistered blob URL must fail locally");
 
         assert_eq!(
-            error,
+            error.to_string(),
             "blob URL `blob:https://example.test/not-registered` is unavailable"
         );
     }

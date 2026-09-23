@@ -5,13 +5,15 @@ use crate::webidl;
 
 pub(in crate::network_host) fn normalize_request_method(
     method: &str,
-) -> Result<String, &'static str> {
+) -> Result<String, webidl::WebIdlError> {
     if method.is_empty() {
         return Ok("GET".to_owned());
     }
     let normalized = method.to_ascii_uppercase();
     if matches!(normalized.as_str(), "CONNECT" | "TRACE" | "TRACK") {
-        return Err("Request method is forbidden");
+        return Err(webidl::WebIdlError::custom_message(
+            "Request method is forbidden",
+        ));
     }
     if matches!(
         normalized.as_str(),
@@ -106,10 +108,7 @@ fn request_input_snapshot_inner<'s>(
         return Ok(None);
     };
     let method = defined_object_string_property(scope, object, "method")
-        .map(|value| {
-            normalize_request_method(&value)
-                .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))
-        })
+        .map(|value| normalize_request_method(&value))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
     let mode =
@@ -170,10 +169,7 @@ fn request_input_snapshot_from_private_slots<'s>(
 ) -> Result<RequestInputSnapshot, webidl::WebIdlError> {
     let url = request_slot_string(scope, object, REQUEST_URL_SLOT).unwrap_or_default();
     let method = request_slot_string(scope, object, REQUEST_METHOD_SLOT)
-        .map(|value| {
-            normalize_request_method(&value)
-                .map_err(|_| webidl::WebIdlError::custom_message("Request method is forbidden"))
-        })
+        .map(|value| normalize_request_method(&value))
         .transpose()?
         .unwrap_or_else(|| "GET".to_owned());
     let mode =
@@ -320,7 +316,7 @@ pub(super) fn resolve_request_constructor_url(
 pub(crate) fn try_resolve_request_constructor_url(
     scope: &mut v8::PinScope<'_, '_>,
     input: &str,
-) -> Result<String, String> {
+) -> Result<String, RequestUrlError> {
     try_resolve_request_constructor_url_for_scope(scope, input, None, None)
 }
 
@@ -328,7 +324,7 @@ pub(crate) fn try_resolve_request_constructor_url_for_child(
     scope: &mut v8::PinScope<'_, '_>,
     input: &str,
     child_handle: Option<crate::document_runtime::DomHandle>,
-) -> Result<String, String> {
+) -> Result<String, RequestUrlError> {
     try_resolve_request_constructor_url_for_scope(scope, input, child_handle, None)
 }
 
@@ -336,7 +332,7 @@ pub(crate) fn try_resolve_request_constructor_url_for_base(
     scope: &mut v8::PinScope<'_, '_>,
     input: &str,
     base_url: Option<url::Url>,
-) -> Result<String, String> {
+) -> Result<String, RequestUrlError> {
     try_resolve_request_constructor_url_for_scope(scope, input, None, base_url)
 }
 
@@ -345,14 +341,14 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
     input: &str,
     child_handle: Option<crate::document_runtime::DomHandle>,
     base_url: Option<url::Url>,
-) -> Result<String, String> {
+) -> Result<String, RequestUrlError> {
     if url::Url::parse(input).is_ok() {
         return Ok(input.to_owned());
     }
     if let Some(base_url) = base_url {
         return resolve_context_url(&base_url, input, None)
             .map(|url| url.to_string())
-            .map_err(|error| error.to_string());
+            .map_err(RequestUrlError::from);
     }
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let host = unsafe { &mut *host_ptr };
@@ -367,14 +363,16 @@ pub(crate) fn try_resolve_request_constructor_url_for_scope(
             });
         resolve_context_url(&document_url, input, None)
             .map(|url| url.to_string())
-            .map_err(|error| error.to_string())
+            .map_err(RequestUrlError::from)
     } else if let Some(worker_url) = crate::context_bootstrap::current_worker_script_url(scope) {
         if worker_url.scheme() == "blob" {
-            return Err(format!("Failed to parse URL from {input}"));
+            return Err(RequestUrlError::OpaqueWorkerBase {
+                input: input.to_owned(),
+            });
         }
         resolve_context_url(&worker_url, input, None)
             .map(|url| url.to_string())
-            .map_err(|error| error.to_string())
+            .map_err(RequestUrlError::from)
     } else {
         Ok(input.to_owned())
     }

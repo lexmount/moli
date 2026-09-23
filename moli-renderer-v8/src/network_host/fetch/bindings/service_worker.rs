@@ -10,21 +10,16 @@ pub(super) fn dispatch_service_worker_fetch(
     host: &mut JsContextHost,
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: &PreparedWindowFetchRequest,
-) -> Result<Option<u64>, String> {
+) -> Option<u64> {
     if !matches!(prepared.resolved_url.scheme(), "http" | "https") {
-        return Ok(None);
+        return None;
     }
     let client_id = host.service_worker_client_id_for_subresource_owner(prepared.request_scope());
-    if host
-        .service_worker_controller_for_fetch(
-            client_id,
-            &prepared.document_url,
-            &prepared.resolved_url,
-        )
-        .is_none()
-    {
-        return Ok(None);
-    }
+    host.service_worker_controller_for_fetch(
+        client_id,
+        &prepared.document_url,
+        &prepared.resolved_url,
+    )?;
 
     let request_cookie_report = observe_subresource_request_cookie_report(
         prepared.resource_loader.request_client(),
@@ -113,7 +108,7 @@ pub(super) fn dispatch_service_worker_fetch(
         direct_completion_tx: None,
     };
     if host.dispatch_service_worker_fetch(dispatch) {
-        return Ok(Some(internal_id));
+        return Some(internal_id);
     }
 
     let _ =
@@ -130,7 +125,7 @@ pub(super) fn dispatch_service_worker_fetch(
                 network_error_text: None,
                 result: Err("service worker fetch dispatch failed".to_owned()).into(),
             });
-    Ok(Some(internal_id))
+    Some(internal_id)
 }
 
 fn request_body_text(body: &Option<Vec<u8>>) -> Option<String> {

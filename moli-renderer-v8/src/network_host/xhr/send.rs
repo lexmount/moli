@@ -181,11 +181,11 @@ pub(super) fn xhr_send_callback<'s>(
                 record_xhr_response_success(host, &prepared, &response);
                 apply_xhr_response(scope, xhr, response);
             }
-            Err(message) if async_request => {
-                record_url_policy_xhr_failure(scope, host, xhr, prepared, message);
+            Err(error) if async_request => {
+                record_url_policy_xhr_failure(scope, host, xhr, prepared, error.to_string());
             }
-            Err(message) => {
-                record_synchronous_xhr_failure(scope, host, xhr, prepared, message);
+            Err(error) => {
+                record_synchronous_xhr_failure(scope, host, xhr, prepared, error.to_string());
             }
         }
         return;
