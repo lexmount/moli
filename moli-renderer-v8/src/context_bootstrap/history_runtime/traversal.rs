@@ -221,6 +221,23 @@ pub(in crate::context_bootstrap) fn prepare_history_participant<'s>(
     Some(data)
 }
 
+pub(in crate::context_bootstrap) fn run_history_participant_handlers<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    outcome: &mut NavigationDispatchOutcome<'s>,
+    settlement: Option<v8::Local<'s, v8::Object>>,
+) {
+    if !outcome.intercepted
+        || settlement.is_some_and(|data| !traversal_intercept_is_active(scope, data.into()))
+    {
+        return;
+    }
+    if let Some(event) = outcome.precommit_event.take() {
+        (outcome.intercept_error, outcome.intercept_result) =
+            run_navigation_precommit_deferred_handlers(scope, event);
+    }
+    suppress_intercept_result_unhandled_rejection(scope, outcome.intercept_result);
+}
+
 pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     applied: &super::apply::AppliedHistoryEntry<'s>,
@@ -228,9 +245,6 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
     finished_resolvers: v8::Local<'s, v8::Array>,
     settlement: Option<v8::Local<'s, v8::Object>>,
 ) {
-    if settlement.is_some_and(|data| !traversal_intercept_is_active(scope, data.into())) {
-        return;
-    }
     if !outcome.intercepted {
         crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections(scope);
         if !navigation_document_has_opaque_origin(scope, applied.owner)
@@ -259,15 +273,8 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
         return;
     };
-    let (error, result) = if outcome.intercepted {
-        outcome.precommit_event.map_or(
-            (outcome.intercept_error, outcome.intercept_result),
-            |event| run_navigation_precommit_deferred_handlers(scope, event),
-        )
-    } else {
-        (None, None)
-    };
-    suppress_intercept_result_unhandled_rejection(scope, result);
+    // Stopping the API method after its commit does not undo the committed
+    // history entry or suppress its popstate. Only settlement is canceled.
     dispatch_history_entry_post_commit_events(scope, applied, true);
     let Some(data) = settlement else {
         resolve_resolver_array(scope, finished_resolvers, applied.resolved_entry);
@@ -276,11 +283,11 @@ pub(in crate::context_bootstrap) fn finish_history_participant<'s>(
     if !traversal_intercept_is_active(scope, data.into()) {
         return;
     }
-    if let Some(error) = error {
+    if let Some(error) = outcome.intercept_error {
         finish_traversal_intercept(scope, data.into(), Some(error));
     } else {
         // Even an empty handler list settles asynchronously after committed reactions.
-        let result = result.or_else(|| {
+        let result = outcome.intercept_result.or_else(|| {
             let resolver = v8::PromiseResolver::new(scope)?;
             resolver.resolve(scope, v8::undefined(scope).into())?;
             Some(resolver.get_promise(scope).into())
