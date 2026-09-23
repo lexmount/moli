@@ -159,7 +159,9 @@ impl StylesheetBlockingState {
     {
         let sender = self.completion_source.sender();
         let completion_wake = self.completion_wake.clone();
-        let completion_publisher = self.completion_publisher.clone();
+        let completion_publisher = fetcher
+            .completion_publisher()
+            .or_else(|| self.completion_publisher.clone());
         let operation = operation.clone();
         let document_url = operation.document_url().clone();
         let task_fetcher = fetcher.clone();
@@ -401,7 +403,9 @@ impl StylesheetBlockingState {
         );
         let sender = self.completion_source.sender();
         let completion_wake = self.completion_wake.clone();
-        let completion_publisher = self.completion_publisher.clone();
+        let completion_publisher = fetcher
+            .completion_publisher()
+            .or_else(|| self.completion_publisher.clone());
         let completion_fetch = fetch.clone();
         self.url_fetches.insert(
             (resource_cache_scope, document_url.clone(), resource_key),
