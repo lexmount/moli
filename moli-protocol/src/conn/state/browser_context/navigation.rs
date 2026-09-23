@@ -80,8 +80,8 @@ impl BrowserContext {
     }
 
     pub(crate) fn target_document_url(&self, target_id: &str) -> Option<Url> {
-        let document = self.document_handle_for_target(target_id)?;
-        self.browser_context.document_url(document).ok()
+        let contents = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context.current_document_url(contents).ok()?
     }
 
     pub(crate) fn target_document_title(&self, target_id: &str) -> Option<String> {

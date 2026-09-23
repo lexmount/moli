@@ -704,7 +704,10 @@ impl BrowserContext {
                     .expect("registered Target must reference live WebContents"),
             )
             .expect("registered Target must reference live WebContents");
-        self.prepare_target_navigation_projection(target_id);
+        self.page_slot_for_target_mut(target_id)
+            .expect("registered Target projection")
+            .pending_renderer_page = None;
+        self.retain_navigation_projections_for_target(target_id);
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .cdp_navigation_loaders
@@ -717,27 +720,21 @@ impl BrowserContext {
         token
     }
 
-    fn prepare_target_navigation_projection(&mut self, target_id: &str) {
-        let slot = self
-            .page_slot_for_target_mut(target_id)
-            .expect("registered Target projection");
-
-        slot.pending_renderer_page = None;
-        self.retain_navigation_projections_for_target(target_id);
-    }
-
     pub(in crate::conn) fn observe_target_navigation_started(
         &mut self,
         target_id: &str,
         request: moli_core::browser::NavigationRequest,
     ) -> bool {
-        if self.web_contents_handle_for_target(target_id) != Some(request.web_contents)
-            || self
-                .browser_context
-                .navigation_snapshot(request.web_contents)
-                .ok()
-                .and_then(|snapshot| snapshot.attempt)
-                != Some(moli_core::browser::NavigationAttempt::Started(request))
+        if self.web_contents_handle_for_target(target_id) != Some(request.web_contents) {
+            return false;
+        }
+        let Ok(snapshot) = self
+            .browser_context
+            .navigation_snapshot(request.web_contents)
+        else {
+            return false;
+        };
+        if snapshot.attempt != Some(moli_core::browser::NavigationAttempt::Started(request))
             || !self.page_targets.get_mut(target_id).is_some_and(|target| {
                 target
                     .runtime_slot
@@ -746,7 +743,11 @@ impl BrowserContext {
         {
             return false;
         }
-        self.prepare_target_navigation_projection(target_id);
+        let slot = self
+            .page_slot_for_target_mut(target_id)
+            .expect("resolved Target projection");
+        slot.pending_renderer_page = None;
+        self.retain_navigation_projections_for_target(target_id);
         true
     }
 
@@ -1077,15 +1078,15 @@ impl BrowserContext {
             self.browser_context.id(),
             target.web_contents_id(),
         );
+        let retained = self
+            .browser_context
+            .retained_navigations(handle)
+            .unwrap_or_default();
         target
             .runtime_slot
             .page_slot_mut()
             .cdp_navigation_loaders
-            .retain(|(id, _)| {
-                self.browser_context
-                    .navigation_retains(handle, *id)
-                    .unwrap_or(false)
-            });
+            .retain(|(id, _)| retained.contains(&Some(*id)));
     }
 
     pub(in crate::conn) fn record_native_navigation_dispatch(

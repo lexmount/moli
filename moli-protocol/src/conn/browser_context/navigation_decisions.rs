@@ -721,12 +721,6 @@ impl CdpConnection {
             .ok_or("navigation Context projection unavailable")?
             .browser_context_handle()
             .clone();
-        let previous = match context.navigation_snapshot(contents)?.attempt {
-            Some(moli_core::browser::NavigationAttempt::Started(request)) => {
-                Some(request.navigation)
-            }
-            _ => None,
-        };
         let waiter = context.navigate_document(
             contents,
             moli_core::browser::web_contents::NavigationRequestInterception::new(
@@ -738,15 +732,14 @@ impl CdpConnection {
             ),
         )?;
         let request = waiter.request();
-        let permit = context
-            .navigation_decision(contents)?
-            .filter(|decision| decision.permit.navigation() == request.navigation)
-            .ok_or("navigation decision unavailable at admission")?
-            .permit;
+        let permit = waiter
+            .initial_decision()
+            .ok_or("navigation decision unavailable at admission")?;
         let (context_id, target_id) = self
             .resolved_page_owner_identity_for_owner(&state.owner)
             .ok_or("navigation projection unavailable")?;
-        let mut events = previous
+        let mut events = waiter
+            .previous_navigation()
             .map(|navigation| self.native_navigation_retirement_events(contents, navigation))
             .unwrap_or_default();
         self.browser_context_by_id_mut(&context_id)

@@ -28,6 +28,8 @@ use crate::runtime::{
 /// request; cancellation is an operation on the original WebContents/navigation.
 pub struct BrowserNavigationWaiter {
     request: NavigationRequest,
+    previous_navigation: Option<NavigationId>,
+    initial_decision: Option<NavigationInterceptionPermit>,
     completion: oneshot::Receiver<Result<BrowserNavigationOutcome, String>>,
 }
 
@@ -39,6 +41,16 @@ pub enum BrowserNavigationOutcome {
 impl BrowserNavigationWaiter {
     pub fn request(&self) -> NavigationRequest {
         self.request
+    }
+
+    /// Facts captured in the admission turn. A later navigation may supersede
+    /// them; resolving a decision still validates its exact permit on the owner.
+    pub fn previous_navigation(&self) -> Option<NavigationId> {
+        self.previous_navigation
+    }
+
+    pub fn initial_decision(&self) -> Option<NavigationInterceptionPermit> {
+        self.initial_decision
     }
 
     pub async fn wait(self) -> Result<BrowserNavigationOutcome, String> {
@@ -166,6 +178,9 @@ impl Browser {
         policy: InheritedDocumentPolicy,
         opening: std::sync::Weak<crate::page::RendererPopupOpening>,
     ) -> Result<BrowserNavigationWaiter, String> {
+        let previous_navigation = self
+            .pending_navigation(contents)?
+            .map(|request| request.navigation);
         let navigation = self.start_navigation(contents)?;
         let initial = (|| {
             let context = self.context_mut(contents.context())?;
@@ -195,6 +210,7 @@ impl Browser {
             navigation,
             parameters.decision_stage(opening),
         )?;
+        let initial_decision = decision.as_ref().map(|decision| decision.permit);
         let request = self
             .pending_navigation(contents)?
             .expect("admitted native navigation");
@@ -259,6 +275,8 @@ impl Browser {
         });
         Ok(BrowserNavigationWaiter {
             request,
+            previous_navigation,
+            initial_decision,
             completion,
         })
     }

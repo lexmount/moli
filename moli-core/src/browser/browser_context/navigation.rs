@@ -276,6 +276,15 @@ impl BrowserContext {
         Ok(self.document(handle)?.page.final_url().clone())
     }
 
+    pub fn current_document_url(&self, handle: WebContentsHandle) -> Result<Option<Url>, String> {
+        Ok(self
+            .web_contents(handle)?
+            .main_frame
+            .current_document
+            .as_ref()
+            .map(|document| document.page.final_url().clone()))
+    }
+
     pub fn document_title(&self, handle: DocumentHandle) -> Result<String, String> {
         Ok(self.document(handle)?.page.document_title())
     }
@@ -555,6 +564,18 @@ impl BrowserContext {
             .web_contents(handle)?
             .navigation()
             .retains_navigation(navigation))
+    }
+
+    /// Pending and committed correlations, read from the navigation controller
+    /// together. This observation does not authorize work on either navigation.
+    pub fn retained_navigations(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<[Option<NavigationId>; 2], String> {
+        Ok(self
+            .web_contents(handle)?
+            .navigation()
+            .retained_navigations())
     }
 
     pub fn current_document_navigation(

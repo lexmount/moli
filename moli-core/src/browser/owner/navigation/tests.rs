@@ -84,6 +84,96 @@ fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, Web
 }
 
 #[tokio::test]
+async fn navigation_admission_facts_remain_bound_to_the_original_attempt() {
+    use crate::browser::{NavigationDecision, web_contents::NavigationRequestInterception};
+
+    let service = BrowserService::start().unwrap();
+    let browser = service.handle();
+    let (context, contents) = context_with_contents(&service);
+    assert_eq!(context.current_document_url(contents).unwrap(), None);
+    let original_url = "data:text/html,original";
+    navigate(&context, contents, original_url).await;
+    let committed = context
+        .navigation_snapshot(contents)
+        .unwrap()
+        .committed
+        .unwrap();
+    let _provider = browser.register_document_decision_provider().unwrap();
+    let admit = |url: &str| {
+        context
+            .navigate_document(
+                contents,
+                NavigationRequestInterception::new(
+                    url.parse().unwrap(),
+                    "GET".into(),
+                    None,
+                    Default::default(),
+                    NavigationRequestLoadPolicy::BrowserInitiated,
+                ),
+            )
+            .unwrap()
+    };
+    let first = admit("data:text/html,first");
+    let first_permit = first.initial_decision().unwrap();
+    assert_eq!(first.previous_navigation(), None);
+    assert_eq!(first_permit.navigation(), first.request().navigation);
+    let second = admit("data:text/html,second");
+    assert_eq!(
+        second.previous_navigation(),
+        Some(first.request().navigation)
+    );
+    assert_eq!(first.initial_decision(), Some(first_permit));
+    assert_eq!(
+        second.initial_decision(),
+        context
+            .navigation_decision(contents)
+            .unwrap()
+            .map(|decision| decision.permit)
+    );
+    assert!(
+        !context
+            .resolve_navigation_decision(contents, first_permit, NavigationDecision::Continue)
+            .unwrap(),
+        "a retained admission cannot resume a superseded request"
+    );
+
+    let retained = context.retained_navigations(contents).unwrap();
+    assert!(retained.contains(&Some(committed.navigation)));
+    assert!(retained.contains(&Some(second.request().navigation)));
+    assert!(!retained.contains(&Some(first.request().navigation)));
+    assert_eq!(
+        context
+            .current_document_url(contents)
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        original_url
+    );
+    assert!(
+        context
+            .cancel_document_navigation(contents, &second.request().navigation)
+            .unwrap()
+    );
+    let failed = context.retained_navigations(contents).unwrap();
+    assert!(failed.contains(&Some(committed.navigation)));
+    assert!(!failed.contains(&Some(second.request().navigation)));
+    for request in [committed, first.request(), second.request()] {
+        assert_eq!(
+            failed.contains(&Some(request.navigation)),
+            context
+                .navigation_retains(contents, request.navigation)
+                .unwrap()
+        );
+    }
+    browser
+        .close_web_contents(contents)
+        .unwrap()
+        .close_async()
+        .await;
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn native_child_document_network_completes_without_devtools() {
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();

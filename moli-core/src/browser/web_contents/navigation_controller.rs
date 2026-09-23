@@ -488,10 +488,16 @@ impl NavigationController {
     }
 
     pub fn retains_navigation(&self, navigation: NavigationId) -> bool {
-        self.pending_navigation_request
-            .as_ref()
-            .is_some_and(|request| request.matches(&navigation))
-            || self.committed_document_navigation == Some(navigation)
+        self.retained_navigations().contains(&Some(navigation))
+    }
+
+    pub fn retained_navigations(&self) -> [Option<NavigationId>; 2] {
+        [
+            self.pending_navigation_request
+                .as_ref()
+                .map(|request| request.navigation_id),
+            self.committed_document_navigation,
+        ]
     }
 
     fn retain_native_responses(&mut self) {

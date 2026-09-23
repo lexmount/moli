@@ -1258,6 +1258,7 @@ impl BrowserContextHandle {
         fn document_renderer_residence(handle: super::DocumentHandle) -> super::RendererPageResidenceIdentity;
         fn web_contents_renderer_popup_sources(handle: WebContentsHandle) -> Vec<(super::RendererPageResidenceIdentity, u64)>;
         fn document_url(handle: super::DocumentHandle) -> url::Url;
+        fn current_document_url(handle: WebContentsHandle) -> Option<url::Url>;
         fn document_title(handle: super::DocumentHandle) -> String;
         fn document_lifecycle_snapshot(handle: super::DocumentHandle) -> Option<crate::page::RendererDocumentLifecycleSnapshot>;
         fn initial_document_url(handle: WebContentsHandle) -> Option<String>;
@@ -1270,6 +1271,7 @@ impl BrowserContextHandle {
         fn has_pending_document_navigation(handle: WebContentsHandle) -> bool;
         fn navigation_is_default(handle: WebContentsHandle) -> bool;
         fn navigation_retains(handle: WebContentsHandle, navigation: super::NavigationId) -> bool;
+        fn retained_navigations(handle: WebContentsHandle) -> [Option<super::NavigationId>; 2];
         fn current_document_navigation(handle: WebContentsHandle) -> Option<super::NavigationId>;
         fn committed_document_navigation(handle: WebContentsHandle) -> Option<super::NavigationId>;
         fn has_inflight_background_navigation_for_web_contents(handle: WebContentsHandle) -> bool;

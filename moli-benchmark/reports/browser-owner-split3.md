@@ -1,6 +1,11 @@
 # Browser owner acceptance measurements
 
-The current frozen comparison covers `f3e4c92459`. Earlier results and failures
+The subsequent [navigation command cost review](browser-owner-navigation-cost.md)
+records fewer synchronous owner calls, a measured navigation latency reduction,
+and the remaining gap to main. The frozen comparison below retains its original
+source and acceptance scope.
+
+The frozen comparison below covers `f3e4c92459`. Earlier results and failures
 retain their source pins below; they do not validate later source changes.
 
 ## Frozen comparison for f3e4c92459, 2026-09-23
