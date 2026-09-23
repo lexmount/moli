@@ -11,8 +11,7 @@ use crate::{
 };
 
 impl ScriptVm {
-    /// Project one stylesheet task owner onto the currently installed main
-    /// Document.
+    /// Validate the exact main or child Document captured by a stylesheet task.
     ///
     /// PageVm and low-level typed-source fixtures share this authorization
     /// boundary. Tests therefore cannot accidentally apply a stale task by
@@ -23,7 +22,10 @@ impl ScriptVm {
         owner: RendererPageStylesheetTaskOwner,
     ) -> bool {
         owner.root_document() == root_document
-            && self.current_main_document_task_owner() == Some(owner.document_owner())
+            && self
+                ._context_host
+                .borrow()
+                .connected_style_document_owner_is_current(owner.document_owner())
     }
 
     pub(crate) fn apply_page_stylesheet_networking_task(
@@ -41,7 +43,10 @@ impl ScriptVm {
         match task.into_completion() {
             RendererPageStylesheetCompletion::Blocking(completion) => self
                 .document_runtime
-                .apply_blocking_stylesheet_completion(completion),
+                .apply_blocking_stylesheet_completion_for_document(
+                    completion,
+                    owner.document_owner(),
+                ),
             RendererPageStylesheetCompletion::Connected(completion) => self
                 .document_runtime
                 .apply_connected_style_load_completion(completion),

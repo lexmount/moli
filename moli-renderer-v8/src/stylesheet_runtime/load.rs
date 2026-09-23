@@ -1,6 +1,8 @@
 use std::sync::{Arc, OnceLock};
 
-use crate::frame_owner_model::{DocumentLinkEventOwner, MainDocumentStyleLoadEventBinding};
+use crate::frame_owner_model::{
+    DocumentLinkEventOwner, FrameDocumentTaskOwner, MainDocumentStyleLoadEventBinding,
+};
 use crate::module_runtime::{NativeModulepreloadFetchStart, NativeModulepreloadLinkClient};
 use crate::style_engine::OwnerStyleSheetSource;
 use crate::stylesheet_blocking::{
@@ -122,6 +124,16 @@ impl ReadyConnectedStyleLoad {
         }
     }
 
+    pub(crate) fn document_owner(&self) -> Option<FrameDocumentTaskOwner> {
+        match &self.operation {
+            ReadyConnectedStyleLoadOperation::Connected(operation) => operation.document_owner(),
+            ReadyConnectedStyleLoadOperation::StylesheetLink(load) => load.document_owner(),
+            ReadyConnectedStyleLoadOperation::NativeModulepreload(client) => client
+                .main_document_event_owner()
+                .map(|owner| owner.owner()),
+        }
+    }
+
     pub(in crate::document_runtime) fn operation(&self) -> &ReadyConnectedStyleLoadOperation {
         &self.operation
     }
@@ -194,8 +206,15 @@ impl NativeModulepreloadLinkFetchOutcome {
 /// between those phases.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ConnectedStyleLoadEventPlan {
-    LoadDelaying { element: DomHandle },
-    NonBlockingLink { element: DomHandle },
+    LoadDelaying {
+        element: DomHandle,
+    },
+    NonBlockingLink {
+        element: DomHandle,
+        // None denotes the runtime's main Document. A native child Document
+        // handle is resolved without borrowing the DOM again during commit.
+        document: Option<DomHandle>,
+    },
 }
 
 impl ConnectedStyleLoadEventPlan {
@@ -203,8 +222,11 @@ impl ConnectedStyleLoadEventPlan {
         Self::LoadDelaying { element }
     }
 
-    pub(in crate::document_runtime) fn non_blocking_link(element: DomHandle) -> Self {
-        Self::NonBlockingLink { element }
+    pub(in crate::document_runtime) fn non_blocking_link(
+        element: DomHandle,
+        document: Option<DomHandle>,
+    ) -> Self {
+        Self::NonBlockingLink { element, document }
     }
 }
 
@@ -233,7 +255,7 @@ impl ConnectedStyleLoadEventAdmission {
             ) => binding.element() == element,
             (
                 Self::NonBlockingLink(owner),
-                ConnectedStyleLoadEventPlan::NonBlockingLink { element },
+                ConnectedStyleLoadEventPlan::NonBlockingLink { element, .. },
             ) => owner.element() == element,
             (Self::LoadDelaying(_), ConnectedStyleLoadEventPlan::NonBlockingLink { .. })
             | (Self::NonBlockingLink(_), ConnectedStyleLoadEventPlan::LoadDelaying { .. }) => false,
@@ -246,6 +268,13 @@ impl ConnectedStyleLoadEventAdmission {
         match self {
             Self::LoadDelaying(binding) => Some(binding),
             Self::NonBlockingLink(_) => None,
+        }
+    }
+
+    pub(in crate::document_runtime) fn document_owner(self) -> FrameDocumentTaskOwner {
+        match self {
+            Self::LoadDelaying(binding) => binding.owner(),
+            Self::NonBlockingLink(owner) => owner.owner(),
         }
     }
 }
@@ -353,7 +382,7 @@ pub(crate) struct ConnectedLoadOperation {
     element_kind: ConnectedStyleEventElementKind,
     pub(in crate::document_runtime) parameters: ConnectedLoadParameters,
     pub(super) blocking_operation: Option<StylesheetBlockingOperation>,
-    load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
+    event_admission: Option<ConnectedStyleLoadEventAdmission>,
 }
 
 impl ConnectedLoadOperation {
@@ -374,12 +403,28 @@ impl ConnectedLoadOperation {
         blocking_operation: Option<StylesheetBlockingOperation>,
         load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
     ) -> Arc<Self> {
+        Self::new_with_event_admission(
+            owner,
+            element_kind,
+            parameters,
+            blocking_operation,
+            load_event_binding.map(ConnectedStyleLoadEventAdmission::LoadDelaying),
+        )
+    }
+
+    pub(in crate::document_runtime) fn new_with_event_admission(
+        owner: DomHandle,
+        element_kind: ConnectedStyleEventElementKind,
+        parameters: ConnectedLoadParameters,
+        blocking_operation: Option<StylesheetBlockingOperation>,
+        event_admission: Option<ConnectedStyleLoadEventAdmission>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             owner,
             element_kind,
             parameters,
             blocking_operation,
-            load_event_binding,
+            event_admission,
         })
     }
 
@@ -390,7 +435,13 @@ impl ConnectedLoadOperation {
     pub(in crate::document_runtime) fn load_event_binding(
         &self,
     ) -> Option<MainDocumentStyleLoadEventBinding> {
-        self.load_event_binding
+        self.event_admission
+            .and_then(ConnectedStyleLoadEventAdmission::load_event_binding)
+    }
+
+    pub(in crate::document_runtime) fn document_owner(&self) -> Option<FrameDocumentTaskOwner> {
+        self.event_admission
+            .map(ConnectedStyleLoadEventAdmission::document_owner)
     }
 
     pub(in crate::document_runtime) fn ptr_eq(left: &Arc<Self>, right: &Arc<Self>) -> bool {
@@ -418,6 +469,7 @@ pub(crate) struct StylesheetLinkClient {
     fetch: StylesheetFetch,
     role: StylesheetLinkClientRole,
     load_event_binding: OnceLock<MainDocumentStyleLoadEventBinding>,
+    event_owner: Option<DocumentLinkEventOwner>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -442,22 +494,22 @@ impl StylesheetLinkClient {
             request_url,
             fetch,
             StylesheetLinkClientRole::Install,
-            load_event_binding,
+            load_event_binding.map(ConnectedStyleLoadEventAdmission::LoadDelaying),
         )
     }
 
-    pub(super) fn new_preload_with_load_event_binding(
+    pub(super) fn new_preload_with_event_admission(
         owner: DomHandle,
         request_url: Url,
         fetch: StylesheetFetch,
-        load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
+        event_admission: Option<ConnectedStyleLoadEventAdmission>,
     ) -> Arc<Self> {
         Self::new_with_role(
             owner,
             request_url,
             fetch,
             StylesheetLinkClientRole::Preload,
-            load_event_binding,
+            event_admission,
         )
     }
 
@@ -466,9 +518,11 @@ impl StylesheetLinkClient {
         request_url: Url,
         fetch: StylesheetFetch,
         role: StylesheetLinkClientRole,
-        load_event_binding: Option<MainDocumentStyleLoadEventBinding>,
+        event_admission: Option<ConnectedStyleLoadEventAdmission>,
     ) -> Arc<Self> {
         let binding = OnceLock::new();
+        let load_event_binding =
+            event_admission.and_then(ConnectedStyleLoadEventAdmission::load_event_binding);
         if let Some(load_event_binding) = load_event_binding {
             binding
                 .set(load_event_binding)
@@ -480,6 +534,10 @@ impl StylesheetLinkClient {
             fetch,
             role,
             load_event_binding: binding,
+            event_owner: event_admission.and_then(|admission| match admission {
+                ConnectedStyleLoadEventAdmission::NonBlockingLink(owner) => Some(owner),
+                ConnectedStyleLoadEventAdmission::LoadDelaying(_) => None,
+            }),
         })
     }
 
@@ -510,6 +568,12 @@ impl StylesheetLinkClient {
             Ok(()) => true,
             Err(candidate) => self.load_event_binding.get() == Some(&candidate),
         }
+    }
+
+    pub(in crate::document_runtime) fn document_owner(&self) -> Option<FrameDocumentTaskOwner> {
+        self.event_owner
+            .map(|owner| owner.owner())
+            .or_else(|| self.load_event_binding().map(|binding| binding.owner()))
     }
 
     pub(in crate::document_runtime) fn ptr_eq(left: &Arc<Self>, right: &Arc<Self>) -> bool {
