@@ -365,11 +365,13 @@ async def run_locator_input_workflows(state: SmokeState) -> None:
         {"target": True, "ancestor": True, "childDisplay": "block"},
         "locator hover persists in Stylo and exposes the dropdown",
     )
+    # Hover updates live style; publish the dropdown's geometry before input.
+    await page.screenshot()
     await page.locator("#hover-child").click(timeout=1_000)
     assert_equal(
         await page.evaluate("() => window.__hoverChildClicked === true"),
         True,
-        "hover dropdown child is clickable without waiting for a screencast frame",
+        "hover dropdown child is clickable in the newly published snapshot",
     )
 
     await page.locator("#check").evaluate("input => input.checked = true")
@@ -1175,6 +1177,7 @@ async def run_cdp_input_navigation_replacement_workflows(state: SmokeState) -> N
         """,
         wait_until="domcontentloaded",
     )
+    await page.screenshot()
     async with page.expect_navigation(
         url=mouse_destination,
         wait_until="domcontentloaded",
@@ -1267,6 +1270,7 @@ async def run_mouse_event_workflows(state: SmokeState) -> None:
         if missing:
             raise SmokeError(f"missing mouse events {missing!r}: {log!r}")
 
+    await page.screenshot()
     await reset()
     await page.mouse.click(50, 60)
     click_events = await events()
@@ -2102,6 +2106,7 @@ async def run_touch_input_workflows(state: SmokeState) -> None:
             },
         ),
     ]
+    await page.screenshot()
     for method, params in valid_commands:
         await cdp.send(method, params)
 

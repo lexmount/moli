@@ -237,9 +237,10 @@ async def _wait_for_witness(
     )
 
 
-async def _wait_for_initial_intersection(
+async def _wait_for_intersections(
     client: RawCdpClient,
     session_id: str,
+    expected: list[bool],
 ) -> None:
     deadline = asyncio.get_running_loop().time() + 2.0
     while asyncio.get_running_loop().time() < deadline:
@@ -248,10 +249,10 @@ async def _wait_for_initial_intersection(
             session_id,
             "JSON.stringify(__actionWindowIoLog)",
         )
-        if state == [False]:
+        if state == expected:
             return
         await asyncio.sleep(0.025)
-    raise SmokeError("initial IntersectionObserver state was not published")
+    raise SmokeError(f"IntersectionObserver state: expected {expected!r}, got {state!r}")
 
 
 async def _run_deadline_contract(
@@ -262,7 +263,7 @@ async def _run_deadline_contract(
 ) -> None:
     await _reset_witness(fixture)
     await _navigate(client, session_id, f"{fixture}/action-window-deadline")
-    await _wait_for_initial_intersection(client, session_id)
+    await _wait_for_intersections(client, session_id, [False])
 
     opened_at = asyncio.get_running_loop().time()
     for index, delta_y in enumerate((100, -100, 100)):
@@ -305,23 +306,26 @@ async def _run_deadline_contract(
                 "microtask:-100",
                 "microtask:100",
             ],
-            "ioLog": [False, True],
+            "ioLog": [False],
         },
         "fixed action-window batch state",
     )
+    await _capture_png(client, session_id)
+    await _wait_for_intersections(client, session_id, [False, True])
     record_contract(
         results,
         "raw_cdp_action_window_fixed_deadline_batch",
         contract=(
             "wheel acknowledgements remain delayed until one fixed deadline, then preserve "
-            "event order and commit IntersectionObserver work once"
+            "event order; IntersectionObserver keeps the old geometry until explicit paint"
         ),
         source="Moli on-demand rendering policy, mirrored by renderer and action-window Rust tests",
         commands=[
             "Input.dispatchMouseEvent(mouseWheel) x3",
             "Runtime.evaluate",
+            "Page.captureScreenshot",
         ],
-        observed={"elapsedSeconds": round(elapsed, 3), **state},
+        observed={"elapsedSeconds": round(elapsed, 3), **state, "ioAfterPaint": [False, True]},
     )
 
 
@@ -363,6 +367,9 @@ async def _run_overflow_container_contract(
         raise SmokeError(
             f"overflow-container wheel batch applied before its deadline: {elapsed:.3f}s"
         )
+    # Keep the deadline witness independent of CDP barriers. Only publish
+    # the new scroll geometry after the batch has released on its own.
+    await _capture_png(client, session_id)
     state = await _evaluate_json(
         client,
         session_id,
@@ -392,6 +399,7 @@ async def _run_overflow_container_contract(
         commands=[
             "Input.dispatchMouseEvent(mouseWheel deltaY)",
             "Input.dispatchMouseEvent(mouseWheel deltaX)",
+            "Page.captureScreenshot",
             "Runtime.evaluate",
         ],
         observed={"elapsedSeconds": round(elapsed, 3), **state},
@@ -476,6 +484,7 @@ async def _run_replacement_contract(
     results: list[dict[str, Any]],
 ) -> None:
     await _navigate(client, session_id, f"{fixture}/action-window-replacement")
+    await _capture_png(client, session_id)
     for delta_y in (10, 20, 30):
         await _dispatch_wheel(client, session_id, delta_y)
     await asyncio.sleep(1.1)

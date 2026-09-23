@@ -2551,6 +2551,11 @@ impl ScriptVm {
         self.start_css_images_discovered_by_layout(css_images);
         if matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
+                crate::observer_runtime::queue_intersection_checks(
+                    scope,
+                    runtime_ptr,
+                    crate::native_bridge::element::GeometryRead::Snapshot,
+                );
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(
                     scope,
                     runtime_ptr,
@@ -2563,7 +2568,7 @@ impl ScriptVm {
             // this body-only operation. Keep a failed admission non-fatal to
             // the completed frame; the next refresh retries from its newer
             // sampled geometry.
-            tracing::warn!(?error, "failed to admit lazy images after layout refresh");
+            tracing::warn!(?error, "failed to queue post-layout observable work");
         }
         result
     }

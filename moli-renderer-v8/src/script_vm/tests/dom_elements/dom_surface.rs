@@ -382,26 +382,75 @@ fn intersection_checks_after_scroll_reuse_geometry_until_fresh_paint() {
         "[false]"
     );
 
-    vm.eval("window.scrollTo(0, 400)")
-        .expect("window scroll should evaluate");
-    assert_eq!(
-        vm.eval("JSON.stringify(window.__intersectionStates)")
-            .expect("scroll should retain the published intersection geometry"),
-        "[false]"
-    );
+    let mut previous = "[false]";
+    for (scroll_y, reason, expected) in [
+        (
+            400,
+            moli_layout::LayoutFlushReason::Screenshot,
+            "[false,true]",
+        ),
+        (
+            0,
+            moli_layout::LayoutFlushReason::Screencast,
+            "[false,true,false]",
+        ),
+    ] {
+        let passes_before = vm.layout_pass_observability_for_test().1;
+        vm.eval(&format!("window.scrollTo(0, {scroll_y})"))
+            .expect("window scroll should evaluate");
+        assert_eq!(
+            vm.eval("JSON.stringify(window.__intersectionStates)")
+                .expect("scroll should retain the published intersection geometry"),
+            previous
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before);
+        vm.paint_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0), reason)
+            .expect("fresh paint publishes the scrolled geometry")
+            .expect("document layout");
+        vm.eval("void 0")
+            .expect("complete the turn and deliver queued observers");
+        assert_eq!(
+            vm.eval("JSON.stringify(window.__intersectionStates)")
+                .expect("publication should queue observer delivery without another mutation"),
+            expected
+        );
+        assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
+        previous = expected;
+    }
+}
+
+#[test]
+fn fresh_paint_publishes_nested_iframe_content_viewports() {
+    let mut vm = new_storage_test_vm("https://nested-frame-publication.test/");
+    vm.eval(
+        r#"
+        document.open();
+        document.write('<!doctype html><iframe id="outer" style="width:240px;height:180px"></iframe>');
+        document.close();
+        const outer = document.getElementById('outer');
+        const child = outer.contentDocument;
+        child.open();
+        child.write('<!doctype html><iframe id="inner" style="box-sizing:border-box;width:100px;height:80px;border:2px solid;padding:3px"></iframe>');
+        child.close();
+        "#,
+    ).expect("nested frame fixture");
+
+    let passes_before = vm.layout_pass_observability_for_test().1;
     vm.screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
-        .expect("fresh paint publishes the scrolled geometry")
+        .expect("paint nested frames")
         .expect("document layout");
-    vm.with_default_context_scope_and_checkpoint_for_test(|scope, runtime_ptr| {
-        crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
-        Ok(())
-    })
-    .expect("check intersections against the newly published geometry");
     assert_eq!(
-        vm.eval("JSON.stringify(window.__intersectionStates)")
-            .expect("scrolled intersection state should flush"),
-        "[false,true]"
+        vm.eval(
+            r#"JSON.stringify([
+            outer.contentWindow.innerWidth, outer.contentWindow.innerHeight,
+            child.getElementById('inner').contentWindow.innerWidth,
+            child.getElementById('inner').contentWindow.innerHeight
+        ])"#
+        )
+        .expect("read published frame viewports"),
+        "[240,180,90,70]"
     );
+    assert_eq!(vm.layout_pass_observability_for_test().1, passes_before + 1);
 }
 
 #[test]

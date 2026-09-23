@@ -83,6 +83,9 @@ async def run_iframe_input_group(state: SmokeState) -> None:
         wait_until="domcontentloaded",
     )
 
+    # Publish the full frame tree; a parent rect alone need not include child
+    # hit-test surfaces, and coordinate input never builds missing geometry.
+    await page.screenshot()
     geometry = await page.evaluate(
         """() => {
           const frame = document.getElementById("input-frame");
@@ -157,6 +160,8 @@ async def run_iframe_input_group(state: SmokeState) -> None:
 
     # Child point (560, 240) lies in the nested overflow element.
     await mouse("mouseWheel", 536.8, 307.2, delta_y=120)
+    # The screenshot flushes pending wheel work and publishes its scroll offsets.
+    await page.screenshot()
 
     async def wheel_applied() -> bool:
         return bool(
@@ -232,14 +237,15 @@ async def run_iframe_input_group(state: SmokeState) -> None:
         }"""
     )
 
-    async def frame_repositioned() -> bool:
-        top = await page.evaluate(
+    await page.screenshot()
+    _assert_close(
+        await page.evaluate(
             """() => document.getElementById("input-frame")
               .getBoundingClientRect().top"""
-        )
-        return isinstance(top, (int, float)) and abs(float(top) - 400.0) < 0.15
-
-    await wait_until(frame_repositioned, "partially hidden iframe layout", timeout_ms=3_000)
+        ),
+        400.0,
+        "partially hidden iframe layout",
+    )
     await mouse("mouseMoved", 287.2, 470.2)
     await mouse("mousePressed", 287.2, 470.2, button="left", buttons=1)
     scroll_after_press = await page.evaluate("() => window.scrollY")
@@ -376,6 +382,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
           parentScroller.scrollTo(50, 40);
         }"""
     )
+    await page.screenshot()
 
     geometry = await page.evaluate(
         """() => {
@@ -503,6 +510,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
 
     # Nested client point (20, 35) lies in the innermost overflow content.
     await mouse("mouseWheel", 136.875, 115.0, delta_x=25, delta_y=30)
+    await page.screenshot()
 
     async def nested_wheel_applied() -> bool:
         return bool(
@@ -597,22 +605,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
         await mouse("mousePressed", 148.875, 120.625, button="left", buttons=1)
         await mouse("mouseReleased", 148.875, 120.625, button="left", buttons=0)
 
-        async def nested_scrollbar_applied() -> bool:
-            return bool(
-                await page.evaluate(
-                    """() => {
-                      const outer = document.getElementById("outer-frame");
-                      const frame = outer.contentDocument.getElementById("nested-frame");
-                      return frame.contentDocument.getElementById("nested-scroll").scrollTop === 70;
-                    }"""
-                )
-            )
-
-        await wait_until(
-            nested_scrollbar_applied,
-            "nested iframe scrollbar control",
-            timeout_ms=3_000,
-        )
+        await page.screenshot()
         scrollbar_probe = await page.evaluate(
             """() => {
               const outer = document.getElementById("outer-frame");
@@ -624,6 +617,7 @@ async def _run_nested_iframe_input_workflow(state: SmokeState) -> None:
             }"""
         )
         scrollbar_top = float(scrollbar_probe["top"])
+        assert_equal(scrollbar_top, 70, "nested iframe scrollbar control")
         assert_equal(
             scrollbar_probe["eventCount"],
             events_before_scrollbar,

@@ -1,5 +1,6 @@
 use std::ptr::NonNull;
 
+use crate::native_bridge::element::GeometryRead;
 use crate::{
     dom::native::{DomHost, DomMutationEffects, NativeNodeId},
     native_bridge::{JsContextHost, RuntimeObservableContextToken, WindowExecutionContextOwner},
@@ -473,13 +474,14 @@ pub(super) fn take_intersection_records<'s>(
 pub(crate) fn queue_intersection_checks(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,
+    read: GeometryRead,
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
     let Some(batch) = access.store(ObserverStore::take_intersection_check_batch) else {
         return;
     };
     let Ok(completed) = access.read(|runtime| {
-        intersection::compute_intersection_check_batch(runtime, runtime.dom_host(), batch)
+        intersection::compute_intersection_check_batch(runtime, runtime.dom_host(), batch, read)
     }) else {
         return;
     };
@@ -499,9 +501,14 @@ fn queue_intersection_checks_with_dom(
     else {
         return;
     };
-    let Ok(completed) = access
-        .read(|runtime| intersection::compute_intersection_check_batch(runtime, dom_host, batch))
-    else {
+    let Ok(completed) = access.read(|runtime| {
+        intersection::compute_intersection_check_batch(
+            runtime,
+            dom_host,
+            batch,
+            GeometryRead::Demand(moli_layout::LayoutFlushReason::ObserverDelivery),
+        )
+    }) else {
         return;
     };
     let queued_any = access.store(|store| store.apply_intersection_check_batch(completed));
@@ -516,7 +523,11 @@ pub(super) fn flush_intersection_checks(
 ) {
     let mut access = ObserverHostAccess::new(host_ptr);
     access.store(|store| store.begin_task(ObserverTask::IntersectionCheck));
-    queue_intersection_checks(scope, host_ptr);
+    queue_intersection_checks(
+        scope,
+        host_ptr,
+        GeometryRead::Demand(moli_layout::LayoutFlushReason::ObserverDelivery),
+    );
 }
 
 pub(super) fn flush_intersection_observers(

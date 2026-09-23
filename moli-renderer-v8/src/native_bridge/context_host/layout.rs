@@ -291,19 +291,23 @@ impl JsContextHost {
         let frame_viewports = self
             .child_browsing_context_handles_in_document_order()
             .into_iter()
-            .filter(|frame| self.dom_host().owner_document_handle(*frame) == Some(document))
-            .map(|frame| {
-                let viewport = pass
-                    .tree
-                    .local_content_box_for_source(frame)
-                    .map(|content| {
-                        LayoutViewport::new(
-                            css_viewport_dimension(f64::from(content.width)),
-                            css_viewport_dimension(f64::from(content.height)),
-                            pass_viewport.device_pixel_ratio,
-                        )
-                    });
-                (frame, viewport)
+            .filter_map(|frame| {
+                let owner = self.dom_host().owner_document_handle(frame)?;
+                let root = self
+                    .dom_host()
+                    .dom()
+                    .document_element_handle_for_document(owner)?;
+                // A fresh paint publishes nested frame trees too. Publish each
+                // frame's used content viewport from that same projection.
+                let tree = pass.tree.tree_for_root(root)?;
+                let viewport = tree.local_content_box_for_source(frame).map(|content| {
+                    LayoutViewport::new(
+                        css_viewport_dimension(f64::from(content.width)),
+                        css_viewport_dimension(f64::from(content.height)),
+                        pass_viewport.device_pixel_ratio,
+                    )
+                });
+                Some((frame, viewport))
             })
             .collect::<Vec<_>>();
         let tree = pass.into_tree();

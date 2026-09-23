@@ -186,6 +186,9 @@ body { height: 1200px; }
 <script>
 globalThis.__actionWindowWheelLog = [];
 globalThis.__actionWindowIoLog = [];
+addEventListener("scroll", () => {
+  fetch("/action-window-witness/entered?source=deadline");
+}, { once: true });
 addEventListener("wheel", event => {
   __actionWindowWheelLog.push("event:" + event.deltaY);
   Promise.resolve().then(() => {
@@ -196,9 +199,6 @@ globalThis.__actionWindowObserver = new IntersectionObserver(entries => {
   const entry = entries.find(candidate => candidate.target.id === "target");
   if (!entry) return;
   __actionWindowIoLog.push(entry.isIntersecting);
-  if (__actionWindowIoLog.length === 2 && entry.isIntersecting) {
-    fetch("/action-window-witness/entered?source=deadline");
-  }
 });
 __actionWindowObserver.observe(document.getElementById("target"));
 </script>

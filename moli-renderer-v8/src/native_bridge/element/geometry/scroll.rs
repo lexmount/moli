@@ -159,7 +159,11 @@ pub(crate) fn apply_scroll_observable_effects(
     }
     queue_revealed_lazy_media_loads(scope, runtime_ptr);
     unsafe { &*runtime_ptr }.invalidate_layout_after_interaction_state_change();
-    crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
+    crate::observer_runtime::queue_intersection_checks(
+        scope,
+        runtime_ptr,
+        moli_layout::LayoutFlushReason::ObserverDelivery.into(),
+    );
     if effects
         .iter()
         .any(|effects| effects.queue_document_events())
