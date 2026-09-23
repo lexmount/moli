@@ -131,7 +131,7 @@ fn signature_matches<'s>(
 pub(super) fn execute<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     plan: JointTraversalPlan<'s>,
-    info: Option<v8::Local<'s, v8::Value>>,
+    initiator_info: Option<v8::Local<'s, v8::Value>>,
     results: &[PendingNavigationResult],
 ) {
     let data = v8::Object::new(scope);
@@ -201,6 +201,9 @@ pub(super) fn execute<'s>(
             abort(scope, data, None);
             return;
         }
+        // Only the initiating Navigation owns this API method's info.
+        let participant_info =
+            initiator_info.filter(|_| target.owner.strict_equals(plan.owner.into()));
         let outcome = object(scope, participant, NAVIGATION)
             .map(|navigation| {
                 dispatch_navigation_traverse_event_with_outcome(
@@ -208,7 +211,7 @@ pub(super) fn execute<'s>(
                     navigation,
                     target.history,
                     target.target_index,
-                    info,
+                    participant_info,
                 )
             })
             .unwrap_or_else(NavigationDispatchOutcome::proceed);

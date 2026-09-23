@@ -485,6 +485,116 @@ async fn joint_session_history_syncs_child_steps_cursor_and_reload_bootstrap() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn joint_history_traversal_info_stays_with_first_participant() {
+    assert_joint_history_traversal_info(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn joint_history_traversal_info_stays_with_last_participant() {
+    assert_joint_history_traversal_info(false).await;
+}
+
+async fn assert_joint_history_traversal_info(caller_first: bool) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route(
+                "/{page}",
+                axum::routing::get(|| async {
+                    axum::response::Html("<!doctype html><body>loaded")
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.process_async(json!({"id":9346,"method":"Page.navigate","sessionId":"SID-1","params":{"url":format!("http://{addr}/top")}})).await;
+    assert!(take_response_by_id(&mut ctx, 9346)["error"].is_null());
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "traversal info fixture load",
+        |message| message["method"] == "Page.domContentEventFired",
+    )
+    .await;
+    let expression = r#"(async () => {
+        const caller = CALLER_FIRST ? 0 : 1;
+        const sibling = 1 - caller;
+        const windows = [];
+        for (const id of ['a', 'b']) {
+            const frame = document.createElement('iframe'); frame.src = '/' + id;
+            await new Promise(resolve => {frame.onload = resolve; document.body.append(frame)});
+            await new Promise(resolve => setTimeout(resolve, 0));
+            frame.contentWindow.history.replaceState(id + '0', '');
+            windows.push(frame.contentWindow);
+        }
+        const initialKeys = windows.map(w => w.navigation.currentEntry.key);
+        for (const index of [caller, sibling]) {
+            windows[index].history.pushState(['a1', 'b1'][index], '');
+        }
+        const finalKeys = windows.map(w => w.navigation.currentEntry.key);
+        const traverse = async (initiator, keys) => {
+            const marker = {}; marker.self = marker;
+            const events = [[], []];
+            const handlers = windows.map((w, index) => {
+                const handler = event => events[index].push([
+                    event.navigationType, event.destination.sameDocument,
+                    event.info === marker, event.info === undefined
+                ]);
+                w.navigation.addEventListener('navigate', handler);
+                return handler;
+            });
+            const popped = windows.map(w => new Promise(resolve =>
+                w.addEventListener('popstate', () => resolve(), {once: true})));
+            const result = windows[initiator].navigation.traverseTo(keys[initiator], {info: marker});
+            const committed = await result.committed;
+            await Promise.all([...popped, result.finished]);
+            windows.forEach((w, i) => w.navigation.removeEventListener('navigate', handlers[i]));
+            return {
+                events,
+                states: windows.map(w => w.history.state),
+                entriesRestored: windows.every((w, i) => w.navigation.currentEntry.key === keys[i]),
+                committedEntry: committed === windows[initiator].navigation.currentEntry
+            };
+        };
+        return {
+            backward: await traverse(caller, initialKeys),
+            forward: await traverse(sibling, finalKeys)
+        };
+    })()"#
+    .replace("CALLER_FIRST", if caller_first { "true" } else { "false" });
+    let actual = joint_history_test_evaluate(&mut ctx, &expression).await;
+    let events = |first: bool| {
+        json!([
+            [["traverse", true, first, !first]],
+            [["traverse", true, !first, first]]
+        ])
+    };
+    assert_eq!(
+        actual,
+        json!({
+            "backward": {
+                "events": events(caller_first),
+                "states": ["a0", "b0"],
+                "entriesRestored": true,
+                "committedEntry": true
+            },
+            "forward": {
+                "events": events(!caller_first),
+                "states": ["a1", "b1"],
+                "entriesRestored": true,
+                "committedEntry": true
+            }
+        })
+    );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn joint_history_traversal_cross_document_before_same_document() {
     assert_joint_history_multi_frame_traversal("a", false, false).await;
 }
