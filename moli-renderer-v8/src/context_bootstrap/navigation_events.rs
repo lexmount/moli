@@ -800,11 +800,7 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     let redirected =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_REDIRECTED_SLOT, false);
     let redirected_url = redirected.then(|| {
-        destination
-            .get(scope, v8str(scope, "url").into())
-            .and_then(|value| value.to_string(scope))
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| href.to_owned())
+        navigation_destination_url_value(scope, destination).unwrap_or_else(|| href.to_owned())
     });
     let redirected_history = if redirected {
         navigate_event_private_value(scope, event, NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT)

@@ -482,11 +482,7 @@ fn precommit_controller_redirect_callback<'s>(
         navigate_event_throw_invalid_state(scope);
         return;
     };
-    let base = destination
-        .get(scope, v8str(scope, "url").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+    let base = navigation_destination_url_value(scope, destination).unwrap_or_default();
     let Some(raw_url) = args.get(0).to_string(scope) else {
         return;
     };
