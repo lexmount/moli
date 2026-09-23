@@ -132,6 +132,10 @@ jobs:
 
       - name: Install AWS-LC build dependencies
         run: |
+          set -eu
+          sed -i -E \
+            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends cmake libclang-dev
 
@@ -251,7 +255,7 @@ jobs:
     name: Build release · HEAD
     needs: resolve-refs
     runs-on: [self-hosted, moli-ci]
-    timeout-minutes: 60
+    timeout-minutes: 180
     container:
       image: rust:1.96.1-bookworm
       volumes:
@@ -264,6 +268,10 @@ jobs:
           ref: ${{ needs.resolve-refs.outputs.head_sha }}
       - name: Install AWS-LC build dependencies
         run: |
+          set -eu
+          sed -i -E \
+            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends cmake libclang-dev
       - name: Build release binary
@@ -290,7 +298,7 @@ jobs:
     name: Build release · common ancestor
     needs: resolve-refs
     runs-on: [self-hosted, moli-ci]
-    timeout-minutes: 60
+    timeout-minutes: 180
     container:
       image: rust:1.96.1-bookworm
       volumes:
@@ -303,6 +311,10 @@ jobs:
           ref: ${{ needs.resolve-refs.outputs.base_sha }}
       - name: Install AWS-LC build dependencies
         run: |
+          set -eu
+          sed -i -E \
+            's#https?://(deb|security)\.debian\.org/#https://mirrors.tuna.tsinghua.edu.cn/#g' \
+            /etc/apt/sources.list.d/debian.sources
           apt-get update
           apt-get install --yes --no-install-recommends cmake libclang-dev
       - name: Build release binary
