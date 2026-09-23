@@ -106,6 +106,14 @@ impl IntegrityServers {
 fn network_cases(origin: &str, cross: &str) -> serde_json::Value {
     serde_json::json!([
         {"name": "same-origin", "src": format!("{origin}/script.js"), "integrity": INTEGRITY, "expected": "load"},
+        {"name": "excess-padding-mismatch", "src": format!("{origin}/script.js"), "integrity": "sha384-AAAA===", "expected": "error"},
+        {"name": "interior-padding-mismatch", "src": format!("{origin}/script.js"), "integrity": "sha384-A=AAA", "expected": "error"},
+        {"name": "padding-only-mismatch", "src": format!("{origin}/script.js"), "integrity": "sha384-====", "expected": "error"},
+        {"name": "malformed-stronger-hash", "src": format!("{origin}/script.js"), "integrity": format!("{INTEGRITY} sha512-AAAA==="), "expected": "error"},
+        {"name": "noncanonical-padding", "src": format!("{origin}/script.js"), "integrity": format!("{INTEGRITY}="), "expected": "load"},
+        {"name": "excess-padding-match", "src": format!("{origin}/script.js"), "integrity": format!("{INTEGRITY}===="), "expected": "load"},
+        {"name": "non-base64-ignored", "src": format!("{origin}/script.js"), "integrity": "sha384-***", "expected": "load"},
+        {"name": "malformed-and-matching", "src": format!("{origin}/script.js"), "integrity": format!("sha384-A=AAA {INTEGRITY}"), "expected": "load"},
         {"name": "cross-no-cors", "src": format!("{cross}/script.js"), "integrity": INTEGRITY, "expected": "error"},
         {"name": "cross-anonymous", "src": format!("{cross}/cors.js"), "integrity": INTEGRITY, "crossOrigin": "anonymous", "expected": "load"},
         {"name": "cross-no-acao", "src": format!("{cross}/script.js"), "integrity": INTEGRITY, "crossOrigin": "anonymous", "expected": "error"},

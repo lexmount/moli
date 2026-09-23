@@ -96,27 +96,13 @@ fn parse_integrity_hash(token: &str) -> Option<IntegrityMetadataHash<'_>> {
 }
 
 fn is_integrity_digest_syntax(digest: &str) -> bool {
-    if digest.is_empty() {
-        return false;
-    }
-    let mut padding = 0_u8;
-    let mut data_characters = 0_usize;
-    for byte in digest.bytes() {
-        if byte == b'=' {
-            padding = padding.saturating_add(1);
-            if padding > 2 {
-                return false;
-            }
-            continue;
-        }
-        if padding != 0
-            || !(byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_'))
-        {
-            return false;
-        }
-        data_characters += 1;
-    }
-    data_characters != 0
+    // Recognizing metadata and decoding its digest are separate steps. Keep
+    // hashes containing misplaced or excess padding: a decode failure must
+    // fail verification, not erase a supported (possibly stronger) algorithm.
+    !digest.is_empty()
+        && digest.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/' | b'-' | b'_' | b'=')
+        })
 }
 
 fn parse_integrity_algorithm_and_digest(token: &str) -> Option<(DigestAlgorithm, &str)> {
@@ -141,19 +127,108 @@ fn parse_integrity_algorithm_and_digest(token: &str) -> Option<(DigestAlgorithm,
 }
 
 fn decode_integrity_digest(digest: &str) -> Option<Vec<u8>> {
-    [
-        &base64::engine::general_purpose::STANDARD,
-        &base64::engine::general_purpose::STANDARD_NO_PAD,
-        &base64::engine::general_purpose::URL_SAFE,
-        &base64::engine::general_purpose::URL_SAFE_NO_PAD,
-    ]
-    .into_iter()
-    .find_map(|engine| engine.decode(digest).ok())
+    // SRI accepts unpadded and non-canonical padded representations. Normalize
+    // only for byte verification; CSP and preload metadata comparison retain
+    // the encoded value. Interior padding still causes decoding to fail.
+    const DECODER: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        base64::engine::general_purpose::NO_PAD.with_decode_allow_trailing_bits(true),
+    );
+    let digest = digest.trim_end_matches('=');
+    let normalized;
+    let digest = if digest.contains(['-', '_']) {
+        normalized = digest.replace('-', "+").replace('_', "/");
+        &normalized
+    } else {
+        digest
+    };
+    DECODER.decode(digest).ok()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn malformed_supported_digests_do_not_disable_integrity_or_downgrade_the_algorithm() {
+        let body = b"integrity must still be checked";
+        let valid = format!(
+            "sha256-{}",
+            base64::engine::general_purpose::STANDARD
+                .encode(DigestAlgorithm::Sha256.digest_bytes(body))
+        );
+        for malformed in [
+            "sha512-AAAA===",
+            "sha512-A=AAA",
+            "sha512-====",
+            "sha-512-AAAA===",
+        ] {
+            for metadata in [malformed.to_owned(), format!("{valid} {malformed}")] {
+                for eligible in [true, false] {
+                    assert!(
+                        !response_matches_subresource_integrity_metadata(
+                            body,
+                            Some(&metadata),
+                            eligible
+                        ),
+                        "{metadata}"
+                    );
+                }
+            }
+            assert!(!integrity_metadata_allows_preload_consumption(
+                &valid,
+                Some(malformed)
+            ));
+            assert!(integrity_metadata_allows_preload_consumption(
+                malformed,
+                Some(malformed)
+            ));
+            assert!(!integrity_metadata_allows_preload_consumption(
+                "",
+                Some(malformed)
+            ));
+        }
+    }
+
+    #[test]
+    fn integrity_verification_accepts_noncanonical_base64_without_changing_metadata_identity() {
+        let body = b"noncanonical integrity";
+        let digest = base64::engine::general_purpose::STANDARD
+            .encode(DigestAlgorithm::Sha256.digest_bytes(body));
+        let metadata = format!("sha256-{digest}");
+        for padding in ["", "=", "===", "======="] {
+            let padded = format!("sha256-{}{padding}", digest.trim_end_matches('='));
+            assert!(response_matches_subresource_integrity_metadata(
+                body,
+                Some(&padded),
+                true
+            ));
+            assert!(!response_matches_subresource_integrity_metadata(
+                body,
+                Some(&padded),
+                false
+            ));
+            assert_eq!(
+                integrity_metadata_allows_preload_consumption(&metadata, Some(&padded)),
+                metadata == padded
+            );
+        }
+        // Only the top four bits of the final SHA-256 base64 symbol carry data.
+        let mut noncanonical = digest.trim_end_matches('=').as_bytes().to_vec();
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let last = noncanonical.last_mut().unwrap();
+        *last = alphabet[alphabet.iter().position(|byte| byte == last).unwrap() + 1];
+        let noncanonical = format!("sha256-{}", String::from_utf8(noncanonical).unwrap());
+        assert!(response_matches_subresource_integrity_metadata(
+            body,
+            Some(&noncanonical),
+            true
+        ));
+        assert!(!integrity_metadata_allows_preload_consumption(
+            &metadata,
+            Some(&noncanonical)
+        ));
+    }
 
     #[test]
     fn preload_integrity_compares_sets_including_weaker_hashes() {
