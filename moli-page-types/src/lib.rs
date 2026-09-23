@@ -13,10 +13,7 @@ mod navigator_overrides;
 mod renderer_transport_memory;
 mod session_history;
 
-pub use session_history::{
-    JointSessionHistory, SessionHistoryCommit, SessionHistoryContextId, SessionHistoryEntry,
-    SessionHistoryPosition, SessionHistorySeed, SessionHistoryStepId, SessionHistoryUpdate,
-};
+pub use session_history::{SessionHistoryCommit, SessionHistorySeed, SessionHistoryUpdate};
 
 use std::{
     borrow::Cow,
@@ -192,10 +189,9 @@ pub use inspector_state::{
     renderer_inspector_protocol_configuration_command_from_method,
 };
 pub use navigation_history::{
-    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
-    NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistoryMutation,
-    NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate, SessionHistoryUpdateKind,
-    apply_child_browsing_context_javascript_url_navigation_to_entry_seed,
+    NavigationActivationSeed, NavigationHistoryEntryId, NavigationHistoryEntrySeed,
+    NavigationHistoryMutation, NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate,
+    SessionHistoryUpdateKind, apply_child_browsing_context_javascript_url_navigation_to_entry_seed,
     apply_child_browsing_context_navigation_to_entry_seed,
     child_browsing_context_single_entry_seed, cross_document_navigation_seed,
     initial_navigation_history_seed, reload_navigation_seed,

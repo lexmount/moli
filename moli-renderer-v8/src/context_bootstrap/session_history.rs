@@ -7,10 +7,11 @@ use super::navigation_window::{
 };
 use crate::native_bridge::{JsContextHost, NavigationHistoryEntrySeed, OwnerDispatchScope};
 use crate::util::context_host_ptr_from_global_bridge;
-use moli_page_types::{
+use moli_page_types::SessionHistoryCommit;
+use moli_session_history::{
     JointSessionHistory, NavigationHistoryDocumentId, NavigationHistoryEntryKey,
-    SessionHistoryCommit, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryPosition,
-    SessionHistoryStepId,
+    SessionHistoryContextId, SessionHistoryEntry, SessionHistoryPosition, SessionHistoryStepId,
+    SessionHistoryTraversalPlan,
 };
 
 #[derive(Clone, Copy)]
@@ -135,7 +136,8 @@ pub(super) fn restore<'s>(
             .session_history
             .target_step
             .or_else(|| history.step_for_entry(binding.context, &entry.key))
-            .and_then(|step| history.traverse(step))
+            .and_then(|step| history.plan_traversal(step))
+            .and_then(|plan| history.commit_traversal(&plan))
             .filter(|delta| *delta != 0)
             .map(|delta| moli_page_types::SessionHistoryUpdateKind::Traverse { delta }),
     };
@@ -225,8 +227,10 @@ pub(super) fn commit<'s>(
             history.replace(binding.context, entry)
         }
         SessionHistoryCommit::Traverse => {
-            if let Some(target) = history.step_for_entry(binding.context, &entry.key) {
-                history.traverse(target);
+            if let Some(target) = history.step_for_entry(binding.context, &entry.key)
+                && let Some(plan) = history.plan_traversal(target)
+            {
+                history.commit_traversal(&plan);
             }
         }
     }
@@ -279,8 +283,9 @@ pub(super) fn capture_for_navigation<'s>(
                 .session_history
                 .target_step
                 .or_else(|| history.step_for_entry(binding.context, &entry.key))
+                && let Some(plan) = history.plan_traversal(target)
             {
-                history.traverse(target);
+                history.commit_traversal(&plan);
             }
         }
     }
@@ -402,24 +407,69 @@ pub(crate) fn prune_joint_session_history(scope: &mut v8::PinScope<'_, '_>) {
     );
 }
 
-pub(super) fn targets_at<'s>(
+pub(super) fn plan_traversal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     step: SessionHistoryStepId,
+) -> Option<SessionHistoryTraversalPlan> {
+    let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
+    let binding = binding(scope, host, owner);
+    host.session_histories
+        .get_mut(binding.popup)
+        .plan_traversal(step)
+}
+
+/// Preserve the admitted transition across V8 continuations without storing
+/// native pointers. Unchanged contexts may attach/detach while admission waits;
+/// a new changing participant or timeline mutation requires fresh admission.
+pub(super) fn traversal_admission_signature(plan: &SessionHistoryTraversalPlan) -> String {
+    fn identity(entry: &SessionHistoryEntry) -> (&str, &str) {
+        (entry.key.as_str(), entry.document.as_str())
+    }
+    let changes = plan
+        .changes()
+        .iter()
+        .map(|change| {
+            (
+                change.context.raw(),
+                change.from.as_ref().map(identity),
+                change.to.as_ref().map(identity),
+            )
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string(&(
+        plan.revision().raw(),
+        plan.source_step().raw(),
+        plan.target_step().raw(),
+        plan.delta(),
+        changes,
+    ))
+    .expect("history admission identities serialize without loss")
+}
+
+pub(super) fn project_traversal<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    plan: &SessionHistoryTraversalPlan,
 ) -> Option<Vec<super::navigation_traversal_execution::TraversalTarget<'s>>> {
     let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
     let binding = binding(scope, host, owner);
-    let entries = host
+    if !host
         .session_histories
         .get_mut(binding.popup)
-        .entries_at(step)?
-        .clone();
-    // An opaque browser-owned step must go back to the browser controller.
+        .is_traversal_plan_current(plan)
+    {
+        return None;
+    }
+    let entries = plan.target_entries();
+    // Opaque browser-owned steps return to the browser controller. Project
+    // the complete destination because live Documents may still be loading a
+    // previously accepted step, even for a context unchanged in this plan.
     if !entries.contains_key(&SessionHistoryContextId::ROOT) {
         return None;
     }
     let mut targets = Vec::new();
-    for (context, entry) in entries {
+    for (&context, entry) in entries {
         let Some(owner) = owner_for_context(scope, host, context, binding.popup) else {
             continue;
         };
@@ -447,7 +497,7 @@ pub(super) fn targets_at<'s>(
                 history,
                 current_index,
                 target_index,
-                joint_step: Some(step),
+                joint_step: Some(plan.target_step()),
             });
         }
     }
@@ -457,11 +507,13 @@ pub(super) fn targets_at<'s>(
 pub(super) fn commit_traversal<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-    step: SessionHistoryStepId,
+    plan: &SessionHistoryTraversalPlan,
 ) -> Option<i64> {
     let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
     let binding = binding(scope, host, owner);
-    host.session_histories.get_mut(binding.popup).traverse(step)
+    host.session_histories
+        .get_mut(binding.popup)
+        .commit_traversal(plan)
 }
 
 pub(super) fn publish<'s>(

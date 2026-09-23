@@ -197,9 +197,10 @@ pub(crate) use messages::{
     PendingWindowMessage, PendingWindowMessageEndpoint, PendingWindowMessageSource,
 };
 pub(crate) use moli_page_types::{
-    NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
-    NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
+    NavigationActivationSeed, NavigationHistoryEntryId, NavigationHistoryEntrySeed,
+    NavigationHistorySerializedEntry,
 };
+pub(crate) use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
 pub(crate) use navigation::{
     PendingLocationNavigation, PendingLocationNavigationKind, PendingTopLevelNavigation,
 };

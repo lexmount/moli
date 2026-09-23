@@ -521,6 +521,16 @@ async fn joint_history_traversal_precommit_cannot_restore_a_pruned_step() {
     assert_joint_history_precommit("prune").await;
 }
 
+#[tokio::test]
+async fn joint_history_traversal_precommit_keeps_an_unchanged_attached_context() {
+    assert_joint_history_precommit("attach").await;
+}
+
+#[tokio::test]
+async fn joint_history_single_target_precommit_keeps_an_unchanged_attached_context() {
+    assert_joint_history_precommit("attach-single").await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn joint_history_traversal_late_response_cannot_overwrite_a_successor_entry() {
     assert_joint_history_late_response(false).await;
@@ -711,6 +721,15 @@ async fn assert_joint_history_precommit(mode: &str) {
         |message| message["method"] == json!("Page.domContentEventFired"),
     )
     .await;
+    joint_history_test_evaluate(
+        &mut ctx,
+        if mode == "attach-single" {
+            "globalThis.testTraversalDelta = -1"
+        } else {
+            "globalThis.testTraversalDelta = -2"
+        },
+    )
+    .await;
     let pending=joint_history_test_evaluate(&mut ctx,r#"(async()=>{
         history.replaceState('top0','');
         globalThis.frame=document.createElement('iframe');frame.src='/a0';
@@ -730,7 +749,7 @@ async fn assert_joint_history_precommit(mode: &str) {
         navigation.onnavigate=event=>{
             if(event.navigationType==='traverse')event.intercept({precommitHandler:()=>{admitted();return gate}});
         };
-        history.go(-2);await started;return snapshot();
+        history.go(testTraversalDelta);await started;return snapshot();
     })()"#).await;
     assert_eq!(pending, json!(["top1", "a1", "/a1", 4, 4, 0]), "{mode}");
     ctx.process_async(json!({"id":9341,"method":"Page.getNavigationHistory","sessionId":"SID-1"}))
@@ -749,16 +768,27 @@ async fn assert_joint_history_precommit(mode: &str) {
         .await;
         assert!(take_response_by_id(&mut ctx, 9342)["error"].is_null());
     }
+    if matches!(mode, "attach" | "attach-single") {
+        let lengths = joint_history_test_evaluate(&mut ctx, r#"(async()=>{
+            const added=document.createElement('iframe');added.src='/attached';
+            await new Promise(resolve=>{added.onload=resolve;document.body.append(added)});
+            await new Promise(resolve=>setTimeout(resolve,0));
+            return [history.length,frame.contentWindow.history.length,added.contentWindow.history.length];
+        })()"#).await;
+        assert_eq!(lengths, json!([4, 4, 4]), "{mode}");
+    }
     let expression = match mode {
-        "resolve" => {
+        "resolve" | "attach" => {
             "new Promise(resolve=>{frame.onload=()=>setTimeout(()=>resolve(snapshot()),0);release()})"
         }
+        "attach-single" => "new Promise(resolve=>{onpopstate=()=>resolve(snapshot());release()})",
         "reject" => "block(new Error('blocked'));failed.then(()=>snapshot())",
         _ => "release();failed.then(()=>snapshot())",
     };
     let after = joint_history_test_evaluate(&mut ctx, expression).await;
     let (expected, index, length) = match mode {
-        "resolve" => (json!(["top0", "a0", "/a0", 4, 4, 1]), 1, 4),
+        "resolve" | "attach" => (json!(["top0", "a0", "/a0", 4, 4, 1]), 1, 4),
+        "attach-single" => (json!(["top0", "a1", "/a1", 4, 4, 0]), 2, 4),
         "reject" => (json!(["top1", "a1", "/a1", 4, 4, 0]), 3, 4),
         _ => (json!(["top1", "a1", "/a1", 1, 1, 0]), 0, 1),
     };

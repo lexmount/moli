@@ -1,5 +1,5 @@
 use super::OwnerDispatchScope;
-use moli_page_types::{JointSessionHistory, SessionHistoryContextId};
+use moli_session_history::{JointSessionHistory, SessionHistoryContextId};
 use std::collections::HashMap;
 
 /// Each traversable owns one history. Lightweight popup Windows share a V8
@@ -15,7 +15,7 @@ impl RendererSessionHistories {
     pub(crate) fn entry_is_current(
         &self,
         owner: OwnerDispatchScope,
-        entry: &moli_page_types::SessionHistoryEntry,
+        entry: &moli_session_history::SessionHistoryEntry,
     ) -> bool {
         let Some(context) = self.contexts.get(&owner).copied() else {
             return false;

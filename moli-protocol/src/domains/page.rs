@@ -4973,7 +4973,7 @@ mod producer_tests {
                         navigation.owner().clone(),
                         navigation.source_document(),
                         moli_page_types::SessionHistoryUpdate {
-                            position: moli_page_types::SessionHistoryPosition::INITIAL,
+                            position: moli_session_history::SessionHistoryPosition::INITIAL,
                             update: moli_page_types::SessionHistoryUpdateKind::Push,
                             root_url: navigation.clone().into_navigation().url,
                             root_entry_steps: vec![0],

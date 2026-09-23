@@ -1,43 +1,8 @@
+use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
 use std::sync::atomic::{AtomicU64, Ordering};
 use url::Url;
 
-static NEXT_NAVIGATION_HISTORY_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_NAVIGATION_HISTORY_ENTRY_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_NAVIGATION_HISTORY_ENTRY_KEY: AtomicU64 = AtomicU64::new(1);
-
-/// Opaque identity shared by session-history entries that belong to the same
-/// `Document`.
-///
-/// The serialized token is carried through the renderer's hidden Navigation
-/// slots, but its contents have no meaning. In particular, callers must not
-/// derive a new identity from a URL, a history index, or a previous token.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NavigationHistoryDocumentId(String);
-
-impl NavigationHistoryDocumentId {
-    pub fn allocate() -> Self {
-        allocate_navigation_history_document_id(&NEXT_NAVIGATION_HISTORY_DOCUMENT_ID)
-    }
-
-    /// Restores an identity previously stored in a renderer-owned runtime
-    /// slot. Equality remains opaque; the token is never parsed.
-    pub fn from_serialized(token: String) -> Self {
-        Self(token)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-fn allocate_navigation_history_document_id(counter: &AtomicU64) -> NavigationHistoryDocumentId {
-    let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .expect("Navigation History Document id allocator exhausted");
-    NavigationHistoryDocumentId(format!("document-{raw}"))
-}
 
 /// Opaque identity for one Navigation API entry incarnation.
 ///
@@ -77,49 +42,6 @@ fn allocate_navigation_history_entry_id(counter: &AtomicU64) -> NavigationHistor
         })
         .expect("Navigation History entry id allocator exhausted");
     NavigationHistoryEntryId(format!("entry-{raw}"))
-}
-
-/// Opaque identity for one session-history slot exposed to Navigation API.
-///
-/// Same-origin replacement retains the key; push and cross-origin
-/// replacement allocate a fresh key. The token is never derived from a URL,
-/// history index, or Document id.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct NavigationHistoryEntryKey(String);
-
-impl NavigationHistoryEntryKey {
-    pub fn allocate() -> Self {
-        allocate_navigation_history_entry_key(&NEXT_NAVIGATION_HISTORY_ENTRY_KEY)
-    }
-
-    pub fn from_serialized(token: String) -> Self {
-        Self(token)
-    }
-
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-
-    fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
-impl std::ops::Deref for NavigationHistoryEntryKey {
-    type Target = str;
-
-    fn deref(&self) -> &Self::Target {
-        self.as_str()
-    }
-}
-
-fn allocate_navigation_history_entry_key(counter: &AtomicU64) -> NavigationHistoryEntryKey {
-    let raw = counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-            current.checked_add(1)
-        })
-        .expect("Navigation History entry key allocator exhausted");
-    NavigationHistoryEntryKey(format!("key-{raw}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -743,28 +665,12 @@ mod tests {
     }
 
     #[test]
-    fn document_id_allocator_rejects_exhaustion_without_wrapping() {
-        let counter = AtomicU64::new(u64::MAX);
-        let exhausted =
-            std::panic::catch_unwind(|| allocate_navigation_history_document_id(&counter));
-
-        assert!(exhausted.is_err());
-        assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
-    }
-
-    #[test]
     fn entry_identity_allocators_reject_exhaustion_without_wrapping() {
         let id_counter = AtomicU64::new(u64::MAX);
         let id_exhausted =
             std::panic::catch_unwind(|| allocate_navigation_history_entry_id(&id_counter));
         assert!(id_exhausted.is_err());
         assert_eq!(id_counter.load(Ordering::Relaxed), u64::MAX);
-
-        let key_counter = AtomicU64::new(u64::MAX);
-        let key_exhausted =
-            std::panic::catch_unwind(|| allocate_navigation_history_entry_key(&key_counter));
-        assert!(key_exhausted.is_err());
-        assert_eq!(key_counter.load(Ordering::Relaxed), u64::MAX);
     }
 
     #[test]

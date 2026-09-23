@@ -5852,7 +5852,7 @@ impl ScriptVm {
 
     pub(super) fn install_session_history_position(
         &mut self,
-        position: moli_page_types::SessionHistoryPosition,
+        position: moli_session_history::SessionHistoryPosition,
     ) {
         let _ = self.with_default_context_scope(|scope, _runtime_ptr| {
             super::context_bootstrap::install_session_history_position(scope, position);

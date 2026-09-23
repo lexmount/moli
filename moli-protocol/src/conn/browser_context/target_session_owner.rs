@@ -180,7 +180,7 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
-    session_history_position: Option<moli_page_types::SessionHistoryPosition>,
+    session_history_position: Option<moli_session_history::SessionHistoryPosition>,
 }
 
 impl TargetNavigationLoadInputs {

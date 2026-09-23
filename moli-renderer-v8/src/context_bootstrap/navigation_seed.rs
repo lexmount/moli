@@ -12,10 +12,11 @@ use super::navigation_window::{
 };
 use crate::native_bridge::NavigationHistoryEntrySeed;
 use moli_page_types::{
-    NavigationHistoryDocumentId, NavigationHistoryEntryId, NavigationHistoryEntryKey,
+    NavigationHistoryEntryId,
     initial_navigation_history_seed as page_initial_navigation_history_seed,
     reload_navigation_seed, traversal_navigation_seed_candidate,
 };
+use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
 
 pub(super) fn initial_navigation_history_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,

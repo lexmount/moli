@@ -122,7 +122,7 @@ impl JsContextHost {
     pub(crate) fn cancel_joint_child_history_navigation(
         &mut self,
         handle: DomHandle,
-        step: moli_page_types::SessionHistoryStepId,
+        step: moli_session_history::SessionHistoryStepId,
     ) {
         if self
             .child_browsing_contexts

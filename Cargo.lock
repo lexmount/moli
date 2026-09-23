@@ -2889,6 +2889,7 @@ dependencies = [
  "moli-dom",
  "moli-fetch",
  "moli-parkable-image",
+ "moli-session-history",
  "moli-web-mime",
  "regex",
  "serde",
@@ -2964,6 +2965,7 @@ dependencies = [
  "moli-image",
  "moli-page-types",
  "moli-protocol-cdp",
+ "moli-session-history",
  "moli-shared-worker",
  "moli-site",
  "moli-storage-key",
@@ -3111,6 +3113,7 @@ dependencies = [
  "moli-protocol-cdp",
  "moli-script",
  "moli-selector",
+ "moli-session-history",
  "moli-shared-worker",
  "moli-storage-key",
  "moli-storage-service",
@@ -3195,6 +3198,10 @@ dependencies = [
  "stylo_traits",
  "url",
 ]
+
+[[package]]
+name = "moli-session-history"
+version = "0.1.0"
 
 [[package]]
 name = "moli-shared-worker"

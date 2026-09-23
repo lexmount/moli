@@ -20,12 +20,13 @@ use super::navigation_window::{
 };
 use crate::native_bridge::PendingNavigationResult;
 use crate::util::{context_host_ptr_from_global_bridge, get_private_value, set_private_value};
-use moli_page_types::SessionHistoryStepId;
+use moli_session_history::SessionHistoryStepId;
 
 const PENDING: &str = "__lmPendingJointTraversal";
 const ACTIVE: &str = "__lmJointActive";
 const OWNER: &str = "__lmJointOwner";
 const STEP: &str = "__lmJointStep";
+const ADMISSION: &str = "__lmJointAdmission";
 const PARTICIPANTS: &str = "__lmJointParticipants";
 const REMAINING: &str = "__lmJointRemaining";
 const COMMITTED: &str = "__lmJointCommitted";
@@ -59,7 +60,7 @@ pub(super) fn queue_plan<'s>(scope: &mut v8::PinScope<'s, '_>, mut plan: JointTr
             history,
             current_index: index,
             target_index: index,
-            joint_step: Some(plan.step),
+            joint_step: Some(plan.step()),
         },
     );
 }
@@ -140,7 +141,14 @@ pub(super) fn execute<'s>(
         scope,
         data,
         STEP,
-        v8::BigInt::new_from_u64(scope, plan.step.raw()).into(),
+        v8::BigInt::new_from_u64(scope, plan.step().raw()).into(),
+    );
+    let signature = super::session_history::traversal_admission_signature(&plan.core);
+    set_private_value(
+        scope,
+        data,
+        ADMISSION,
+        v8::String::new(scope, &signature).unwrap().into(),
     );
     let participants = v8::Array::new(scope, plan.targets.len() as i32);
     set_private_value(scope, data, PARTICIPANTS, participants.into());
@@ -299,6 +307,12 @@ fn validate<'s>(
         owner,
         SessionHistoryStepId::from_raw(step.u64_value().0),
     )?;
+    let signature = get_private_value(scope, data, ADMISSION)?
+        .to_string(scope)?
+        .to_rust_string_lossy(scope);
+    if signature != super::session_history::traversal_admission_signature(&plan.core) {
+        return None;
+    }
     let participants = array(scope, data, PARTICIPANTS)?;
     if participants.length() as usize != plan.targets.len() {
         return None;
@@ -463,7 +477,7 @@ fn commit<'s>(scope: &mut v8::PinScope<'s, '_>, data: v8::Local<'s, v8::Object>)
                 abort(scope, data, None);
                 return;
             };
-            seed.session_history.target_step = Some(plan.step);
+            seed.session_history.target_step = Some(plan.step());
             seed.session_history.admitted_entry = history_entries(scope, target.history)
                 .and_then(|entries| entries.get_index(scope, target.target_index))
                 .and_then(|entry| entry.try_into().ok())
@@ -511,7 +525,7 @@ fn commit<'s>(scope: &mut v8::PinScope<'s, '_>, data: v8::Local<'s, v8::Object>)
             seed.clone(),
         ) {
             for (_, queued, _, _) in &cross_document {
-                host.cancel_joint_child_history_navigation(*queued, plan.step);
+                host.cancel_joint_child_history_navigation(*queued, plan.step());
             }
             abort(scope, data, None);
             return;
@@ -519,9 +533,10 @@ fn commit<'s>(scope: &mut v8::PinScope<'s, '_>, data: v8::Local<'s, v8::Object>)
     }
     // Acceptance point: all admissions passed, all child navigations have
     // reservations, and same-Document views can commit without script or failure.
-    let Some(delta) = super::session_history::commit_traversal(scope, plan.owner, plan.step) else {
+    let Some(delta) = super::session_history::commit_traversal(scope, plan.owner, &plan.core)
+    else {
         for (_, handle, _, _) in &cross_document {
-            unsafe { &mut *host_ptr }.cancel_joint_child_history_navigation(*handle, plan.step);
+            unsafe { &mut *host_ptr }.cancel_joint_child_history_navigation(*handle, plan.step());
         }
         abort(scope, data, None);
         return;

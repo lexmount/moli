@@ -28,7 +28,7 @@ pub(super) struct TraversalTarget<'s> {
     pub(super) history: v8::Local<'s, v8::Object>,
     pub(super) current_index: u32,
     pub(super) target_index: u32,
-    pub(super) joint_step: Option<moli_page_types::SessionHistoryStepId>,
+    pub(super) joint_step: Option<moli_session_history::SessionHistoryStepId>,
 }
 
 pub(super) fn queue_navigation_traversal_with_result<'s>(
@@ -49,14 +49,7 @@ pub(super) fn queue_navigation_traversal_with_result<'s>(
                 "AbortError",
             ));
         }
-        apply_history_entry(
-            scope,
-            target.history,
-            target.target_index,
-            target.joint_step,
-            true,
-            None,
-        );
+        apply_history_entry(scope, target.history, target.target_index, None, true, None);
         return Some(navigation_immediate_current_entry_result(
             scope,
             target.owner,
@@ -157,14 +150,7 @@ pub(super) fn queue_history_traversal_without_result<'s>(
         if !dispatch_traverse_event(scope, &target) {
             return;
         }
-        apply_history_entry(
-            scope,
-            target.history,
-            target.target_index,
-            target.joint_step,
-            true,
-            None,
-        );
+        apply_history_entry(scope, target.history, target.target_index, None, true, None);
         return;
     };
     let host = unsafe { &mut *host_ptr };

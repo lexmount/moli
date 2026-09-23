@@ -47,7 +47,7 @@ impl TargetNavigationHistoryState {
         self.entries.is_empty()
     }
 
-    pub(crate) fn position_after_navigation(&self) -> moli_page_types::SessionHistoryPosition {
+    pub(crate) fn position_after_navigation(&self) -> moli_session_history::SessionHistoryPosition {
         let (index, length) = match self.pending_update {
             Some(
                 PendingNavigationHistoryUpdate::ReplaceCurrent
@@ -66,7 +66,7 @@ impl TargetNavigationHistoryState {
                 (index, index + 1)
             }
         };
-        moli_page_types::SessionHistoryPosition::new(index, length)
+        moli_session_history::SessionHistoryPosition::new(index, length)
             .expect("browser session history position must be valid")
     }
 

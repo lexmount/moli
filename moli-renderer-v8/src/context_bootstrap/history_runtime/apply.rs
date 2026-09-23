@@ -45,11 +45,11 @@ pub(in crate::context_bootstrap) fn apply_history_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     index: u32,
-    joint_step: Option<moli_page_types::SessionHistoryStepId>,
+    plan: Option<&moli_session_history::SessionHistoryTraversalPlan>,
     dispatch_popstate: bool,
     pending_results: Option<&[PendingNavigationResult]>,
 ) {
-    let Some(applied) = apply_history_entry_commit(scope, history, index, joint_step) else {
+    let Some(applied) = apply_history_entry_commit(scope, history, index, plan) else {
         if let Some(results) = pending_results {
             let error = super::super::navigation_result::navigation_dom_exception(
                 scope,
@@ -91,16 +91,11 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     index: u32,
-    joint_step: Option<moli_page_types::SessionHistoryStepId>,
+    plan: Option<&moli_session_history::SessionHistoryTraversalPlan>,
 ) -> Option<AppliedHistoryEntry<'s>> {
     let owner = runtime_window_owner(scope, history);
-    let entry = history_entries(scope, history)?
-        .get_index(scope, index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let step =
-        joint_step.or_else(|| super::super::session_history::step_for_entry(scope, owner, entry));
-    let targets = match step {
-        Some(step) => super::super::session_history::targets_at(scope, owner, step)?,
+    let targets = match plan {
+        Some(plan) => super::super::session_history::project_traversal(scope, owner, plan)?,
         None => Vec::new(),
     };
     // The multi-participant coordinator admits and commits complete plans.
@@ -113,27 +108,22 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
     }
     // Admission can run script, so validate the stable step again before any
     // local entry is changed. Forward pruning invalidates it atomically.
-    if let Some(step) = step {
+    if let Some(plan) = plan {
         let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
         let binding = super::super::session_history::binding(scope, host, owner);
-        let expected = host
-            .session_histories
-            .get_mut(binding.popup)
-            .entries_at(step)?
-            .get(&binding.context)?
-            .clone();
+        let expected = plan.target_entries().get(&binding.context)?;
         let live = history_entries(scope, history)?
             .get_index(scope, index)
             .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
             .and_then(|entry| super::super::session_history::entry_reference(scope, entry))?;
-        if live != expected {
+        if &live != expected {
             return None;
         }
     }
     let prepared = prepare_local_history_entry_commit(scope, history, index)?;
-    let delta = match step {
-        Some(step) => Some(super::super::session_history::commit_traversal(
-            scope, owner, step,
+    let delta = match plan {
+        Some(plan) => Some(super::super::session_history::commit_traversal(
+            scope, owner, plan,
         )?),
         None => None,
     };

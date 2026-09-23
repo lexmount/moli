@@ -818,7 +818,7 @@ pub struct RendererMainDocumentCommit {
     pub secure_context_type: String,
     pub timestamp: f64,
     /// Browser-owned session-history cursor and length at this document's commit.
-    pub session_history_position: Option<moli_page_types::SessionHistoryPosition>,
+    pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

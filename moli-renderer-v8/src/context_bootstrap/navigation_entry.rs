@@ -15,7 +15,8 @@ use super::navigation_window::{
 use super::*;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
-use moli_page_types::{NavigationHistoryEntryId, NavigationHistoryEntryKey};
+use moli_page_types::NavigationHistoryEntryId;
+use moli_session_history::NavigationHistoryEntryKey;
 use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_ENTRY_INITIAL_INDEX_SLOT: &str = "__lmNavigationEntryInitialIndex";

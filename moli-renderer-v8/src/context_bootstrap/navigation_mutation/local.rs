@@ -38,7 +38,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 &new_navigation_entry_id(),
                 &new_navigation_entry_key(),
             );
-            let document_id = moli_page_types::NavigationHistoryDocumentId::allocate();
+            let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
             set_navigation_entry_document_id(scope, next_entry, document_id.as_str());
             bind_navigation_entry_runtime_owner(scope, next_entry, owner);
             let _ = next_entries.set_index(scope, next_index, next_entry.into());
@@ -76,7 +76,7 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
                 &new_navigation_entry_id(),
                 &key,
             );
-            let document_id = moli_page_types::NavigationHistoryDocumentId::allocate();
+            let document_id = moli_session_history::NavigationHistoryDocumentId::allocate();
             set_navigation_entry_document_id(scope, entry, document_id.as_str());
             bind_navigation_entry_runtime_owner(scope, entry, owner);
             let _ = entries.set_index(scope, current_index, entry.into());

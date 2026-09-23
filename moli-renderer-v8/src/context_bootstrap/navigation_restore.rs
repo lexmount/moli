@@ -10,9 +10,8 @@ use super::navigation_entry_state::clone_history_entry_state;
 use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_window::{window_history_for_holder, window_navigation_for_holder};
 use crate::native_bridge::NavigationHistoryEntrySeed;
-use moli_page_types::{
-    NavigationHistoryDocumentId, NavigationHistoryEntryId, NavigationHistoryEntryKey,
-};
+use moli_page_types::NavigationHistoryEntryId;
+use moli_session_history::{NavigationHistoryDocumentId, NavigationHistoryEntryKey};
 
 pub(crate) fn install_navigation_bootstrap_entry(
     scope: &mut v8::PinScope<'_, '_>,

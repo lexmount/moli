@@ -47,6 +47,7 @@ members = [
     "moli-protocol-server",
     "moli-script",
     "moli-selector",
+    "moli-session-history",
     "moli-site",
     "moli-shared-worker",
     "moli-storage-service",

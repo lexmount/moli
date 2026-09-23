@@ -42,7 +42,7 @@ fn configure_child_document_navigation_request(
 
 #[derive(Debug, Clone)]
 pub(super) struct PendingChildDocumentNavigation {
-    pub(super) admitted_history_entry: Option<moli_page_types::SessionHistoryEntry>,
+    pub(super) admitted_history_entry: Option<moli_session_history::SessionHistoryEntry>,
     pub(super) target: ChildDocumentNavigationFetchTarget,
     pub(super) target_url: Url,
     pub(super) resource_loader: crate::network::navigation::NavigationResourceLoader,

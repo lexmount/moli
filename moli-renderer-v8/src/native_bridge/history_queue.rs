@@ -54,7 +54,7 @@ pub(crate) struct QueuedNavigationApiTask {
 }
 
 pub(crate) struct PendingHistoryTraversal {
-    pub(crate) joint_step: Option<moli_page_types::SessionHistoryStepId>,
+    pub(crate) joint_step: Option<moli_session_history::SessionHistoryStepId>,
     pub(crate) target: WindowTaskTarget,
     pub(crate) target_index: u32,
     pub(crate) target_key: Option<String>,
@@ -135,7 +135,7 @@ impl HistoryQueueState {
         relevant_context: WindowExecutionContextBinding,
         target: WindowTaskTarget,
         target_index: u32,
-        joint_step: Option<moli_page_types::SessionHistoryStepId>,
+        joint_step: Option<moli_session_history::SessionHistoryStepId>,
         target_key: Option<String>,
         info: Option<v8::Global<v8::Value>>,
         result: Option<PendingNavigationResult>,
@@ -393,8 +393,8 @@ impl JsContextHost {
 
     pub(crate) fn pending_joint_history_step(
         &self,
-        history: &moli_page_types::JointSessionHistory,
-    ) -> Option<moli_page_types::SessionHistoryStepId> {
+        history: &moli_session_history::JointSessionHistory,
+    ) -> Option<moli_session_history::SessionHistoryStepId> {
         self.history_queue
             .pending_history_traversal_tasks
             .iter()
@@ -415,7 +415,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
         target_index: u32,
-        joint_step: Option<moli_page_types::SessionHistoryStepId>,
+        joint_step: Option<moli_session_history::SessionHistoryStepId>,
         target_key: Option<String>,
     ) -> Option<RendererPageHistoryTraversalProducer> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
@@ -525,7 +525,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
         target_index: u32,
-        joint_step: Option<moli_page_types::SessionHistoryStepId>,
+        joint_step: Option<moli_session_history::SessionHistoryStepId>,
         target_key: Option<String>,
         info: Option<v8::Local<'s, v8::Value>>,
     ) -> Option<(

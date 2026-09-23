@@ -12,7 +12,7 @@ use super::navigation_window::{
 };
 
 pub(super) struct JointTraversalPlan<'s> {
-    pub(super) step: moli_page_types::SessionHistoryStepId,
+    pub(super) core: moli_session_history::SessionHistoryTraversalPlan,
     pub(super) owner: v8::Local<'s, v8::Object>,
     pub(super) targets: Vec<TraversalTarget<'s>>,
 }
@@ -21,13 +21,19 @@ impl<'s> JointTraversalPlan<'s> {
     pub(super) fn resolve(
         scope: &mut v8::PinScope<'s, '_>,
         owner: v8::Local<'s, v8::Object>,
-        step: moli_page_types::SessionHistoryStepId,
+        step: moli_session_history::SessionHistoryStepId,
     ) -> Option<Self> {
+        let core = super::session_history::plan_traversal(scope, owner, step)?;
+        let targets = super::session_history::project_traversal(scope, owner, &core)?;
         Some(Self {
-            step,
+            core,
             owner,
-            targets: super::session_history::targets_at(scope, owner, step)?,
+            targets,
         })
+    }
+
+    pub(super) fn step(&self) -> moli_session_history::SessionHistoryStepId {
+        self.core.target_step()
     }
 
     pub(super) fn has_cross_document_root(&self, scope: &mut v8::PinScope<'s, '_>) -> bool {
@@ -165,10 +171,10 @@ pub(super) fn history_delta_traversal_plan<'s>(
     let owner = runtime_window_owner(scope, history);
     let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
     let binding = super::session_history::binding(scope, host, owner);
-    let mut model = host.session_histories.get_mut(binding.popup).clone();
-    if let Some(step) = host.pending_joint_history_step(&model) {
-        model.traverse(step);
-    }
-    let step = model.step_by_delta(delta)?;
+    let model = host.session_histories.get_mut(binding.popup).clone();
+    let source = host
+        .pending_joint_history_step(&model)
+        .unwrap_or_else(|| model.current_step());
+    let step = model.step_by_delta_from(source, delta)?;
     JointTraversalPlan::resolve(scope, owner, step)
 }

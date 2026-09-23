@@ -15,6 +15,7 @@ moli-dom = { path = "../moli-dom" }
 moli-disk-pool = { path = "../moli-disk-pool" }
 moli-fetch = { path = "../moli-fetch" }
 moli-parkable-image = { path = "../moli-parkable-image" }
+moli-session-history = { path = "../moli-session-history" }
 moli-web-mime = { path = "../moli-web-mime" }
 http-auth = { version = "0.1.10", default-features = false }
 regex = "1.12.3"

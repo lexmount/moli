@@ -24,6 +24,7 @@ moli-fetch = { path = "../moli-fetch" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-shared-worker = { path = "../moli-shared-worker" }
 moli-site = { path = "../moli-site" }
+moli-session-history = { path = "../moli-session-history" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-trace = { path = "../moli-trace" }
 moli-url = { path = "../moli-url" }
