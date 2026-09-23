@@ -1733,21 +1733,18 @@ fn font_face_variation_settings_use_stylo_descriptor_serialization() {
   } catch (error) {
     setterError = error.name;
   }
-  let constructorError = '';
-  try {
-    new FontFace('Invalid', 'url(invalid.woff2)', {
-      variationSettings: 'not-a-valid-setting'
-    });
-  } catch (error) {
-    constructorError = error.name;
-  }
+  const invalid = new FontFace('Invalid', 'url(invalid.woff2)', {
+    variationSettings: 'not-a-valid-setting'
+  });
+  invalid.loaded.catch(() => {});
   const descriptor = Object.getOwnPropertyDescriptor(
     FontFace.prototype,
     'variationSettings'
   );
   return JSON.stringify({
     values: [initial, updated, face.variationSettings],
-    errors: [setterError, constructorError],
+    setterError,
+    constructorStatus: invalid.status,
     descriptor: [
       typeof descriptor.get,
       descriptor.get.length,
@@ -1765,7 +1762,7 @@ fn font_face_variation_settings_use_stylo_descriptor_serialization() {
 
     assert_eq!(
         result,
-        r#"{"values":["\"wght\" 850","\"wdth\" 120.5","\"wdth\" 120.5"],"errors":["SyntaxError","SyntaxError"],"descriptor":["function",0,"function",1,true,true,false]}"#
+        r#"{"values":["\"wght\" 850","\"wdth\" 120.5","\"wdth\" 120.5"],"setterError":"SyntaxError","constructorStatus":"error","descriptor":["function",0,"function",1,true,true,false]}"#
     );
 }
 
