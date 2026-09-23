@@ -7,8 +7,8 @@ use crate::context_bootstrap::history_mutation::document_can_have_url_rewritten;
 use crate::context_bootstrap::location_runtime::location_href_slot;
 use crate::context_bootstrap::navigation_activation::{NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition};
 use crate::context_bootstrap::navigation_events::{
-    NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT, navigation_destination_url_value, navigation_scroll_event_is_active,
-    set_navigation_destination_url,
+    NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT, navigation_destination_url_value,
+    navigation_scroll_event_is_active, set_navigation_destination_url,
 };
 use crate::context_bootstrap::navigation_handler_callbacks::{
     NAVIGATE_EVENT_ADDED_HANDLERS_SLOT, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT,
