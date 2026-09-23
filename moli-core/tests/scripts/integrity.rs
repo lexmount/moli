@@ -10,6 +10,9 @@ use tokio::{
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
+#[path = "preload_integrity.rs"]
+mod preload;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -130,6 +133,11 @@ fn fixture_response(
     let (path, query) = request.path.split_once('?').unwrap_or((&request.path, ""));
     let javascript = "Content-Type: text/javascript\r\n";
     match path {
+        "/preload-parser.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            preload::parser_markup(origin, cross),
+        ),
         "/echo-origin.js"
         | "/echo-origin-redirect.js"
         | "/echo-origin-home.js"
