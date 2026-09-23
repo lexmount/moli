@@ -153,7 +153,9 @@ pub(in crate::context_bootstrap) fn navigation_navigate_callback<'s>(
         return;
     }
     let cloned_navigation_state = match clone_navigation_state_arg_for_result(scope, options) {
-        Ok(state) => state,
+        // navigate() serializes an omitted state as undefined. Keep it distinct
+        // from navigation sources which use the default null destination state.
+        Ok(state) => Some(state.unwrap_or_else(|| v8::undefined(scope).into())),
         Err(error) => {
             rv.set(navigation_rejected_value_result(scope, error).into());
             return;
