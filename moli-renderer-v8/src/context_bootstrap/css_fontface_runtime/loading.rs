@@ -325,12 +325,8 @@ fn advance_sources<'s>(
         let Some(url) = url else {
             break;
         };
-        match crate::network_host::start_font_face_fetch(scope, face, request_context, &url) {
-            Ok(crate::network_host::FontFaceFetchStart::Pending) => return,
-            Ok(crate::network_host::FontFaceFetchStart::Local(bytes)) => {
-                let _ = load.borrow_mut().accept_response(Some(&bytes));
-            }
-            Err(_) => {}
+        if crate::network_host::start_font_face_fetch(scope, face, request_context, &url).is_ok() {
+            return;
         }
     }
     publish_font_face_load_changes(scope);
