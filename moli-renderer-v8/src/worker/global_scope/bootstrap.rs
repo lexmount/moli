@@ -354,6 +354,7 @@ pub(in crate::worker) fn prepare_worker_global_scope_templates<'s>(
 
     let worker = worker_global_scope_template(scope, "WorkerGlobalScope");
     worker.inherit(event_target);
+    font_loading::install_worker_font_source_template(scope, worker);
     let specific_worker = worker_global_scope_template(scope, interface);
     specific_worker.inherit(worker);
     specific_worker

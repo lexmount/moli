@@ -117,6 +117,7 @@ mod content_security_policy;
 mod event_handlers;
 mod extendable_events;
 mod fetch;
+mod font_loading;
 mod import_scripts;
 mod messaging;
 mod nested_workers;
@@ -144,6 +145,7 @@ pub(in crate::worker) use content_security_policy::{
     fulfill_pending_worker_csp_report,
 };
 pub(crate) use fetch::*;
+pub(crate) use font_loading::{queue_worker_font_task, start_worker_font_face_fetch};
 use import_scripts::*;
 use timers::*;
 pub(crate) use xhr::*;
