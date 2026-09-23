@@ -1867,7 +1867,7 @@ impl DocumentRuntime {
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
             parser_bridge,
-            ParserSuspensionCause::DocumentWriteExternalScript { script: node },
+            ParserSuspensionCause::ParserClassicSource { script: node },
         );
         self.start_document_write_external_script_load(
             scope,
@@ -1958,7 +1958,7 @@ impl DocumentRuntime {
             DocumentWriteScriptRunOutcome::Suspend(start) => {
                 Self::resuspend_document_write_insertion(
                     &mut insertion,
-                    ParserSuspensionCause::DocumentWriteExternalScript { script: node },
+                    ParserSuspensionCause::ParserClassicSource { script: node },
                 );
                 self.start_document_write_external_script_load(
                     scope,
@@ -2184,7 +2184,7 @@ impl DocumentRuntime {
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
             parser_bridge,
-            ParserSuspensionCause::DocumentWriteExternalScript { script },
+            ParserSuspensionCause::ParserClassicSource { script },
         );
         self.start_document_write_external_script_load(
             scope,

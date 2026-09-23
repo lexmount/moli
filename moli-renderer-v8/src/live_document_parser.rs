@@ -206,13 +206,23 @@ pub(crate) enum ParserSuspensionCause {
     ParserClassicSource { script: NativeNodeId },
     ParserClassicStylesheets { script: NativeNodeId },
     ParserCreatedStylesheet { owner: NativeNodeId },
-    DocumentWriteExternalScript { script: NativeNodeId },
+}
+
+/// The component retaining the continuation for one exact parser suspension.
+/// The same script or stylesheet blocker can be reached by either component.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ParserResumeOwner {
+    /// The main or child document's ordinary parser driver.
+    ParserDriver,
+    /// A suspended insertion retained by `DocumentRuntime`.
+    DocumentWrite,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ParserSuspension {
     id: ParserSuspensionId,
     cause: ParserSuspensionCause,
+    resume_owner: ParserResumeOwner,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -237,6 +247,7 @@ pub(crate) enum DocumentParserRunState {
     Suspended {
         id: ParserSuspensionId,
         cause: ParserSuspensionCause,
+        resume_owner: ParserResumeOwner,
     },
     Finishing,
     Finished,
@@ -272,6 +283,7 @@ enum DocumentParserLifecycleState {
     Suspended {
         id: ParserSuspensionId,
         cause: ParserSuspensionCause,
+        resume_owner: ParserResumeOwner,
     },
     Finishing,
     Finished,
@@ -283,6 +295,7 @@ impl From<ParserSuspension> for DocumentParserLifecycleState {
         Self::Suspended {
             id: suspension.id,
             cause: suspension.cause,
+            resume_owner: suspension.resume_owner,
         }
     }
 }
@@ -290,7 +303,15 @@ impl From<ParserSuspension> for DocumentParserLifecycleState {
 impl DocumentParserLifecycleState {
     fn suspension(self) -> Option<ParserSuspension> {
         match self {
-            Self::Suspended { id, cause } => Some(ParserSuspension { id, cause }),
+            Self::Suspended {
+                id,
+                cause,
+                resume_owner,
+            } => Some(ParserSuspension {
+                id,
+                cause,
+                resume_owner,
+            }),
             _ => None,
         }
     }
@@ -299,7 +320,18 @@ impl DocumentParserLifecycleState {
         match (self, pump_session_nesting_level) {
             (Self::Ready, nesting_level @ 1..) => DocumentParserRunState::Pumping { nesting_level },
             (Self::Ready, 0) => DocumentParserRunState::Ready,
-            (Self::Suspended { id, cause }, _) => DocumentParserRunState::Suspended { id, cause },
+            (
+                Self::Suspended {
+                    id,
+                    cause,
+                    resume_owner,
+                },
+                _,
+            ) => DocumentParserRunState::Suspended {
+                id,
+                cause,
+                resume_owner,
+            },
             (Self::Finishing, _) => DocumentParserRunState::Finishing,
             (Self::Finished, _) => DocumentParserRunState::Finished,
             (Self::Stopped(reason), _) => DocumentParserRunState::Stopped(reason),
@@ -439,7 +471,11 @@ impl DocumentParserSessionControlHandle {
         true
     }
 
-    pub(crate) fn suspend(&self, cause: ParserSuspensionCause) -> ParserResumePermit {
+    pub(crate) fn suspend(
+        &self,
+        cause: ParserSuspensionCause,
+        resume_owner: ParserResumeOwner,
+    ) -> ParserResumePermit {
         let mut control = self.0.borrow_mut();
         assert_eq!(
             control.lifecycle_state,
@@ -454,6 +490,7 @@ impl DocumentParserSessionControlHandle {
         let suspension = ParserSuspension {
             id: suspension_id,
             cause,
+            resume_owner,
         };
         if matches!(
             control.finish_request_state,
@@ -478,7 +515,11 @@ impl DocumentParserSessionControlHandle {
         })
     }
 
-    pub(crate) fn resume(&self, permit: ParserResumePermit) -> bool {
+    pub(crate) fn resume(
+        &self,
+        permit: ParserResumePermit,
+        resume_owner: ParserResumeOwner,
+    ) -> bool {
         let mut control = self.0.borrow_mut();
         if permit.session_id != control.session_id {
             return false;
@@ -486,7 +527,7 @@ impl DocumentParserSessionControlHandle {
         let Some(suspension) = control.lifecycle_state.suspension() else {
             return false;
         };
-        if suspension.id != permit.suspension_id {
+        if suspension.id != permit.suspension_id || suspension.resume_owner != resume_owner {
             return false;
         }
         control.lifecycle_state = DocumentParserLifecycleState::Ready;
@@ -809,7 +850,7 @@ impl DocumentParserSession {
     }
 
     pub(crate) fn suspend(&mut self, cause: ParserSuspensionCause) -> ParserResumePermit {
-        self.control.suspend(cause)
+        self.control.suspend(cause, ParserResumeOwner::ParserDriver)
     }
 
     pub(crate) fn current_resume_permit(&self) -> Option<ParserResumePermit> {
@@ -817,7 +858,7 @@ impl DocumentParserSession {
     }
 
     pub(crate) fn resume(&mut self, permit: ParserResumePermit) -> bool {
-        self.control.resume(permit)
+        self.control.resume(permit, ParserResumeOwner::ParserDriver)
     }
 
     pub(crate) fn stop(&mut self, reason: ParserStopReason) {
@@ -1228,11 +1269,50 @@ mod session_state_tests {
         assert!(!other.resume(first));
 
         assert!(parser.resume(first));
-        let second = parser.suspend(ParserSuspensionCause::DocumentWriteExternalScript {
+        let second = parser.suspend(ParserSuspensionCause::ParserClassicSource {
             script: NativeNodeId::new(6),
         });
         assert!(!parser.resume(first));
         assert!(parser.resume(second));
+    }
+
+    #[test]
+    fn parser_resume_permits_cannot_cross_continuation_owners() {
+        let mut parser = session();
+        let bridge = crate::document_runtime::ParserConnectedScriptBridge::for_session(&parser)
+            .expect("HTML parser bridge");
+        for cause in [
+            ParserSuspensionCause::ParserClassicSource {
+                script: NativeNodeId::new(8),
+            },
+            ParserSuspensionCause::ParserClassicStylesheets {
+                script: NativeNodeId::new(8),
+            },
+            ParserSuspensionCause::ParserCreatedStylesheet {
+                owner: NativeNodeId::new(9),
+            },
+        ] {
+            let driver_permit = parser.suspend(cause);
+            let driver_state = parser.run_state();
+            assert!(!bridge.resume(driver_permit));
+            assert_eq!(parser.run_state(), driver_state);
+            assert!(parser.resume(driver_permit));
+
+            let insertion_permit = bridge.suspend(cause);
+            let insertion_state = parser.run_state();
+            assert!(matches!(
+                insertion_state,
+                DocumentParserRunState::Suspended {
+                    resume_owner: ParserResumeOwner::DocumentWrite,
+                    ..
+                }
+            ));
+            assert!(!parser.resume(insertion_permit));
+            assert!(!bridge.resume(driver_permit));
+            assert_eq!(parser.run_state(), insertion_state);
+            assert!(bridge.resume(insertion_permit));
+            assert!(!bridge.resume(insertion_permit));
+        }
     }
 
     #[test]

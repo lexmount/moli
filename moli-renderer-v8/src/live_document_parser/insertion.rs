@@ -1,7 +1,7 @@
 use super::{
     DocumentParserCloseDisposition, DocumentParserLifetime, DocumentParserRunState,
     DocumentParserSessionControlHandle, LiveDocumentParserDiscoverySignals,
-    LiveDocumentParserOwner, LiveDocumentParserStepOutcome, ParserStopReason,
+    LiveDocumentParserOwner, LiveDocumentParserStepOutcome, ParserResumeOwner, ParserStopReason,
     ParserSuspensionCause, advance_next_live_document_parser_step,
 };
 use std::{cell::RefCell, rc::Rc};
@@ -38,7 +38,7 @@ impl ParserInsertionHandle {
     }
 
     pub(crate) fn suspend(&self, cause: ParserSuspensionCause) {
-        let _ = self.control.suspend(cause);
+        let _ = self.control.suspend(cause, ParserResumeOwner::ParserDriver);
     }
 
     pub(crate) fn stop(&self, reason: ParserStopReason) {

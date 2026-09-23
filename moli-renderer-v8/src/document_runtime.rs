@@ -61,7 +61,8 @@ use crate::{
     frame_owner_model::FrameDocumentTaskOwner,
     live_document_parser::{
         DocumentParserLifetime, DocumentParserRunState, DocumentParserSession,
-        DocumentParserSessionControlHandle, ParserResumePermit, ParserSuspensionCause,
+        DocumentParserSessionControlHandle, ParserResumeOwner, ParserResumePermit,
+        ParserSuspensionCause,
     },
     module_runtime::ModuleMapKey,
     network::ResourceRequestClient,
@@ -294,11 +295,13 @@ impl ParserConnectedScriptBridge {
     }
 
     pub(crate) fn suspend(&self, cause: ParserSuspensionCause) -> ParserResumePermit {
-        self.parser_control.suspend(cause)
+        self.parser_control
+            .suspend(cause, ParserResumeOwner::DocumentWrite)
     }
 
     pub(crate) fn resume(&self, permit: ParserResumePermit) -> bool {
-        self.parser_control.resume(permit)
+        self.parser_control
+            .resume(permit, ParserResumeOwner::DocumentWrite)
     }
 
     pub(crate) fn begin_pump(&self) -> crate::live_document_parser::DocumentParserPumpGuard {

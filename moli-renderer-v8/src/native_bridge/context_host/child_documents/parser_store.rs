@@ -4,7 +4,8 @@ use crate::{
     frame_owner_model::FrameDocumentOwner,
     live_document_parser::{
         DocumentParserRunState, DocumentParserSession, DocumentParserSessionControlHandle,
-        ParserInsertionHandle, ParserResumePermit, ParserStopReason, ParserSuspensionCause,
+        ParserInsertionHandle, ParserResumeOwner, ParserResumePermit, ParserStopReason,
+        ParserSuspensionCause,
     },
 };
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
@@ -153,7 +154,7 @@ impl ChildDocumentParserStore {
         permit: ParserResumePermit,
     ) -> Option<bool> {
         self.control_handle(owner)
-            .map(|parser| parser.resume(permit))
+            .map(|parser| parser.resume(permit, ParserResumeOwner::ParserDriver))
     }
 
     pub(in crate::native_bridge::context_host) fn is_suspended_on_parser_created_stylesheet(

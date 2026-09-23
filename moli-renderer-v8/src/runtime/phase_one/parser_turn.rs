@@ -19,8 +19,8 @@ use super::*;
 use crate::document_runtime::parser_script_preparation_failure_page_owned_work;
 use crate::dom::native::{Attribute, DomMutationEffects, NativeNodeId};
 use crate::live_document_parser::{
-    DocumentParserFinishRequestState, LiveDocumentParserOwner, LiveDocumentParserStepOutcome,
-    ParserSuspensionCause,
+    DocumentParserFinishRequestState, DocumentParserRunState, LiveDocumentParserOwner,
+    LiveDocumentParserStepOutcome, ParserResumeOwner, ParserSuspensionCause,
 };
 use crate::parser::{
     ParserDomMutation, ParserDomMutationConsumer, ParserDomReadConsumer,
@@ -538,22 +538,36 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             );
             return Ok(owner_step_progress_after_current_document_stop(page_vm));
         }
-        match self.parser_session.suspension_cause() {
-            Some(ParserSuspensionCause::ParserClassicStylesheets { .. })
-                if page_vm
-                    .vm()
-                    .document_runtime
-                    .has_pending_document_write_stylesheet_blocked_script() =>
-            {
-                // A document.write() insertion owns this suspension and its
-                // script. Its stylesheet completion is admitted on the Page
-                // lane; the main parser runner has no pending script to resume.
+        match self.parser_session.run_state() {
+            DocumentParserRunState::Suspended {
+                resume_owner: ParserResumeOwner::DocumentWrite,
+                cause:
+                    ParserSuspensionCause::ParserClassicStylesheets { .. }
+                    | ParserSuspensionCause::ParserCreatedStylesheet { .. },
+                ..
+            } => {
+                // The insertion retains this suspension's resume permit.
+                // Its continuation must run through the Page scheduler.
                 return Ok(suspend_parser_for_stylesheet_page_task(
                     owner,
                     pending_parsing_blocking_wait,
                 ));
             }
-            Some(ParserSuspensionCause::ParserCreatedStylesheet { .. }) => {
+            DocumentParserRunState::Suspended {
+                resume_owner: ParserResumeOwner::DocumentWrite,
+                cause: ParserSuspensionCause::ParserClassicSource { .. },
+                ..
+            } => {
+                *owner = ParseTimeOwner::Document;
+                *pending_parsing_blocking_wait =
+                    PendingParsingBlockingWait::PageNetworkingDocumentWriteExternalScript;
+                return Ok(OwnerStepProgress::BlockedOnPageTask);
+            }
+            DocumentParserRunState::Suspended {
+                resume_owner: ParserResumeOwner::ParserDriver,
+                cause: ParserSuspensionCause::ParserCreatedStylesheet { .. },
+                ..
+            } => {
                 if !page_vm
                     .vm()
                     .document_runtime
@@ -573,31 +587,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     "the admitted stylesheet continuation must resume its exact parser suspension"
                 );
             }
-            Some(ParserSuspensionCause::DocumentWriteExternalScript { .. }) => {
-                if page_vm
-                    .vm()
-                    .document_runtime
-                    .has_pending_document_write_external_script_load()
-                {
-                    *owner = ParseTimeOwner::Document;
-                    *pending_parsing_blocking_wait =
-                        PendingParsingBlockingWait::PageNetworkingDocumentWriteExternalScript;
-                    return Ok(OwnerStepProgress::BlockedOnPageTask);
-                }
-                let permit = self
-                    .parser_session
-                    .current_resume_permit()
-                    .expect("a document.write-suspended parser must retain its resume permit");
-                assert!(
-                    self.parser_session.resume(permit),
-                    "the admitted document.write continuation must resume its exact parser suspension"
-                );
-            }
-            Some(
-                ParserSuspensionCause::ParserClassicSource { .. }
-                | ParserSuspensionCause::ParserClassicStylesheets { .. },
-            )
-            | None => {}
+            _ => {}
         }
         debug_assert!(
             !pending_parsing_blocking_wait.is_pending(),
@@ -1637,9 +1627,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                             break ParserStepAdvanceOutcome::StoppedCurrentDocument;
                         }
                         ScriptHandoffOutcome::NoNavigation => {
-                            if let Some(outcome) =
-                                self.document_write_suspension_step_outcome(page_vm)
-                            {
+                            if let Some(outcome) = self.document_write_suspension_step_outcome() {
                                 break outcome;
                             }
                         }
@@ -1759,9 +1747,7 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                             break ParserStepAdvanceOutcome::StoppedCurrentDocument;
                         }
                         ScriptHandoffOutcome::NoNavigation => {
-                            if let Some(outcome) =
-                                self.document_write_suspension_step_outcome(page_vm)
-                            {
+                            if let Some(outcome) = self.document_write_suspension_step_outcome() {
                                 break outcome;
                             }
                         }
@@ -1785,30 +1771,23 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
         Ok(outcome)
     }
 
-    fn document_write_suspension_step_outcome(
-        &self,
-        page_vm: &PageVm,
-    ) -> Option<ParserStepAdvanceOutcome> {
-        match self.parser_session.suspension_cause() {
-            Some(ParserSuspensionCause::ParserClassicStylesheets { .. })
-                if page_vm
-                    .vm()
-                    .document_runtime
-                    .has_pending_document_write_stylesheet_blocked_script() =>
-            {
-                Some(ParserStepAdvanceOutcome::BlockedOnStylesheetParserPause)
+    fn document_write_suspension_step_outcome(&self) -> Option<ParserStepAdvanceOutcome> {
+        let DocumentParserRunState::Suspended {
+            resume_owner: ParserResumeOwner::DocumentWrite,
+            cause,
+            ..
+        } = self.parser_session.run_state()
+        else {
+            return None;
+        };
+        Some(match cause {
+            ParserSuspensionCause::ParserClassicStylesheets { .. }
+            | ParserSuspensionCause::ParserCreatedStylesheet { .. } => {
+                ParserStepAdvanceOutcome::BlockedOnStylesheetParserPause
             }
-            Some(ParserSuspensionCause::ParserCreatedStylesheet { .. }) => {
-                Some(ParserStepAdvanceOutcome::BlockedOnStylesheetParserPause)
+            ParserSuspensionCause::ParserClassicSource { .. } => {
+                ParserStepAdvanceOutcome::BlockedOnDocumentWriteExternalLoad
             }
-            Some(ParserSuspensionCause::DocumentWriteExternalScript { .. }) => {
-                Some(ParserStepAdvanceOutcome::BlockedOnDocumentWriteExternalLoad)
-            }
-            Some(
-                ParserSuspensionCause::ParserClassicSource { .. }
-                | ParserSuspensionCause::ParserClassicStylesheets { .. },
-            )
-            | None => None,
-        }
+        })
     }
 }
