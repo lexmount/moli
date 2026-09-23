@@ -460,7 +460,7 @@ struct CrossDocumentParticipant<'s> {
 }
 
 fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalAdmission) {
-    let _execution = crate::script_cleanup::ScriptExecutionScope::enter(scope);
+    let execution = crate::script_cleanup::ScriptExecutionScope::enter(scope);
     for participant in &admission.participants {
         if let Some(event) = &participant.outcome.event {
             let event = v8::Local::new(scope, event);
@@ -584,6 +584,13 @@ fn commit(scope: &mut v8::PinScope<'_, '_>, admission: &PendingHistoryTraversalA
     for (_, entry) in &applied {
         apply::dispatch_history_entry_currententrychange(scope, entry);
     }
+    for (outcome, _, settlement) in &mut completions {
+        traversal::run_history_participant_handlers(scope, outcome, *settlement);
+    }
+    // Finish all currententrychange callbacks and interception handlers before
+    // script cleanup and the committed history's popstate events.
+    drop(execution);
+    crate::script_cleanup::perform_callback_cleanup_checkpoint(scope);
     for ((_, entry), (outcome, resolvers, settlement)) in applied.iter().zip(completions) {
         traversal::finish_history_participant(scope, entry, outcome, resolvers, settlement);
     }
