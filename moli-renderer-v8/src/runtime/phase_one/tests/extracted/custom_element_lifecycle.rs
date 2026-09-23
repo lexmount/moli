@@ -1576,7 +1576,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -1714,7 +1714,7 @@ document.body.setAttribute('data-result', [
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
             let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {

@@ -68,6 +68,7 @@ wpt_compat_cases! {
     wpt_compat_case_chromium_webmcp_declarative_respond_with_reject => "chromium-webmcp-declarative-respond-with-reject",
     wpt_compat_case_chromium_webmcp_declarative_respond_with_circular_object => "chromium-webmcp-declarative-respond-with-circular-object",
     wpt_compat_case_chromium_webmcp_declarative_invalid_input => "chromium-webmcp-declarative-invalid-input",
+    wpt_compat_case_upstream_preload_preload_link_cached_stylesheet_different_doc => "upstream-preload-preload-link-cached-stylesheet-different-doc",
     wpt_compat_case_eventtarget_basic => "eventtarget-basic",
     wpt_compat_case_chromium_webmcp_declarative_execute_tool_abort => "chromium-webmcp-declarative-execute-tool-abort",
     wpt_compat_case_chromium_webmcp_declarative_execute_tool_flexible_types => "chromium-webmcp-declarative-execute-tool-flexible-types",

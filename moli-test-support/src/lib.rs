@@ -37,6 +37,7 @@ struct FixtureRuntimeState {
     parse_time_async_task_first_executed: Arc<FixtureEvent>,
     parse_time_async_task_visibility_first_executed: Arc<FixtureEvent>,
     dynamic_preparation_context_replaced: Arc<FixtureEvent>,
+    preload_request_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[derive(Default)]

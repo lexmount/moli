@@ -177,7 +177,7 @@ fn parser_step_without_script_handoff_consumes_live_backend_dom() {
     let crate::parser::ParserPumpOutcome {
         result,
         discovered_async_prefetch_scripts: _,
-        discovered_modulepreload_link_candidates: _,
+        discovered_preload_link_candidates: _,
         discovered_stylesheet_inputs: _,
     } = driver
         .parser_session
@@ -229,7 +229,7 @@ fn parser_step_with_inline_svg_script_surfaces_shared_script_handoff() {
     let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
             "<!doctype html><html><body><svg><script>window.svgAnswer = 42;</script></svg><div>late</div></body></html>",
@@ -333,7 +333,7 @@ fn parser_defined_autonomous_custom_element_reaches_parser_handoff() {
             let crate::parser::ParserPumpOutcome {
                 result,
                 discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
+                discovered_preload_link_candidates: _,
                 discovered_stylesheet_inputs: _,
             } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(
                 r#"<!doctype html><script>customElements.define("x-sync", class extends HTMLElement {});</script>"#,

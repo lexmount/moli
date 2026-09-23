@@ -437,9 +437,8 @@ impl XmlParserSession {
                 }
             })
             .collect::<Vec<PreparedScript>>();
-        let discovered_modulepreload_link_candidates = target
-            .common
-            .drain_discovered_modulepreload_link_candidates();
+        let discovered_preload_link_candidates =
+            target.common.drain_discovered_preload_link_candidates();
         let discovered_stylesheet_inputs = target.common.drain_discovered_stylesheet_inputs();
 
         let result = match raw_step {
@@ -465,7 +464,7 @@ impl XmlParserSession {
         ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts,
-            discovered_modulepreload_link_candidates,
+            discovered_preload_link_candidates,
             discovered_stylesheet_inputs,
         }
     }
@@ -496,9 +495,9 @@ impl XmlParserSession {
             parser_created_null_registry_elements: target
                 .common
                 .take_parser_stream_null_custom_element_registry_elements(),
-            discovered_modulepreload_link_candidates: target
+            discovered_preload_link_candidates: target
                 .common
-                .drain_discovered_modulepreload_link_candidates(),
+                .drain_discovered_preload_link_candidates(),
             discovered_parser_meta_csp_candidates: target
                 .common
                 .drain_discovered_parser_meta_csp_candidates(),

@@ -632,15 +632,15 @@ impl PageScriptHost {
         discovery_signals: crate::live_document_parser::LiveDocumentParserDiscoverySignals,
     ) {
         let async_prefetch_count = discovery_signals.async_prefetch_scripts.len();
-        let modulepreload_link_count = discovery_signals.modulepreload_link_candidates.len();
+        let preload_link_count = discovery_signals.preload_link_candidates.len();
         let stylesheet_count = discovery_signals.stylesheet_inputs.len();
-        let modulepreload_link_candidates = discovery_signals.modulepreload_link_candidates;
+        let preload_link_candidates = discovery_signals.preload_link_candidates;
         let stylesheet_inputs = discovery_signals.stylesheet_inputs;
-        if async_prefetch_count != 0 || modulepreload_link_count != 0 || stylesheet_count != 0 {
+        if async_prefetch_count != 0 || preload_link_count != 0 || stylesheet_count != 0 {
             tracing::debug!(
                 child_document_handle = ?document_handle,
                 async_prefetch_count,
-                modulepreload_link_count,
+                preload_link_count,
                 stylesheet_count,
                 "child live parser emitted document-owned discovery signals"
             );
@@ -661,10 +661,11 @@ impl PageScriptHost {
                 );
             }
         }
-        self.queue_child_parser_discovered_modulepreload_links(
+        self.queue_child_parser_discovered_preloads(
+            scope,
             child_handle,
             document_handle,
-            modulepreload_link_candidates,
+            &preload_link_candidates,
         );
     }
 
@@ -688,6 +689,9 @@ impl PageScriptHost {
             else {
                 continue;
             };
+            let Some(raw_href) = modulepreload_href(element) else {
+                continue;
+            };
             if let Some(invalid_as) = invalid_modulepreload_as_value(element) {
                 tracing::debug!(
                     child_handle = ?child_handle,
@@ -702,9 +706,6 @@ impl PageScriptHost {
                 );
                 continue;
             }
-            let Some(raw_href) = modulepreload_href(element) else {
-                continue;
-            };
             let Some(initiator_url) =
                 self.child_browsing_context_request_initiator_url(child_handle)
             else {

@@ -119,7 +119,7 @@ pub struct ParserStreamDocumentSnapshot(NativeDom);
 pub struct ParserPumpOutcome {
     pub result: ParserPumpStep,
     pub discovered_async_prefetch_scripts: Vec<PreparedScript>,
-    pub discovered_modulepreload_link_candidates: Vec<NativeNodeId>,
+    pub discovered_preload_link_candidates: Vec<NativeNodeId>,
     /// Parser-created loads, including stylesheets whose media does not block scripts.
     pub discovered_stylesheet_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
 }
@@ -127,7 +127,7 @@ pub struct ParserPumpOutcome {
 #[derive(Debug, Default)]
 pub struct ParserFinishDiscoverySignals {
     pub parser_created_null_registry_elements: Vec<NativeNodeId>,
-    pub discovered_modulepreload_link_candidates: Vec<NativeNodeId>,
+    pub discovered_preload_link_candidates: Vec<NativeNodeId>,
     pub discovered_parser_meta_csp_candidates: Vec<NativeNodeId>,
     /// Parser-created loads, including stylesheets whose media does not block scripts.
     pub discovered_stylesheet_inputs: Vec<DocumentOwnedStylesheetDiscoveryInput>,
@@ -1214,8 +1214,8 @@ impl DocumentStream {
         self.inner.drain_discovered_async_prefetch_candidates()
     }
 
-    pub fn drain_discovered_modulepreload_link_candidates(&self) -> Vec<NativeNodeId> {
-        self.inner.drain_discovered_modulepreload_link_candidates()
+    pub fn drain_discovered_preload_link_candidates(&self) -> Vec<NativeNodeId> {
+        self.inner.drain_discovered_preload_link_candidates()
     }
 
     pub fn drain_discovered_parser_meta_csp_candidates(&self) -> Vec<NativeNodeId> {
@@ -1726,10 +1726,10 @@ impl DocumentSink {
             .drain_discovered_async_prefetch_candidates()
     }
 
-    pub(super) fn drain_discovered_modulepreload_link_candidates(&self) -> Vec<NativeNodeId> {
+    pub(super) fn drain_discovered_preload_link_candidates(&self) -> Vec<NativeNodeId> {
         self.target
             .borrow_mut()
-            .drain_discovered_modulepreload_link_candidates()
+            .drain_discovered_preload_link_candidates()
     }
 
     pub(super) fn drain_discovered_parser_meta_csp_candidates(&self) -> Vec<NativeNodeId> {

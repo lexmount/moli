@@ -16,6 +16,7 @@ const DEFAULT_SRC: &str = "default-src";
 const BASE_URI: &str = "base-uri";
 const FRAME_ANCESTORS: &str = "frame-ancestors";
 const FRAME_SRC: &str = "frame-src";
+const FONT_SRC: &str = "font-src";
 const IMG_SRC: &str = "img-src";
 const MANIFEST_SRC: &str = "manifest-src";
 const MEDIA_SRC: &str = "media-src";
@@ -1370,10 +1371,10 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentBase => BASE_URI,
             Self::DocumentConnect => CONNECT_SRC,
             Self::DocumentFrame => FRAME_SRC,
+            Self::DocumentFont => FONT_SRC,
             Self::DocumentImage => IMG_SRC,
             Self::DocumentManifest => MANIFEST_SRC,
             Self::DocumentMedia => MEDIA_SRC,
-            Self::DocumentFont => "font-src",
             Self::DocumentScriptElement | Self::WorkerDynamicModuleImport | Self::WorkerScript => {
                 SCRIPT_SRC_ELEM
             }
@@ -1388,10 +1389,10 @@ impl ContentSecurityPolicyResourceKind {
             Self::DocumentBase => &[BASE_URI],
             Self::DocumentConnect => &[CONNECT_SRC, DEFAULT_SRC],
             Self::DocumentFrame => &[FRAME_SRC, CHILD_SRC, DEFAULT_SRC],
+            Self::DocumentFont => &[FONT_SRC, DEFAULT_SRC],
             Self::DocumentImage => &[IMG_SRC, DEFAULT_SRC],
             Self::DocumentManifest => &[MANIFEST_SRC, DEFAULT_SRC],
             Self::DocumentMedia => &[MEDIA_SRC, DEFAULT_SRC],
-            Self::DocumentFont => &["font-src", DEFAULT_SRC],
             Self::DocumentScriptElement => &[SCRIPT_SRC_ELEM, SCRIPT_SRC, DEFAULT_SRC],
             Self::DocumentStyleElement => &[STYLE_SRC_ELEM, STYLE_SRC, DEFAULT_SRC],
             Self::WorkerConstructor => &[WORKER_SRC, CHILD_SRC, SCRIPT_SRC, DEFAULT_SRC],

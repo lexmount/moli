@@ -503,9 +503,7 @@ impl DocumentRuntime {
         self.accept_document_write_parser_modulepreloads(
             scope,
             host_ptr,
-            finish_signals
-                .discovery_signals
-                .modulepreload_link_candidates,
+            finish_signals.discovery_signals.preload_link_candidates,
         );
         let completed_stylesheet_clients = self.note_discovered_document_owned_stylesheet_inputs(
             finish_signals.discovery_signals.stylesheet_inputs.iter(),
@@ -2407,7 +2405,7 @@ impl DocumentRuntime {
                     ParserPumpOutcome {
                         result,
                         discovered_async_prefetch_scripts: _,
-                        discovered_modulepreload_link_candidates,
+                        discovered_preload_link_candidates,
                         discovered_stylesheet_inputs,
                     },
             } = parser_step;
@@ -2421,7 +2419,7 @@ impl DocumentRuntime {
             self.accept_document_write_parser_modulepreloads(
                 scope,
                 host_ptr,
-                discovered_modulepreload_link_candidates,
+                discovered_preload_link_candidates,
             );
             self.run_pending_parser_post_step_runtime_work(scope, host_ptr);
             chunk.clear();
