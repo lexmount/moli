@@ -76,7 +76,22 @@ http.client._MAXHEADERS = 512
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
+XHR_DOCUMENT_FIXTURES = {
+    "/xhr/resources/win-1252-xml.py": ("application/xml;charset=windows-1252", b"<\xff/>"),
+    # The upstream handler returns a Unicode string, encoded by wptserve as UTF-8.
+    "/xhr/resources/win-1252-html.py": ("text/html;charset=windows-1252", b"\xc3\xbf"),
+    "/xhr/resources/invalid-utf8-html.py": ("text/html;charset=utf-8", b"\xff"),
+    "/xhr/resources/shift-jis-html.py": ("text/html;charset=shift-jis", b"\x83e\x83X\x83g"),
+    "/xhr/resources/img-utf8-html.py": ("text/html;charset=utf-8", b"<img>foo"),
+    "/xhr/resources/empty-div-utf8-html.py": ("text/html;charset=utf-8", b"<!DOCTYPE html><div></div>"),
+}
+XHR_BODY_RESOURCE_PATHS = {
+    "/xhr/resources/content.py",
+    "/xhr/resources/echo-content-type.py",
+    *XHR_DOCUMENT_FIXTURES,
+}
 XHR_RESPONSE_RESOURCE_PATHS = {
+    *XHR_BODY_RESOURCE_PATHS,
     "/xhr/resources/inspect-headers.py",
     "/xhr/resources/echo-headers.py",
     "/xhr/resources/corsenabled.py",
@@ -1819,7 +1834,7 @@ def _make_handler(
                 return
             if unquote(urlparse(self.path).path) in {
                 "/xhr/resources/inspect-headers.py", "/xhr/resources/echo-headers.py",
-            }:
+            } | XHR_BODY_RESOURCE_PATHS:
                 self._serve_xhr_response_resource()
                 return
             parsed = urlparse(self.path)
@@ -2600,11 +2615,61 @@ def _make_handler(
             )
             return True
 
+        def _serve_xhr_body_resource(self, parsed, *, emit_body: bool) -> None:
+            path = unquote(parsed.path)
+            upload_consumed = False
+            try:
+                if path == "/xhr/resources/content.py":
+                    params = parse_qs(parsed.query, keep_blank_values=True, encoding="latin-1")
+                    if "content" in params:
+                        body = params["content"][0].encode("latin-1")
+                    else:
+                        body = self._read_content_length_request_body()
+                        if body is None:
+                            return
+                        upload_consumed = True
+                    content_type = "text/plain"
+                    if "response_charset_label" in params:
+                        content_type += ";charset=" + params["response_charset_label"][0]
+                    headers = [
+                        ("Content-Type", content_type),
+                        ("X-Request-Method", self.command),
+                        ("X-Request-Query", parsed.query or "NO"),
+                        ("X-Request-Content-Length", self.headers.get("Content-Length", "NO")),
+                        ("X-Request-Content-Type", self.headers.get("Content-Type", "NO")),
+                    ]
+                elif path == "/xhr/resources/echo-content-type.py":
+                    headers = [("Content-Type", "text/plain")]
+                    body = self.headers.get("Content-Type", "").encode("latin-1")
+                else:
+                    content_type, body = XHR_DOCUMENT_FIXTURES[path]
+                    headers = [("Content-Type", content_type)]
+            except (ValueError, KeyError, OverflowError, OSError):
+                self.send_error(500)
+                return
+            # Unused uploads must not delay an early response or be parsed as
+            # another request. Consumed uploads can finish normally.
+            if path == "/xhr/resources/echo-content-type.py" or not upload_consumed and (
+                self.headers.get("Transfer-Encoding") is not None
+                or self.headers.get("Content-Length", "0").strip() not in {"", "0"}
+            ):
+                self.close_connection = True
+                headers.append(("Connection", "close"))
+            self._send_bytes(
+                None, body, emit_body=emit_body, extra_headers=headers, cache_control=None,
+                auto_content_length=(
+                    path != "/xhr/resources/echo-content-type.py" or "Content-Type" in self.headers
+                ),
+            )
+
         def _serve_xhr_response_resource(self, *, emit_body: bool = True) -> bool:
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
             if path not in XHR_RESPONSE_RESOURCE_PATHS:
                 return False
+            if path in XHR_BODY_RESOURCE_PATHS:
+                self._serve_xhr_body_resource(parsed, emit_body=emit_body)
+                return True
             if path == "/xhr/resources/corsenabled.py":
                 self._serve_xhr_cors_echo(parsed, emit_body=emit_body)
                 return True
@@ -2935,6 +3000,7 @@ def _make_handler(
             status_code: int = 200,
             status_text: str | None = None,
             cache_control: str | None = "no-store",
+            auto_content_length: bool = True,
         ) -> None:
             content_type, extra_headers = _response_content_type_and_extra_headers(
                 content_type,
@@ -2944,7 +3010,7 @@ def _make_handler(
             header_block = _static_response_header_block(content_type, extra_headers)
             for name, value in header_block:
                 self.send_header(name, value)
-            if not _headers_include(header_block, "Content-Length"):
+            if auto_content_length and not _headers_include(header_block, "Content-Length"):
                 self.send_header("Content-Length", str(len(body)))
             if cache_control is not None:
                 self.send_header("Cache-Control", cache_control)
