@@ -39,13 +39,16 @@ use super::{
     },
     script_provenance::CompiledStringProvenance,
     util::{
-        callback_arg_string, context_host_from_global_bridge, context_host_ptr_from_global_bridge,
+        context_host_from_global_bridge, context_host_ptr_from_global_bridge,
         context_host_ptr_from_window_object, define_non_enumerable_static_bool_property,
         get_private_value, object_bool_property, object_number_property,
         script_base_url_from_continuation_data, script_base_url_from_host_defined_options,
         set_private_value, throw_type_error, v8_string, v8str,
     },
     webidl,
+};
+use crate::event_listener_args::{
+    AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
 };
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -142,124 +145,6 @@ struct IdleDeadlinePrototypeDeclaration {
     time_remaining: (),
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.addEventListener")]
-struct WindowAddEventListenerArgs<'s> {
-    #[webidl(with = window_add_event_listener_call)]
-    call: webidl::ParseOutcome<WindowAddEventListenerCall<'s>>,
-}
-
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "EventTarget.removeEventListener")]
-struct WindowRemoveEventListenerArgs<'s> {
-    #[webidl(with = window_remove_event_listener_call)]
-    call: webidl::ParseOutcome<WindowRemoveEventListenerCall<'s>>,
-}
-
-struct WindowAddEventListenerCall<'s> {
-    event_type: String,
-    callback: v8::Local<'s, v8::Object>,
-    callback_relevant_context: v8::Local<'s, v8::Context>,
-    incumbent_context: v8::Local<'s, v8::Context>,
-    options: webidl::EventListenerOptions,
-    signal: Option<v8::Local<'s, v8::Object>>,
-}
-
-struct WindowRemoveEventListenerCall<'s> {
-    event_type: String,
-    callback: v8::Local<'s, v8::Object>,
-    options: webidl::EventListenerOptions,
-}
-
-fn window_add_event_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<WindowAddEventListenerCall<'s>>, webidl::WebIdlError> {
-    let Some(event_type) = callback_arg_string(scope, args, 0) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let options = webidl::event_listener_options(scope, args, 2, true);
-    let listener_arg = args.get(1);
-    let current_context = scope.get_current_context();
-    let callback = if let Ok(function) = v8::Local::<v8::Function>::try_from(listener_arg) {
-        let callback = v8::Local::<v8::Object>::from(function);
-        let callback_relevant_context = callback
-            .get_creation_context(scope)
-            .unwrap_or(current_context);
-        Some((callback, callback_relevant_context))
-    } else if listener_arg.is_object() && !listener_arg.is_null_or_undefined() {
-        let Ok(object) = v8::Local::<v8::Object>::try_from(listener_arg) else {
-            return Ok(webidl::ParseOutcome::Skip);
-        };
-        let callback_relevant_context = object
-            .get_creation_context(scope)
-            .unwrap_or(current_context);
-        Some((object, callback_relevant_context))
-    } else {
-        None
-    };
-    let Some((callback, callback_relevant_context)) = callback else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let incumbent_context = scope.get_incumbent_context().unwrap_or(current_context);
-    Ok(webidl::ParseOutcome::Parsed(WindowAddEventListenerCall {
-        event_type,
-        callback,
-        callback_relevant_context,
-        incumbent_context,
-        signal: signal_from_options_value(scope, args.get(2)),
-        options,
-    }))
-}
-
-fn window_remove_event_listener_call<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    _index: i32,
-) -> Result<webidl::ParseOutcome<WindowRemoveEventListenerCall<'s>>, webidl::WebIdlError> {
-    let Some(event_type) = callback_arg_string(scope, args, 0) else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    let options = webidl::event_listener_options(scope, args, 2, true);
-    let listener_arg = args.get(1);
-    let callback = if let Ok(function) = v8::Local::<v8::Function>::try_from(listener_arg) {
-        Some(v8::Local::<v8::Object>::from(function))
-    } else if listener_arg.is_object() && !listener_arg.is_null_or_undefined() {
-        v8::Local::<v8::Object>::try_from(listener_arg).ok()
-    } else {
-        None
-    };
-    let Some(callback) = callback else {
-        return Ok(webidl::ParseOutcome::Skip);
-    };
-    Ok(webidl::ParseOutcome::Parsed(
-        WindowRemoveEventListenerCall {
-            event_type,
-            callback,
-            options,
-        },
-    ))
-}
-
-fn signal_from_options_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return None;
-    };
-    options
-        .get(scope, v8str(scope, "signal").into())
-        .and_then(|value| {
-            if value.is_null_or_undefined() {
-                None
-            } else {
-                v8::Local::<v8::Object>::try_from(value).ok()
-            }
-        })
-}
-
 pub(super) fn event_target_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -273,16 +158,17 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let parsed = webidl::parse_args::<WindowAddEventListenerArgs>(scope, &args);
-    let Some(parsed) = parsed else {
+    let parsed = parse_listener_args::<AddEventListenerArgs>(scope, &args, "addEventListener");
+    let Some(call) = parsed else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(listener) = call.listener else {
         return;
     };
-    let capture = call.options.capture;
-    let once = call.options.once;
-    let signal = call.signal;
+    let options = call.options.options;
+    let capture = options.capture;
+    let once = options.once;
+    let signal = call.options.signal.map(|signal| signal.value());
     if let Some(signal) = signal
         && host.abort_signal_aborted(scope, signal)
     {
@@ -303,17 +189,20 @@ pub(super) fn event_target_add_event_listener_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    let passive = call
-        .options
+    let passive = options
         .passive
         .unwrap_or_else(|| default_passive_value(host, target, &call.event_type));
+    let callback = v8::Local::<v8::Object>::try_from(listener.value(scope))
+        .expect("converted EventListener must remain an object");
+    let callback_relevant_context = listener.relevant_context(scope);
+    let incumbent_context = listener.incumbent_context(scope);
     let Some(callback_id) = host.register_target_event_listener(
         scope,
         target,
         &call.event_type,
-        call.callback,
-        call.callback_relevant_context,
-        call.incumbent_context,
+        callback,
+        callback_relevant_context,
+        incumbent_context,
         capture,
         once,
         passive,
@@ -391,10 +280,12 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(parsed) = webidl::parse_args::<WindowRemoveEventListenerArgs>(scope, &args) else {
+    let Some(call) =
+        parse_listener_args::<RemoveEventListenerArgs>(scope, &args, "removeEventListener")
+    else {
         return;
     };
-    let webidl::ParseOutcome::Parsed(call) = parsed.call else {
+    let Some(listener) = call.listener else {
         return;
     };
     let capture = call.options.capture;
@@ -411,7 +302,9 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
         throw_type_error(scope, "Illegal invocation");
         return;
     };
-    host.remove_registered_event_listener(scope, target, &call.event_type, call.callback, capture);
+    let callback = v8::Local::<v8::Object>::try_from(listener.value(scope))
+        .expect("converted EventListener must remain an object");
+    host.remove_registered_event_listener(scope, target, &call.event_type, callback, capture);
 }
 
 pub(super) fn event_target_dispatch_event_callback<'s>(

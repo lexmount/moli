@@ -1,4 +1,4 @@
-use crate::types::EventListenerOptionsMembers;
+use crate::types::{AddEventListenerOptionsMembers, EventListenerOptionsMembers};
 use crate::{
     Context, DomString, EventListenerOptions, UnrestrictedDouble, WebIdlError,
     legacy_optional_member, parse_dictionary_object,
@@ -170,69 +170,6 @@ pub fn optional_number_property<'s>(
         .map(Into::into)
 }
 
-/// Parses the third argument shape used by event listener registration.
-///
-/// Boolean values use the legacy capture-only path. Object values are parsed as
-/// `AddEventListenerOptions`. When `observe_passive` is true, the `passive`
-/// member is read even if the resulting value is not otherwise needed, matching
-/// sites that observe getter side effects.
-pub fn event_listener_options<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-    observe_passive: bool,
-) -> EventListenerOptions {
-    if args.length() <= index {
-        return EventListenerOptions::default();
-    }
-    event_listener_options_value(scope, args.get(index), observe_passive)
-}
-
-pub fn event_listener_options_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-    observe_passive: bool,
-) -> EventListenerOptions {
-    if is_nullish(value) {
-        return EventListenerOptions::default();
-    }
-    if !value.is_object() || value.is_boolean() {
-        return EventListenerOptions {
-            capture: value.boolean_value(scope),
-            once: false,
-            passive: None,
-        };
-    }
-    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
-        return EventListenerOptions::default();
-    };
-    if observe_passive {
-        let _ = property(scope, object, "passive");
-    }
-    parse_dictionary_object::<EventListenerOptionsMembers>(scope, object)
-        .map(|parsed| EventListenerOptions {
-            capture: parsed.capture,
-            once: parsed.once,
-            passive: parsed.passive,
-        })
-        .unwrap_or_default()
-}
-
-pub fn event_listener_once_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    value: v8::Local<'s, v8::Value>,
-) -> bool {
-    event_listener_options_value(scope, value, false).once
-}
-
-pub fn event_listener_once_option<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: &v8::FunctionCallbackArguments<'s>,
-    index: i32,
-) -> bool {
-    event_listener_options(scope, args, index, false).once
-}
-
 /// Converts `(AddEventListenerOptions or boolean)` through `passive`.
 ///
 /// The caller must convert the platform-specific `signal` member next, before
@@ -247,10 +184,35 @@ pub fn add_event_listener_options_value<'s>(
             ..EventListenerOptions::default()
         });
     };
-    let parsed = parse_dictionary_object::<EventListenerOptionsMembers>(scope, object)?;
+    let parsed = parse_dictionary_object::<AddEventListenerOptionsMembers>(scope, object)?;
     Ok(EventListenerOptions {
         capture: parsed.capture,
         once: parsed.once,
         passive: parsed.passive,
+    })
+}
+
+/// Converts removeEventListener's `(EventListenerOptions or boolean)` argument.
+/// Only `capture` belongs to this dictionary; no registration-only getters run.
+pub fn event_listener_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    index: i32,
+) -> Result<EventListenerOptions, WebIdlError> {
+    event_listener_options_value(scope, args.get(index))
+}
+
+pub fn event_listener_options_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Result<EventListenerOptions, WebIdlError> {
+    let capture = if let Ok(object) = v8::Local::<v8::Object>::try_from(value) {
+        parse_dictionary_object::<EventListenerOptionsMembers>(scope, object)?.capture
+    } else {
+        value.boolean_value(scope)
+    };
+    Ok(EventListenerOptions {
+        capture,
+        ..EventListenerOptions::default()
     })
 }
