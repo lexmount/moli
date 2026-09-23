@@ -197,6 +197,9 @@ pub struct StylesheetFetchTerminal {
     physical: StylesheetPhysicalOutcome,
     usability: StylesheetUsability,
     origin_clean: Option<bool>,
+    from_service_worker: bool,
+    response_filter: Option<moli_fetch::FetchResponseFilter>,
+    consumed_preload_error: bool,
 }
 
 impl StylesheetFetchTerminal {
@@ -209,6 +212,9 @@ impl StylesheetFetchTerminal {
             physical: StylesheetPhysicalOutcome::Response(Arc::new(response)),
             usability,
             origin_clean: Some(origin_clean),
+            from_service_worker: false,
+            response_filter: None,
+            consumed_preload_error: false,
         }
     }
 
@@ -236,7 +242,38 @@ impl StylesheetFetchTerminal {
             physical: StylesheetPhysicalOutcome::NetworkError(Arc::clone(&reason)),
             usability: StylesheetUsability::Failed { reason },
             origin_clean: None,
+            from_service_worker: false,
+            response_filter: None,
+            consumed_preload_error: false,
         }
+    }
+
+    pub fn consumed_preload_error(reason: impl Into<Arc<str>>) -> Self {
+        Self {
+            consumed_preload_error: true,
+            ..Self::network_error(reason)
+        }
+    }
+
+    pub fn is_consumed_preload_error(&self) -> bool {
+        self.consumed_preload_error
+    }
+
+    pub fn with_service_worker_response(
+        mut self,
+        filter: Option<moli_fetch::FetchResponseFilter>,
+    ) -> Self {
+        self.from_service_worker = true;
+        self.response_filter = filter;
+        self
+    }
+
+    pub fn from_service_worker(&self) -> bool {
+        self.from_service_worker
+    }
+
+    pub fn response_filter(&self) -> Option<&moli_fetch::FetchResponseFilter> {
+        self.response_filter.as_ref()
     }
 
     pub fn integrity_failure(
@@ -284,10 +321,68 @@ impl StylesheetFetchTerminal {
     }
 }
 
+type StylesheetResponseFuture =
+    Pin<Box<dyn Future<Output = StylesheetFetchTerminal> + Send + 'static>>;
+type StylesheetPublishedCallback = Box<dyn FnOnce(&StylesheetFetchTerminal) + Send + 'static>;
+
+pub(crate) enum PreparedStylesheetResponse {
+    Reused(StylesheetFetchTerminal),
+    Pending(StylesheetResponseFuture),
+}
+
+/// Prepared before spawning so a preload is discoverable by subsequent consumers.
+/// The callback runs after the producer's completion has been queued, preserving
+/// its observation order when publishing the response wakes a waiting consumer.
+pub struct PreparedStylesheetFetch {
+    pub(crate) response: PreparedStylesheetResponse,
+    pub(crate) on_published: Option<StylesheetPublishedCallback>,
+}
+
+impl PreparedStylesheetFetch {
+    pub fn new(response: StylesheetResponseFuture) -> Self {
+        Self {
+            response: PreparedStylesheetResponse::Pending(response),
+            on_published: None,
+        }
+    }
+
+    /// Reuse an already observed response without introducing another task or
+    /// physical observation. A link can install this sheet during admission.
+    pub fn reused(terminal: StylesheetFetchTerminal) -> Self {
+        Self {
+            response: PreparedStylesheetResponse::Reused(terminal),
+            on_published: None,
+        }
+    }
+
+    pub fn with_published_callback(
+        mut self,
+        callback: impl FnOnce(&StylesheetFetchTerminal) + Send + 'static,
+    ) -> Self {
+        self.on_published = Some(Box::new(callback));
+        self
+    }
+}
+
 pub trait StylesheetFetcher: Clone + Send + 'static {
     /// Distinguishes environment-specific responses when a store serves several Documents.
     fn resource_cache_scope(&self) -> u64 {
         0
+    }
+
+    /// A link preload supplies the Document preload map, while speculative
+    /// ordinary stylesheets remain directly adoptable through this store.
+    fn is_document_preload(&self, _url: &Url) -> bool {
+        false
+    }
+
+    fn prepare_stylesheet_resource(
+        &self,
+        document_url: Url,
+        url: Url,
+        options: StylesheetFetchOptions,
+    ) -> PreparedStylesheetFetch {
+        PreparedStylesheetFetch::new(self.fetch_stylesheet_resource(document_url, url, options))
     }
 
     /// An exact request-owner route overrides the store's default route.
