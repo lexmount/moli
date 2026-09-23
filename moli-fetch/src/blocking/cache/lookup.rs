@@ -165,6 +165,7 @@ fn cached_streaming_record_from_entry(
         body: entry.body,
         expires_at_unix_ms: entry.metadata.expires_at_unix_ms,
         force_validate,
+        cache_state: crate::ResponseCacheState::Local,
     }
 }
 
