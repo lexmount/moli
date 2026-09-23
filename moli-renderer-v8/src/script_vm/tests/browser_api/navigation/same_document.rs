@@ -117,6 +117,39 @@ fn same_document_navigation_precommit_redirect_updates_destination() {
     );
 }
 
+#[test]
+fn precommit_redirect_resolves_and_commits_the_native_destination_url() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+
+    vm.eval(
+        r##"
+        globalThis.customDestinationReads = 0;
+        navigation.addEventListener("navigate", event => {
+          event.intercept({
+            precommitHandler(controller) {
+              Object.defineProperty(event.destination, "url", {
+                get() {
+                  ++customDestinationReads;
+                  return "https://example.com/base";
+                }
+              });
+              controller.redirect("#redirected");
+            }
+          });
+        }, { once: true });
+        navigation.navigate("#initial");
+        "ready"
+        "##,
+    )
+    .unwrap();
+
+    assert_eq!(
+        vm.eval(r##"JSON.stringify([location.hash, customDestinationReads])"##)
+            .unwrap(),
+        r##"["#redirected",0]"##,
+    );
+}
+
 #[tokio::test]
 async fn same_document_navigation_precommit_added_handler_delays_finished() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
