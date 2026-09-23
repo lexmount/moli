@@ -3038,7 +3038,7 @@ async fn service_worker_fetch_respond_with_body_accessed_opaque_response_keeps_i
                 response
                     .headers
                     .iter()
-                    .any(|(key, entry)| key.eq_ignore_ascii_case(name) && entry == value),
+                    .any(|(key, entry)| key.eq_ignore_ascii_case(name) && entry == value.as_bytes()),
                 "missing internal {name} for {clone_mode}/{cache_mode}: {:?}",
                 response.headers,
             );

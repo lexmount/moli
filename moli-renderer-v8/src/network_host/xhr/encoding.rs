@@ -6,7 +6,7 @@ use super::*;
 pub(crate) fn xhr_response_text_decoder(
     scope: &mut v8::PinScope<'_, '_>,
     xhr: v8::Local<'_, v8::Object>,
-    headers: &[(String, String)],
+    headers: &[(String, Vec<u8>)],
 ) -> XhrResponseDecoder {
     let override_mime = xhr_state_string_property(scope, xhr, XHR_OVERRIDE_MIME_TYPE_SLOT);
     // A MIME-only override must retain the response charset. Blink also

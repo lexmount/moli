@@ -49,7 +49,9 @@ use super::{
     },
     webidl,
 };
-use crate::event_listener_args::{AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args};
+use crate::event_listener_args::{
+    AddEventListenerArgs, RemoveEventListenerArgs, parse_listener_args,
+};
 use crate::web_api_interfaces;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -365,7 +367,9 @@ pub(super) fn event_target_remove_event_listener_callback<'s>(
     let Ok(window_receiver) = capture_window_event_target_receiver(scope, args.this(), host) else {
         return;
     };
-    let Some(call) = parse_listener_args::<RemoveEventListenerArgs>(scope, &args, "removeEventListener") else {
+    let Some(call) =
+        parse_listener_args::<RemoveEventListenerArgs>(scope, &args, "removeEventListener")
+    else {
         return;
     };
     let Some(listener) = call.listener else {

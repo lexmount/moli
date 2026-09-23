@@ -234,14 +234,14 @@ mod tests {
         )
         .with_follow_redirects(false);
         let headers = vec![
-            ("location".to_owned(), "/next".to_owned()),
+            ("location".to_owned(), b"/next".to_vec()),
             (
                 "access-control-allow-origin".to_owned(),
-                "https://origin.test".to_owned(),
+                b"https://origin.test".to_vec(),
             ),
             (
                 "access-control-allow-credentials".to_owned(),
-                "true".to_owned(),
+                b"true".to_vec(),
             ),
         ];
         let next = next_followed_redirect_url_from_parts(

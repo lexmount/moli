@@ -1,4 +1,3 @@
-use crate::web_api_interfaces;
 use std::collections::{HashMap, HashSet};
 
 use super::super::document_runtime::EventTargetHandle;

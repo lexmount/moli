@@ -1396,8 +1396,8 @@ fn xml_http_request_response_document_uses_response_url_and_requester_origin() {
                         final_url: Url::parse("https://response.example/resource/doc#fragment").unwrap(),
                         status: 200,
                         headers: vec![
-                            ("Content-Type".to_owned(), mime.to_owned()),
-                            ("lAsT-mOdIfIeD".to_owned(), "Thu, 01 Jan 1970 01:23:45 GMT".to_owned()),
+                            ("Content-Type".to_owned(), mime.as_bytes().to_vec()),
+                            ("lAsT-mOdIfIeD".to_owned(), b"Thu, 01 Jan 1970 01:23:45 GMT".to_vec()),
                         ],
                         request_cookie_report: None,
                         cookie_set_reports: Vec::new(),
@@ -1494,7 +1494,7 @@ fn xml_http_request_document_response_requires_an_eligible_mime_and_well_formed_
                     final_url: request.url.clone(),
                     status: 200,
                     headers: mime
-                        .map(|mime| vec![("Content-Type".to_owned(), mime.to_owned())])
+                        .map(|mime| vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())])
                         .unwrap_or_default(),
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
@@ -1630,9 +1630,9 @@ fn xhr_streamed_response_documents_keep_distinct_source_modification_times() {
             let pending = vm.take_pending_subresource_fetch_infos();
             assert_eq!(pending.len(), 1);
             let request = &pending[0];
-            let mut headers = vec![("Content-Type".to_owned(), mime.to_owned())];
+            let mut headers = vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())];
             if let Some(header) = header {
-                headers.push(("lAsT-mOdIfIeD".to_owned(), header.to_owned()));
+                headers.push(("lAsT-mOdIfIeD".to_owned(), header.as_bytes().to_vec()));
             }
             let body_source_id = crate::network_host::new_network_body_source_id();
             vm.start_streaming_async_subresource_fetch(
@@ -1760,9 +1760,12 @@ fn xhr_response_decoding_uses_headers_received_overrides_for_buffered_and_stream
                 headers: vec![
                     (
                         "Content-Type".to_owned(),
-                        "text/plain;charset=UTF-8".to_owned(),
+                        b"text/plain;charset=UTF-8".to_vec(),
                     ),
-                    ("Content-Length".to_owned(), bytes.len().to_string()),
+                    (
+                        "Content-Length".to_owned(),
+                        bytes.len().to_string().into_bytes(),
+                    ),
                 ],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),

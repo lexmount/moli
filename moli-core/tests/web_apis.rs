@@ -1,6 +1,3 @@
-#[path = "web_apis/indexed_db_transaction.rs"]
-mod indexed_db_transaction;
-
 use moli_test_support as support;
 
 use anyhow::Result;

@@ -301,7 +301,7 @@ impl WorkerModuleSource {
     pub(super) fn from_response_parts(
         module_type: WorkerModuleType,
         url: &Url,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         bytes: Vec<u8>,
     ) -> Result<Self, String> {
         let kind = module_type.response_kind(url, headers, &bytes)?;
@@ -1951,7 +1951,7 @@ impl WorkerModuleType {
     pub(super) fn response_kind(
         self,
         url: &Url,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         bytes: &[u8],
     ) -> Result<WorkerScriptResourceKind, String> {
         match self {
@@ -2834,7 +2834,11 @@ fn load_worker_static_module_dependency(
             let source = WorkerModuleSource::from_response_parts(
                 module_type,
                 &dependency_url,
-                &[("content-type".to_owned(), mime)],
+                &[(
+                    "content-type".to_owned(),
+                    moli_fetch::header_value_from_byte_string(&mime)
+                        .expect("serialized MIME types contain ByteStrings"),
+                )],
                 bytes,
             )?;
             Ok(WorkerModuleDependencyLoad::Source {

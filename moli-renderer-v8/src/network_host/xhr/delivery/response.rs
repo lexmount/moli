@@ -3,8 +3,7 @@ use super::super::events::{
 };
 use super::super::*;
 use moli_web_mime::{
-    effective_response_mime_essence, extract_response_mime_type,
-    is_html_document_mime,
+    effective_response_mime_essence, extract_response_mime_type, is_html_document_mime,
 };
 
 pub(crate) fn apply_xhr_response(

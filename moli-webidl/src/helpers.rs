@@ -216,4 +216,3 @@ pub fn event_listener_options_value<'s>(
         ..EventListenerOptions::default()
     })
 }
-

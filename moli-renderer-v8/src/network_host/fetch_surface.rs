@@ -456,7 +456,7 @@ fn response_content_type<'s>(
     let headers = response_slot_object(scope, response, RESPONSE_HEADERS_SLOT)?;
     moli_web_mime::response_header_value(
         &moli_fetch::headers_from_byte_strings(&headers_entries(scope, headers))
-        .expect("Headers contain ByteStrings"),
+            .expect("Headers contain ByteStrings"),
         "content-type",
     )
 }

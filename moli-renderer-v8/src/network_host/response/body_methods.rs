@@ -159,8 +159,7 @@ fn body_headers<'s>(
             .map(|headers| headers_entries(scope, headers)),
     }
     .map(|headers| {
-        moli_fetch::headers_from_byte_strings(&headers)
-            .expect("Headers contain ByteStrings")
+        moli_fetch::headers_from_byte_strings(&headers).expect("Headers contain ByteStrings")
     })
 }
 

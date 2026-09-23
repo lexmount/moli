@@ -2976,7 +2976,7 @@ fn build_storage_bucket_cached_response_object<'s>(
             &response.url,
             response.status,
             &response.status_text,
-            &response.headers,
+            &moli_fetch::headers_to_byte_strings(&response.headers),
             response.body,
         );
     }
@@ -3009,7 +3009,8 @@ fn build_storage_bucket_cached_response_object<'s>(
         })
         .cloned()
         .collect::<Vec<_>>();
-    let headers = headers_entries_to_init_array(scope, &moli_fetch::headers_to_byte_strings(&public_headers));
+    let headers =
+        headers_entries_to_init_array(scope, &moli_fetch::headers_to_byte_strings(&public_headers));
     init.set_string_property(scope, "headers", headers.into());
     let global = scope.get_current_context().global(scope);
     let constructor = global
@@ -3023,7 +3024,7 @@ fn build_storage_bucket_cached_response_object<'s>(
             response_obj,
             response.status,
             &response.status_text,
-            &response.headers,
+            &moli_fetch::headers_to_byte_strings(&response.headers),
         );
     }
     crate::network_host::set_response_slot_string(

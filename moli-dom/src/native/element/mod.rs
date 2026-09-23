@@ -63,10 +63,7 @@ fn initial_custom_element_state_for_identity(
 fn is_element_reference_attribute(name: &str) -> bool {
     matches!(
         name,
-        "commandfor"
-            | "interestfor"
-            | "popovertarget"
-            | "aria-activedescendant"
+        "aria-activedescendant"
             | "aria-controls"
             | "aria-describedby"
             | "aria-details"

@@ -555,7 +555,7 @@ pub(super) use methods::{
     event_composed_path_callback, event_prevent_default_callback,
     event_return_value_getter_function, event_return_value_setter_function,
     event_stop_immediate_propagation_callback, event_stop_propagation_callback,
-    event_time_stamp_getter_function, set_event_default_prevented,
+    event_time_stamp_getter_function,
 };
 pub(in crate::context_bootstrap) use subclasses::run_navigate_event_precommit_handlers;
 pub(super) use subclasses::{

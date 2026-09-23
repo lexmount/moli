@@ -19,7 +19,11 @@ pub(in crate::context_bootstrap::indexed_db) fn idb_object_store_delete_callback
     };
     let store = args.this();
     if crate::context_bootstrap::indexed_db::indexed_db_object_store_is_deleted(scope, store) {
-        let error = dom_exception_value(scope, "The object store has been deleted.", "InvalidStateError");
+        let error = dom_exception_value(
+            scope,
+            "The object store has been deleted.",
+            "InvalidStateError",
+        );
         scope.throw_exception(error);
         return;
     }

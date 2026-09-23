@@ -3,10 +3,7 @@ use super::super::node::{
     node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object_or_detached,
     remove_child_in_reaction_scope,
 };
-use super::{
-    JsContextHost, document_has_browsing_context,
-    is_html_document, throw_dom_exception,
-};
+use super::{JsContextHost, document_has_browsing_context, is_html_document, throw_dom_exception};
 use crate::native_bridge::element::{
     contenteditable_editing_host, dispatch_text_control_event, document_copy_command_supported,
     form_control_is_effectively_disabled, is_text_control,

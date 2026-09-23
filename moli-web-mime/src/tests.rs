@@ -776,7 +776,7 @@ fn checks_script_response_mime_for_nosniff_strict_and_classic_rules() {
 fn strict_script_response_mime_never_uses_a_sniffing_default() {
     for content_type in [None, Some(""), Some("not a mime type"), Some("text/")] {
         let headers: Vec<_> = content_type
-            .map(|value| ("Content-Type".to_owned(), value.to_owned()))
+            .map(|value| ("Content-Type".to_owned(), value.as_bytes().to_vec()))
             .into_iter()
             .collect();
         for body in [b"".as_slice(), b"self.executed = true;"] {
@@ -803,7 +803,7 @@ fn strict_script_response_mime_accepts_supplied_javascript_essences() {
         "application/x-javascript",
         "text/javascript1.5",
     ] {
-        let headers = [("Content-Type".to_owned(), content_type.to_owned())];
+        let headers = [("Content-Type".to_owned(), content_type.as_bytes().to_vec())];
         assert!(
             check_script_response_mime(&headers, b"", FetchDestination::Worker, true).is_ok(),
             "{content_type}"
