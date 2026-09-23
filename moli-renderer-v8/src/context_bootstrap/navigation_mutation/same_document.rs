@@ -71,13 +71,7 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
         }
         LocationNavigationKind::Reload => return,
     }
-    sync_same_document_navigation_commit(
-        scope,
-        owner,
-        href,
-        protocol_navigation_type,
-        true,
-    );
+    sync_same_document_navigation_commit(scope, owner, href, protocol_navigation_type, true);
     let navigation_type = match kind {
         LocationNavigationKind::Assign => Some("push"),
         LocationNavigationKind::Replace => Some("replace"),
