@@ -1982,6 +1982,43 @@ fn cli_fetch_scopes_custom_headers_to_main_document_request() -> Result<()> {
 }
 
 #[test]
+fn cli_dump_json_renders_body_stylesheet_with_charset_and_curly_quote_meta() -> Result<()> {
+    let html = concat!(
+        "<!doctype html><head><title>Parser regression</title>",
+        "<meta name=\"viewport\" content=\"initial-scale=0.4\">",
+        "<meta name=“viewport“ content=“width=device-width, initial-scale=1“>",
+        "</head><body>",
+        "<link rel=stylesheet href='data:text/css,body%7Bcolor:rgb(1,2,3)%7D' charset=utf-8>",
+        "\n<script>document.body.setAttribute('data-color', getComputedStyle(document.body).color);</script>",
+        "<main id=after>café</main></body>",
+    );
+    let url = format!(
+        "data:text/html;charset=utf-8;base64,{}",
+        BASE64_STANDARD.encode(html),
+    );
+    let output = run_fetch_cli_with_wait_until_and_dump(&url, "domcontentloaded", "json")?;
+    assert!(
+        output.status.success(),
+        "moli fetch failed: {}",
+        clean_output(&output.stderr),
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout)?;
+    assert_json_dump_shape(&payload, &url, 200);
+    assert_eq!(payload["title"], "Parser regression");
+    let rendered = payload["html"].as_str().expect("rendered HTML");
+    assert!(rendered.contains("name=\"“viewport“\""), "{rendered}");
+    assert!(
+        rendered.contains("data-color=\"rgb(1, 2, 3)\""),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("<main id=\"after\">café</main>"),
+        "{rendered}"
+    );
+    Ok(())
+}
+
+#[test]
 fn cli_dump_json_emits_final_url_status_and_html() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;

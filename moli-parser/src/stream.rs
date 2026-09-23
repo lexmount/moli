@@ -2238,6 +2238,51 @@ mod tests {
     }
 
     #[test]
+    fn parser_stream_encoding_indicator_preserves_stylesheet_pause() {
+        for attributes in [
+            "charset=utf-8",
+            "charset=windows-1252",
+            "charset=unknown-encoding",
+            "http-equiv=content-type content='text/css; charset=utf-8'",
+        ] {
+            let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                Url::parse("https://example.test/page.html").expect("test url"),
+            );
+            let tail = "\n<script>window.afterStylesheet = true;</script><p>café</p>";
+            let first = stream.pump_parser_step(&format!(
+                "<!doctype html><body><link rel=stylesheet href='/slow.css' {attributes}>{tail}"
+            ));
+            assert!(
+                matches!(
+                    first.result,
+                    ParserPumpStep::Yield(ParserYield::BlockingStylesheet(_))
+                ),
+                "encoding notification must not bypass the stylesheet pause: {attributes}"
+            );
+            assert_eq!(first.discovered_blocking_stylesheet_inputs.len(), 1);
+            assert_eq!(stream.snapshot_pending_input(), tail);
+
+            let second = stream.pump_parser_step("");
+            assert!(matches!(
+                second.result,
+                ParserPumpStep::Yield(ParserYield::Script(_))
+            ));
+            assert_eq!(stream.snapshot_pending_input(), "<p>café</p>");
+            assert!(matches!(
+                stream.pump_parser_step("").result,
+                ParserPumpStep::InputDrained
+            ));
+            let document = stream.finish();
+            let paragraphs = document.elements_by_tag_name(document.document_node_id(), "p", false);
+            assert_eq!(paragraphs.len(), 1);
+            assert_eq!(
+                document.text_content(paragraphs[0]).as_deref(),
+                Some("café")
+            );
+        }
+    }
+
+    #[test]
     fn parser_stream_feed_consumes_custom_element_handoff_without_runtime_owner() {
         let stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
             Url::parse("https://example.test/page.html").expect("test url"),

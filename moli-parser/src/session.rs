@@ -91,7 +91,15 @@ impl EmbedderPausingTreeBuilder {
             _ => None,
         };
         let result = self.inner.process_token(token, line_number);
-        if !matches!(result, TokenSinkResult::Continue) {
+        // Encoding notices are advisory for this already-decoded input. A tag
+        // such as <link rel=stylesheet charset=utf-8> can also require an
+        // embedder pause, which must be returned at this tag boundary. Leaving
+        // it pending would expose it on a later character or error token,
+        // where html5ever requires Continue and would otherwise panic.
+        if !matches!(
+            result,
+            TokenSinkResult::Continue | TokenSinkResult::EncodingIndicator(_)
+        ) {
             return result;
         }
         let svg_script_handoff = if let Some(local_name) = foreign_end_tag {
@@ -130,7 +138,7 @@ impl EmbedderPausingTreeBuilder {
             // actual script and custom-element handoffs using sink-owned state.
             return TokenSinkResult::Script(ParseHandle::new(stylesheet, None));
         }
-        TokenSinkResult::Continue
+        result
     }
 }
 
