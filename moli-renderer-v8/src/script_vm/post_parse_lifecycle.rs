@@ -2546,6 +2546,7 @@ impl ScriptVm {
         let mut host = self._context_host.borrow_mut();
         for network_result in results {
             let crate::document_runtime::ConnectedLoadNetworkResult {
+                consumed_preload_error,
                 document_owner,
                 stylesheet_fetch,
                 blocking_operation: _,
@@ -2572,15 +2573,17 @@ impl ScriptVm {
             } else {
                 !source_owners.is_empty()
             };
-            performance_entries.push((
-                document_owner,
-                crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
-                    request_url.as_str(),
-                    preload_like_resource_initiator_type(resource_type),
-                    start_unix_millis,
-                    &result,
-                ),
-            ));
+            if !consumed_preload_error {
+                performance_entries.push((
+                    document_owner,
+                    crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
+                        request_url.as_str(),
+                        preload_like_resource_initiator_type(resource_type),
+                        start_unix_millis,
+                        &result,
+                    ),
+                ));
+            }
             if resource_type == SubresourceResourceType::Stylesheet && stylesheet_fetch.is_none() {
                 let validated_response = result
                     .as_ref()
