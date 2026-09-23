@@ -307,6 +307,7 @@ impl JsContextHost {
                 response_body: SubresourceResponseBody::from_bytes(Vec::new()),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
             }),
         );
         true

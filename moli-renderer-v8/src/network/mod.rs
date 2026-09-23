@@ -14,6 +14,7 @@ mod devtools_resource_load;
 pub(crate) mod loads;
 pub mod navigation;
 mod policy;
+pub(crate) mod preloads;
 mod request_client;
 mod task_runner;
 
@@ -29,6 +30,7 @@ pub use devtools_resource_load::{
     RendererNetworkResourceLoadResponse, RendererPreparedNetworkResourceLoad,
 };
 pub use policy::{PageNetworkPolicy, PageNetworkPolicySnapshot};
+pub(crate) use request_client::streaming_raw_response_from_local_response;
 pub use request_client::{ResourceRequestClient, ResourceRequestClientOwner};
 pub use task_runner::RendererResourceTaskRunner;
 
