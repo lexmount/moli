@@ -2231,7 +2231,37 @@ JSON.stringify({
 
 #[tokio::test]
 async fn indexed_db_continuations_preserve_lightweight_popup_sender() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    // Compile the listener inside the popup; an opener-created function keeps
+    // its opener realm even when assigned to popup.onmessage.
+    let popup_source = r#"
+onmessage = async event => {
+  let response;
+  try {
+    if (event.data && event.data.action === "delete") {
+      await new Promise((resolve, reject) => {
+        const request = indexedDB.deleteDatabase(event.data.name);
+        request.onsuccess = resolve;
+        request.onerror = reject;
+      });
+      response = { ok: true, deleted: true };
+    } else {
+      const infos = await indexedDB.databases();
+      response = { ok: true, names: infos.map(info => info.name) };
+    }
+  } catch (error) {
+    response = { ok: false, error: error && error.name };
+  }
+  event.source.postMessage(JSON.stringify(response), event.origin);
+};
+opener.postMessage("fixture-ready", "*");
+"#;
+    let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+        "<!doctype html><script>{popup_source}</script>"
+    )])
+    .await;
+    let popup_url = server.base_url().join("/popup.html").expect("popup URL");
+    let popup_origin = popup_url.origin().ascii_serialization();
+    let loader = static_http_loader([]);
     let root = indexed_db_test_root("databases-lightweight-popup");
     let manager = crate::new_indexed_db_manager(Some(root.clone()))
         .expect("page-local indexedDB manager should initialize");
@@ -2246,41 +2276,27 @@ async fn indexed_db_continuations_preserve_lightweight_popup_sender() {
 
     let setup = vm
         .eval(
-            r#"
+            &r#"
 (() => {
+  let resolvePopupReady;
+  const popupReady = new Promise(resolve => { resolvePopupReady = resolve; });
   globalThis.__popupIndexedDbMessages = [];
   onmessage = event => {
+    if (event.data === "fixture-ready") { resolvePopupReady(); return; }
     globalThis.__popupIndexedDbMessages.push(JSON.stringify({
       origin: event.origin,
       sourceIsPopup: event.source === globalThis.__indexedDbPopup,
       data: JSON.parse(String(event.data))
     }));
   };
-  const popup = open("about:blank#idb-popup");
+  const popup = open("__POPUP_CALLBACK_URL__");
   globalThis.__indexedDbPopup = popup;
-  popup.onmessage = async event => {
-    let response;
-    try {
-      if (event.data && event.data.action === "delete") {
-        await new Promise((resolve, reject) => {
-          const request = indexedDB.deleteDatabase(event.data.name);
-          request.onsuccess = resolve;
-          request.onerror = reject;
-        });
-        response = { ok: true, deleted: true };
-      } else {
-        const infos = await indexedDB.databases();
-        response = { ok: true, names: infos.map(info => info.name) };
-      }
-    } catch (error) {
-      response = { ok: false, error: error && error.name };
-    }
-    event.source.postMessage(JSON.stringify(response), event.origin);
-  };
-  popup.postMessage({ action: "delete", name: "popup-owner-db" }, "*");
+
+  popupReady.then(() => popup.postMessage({ action: "delete", name: "popup-owner-db" }, "*"));
   return "scheduled";
 })()
-"#,
+"#
+            .replace("__POPUP_CALLBACK_URL__", popup_url.as_str()),
         )
         .expect("popup IndexedDB owner workflow should schedule");
     assert_eq!(setup, "scheduled");
@@ -2296,7 +2312,9 @@ async fn indexed_db_continuations_preserve_lightweight_popup_sender() {
     assert_eq!(
         vm.eval("String(globalThis.__popupIndexedDbMessages[0])")
             .expect("popup delete response should evaluate"),
-        r#"{"origin":"https://indexeddb-popup-databases-message.test","sourceIsPopup":true,"data":{"ok":true,"deleted":true}}"#
+        format!(
+            r#"{{"origin":"{popup_origin}","sourceIsPopup":true,"data":{{"ok":true,"deleted":true}}}}"#
+        )
     );
 
     vm.eval(
@@ -2317,15 +2335,42 @@ globalThis.__indexedDbPopup.postMessage({ action: "get" }, "*");
     assert_eq!(
         vm.eval("String(globalThis.__popupIndexedDbMessages[0])")
             .expect("popup databases response should evaluate"),
-        r#"{"origin":"https://indexeddb-popup-databases-message.test","sourceIsPopup":true,"data":{"ok":true,"names":[]}}"#
+        format!(
+            r#"{{"origin":"{popup_origin}","sourceIsPopup":true,"data":{{"ok":true,"names":[]}}}}"#
+        )
     );
 
     let _ = std::fs::remove_dir_all(root);
+    assert_eq!(server.finish_targets().await, ["/popup.html"]);
 }
 
 #[tokio::test]
 async fn indexed_db_continuation_broadcast_channel_stays_in_lightweight_popup_owner() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    // Compile the listener inside the popup; an opener-created function keeps
+    // its opener realm even when assigned to popup.onmessage.
+    let popup_source = r#"
+onmessage = async event => {
+  if (event.data !== "probe") {
+    return;
+  }
+  try {
+    await indexedDB.databases();
+    const popupChannel = new BroadcastChannel("indexeddb-popup-continuation-owner");
+    popupChannel.postMessage("from-popup-idb-continuation");
+    event.source.postMessage("done", event.origin);
+  } catch (error) {
+    event.source.postMessage("error:" + (error && error.name), event.origin);
+  }
+};
+opener.postMessage("fixture-ready", "*");
+"#;
+    let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+        "<!doctype html><script>{popup_source}</script>"
+    )])
+    .await;
+    let popup_url = server.base_url().join("/popup.html").expect("popup URL");
+    let popup_origin = popup_url.origin().ascii_serialization();
+    let loader = static_http_loader([]);
     let root = indexed_db_test_root("databases-popup-broadcast-channel-owner");
     let manager = crate::new_indexed_db_manager(Some(root.clone()))
         .expect("page-local indexedDB manager should initialize");
@@ -2340,55 +2385,38 @@ async fn indexed_db_continuation_broadcast_channel_stays_in_lightweight_popup_ow
 
     let setup = vm
         .eval(
-            r#"
+            &r#"
 (() => {
+  let resolvePopupReady;
+  const popupReady = new Promise(resolve => { resolvePopupReady = resolve; });
   globalThis.__popupIndexedDbBroadcastChannelMessages = [];
   const topChannel = new BroadcastChannel("indexeddb-popup-continuation-owner");
   topChannel.onmessage = event => {
     __popupIndexedDbBroadcastChannelMessages.push("top-bc:" + event.data + ":" + event.origin);
   };
   onmessage = event => {
+    if (event.data === "fixture-ready") { resolvePopupReady(); return; }
     __popupIndexedDbBroadcastChannelMessages.push("window:" + event.data + ":" + event.origin);
   };
 
-  const popup = open("https://indexeddb-popup-broadcast-channel-child.test/page.html");
-  popup.onmessage = async event => {
-    if (event.data !== "probe") {
-      return;
-    }
-    try {
-      await indexedDB.databases();
-      const popupChannel = new BroadcastChannel("indexeddb-popup-continuation-owner");
-      popupChannel.postMessage("from-popup-idb-continuation");
-      event.source.postMessage("done", event.origin);
-    } catch (error) {
-      event.source.postMessage("error:" + (error && error.name), event.origin);
-    }
-  };
-  popup.postMessage("probe", "*");
+  const popup = open("__POPUP_CALLBACK_URL__");
+
+  popupReady.then(() => popup.postMessage("probe", "*"));
   return "scheduled";
 })()
-"#,
+"#
+            .replace("__POPUP_CALLBACK_URL__", popup_url.as_str()),
         )
         .expect("popup IndexedDB BroadcastChannel owner workflow should schedule");
     assert_eq!(setup, "scheduled");
 
-    for _ in 0..16 {
-        if vm
-            .eval(
-                r#"String(globalThis.__popupIndexedDbBroadcastChannelMessages.some(
-  message => message.startsWith("window:")
-))"#,
-            )
-            .expect("popup IndexedDB BroadcastChannel completion should evaluate")
-            == "true"
-        {
-            break;
-        }
-        wait_for_one_selected_page_task_executor_test_turn(&mut vm, &loader)
-            .await
-            .expect("Page task executor should advance popup IndexedDB BroadcastChannel workflow");
-    }
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        r#"String(__popupIndexedDbBroadcastChannelMessages.some(message => message.startsWith("window:")))"#,
+        "true",
+        "popup callback workflow",
+    ).await;
 
     vm.apply_pending_broadcast_channel_delivery_tasks(&loader, 4)
         .await
@@ -2397,15 +2425,51 @@ async fn indexed_db_continuation_broadcast_channel_stays_in_lightweight_popup_ow
     assert_eq!(
         vm.eval("JSON.stringify(globalThis.__popupIndexedDbBroadcastChannelMessages)")
             .expect("popup IndexedDB BroadcastChannel messages should evaluate"),
-        r#"["window:done:https://indexeddb-popup-broadcast-channel-child.test"]"#
+        format!(r#"["window:done:{popup_origin}"]"#)
     );
 
     let _ = std::fs::remove_dir_all(root);
+    assert_eq!(server.finish_targets().await, ["/popup.html"]);
 }
 
 #[tokio::test]
 async fn message_port_handler_indexed_db_uses_lightweight_popup_owner() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    // Compile the listener inside the popup; an opener-created function keeps
+    // its opener realm even when assigned to popup.onmessage.
+    let popup_source = r#"
+onmessage = event => {
+  if (event.data !== "setup") {
+    return;
+  }
+  const channel = new MessageChannel();
+  channel.port2.onmessage = async () => {
+    const popupIndexedDB = indexedDB;
+    let response;
+    try {
+      const databases = await popupIndexedDB.databases();
+      response = {
+        ok: true,
+        names: databases.map(database => database.name).sort()
+      };
+    } catch (error) {
+      response = {
+        ok: false,
+        error: error && error.name
+      };
+    }
+    event.source.postMessage(response, event.origin);
+  };
+  channel.port1.postMessage("probe");
+};
+opener.postMessage("fixture-ready", "*");
+"#;
+    let server = StaticHttpServer::spawn_with_bodies(vec![format!(
+        "<!doctype html><script>{popup_source}</script>"
+    )])
+    .await;
+    let popup_url = server.base_url().join("/popup.html").expect("popup URL");
+    let popup_origin = popup_url.origin().ascii_serialization();
+    let loader = static_http_loader([]);
     let root = indexed_db_test_root("message-port-popup-owner");
     let manager = crate::new_indexed_db_manager(Some(root.clone()))
         .expect("page-local indexedDB manager should initialize");
@@ -2420,8 +2484,10 @@ async fn message_port_handler_indexed_db_uses_lightweight_popup_owner() {
 
     let setup = vm
         .eval(
-            r#"
+            &r#"
 (() => {
+  let resolvePopupReady;
+  const popupReady = new Promise(resolve => { resolvePopupReady = resolve; });
   globalThis.__messagePortPopupIndexedDbMessages = [];
   const openDb = name => new Promise((resolve, reject) => {
     const deleteRequest = indexedDB.deleteDatabase(name);
@@ -2441,47 +2507,26 @@ async fn message_port_handler_indexed_db_uses_lightweight_popup_owner() {
     };
   });
 
-  const popup = open("https://message-port-popup-idb-child.test/page.html");
+  const popup = open("__POPUP_CALLBACK_URL__");
   globalThis.__messagePortPopupIndexedDb = popup;
   onmessage = event => {
+    if (event.data === "fixture-ready") { resolvePopupReady(); return; }
     globalThis.__messagePortPopupIndexedDbMessages.push(JSON.stringify({
       origin: event.origin,
       sourceIsPopup: event.source === popup,
       data: event.data
     }));
   };
-  popup.onmessage = event => {
-    if (event.data !== "setup") {
-      return;
-    }
-    const channel = new MessageChannel();
-    channel.port2.onmessage = async () => {
-      const popupIndexedDB = indexedDB;
-      let response;
-      try {
-        const databases = await popupIndexedDB.databases();
-        response = {
-          ok: true,
-          names: databases.map(database => database.name).sort()
-        };
-      } catch (error) {
-        response = {
-          ok: false,
-          error: error && error.name
-        };
-      }
-      event.source.postMessage(response, event.origin);
-    };
-    channel.port1.postMessage("probe");
-  };
-  openDb("top-owner-db")
+
+  Promise.all([openDb("top-owner-db"), popupReady])
     .then(() => popup.postMessage("setup", "*"))
     .catch(error => {
       __messagePortPopupIndexedDbMessages.push("setup-error:" + (error && error.name));
     });
   return "scheduled";
 })()
-"#,
+"#
+            .replace("__POPUP_CALLBACK_URL__", popup_url.as_str()),
         )
         .expect("popup MessagePort IndexedDB owner workflow should schedule");
     assert_eq!(setup, "scheduled");
@@ -2498,10 +2543,13 @@ async fn message_port_handler_indexed_db_uses_lightweight_popup_owner() {
     assert_eq!(
         vm.eval("String(globalThis.__messagePortPopupIndexedDbMessages[0])")
             .expect("popup MessagePort IndexedDB response should evaluate"),
-        r#"{"origin":"https://message-port-popup-idb-child.test","sourceIsPopup":true,"data":{"ok":true,"names":[]}}"#
+        format!(
+            r#"{{"origin":"{popup_origin}","sourceIsPopup":true,"data":{{"ok":true,"names":[]}}}}"#
+        )
     );
 
     let _ = std::fs::remove_dir_all(root);
+    assert_eq!(server.finish_targets().await, ["/popup.html"]);
 }
 
 #[tokio::test]
