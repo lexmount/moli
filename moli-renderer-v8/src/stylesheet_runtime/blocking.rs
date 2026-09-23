@@ -357,6 +357,24 @@ impl DocumentRuntime {
         self.request_parser_if_stylesheet_blockers_released(had_pending_blocker);
     }
 
+    pub(crate) fn apply_blocking_stylesheet_completion_for_document(
+        &mut self,
+        completion: crate::stylesheet_blocking::StylesheetCompletion,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) {
+        // Keep any observations already pending before this task separate from
+        // the physical results produced by this exact Document's completion.
+        let previous = self.take_blocking_stylesheet_network_results(None);
+        self.stylesheet_lifecycle
+            .ready_connected_load_network_results
+            .extend(previous);
+        self.apply_blocking_stylesheet_completion(completion);
+        let completed = self.take_blocking_stylesheet_network_results(Some(owner));
+        self.stylesheet_lifecycle
+            .ready_connected_load_network_results
+            .extend(completed);
+    }
+
     pub(super) fn parser_blocking_stylesheet_release_is_ready(&self) -> bool {
         !self.stylesheet_lifecycle.fetches.has_any_pending_entries()
             && !self.has_pending_parser_blocking_link()
@@ -405,8 +423,23 @@ impl DocumentRuntime {
         &mut self,
     ) -> Vec<ConnectedLoadNetworkResult> {
         self.drain_blocking_stylesheet_completions();
-        let mut results = self
-            .stylesheet_lifecycle
+        let mut results = self.take_blocking_stylesheet_network_results(None);
+        results.extend(
+            self.stylesheet_lifecycle
+                .ready_connected_load_network_results
+                .drain(..),
+        );
+        results
+            .into_iter()
+            .map(|result| self.apply_network_result_install_authority(result))
+            .collect()
+    }
+
+    fn take_blocking_stylesheet_network_results(
+        &mut self,
+        document_owner: Option<crate::frame_owner_model::FrameDocumentTaskOwner>,
+    ) -> Vec<ConnectedLoadNetworkResult> {
+        self.stylesheet_lifecycle
             .fetches
             .take_ready_network_results()
             .into_iter()
@@ -414,6 +447,7 @@ impl DocumentRuntime {
                 let origin_clean = result.terminal.origin_clean().unwrap_or(false);
                 let physical_result = result.terminal.physical().as_result();
                 ConnectedLoadNetworkResult {
+                    document_owner,
                     stylesheet_fetch: result.fetch,
                     blocking_operation: result.blocking_operation,
                     source_operation: None,
@@ -431,15 +465,6 @@ impl DocumentRuntime {
                     result: physical_result,
                 }
             })
-            .collect::<Vec<_>>();
-        results.extend(
-            self.stylesheet_lifecycle
-                .ready_connected_load_network_results
-                .drain(..),
-        );
-        results
-            .into_iter()
-            .map(|result| self.apply_network_result_install_authority(result))
             .collect()
     }
 

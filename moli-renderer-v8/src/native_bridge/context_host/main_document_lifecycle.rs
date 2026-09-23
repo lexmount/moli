@@ -239,20 +239,73 @@ impl JsContextHost {
                 let binding = self.accept_current_main_style_load_event(element)?;
                 Some(ConnectedStyleLoadEventAdmission::LoadDelaying(binding))
             }
-            ConnectedStyleLoadEventPlan::NonBlockingLink { element } => {
-                let owner = self.accept_current_main_link_event_owner(element)?;
+            ConnectedStyleLoadEventPlan::NonBlockingLink { element, document } => {
+                let owner = self.accept_current_link_event_owner(element, document)?;
                 Some(ConnectedStyleLoadEventAdmission::NonBlockingLink(owner))
             }
         }
     }
 
-    pub(crate) fn accept_current_main_link_event_owner(
+    fn accept_current_link_event_owner(
         &self,
         element: crate::document_runtime::DomHandle,
+        document: Option<crate::document_runtime::DomHandle>,
     ) -> Option<DocumentLinkEventOwner> {
-        let owner = self.current_main_document_task_owner()?;
+        let owner = match document {
+            Some(document) => {
+                if let Some(child) = self.child_browsing_context_host_for_document_handle(document)
+                {
+                    self.frame_owner_store
+                        .current_child_document_task_owner(child)?
+                } else if self
+                    .lightweight_popup_document_handles
+                    .contains_key(&document)
+                {
+                    // Preserve the existing popup task route; child frames have
+                    // their own exact Document owner and never use this fallback.
+                    self.current_main_document_task_owner()?
+                } else {
+                    return None;
+                }
+            }
+            None => self.current_main_document_task_owner()?,
+        };
         self.frame_owner_store
-            .accept_current_main_link_event_owner(owner, element)
+            .accept_current_link_event_owner(owner, element)
+    }
+
+    pub(crate) fn connected_style_document_owner_is_current(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> bool {
+        self.frame_owner_store.document_task_owner_is_current(owner)
+    }
+
+    pub(crate) fn connected_style_document_realm(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> Option<crate::frame_owner_model::FrameRealmId> {
+        self.frame_owner_store
+            .current_materialized_realm_id_for_document_task_owner(owner)
+    }
+
+    pub(crate) fn connected_style_network_frame_id(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> Option<String> {
+        // Network records use None for the root frame so the protocol can
+        // supply its target ID instead of the renderer's internal main ID.
+        self.frame_owner_store
+            .child_frame_id_for_document_task_owner(owner)
+            .map(|id| id.0.clone())
+    }
+
+    pub(crate) fn connected_style_resource_timing_realm(
+        &self,
+        owner: crate::frame_owner_model::FrameDocumentTaskOwner,
+    ) -> Option<crate::frame_owner_model::FrameRealmId> {
+        self.frame_owner_store
+            .resource_timing_realm_for_document_task_owner(owner)
     }
 
     pub(crate) fn main_style_load_event_is_current(
