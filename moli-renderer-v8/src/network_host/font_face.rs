@@ -26,11 +26,13 @@ pub(crate) fn resolve_font_face_sources(
 ) -> Vec<moli_css_parse::CssFontSource> {
     use moli_css_parse::CssFontSource;
 
-    let base = crate::util::context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
-        let host = unsafe { &*host_ptr };
-        let identity = request_context
-            .filter(|identity| host.window_execution_context_identity_is_current(*identity))?;
-        subresource_api_base_url(scope, host, identity.dispatch_scope())
+    let base = crate::worker::worker_current_script_url(scope).or_else(|| {
+        crate::util::context_host_ptr_from_global_bridge(scope).and_then(|host_ptr| {
+            let host = unsafe { &*host_ptr };
+            let identity = request_context
+                .filter(|identity| host.window_execution_context_identity_is_current(*identity))?;
+            subresource_api_base_url(scope, host, identity.dispatch_scope())
+        })
     });
     sources
         .into_iter()
@@ -53,6 +55,12 @@ pub(crate) fn start_font_face_fetch(
     request_context: Option<WindowExecutionContextIdentity>,
     source: &str,
 ) -> Result<()> {
+    if crate::worker::get_worker_state(scope).is_some() {
+        let url =
+            url::Url::parse(source).context("failed to resolve worker FontFace source URL")?;
+        return crate::worker::start_worker_font_face_fetch(scope, face, url)
+            .map_err(anyhow::Error::msg);
+    }
     let host_ptr = crate::util::context_host_ptr_from_global_bridge(scope)
         .context("FontFace URL loader is unavailable in this realm")?;
     // SAFETY: the current live realm owns the bridge. No author callback runs
@@ -74,12 +82,12 @@ pub(crate) fn start_font_face_fetch(
         .context("failed to resolve FontFace source URL")?;
     let policy = host
         .document_connect_policy_snapshot_for_owner(owner)
-        .ok_or("FontFace policy owner is unavailable")?
+        .context("FontFace policy owner is unavailable")?
         .for_resource_kind(
             crate::content_security_policy::ContentSecurityPolicyResourceKind::DocumentFont,
         );
     let report_context = capture_window_csp_report_request_context(scope, host, owner)
-        .ok_or("FontFace reporting owner is unavailable")?;
+        .context("FontFace reporting owner is unavailable")?;
     let (reports, enforced) = policy
         .check_url(
             &environment.document_url,

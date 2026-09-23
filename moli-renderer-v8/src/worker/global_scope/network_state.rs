@@ -3,6 +3,8 @@
 use super::*;
 
 pub(in crate::worker) struct PendingWorkerFetch {
+    pub(in crate::worker) kind: fetch::WorkerFetchKind,
+    pub(in crate::worker) font_face: Option<v8::Global<v8::Object>>,
     pub(in crate::worker) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     pub(in crate::worker) redirect_csp_state: crate::network_host::FetchCspRedirectState,
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
