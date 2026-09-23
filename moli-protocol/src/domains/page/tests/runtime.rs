@@ -554,6 +554,16 @@ async fn runtime_add_binding_with_child_default_execution_context_id_installs_ch
         }
     })
     .to_string();
+    let command = crate::conn::ParsedCdpCommand::parse_str(raw.clone())
+        .expect("Runtime.addBinding command must parse");
+    assert_eq!(
+        command.completion_semantics(),
+        crate::conn::CdpCommandCompletionSemantics::SynchronousResponse
+    );
+    assert_eq!(
+        command.dispatch_lane(),
+        crate::conn::CdpCommandDispatchLane::MainThread
+    );
     let pending = ctx
         .conn
         .try_start_pending_command_dispatch(&raw)

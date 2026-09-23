@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::{error::Error, fmt};
 
+use crate::scheduling::{CdpCommandSchedulingPolicy, chromium_sends_on_io};
+
 /// CDP response class for a command that could not enter the typed wire
 /// envelope.
 ///
@@ -267,6 +269,7 @@ pub struct ParsedCdpCommand {
     json: String,
     request: CdpRequest,
     renderer_policy: CdpRendererCommandPolicy,
+    scheduling_policy: CdpCommandSchedulingPolicy,
 }
 
 impl ParsedCdpCommand {
@@ -312,10 +315,12 @@ impl ParsedCdpCommand {
 
     fn from_request(json: String, request: CdpRequest) -> Self {
         let renderer_policy = CdpRendererCommandPolicy::for_method(request.method());
+        let scheduling_policy = CdpCommandSchedulingPolicy::for_method(request.method());
         Self {
             json,
             request,
             renderer_policy,
+            scheduling_policy,
         }
     }
 
@@ -385,6 +390,18 @@ impl ParsedCdpCommand {
 
     pub fn renderer_access(&self) -> CdpRendererCommandAccess {
         self.renderer_policy.access()
+    }
+
+    pub const fn scheduling_policy(&self) -> CdpCommandSchedulingPolicy {
+        self.scheduling_policy
+    }
+
+    pub const fn completion_semantics(&self) -> crate::CdpCommandCompletionSemantics {
+        self.scheduling_policy.completion_semantics()
+    }
+
+    pub const fn dispatch_lane(&self) -> crate::CdpCommandDispatchLane {
+        self.scheduling_policy.dispatch_lane()
     }
 
     pub fn inspector_task_mode(&self) -> CdpInspectorTaskMode {
@@ -502,45 +519,11 @@ enum DebuggerWireAction {
 }
 
 impl DebuggerWireAction {
-    fn is_interruptible(self) -> bool {
-        matches!(self, Self::Interruptible | Self::IoExecutionControl)
-    }
-
     fn executes_page_javascript(self) -> bool {
         matches!(
             self,
             Self::IoExecutionControl | Self::MainThreadExecutionControl
         )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PerformanceWireAction {
-    GetMetrics,
-    Other,
-}
-
-impl PerformanceWireAction {
-    fn parse(action: &str) -> Self {
-        match action {
-            "getMetrics" => Self::GetMetrics,
-            _ => Self::Other,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EmulationWireAction {
-    SetScriptExecutionDisabled,
-    Other,
-}
-
-impl EmulationWireAction {
-    fn parse(action: &str) -> Self {
-        match action {
-            "setScriptExecutionDisabled" => Self::SetScriptExecutionDisabled,
-            _ => Self::Other,
-        }
     }
 }
 
@@ -580,50 +563,29 @@ impl CdpRendererCommandPolicy {
             (domain == CdpMethodDomain::Runtime).then(|| RuntimeWireAction::parse(action));
         let debugger_action =
             (domain == CdpMethodDomain::Debugger).then(|| DebuggerWireAction::parse(action));
-        let renderer_access = match domain {
-            CdpMethodDomain::Runtime => {
-                if runtime_action == Some(RuntimeWireAction::TerminateExecution) {
-                    CdpRendererCommandAccess::Io
-                } else {
+        let renderer_access = if chromium_sends_on_io(method) {
+            CdpRendererCommandAccess::Io
+        } else {
+            match domain {
+                CdpMethodDomain::Runtime => CdpRendererCommandAccess::MainThread,
+                CdpMethodDomain::Debugger | CdpMethodDomain::Performance => {
                     CdpRendererCommandAccess::MainThread
                 }
+                CdpMethodDomain::Emulation => CdpRendererCommandAccess::OwnerIndependent,
+                CdpMethodDomain::Page => match PageWireAction::parse(action) {
+                    PageWireAction::MainThread => CdpRendererCommandAccess::MainThread,
+                    PageWireAction::Crash => unreachable!("Page.crash must use Chromium's IO lane"),
+                    PageWireAction::Other => CdpRendererCommandAccess::OwnerIndependent,
+                },
+                CdpMethodDomain::Accessibility
+                | CdpMethodDomain::Console
+                | CdpMethodDomain::Css
+                | CdpMethodDomain::Dom
+                | CdpMethodDomain::DomSnapshot
+                | CdpMethodDomain::HeapProfiler
+                | CdpMethodDomain::Profiler => CdpRendererCommandAccess::MainThread,
+                CdpMethodDomain::Other => CdpRendererCommandAccess::OwnerIndependent,
             }
-            CdpMethodDomain::Debugger => {
-                if debugger_action.is_some_and(DebuggerWireAction::is_interruptible) {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::MainThread
-                }
-            }
-            CdpMethodDomain::Performance => {
-                if PerformanceWireAction::parse(action) == PerformanceWireAction::GetMetrics {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::MainThread
-                }
-            }
-            CdpMethodDomain::Emulation => {
-                if EmulationWireAction::parse(action)
-                    == EmulationWireAction::SetScriptExecutionDisabled
-                {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::OwnerIndependent
-                }
-            }
-            CdpMethodDomain::Page => match PageWireAction::parse(action) {
-                PageWireAction::MainThread => CdpRendererCommandAccess::MainThread,
-                PageWireAction::Crash => CdpRendererCommandAccess::Io,
-                PageWireAction::Other => CdpRendererCommandAccess::OwnerIndependent,
-            },
-            CdpMethodDomain::Accessibility
-            | CdpMethodDomain::Console
-            | CdpMethodDomain::Css
-            | CdpMethodDomain::Dom
-            | CdpMethodDomain::DomSnapshot
-            | CdpMethodDomain::HeapProfiler
-            | CdpMethodDomain::Profiler => CdpRendererCommandAccess::MainThread,
-            CdpMethodDomain::Other => CdpRendererCommandAccess::OwnerIndependent,
         };
         Self {
             renderer_access,

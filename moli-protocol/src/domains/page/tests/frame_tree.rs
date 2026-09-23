@@ -461,6 +461,16 @@ async fn get_frame_tree_can_complete_through_pending_command_dispatch() {
         "sessionId": "SID-PENDING-FRAME-TREE"
     })
     .to_string();
+    let command = crate::conn::ParsedCdpCommand::parse_str(raw.clone())
+        .expect("Page.getFrameTree command must parse");
+    assert_eq!(
+        command.completion_semantics(),
+        crate::conn::CdpCommandCompletionSemantics::SynchronousResponse
+    );
+    assert_eq!(
+        command.dispatch_lane(),
+        crate::conn::CdpCommandDispatchLane::MainThread
+    );
     let pending = ctx
         .conn
         .try_start_pending_command_dispatch(&raw)
