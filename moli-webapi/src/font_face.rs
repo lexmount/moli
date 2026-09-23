@@ -1,7 +1,7 @@
 use moli_webidl as webidl;
 
 // WebIDL reads dictionary members in lexicographic order, and must finish
-// their conversion before the constructor starts parsing CSS.
+// their conversion before the constructor starts parsing CSS or copying bytes.
 #[derive(Default, webidl::WebIdlDictionary)]
 #[webidl(prefix = "FontFaceDescriptors")]
 pub struct FontFaceDescriptors {
