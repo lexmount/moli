@@ -13,6 +13,9 @@ mod document_referrer_dispatch;
 const SCRIPT: &str = "globalThis.sriExecutions = (globalThis.sriExecutions || 0) + 1;";
 const INTEGRITY: &str = "sha384-T7tuz8k7Hz0eBaWUPKiAEECRmaKHLJ1eRz7NF4VdK1fN++IaKD3hEk0SETOP+8aJ";
 
+#[path = "preload_integrity.rs"]
+mod preload;
+
 struct IntegrityServers {
     origin: String,
     cross_origin: String,
@@ -146,6 +149,11 @@ fn fixture_response(
         "/document-referrer.html" | "/meta-policy.html" | "/meta-policy-fetch" => {
             document_referrer_dispatch::fixture_response(path, query, request.referer.as_deref())
         }
+        "/preload-parser.html" => (
+            "200 OK",
+            "Content-Type: text/html\r\n".to_owned(),
+            preload::parser_markup(origin, cross),
+        ),
         "/echo-origin.js"
         | "/echo-origin-redirect.js"
         | "/echo-origin-home.js"

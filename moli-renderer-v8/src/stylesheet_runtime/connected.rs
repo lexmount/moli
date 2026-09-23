@@ -24,11 +24,23 @@ struct ConnectedLinkReadinessFetchResponse {
 }
 
 impl ConnectedLinkReadinessFetchResponse {
-    fn new(
+    fn from_response(
         response: crate::protocol_types::NavigationResponse,
         origin_clean: bool,
         load_event_successful: bool,
+        integrity: Option<&str>,
     ) -> Self {
+        // Hash the original body, including binary responses. A matching digest
+        // must not make an opaque response eligible, including SW responses to
+        // an otherwise same-origin request.
+        // Retain the network response even on integrity failure: its downloaded
+        // bytes still contribute to the preload's Resource Timing entry.
+        let load_event_successful = load_event_successful
+            && crate::subresource_integrity::response_matches_subresource_integrity_metadata(
+                response.body_bytes(),
+                integrity,
+                origin_clean,
+            );
         Self {
             response,
             origin_clean,
@@ -2255,7 +2267,7 @@ async fn fetch_connected_link_readiness(
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let request_origin = moli_url::WebOrigin::from_url(&document_url);
     let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
-    fetch_connected_link_readiness_with_request(loader, url, options, request).await
+    fetch_connected_link_readiness_with_request(loader, url, &options, request).await
 }
 
 async fn fetch_connected_link_readiness_with_service_worker(
@@ -2268,6 +2280,10 @@ async fn fetch_connected_link_readiness_with_service_worker(
     service_worker_context: Option<ServiceWorkerConnectedLinkContext>,
 ) -> Result<ConnectedLinkReadinessFetchResponse, String> {
     let request = connected_link_readiness_request(&document_url, &request_origin, &url, &options);
+    let integrity = options
+        .link_preload
+        .then(|| options.link_fetch_options.integrity())
+        .flatten();
     if let (Some(context), Some(destination)) = (
         service_worker_context,
         ServiceWorkerRequestDestination::for_subresource_resource_type(options.resource_type),
@@ -2286,16 +2302,19 @@ async fn fetch_connected_link_readiness_with_service_worker(
             .await
         {
             Ok(Some(response)) => {
-                let response_filter = response.response_filter;
-                let origin_clean =
-                    connected_link_origin_clean_from_service_worker_filter(response_filter.clone());
-                let response = *response.response;
-                let load_event_successful =
-                    connected_link_load_event_successful(&response, response_filter);
-                return Ok(ConnectedLinkReadinessFetchResponse::new(
-                    response,
+                let origin_clean = response
+                    .response_filter
+                    .as_ref()
+                    .is_none_or(|filter| filter.is_readable());
+                let load_event_successful = connected_link_load_event_successful(
+                    &response.response,
+                    response.response_filter,
+                );
+                return Ok(ConnectedLinkReadinessFetchResponse::from_response(
+                    *response.response,
                     origin_clean,
                     load_event_successful,
+                    integrity,
                 ));
             }
             Ok(None) => {}
@@ -2307,7 +2326,7 @@ async fn fetch_connected_link_readiness_with_service_worker(
         }
     }
     let request_mode = options.request_mode;
-    fetch_connected_link_readiness_with_request(loader, url, options, request)
+    fetch_connected_link_readiness_with_request(loader, url, &options, request)
         .await
         .map(|response| {
             let load_event_successful = connected_link_load_event_successful(&response, None);
@@ -2318,7 +2337,12 @@ async fn fetch_connected_link_readiness_with_service_worker(
                 moli_fetch::RequestRedirectMode::Follow,
             )
             .is_none_or(|filter| filter.is_readable());
-            ConnectedLinkReadinessFetchResponse::new(response, origin_clean, load_event_successful)
+            ConnectedLinkReadinessFetchResponse::from_response(
+                response,
+                origin_clean,
+                load_event_successful,
+                integrity,
+            )
         })
 }
 
@@ -2391,12 +2415,6 @@ fn connected_link_readiness_request(
     request
 }
 
-fn connected_link_origin_clean_from_service_worker_filter(
-    response_filter: Option<AsyncSubresourceFetchResponseFilter>,
-) -> bool {
-    response_filter.is_none_or(|filter| filter.is_readable())
-}
-
 fn link_crossorigin_credentials_mode(cross_origin: Option<&str>) -> RequestCredentialsMode {
     if cross_origin
         .map(str::trim)
@@ -2419,7 +2437,7 @@ fn connected_link_load_event_successful(
 async fn fetch_connected_link_readiness_with_request(
     loader: ResourceRequestClient,
     url: Url,
-    options: ConnectedLinkReadinessFetchOptions,
+    options: &ConnectedLinkReadinessFetchOptions,
     request: moli_fetch::Request,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
     let response = async {
