@@ -219,16 +219,23 @@ pub(crate) fn finish_without_document_commit(
         return;
     }
     let context = host.session_histories.context(owner);
-    if let Some(step) = host
+    if let Some((step, delta)) = host
         .session_histories
-        .finish_traversal_entry(popup, context, None)
+        .finish_traversal_without_document_commit(popup, context)
         && let Some(root) = session_history::owner_for_context(
             scope,
             host,
-            moli_page_types::SessionHistoryContextId::ROOT,
+            moli_session_history::SessionHistoryContextId::ROOT,
             popup,
         )
     {
+        if let Some(delta) = delta.filter(|delta| *delta != 0) {
+            session_history::publish(
+                scope,
+                root,
+                moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
+            );
+        }
         // A retiring child must never materialize its Window again.
         finish(scope, host_ptr, root, popup, step);
     }

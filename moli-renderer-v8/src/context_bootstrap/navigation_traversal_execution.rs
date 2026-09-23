@@ -150,7 +150,7 @@ fn apply_history_traversal_by_delta(
     host: &mut PageScriptHost,
     exact_target: crate::native_bridge::WindowTaskTarget,
     delta: i64,
-    from: moli_page_types::SessionHistoryStepId,
+    from: moli_session_history::SessionHistoryStepId,
 ) {
     let Some(owner) = history_traversal_target_window(scope, host, exact_target) else {
         return;
