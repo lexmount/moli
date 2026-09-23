@@ -1,6 +1,6 @@
 use std::sync::{
     Arc,
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use moli_cookie_jar::BrowserCookieFacadeContext;
@@ -51,6 +51,8 @@ struct DocumentResourceLoaderAuthority {
     id: u64,
     lifecycle: Mutex<DocumentResourceLoaderLifecycle>,
     loads: ResourceLoadRegistry,
+    preloads: crate::network::preloads::DocumentPreloads,
+    owns_preloads: AtomicBool,
 }
 
 struct DocumentResourceLoaderLifecycle {
@@ -64,6 +66,9 @@ impl Drop for DocumentResourceLoaderAuthority {
         // boundary. This final guard covers construction failures and runtime
         // teardown paths that drop the authority before publishing it.
         self.loads.begin_detach();
+        if self.owns_preloads.load(Ordering::Acquire) {
+            self.preloads.retire();
+        }
     }
 }
 
@@ -143,9 +148,12 @@ impl DocumentResourceLoader {
         let loads = ResourceLoadRegistry::new(task_runner);
         // The Fetch client origin is independent of a script's referrer/base
         // URL, including cross-origin dependencies and inherited/sandboxed Documents.
-        let request_client = request_client.with_script_request_origin(
-            moli_url::WebOrigin::from_ascii_serialization(context.origin()),
-        );
+        let preloads = crate::network::preloads::DocumentPreloads::default();
+        let request_client = request_client
+            .with_script_request_origin(moli_url::WebOrigin::from_ascii_serialization(
+                context.origin(),
+            ))
+            .with_document_preloads(preloads.clone());
         Self {
             request_client,
             csp_reports: Default::default(),
@@ -158,6 +166,8 @@ impl DocumentResourceLoader {
                     context,
                 }),
                 loads,
+                preloads,
+                owns_preloads: AtomicBool::new(true),
             }),
         }
     }
@@ -204,6 +214,18 @@ impl DocumentResourceLoader {
         // document.open() rotates Moli's load owner, but keeps the Document's
         // CSP. In-flight requests and new requests must share its report history.
         replacement.csp_reports = previous.csp_reports.clone();
+        // document.open() replaces the load owner, not the Document. Transfer
+        // retirement authority along with its one-shot preload map.
+        previous
+            .authority
+            .owns_preloads
+            .store(false, Ordering::Release);
+        Arc::get_mut(&mut replacement.authority)
+            .expect("new Document resource authority is unshared")
+            .preloads = previous.authority.preloads.clone();
+        replacement.request_client = replacement
+            .request_client
+            .with_document_preloads(previous.authority.preloads.clone());
         replacement
     }
 
@@ -238,11 +260,11 @@ impl DocumentResourceLoader {
         if let Some(browser_site_context) = self.request_client.shared_browser_site_context() {
             request_client = request_client.with_shared_browser_site_context(browser_site_context);
         }
-        request_client = request_client.with_script_request_origin(
-            moli_url::WebOrigin::from_ascii_serialization(
+        request_client = request_client
+            .with_script_request_origin(moli_url::WebOrigin::from_ascii_serialization(
                 self.authority.lifecycle.lock().context.origin(),
-            ),
-        );
+            ))
+            .with_document_preloads(self.authority.preloads.clone());
         Self {
             request_client,
             authority: Arc::clone(&self.authority),
@@ -258,6 +280,9 @@ impl DocumentResourceLoader {
         lifecycle.state = DocumentResourceLoaderState::Detaching;
         drop(lifecycle);
         self.authority.loads.begin_detach();
+        if self.authority.owns_preloads.load(Ordering::Acquire) {
+            self.authority.preloads.retire();
+        }
         true
     }
 

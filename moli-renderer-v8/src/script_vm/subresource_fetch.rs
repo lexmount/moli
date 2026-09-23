@@ -331,6 +331,7 @@ enum ImageSubresourceTerminal<'a> {
         encoded: &'a moli_parkable_image::ParkableImage,
     },
     Failure,
+    PreloadFailure,
 }
 
 impl ImageSubresourceTerminal<'_> {
@@ -348,7 +349,7 @@ impl ImageSubresourceTerminal<'_> {
                     encoded.len(),
                 )
             }
-            Self::Failure => {
+            Self::Failure | Self::PreloadFailure => {
                 crate::context_bootstrap::ResourcePerformanceEntry::from_network_failure(
                     request_url.as_str(),
                     "img",
@@ -383,7 +384,7 @@ fn apply_image_subresource_terminal(
                 );
             (completion.accepted(), completion.followup())
         }
-        ImageSubresourceTerminal::Failure => {
+        ImageSubresourceTerminal::Failure | ImageSubresourceTerminal::PreloadFailure => {
             let followup = context_host
                 .borrow_mut()
                 .complete_pending_image_load_network_request_if_matches(
@@ -395,7 +396,7 @@ fn apply_image_subresource_terminal(
             (followup.is_some(), followup)
         }
     };
-    if accepted {
+    if accepted && !matches!(terminal, ImageSubresourceTerminal::PreloadFailure) {
         crate::context_bootstrap::record_resource_performance_entry(
             scope,
             terminal.resource_performance_entry(request_url),

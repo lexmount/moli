@@ -2367,6 +2367,7 @@ impl RuntimeOwner {
                     redirect_chain: job.request.redirect_chain,
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version,
                     network_request_extra_info: request_extra_info,
                 }));
@@ -2998,6 +2999,7 @@ fn complete_streaming_html_job(job: StreamingRuntimeJob, response: Response) {
             redirect_chain: head.redirect_chain,
             from_cache: head.from_cache,
             cache_state: head.cache_state,
+            preload_state: head.preload_state.clone(),
             negotiated_http_version: head.negotiated_http_version,
             network_request_extra_info,
         }));
@@ -3064,6 +3066,7 @@ fn complete_cached_streaming_html_job(
             redirect_chain,
             from_cache: true,
             cache_state,
+            preload_state: Default::default(),
             negotiated_http_version: None,
             network_request_extra_info: None,
         }));
@@ -3191,6 +3194,7 @@ fn complete_cached_streaming_raw_job(
             redirect_chain,
             from_cache: true,
             cache_state,
+            preload_state: Default::default(),
             negotiated_http_version: None,
             network_request_extra_info: None,
         }));
@@ -3636,6 +3640,7 @@ fn proxy_connect_response_start(
         redirect_chain: redirect_chain.to_vec(),
         from_cache: false,
         cache_state: Default::default(),
+        preload_state: Default::default(),
         negotiated_http_version: None,
         network_request_extra_info: None,
     }
@@ -3740,6 +3745,7 @@ fn collect_buffered_response(
                 redirect_chain: Vec::new(),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
                 negotiated_http_version,
             },
             body,
@@ -4409,6 +4415,7 @@ mod tests {
                     redirect_chain: Vec::new(),
                     from_cache: false,
                     cache_state: Default::default(),
+                    preload_state: Default::default(),
                     negotiated_http_version: None,
                 },
                 "<!doctype html><html><body>cached</body></html>".to_owned(),
