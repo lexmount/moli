@@ -13,8 +13,8 @@ use super::navigation_activation::{
 };
 use super::navigation_entry::{
     history_entries, navigation_current_entry, navigation_entries_share_document,
-    navigation_entry_id_value, navigation_entry_key_value, navigation_entry_url_value,
-    save_current_navigation_entry_scroll_position,
+    navigation_entry_id_value, navigation_entry_index_value, navigation_entry_key_value,
+    navigation_entry_url_value, save_current_navigation_entry_scroll_position,
 };
 use super::navigation_entry_state::clone_navigation_entry_state;
 use super::navigation_handler_callbacks::{
@@ -36,12 +36,13 @@ use crate::document_runtime::EventTargetHandle;
 use crate::page_task_queue::RendererPageHashChangeData;
 use crate::util::{get_private_value, set_private_value};
 use crate::web_api_interfaces;
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const NAVIGATION_DESTINATION_STATE_SLOT: &str = "__lmNavigationDestinationState";
 const NAVIGATION_DESTINATION_ENTRY_SLOT: &str = "__lmNavigationDestinationEntry";
 const NAVIGATION_DESTINATION_BACKING_SLOT: &str = "__moliNavigationDestinationBacking";
-const NAVIGATION_TRACKED_DESTINATIONS_SLOT: &str = "__lmNavigationTrackedDestinations";
+const NAVIGATION_DESTINATION_URL_SLOT: &str = "__lmNavigationDestinationUrl";
+const NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT: &str = "__lmNavigationDestinationSameDocument";
 const NAVIGATE_EVENT_SYNTHETIC_SLOT: &str = "__lmNavigateEventSynthetic";
 const NAVIGATE_EVENT_INTERCEPTED_SLOT: &str = "__lmNavigateEventIntercepted";
 const NAVIGATION_ERROR_EVENT_ACTIVE_SLOT: &str = "__lmNavigationErrorEventActive";
@@ -153,43 +154,41 @@ struct ActiveNavigateEventDataDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationDestination, prototype = "Object", enumerable)]
+#[webapi(interface = web_api_interfaces::NavigationDestination)]
 struct NavigationDestinationDeclaration<'scope> {
-    #[webapi(data_property)]
+    #[webapi(slot = NAVIGATION_DESTINATION_URL_SLOT)]
     url: v8::Local<'scope, v8::String>,
-    #[webapi(data_property)]
-    key: v8::Local<'scope, v8::String>,
-    #[webapi(data_property)]
-    id: v8::Local<'scope, v8::String>,
-    #[webapi(data_property)]
-    index: f64,
-    #[webapi(data_property)]
-    same_document: bool,
-    #[webapi(slot = NAVIGATION_DESTINATION_STATE_SLOT)]
-    state: v8::Local<'scope, v8::Value>,
-    #[webapi(method, callback = navigation_destination_get_state_callback, data = object)]
-    get_state: (),
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = web_api_interfaces::NavigationDestination, prototype = "Object", enumerable)]
-struct NavigationEntryBackedDestinationDeclaration<'scope> {
-    #[webapi(data_property)]
-    url: v8::Local<'scope, v8::String>,
-    #[webapi(data_property)]
+    #[webapi(slot = NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT)]
     same_document: bool,
     #[webapi(slot = NAVIGATION_DESTINATION_ENTRY_SLOT)]
-    entry: v8::Local<'scope, v8::Object>,
+    entry: Option<v8::Local<'scope, v8::Object>>,
     #[webapi(slot = NAVIGATION_DESTINATION_STATE_SLOT)]
     state: v8::Local<'scope, v8::Value>,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::NavigationDestination, enumerable, receiver)]
+struct NavigationDestinationPrototypeDeclaration {
+    #[webapi(accessor_property, getter = navigation_destination_url_getter)]
+    url: (),
     #[webapi(accessor_property, getter = navigation_destination_key_getter)]
     key: (),
     #[webapi(accessor_property, getter = navigation_destination_id_getter)]
     id: (),
     #[webapi(accessor_property, getter = navigation_destination_index_getter)]
     index: (),
-    #[webapi(method, callback = navigation_destination_get_state_callback, data = object)]
+    #[webapi(accessor_property, getter = navigation_destination_same_document_getter)]
+    same_document: (),
+    #[webapi(method, length = 0, callback = navigation_destination_get_state_callback)]
     get_state: (),
+}
+
+pub(super) fn install_navigation_destination_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let prototype = template.prototype_template(scope);
+    NavigationDestinationPrototypeDeclaration::initialize_prototype_template(scope, prototype);
 }
 
 pub(super) struct NavigationDispatchOutcome<'s> {
@@ -964,7 +963,7 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
     else {
         return NavigationDispatchOutcome::proceed();
     };
-    let destination = create_navigation_destination(scope, href, same_document, -1, state);
+    let destination = create_navigation_destination(scope, href, same_document, state);
     let signal = create_navigation_abort_signal(scope);
     let signal_object = v8::Local::<v8::Object>::try_from(signal).ok();
     let init = NavigateEventInitDeclaration {
@@ -1096,10 +1095,8 @@ pub(super) fn navigation_precommit_redirect<'s>(
     let destination = event
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok());
-    let url = destination
-        .and_then(|destination| destination.get(scope, v8str(scope, "url").into()))
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope));
+    let url =
+        destination.and_then(|destination| navigation_destination_url_value(scope, destination));
     let history = navigate_event_private_value(scope, event, NAVIGATE_EVENT_REDIRECT_HISTORY_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
@@ -1265,17 +1262,12 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     let owner = runtime_window_owner(scope, navigation);
     let entry = super::history_runtime::native::entry_wrapper(scope, owner, entry.clone());
     let destination = create_navigation_destination_for_entry(scope, navigation, entry);
-    let target_href = destination
-        .get(scope, v8str(scope, "url").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+    let target_href = navigation_destination_url_value(scope, destination).unwrap_or_default();
     let owner = runtime_window_owner(scope, navigation);
     let current_href = window_location_for_holder(scope, owner)
         .and_then(|location| location_href_slot(scope, location))
         .unwrap_or_default();
-    let destination_same_document =
-        object_bool_property(scope, destination, "sameDocument").unwrap_or(true);
+    let destination_same_document = navigation_destination_same_document_value(scope, destination);
     let hash_change =
         destination_same_document && should_dispatch_hash_change(&current_href, &target_href);
     let signal = create_navigation_abort_signal(scope);
@@ -1312,11 +1304,7 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
         true,
     );
     install_precommit_transition_seed(scope, navigation, event, destination, "traverse");
-    let href = destination
-        .get(scope, v8str(scope, "url").into())
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
-        .unwrap_or_default();
+    let href = target_href;
     let active_data = create_active_navigate_event_data(scope, event, signal_object, &href);
     set_navigation_active_navigate_event(scope, navigation, active_data);
     let owner = runtime_window_owner(scope, navigation);
@@ -1374,73 +1362,42 @@ fn create_navigation_destination<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     href: &str,
     same_document: bool,
-    index: i32,
     state: Option<v8::Local<'s, v8::Value>>,
 ) -> v8::Local<'s, v8::Object> {
     NavigationDestinationDeclaration::new(
         v8_string(scope, href).unwrap_or_else(|| v8::String::empty(scope)),
-        v8::String::empty(scope),
-        v8::String::empty(scope),
-        index as f64,
         same_document,
+        None,
         state.unwrap_or_else(|| v8::null(scope).into()),
     )
     .bind(scope)
     .expect("NavigationDestination declaration should bind")
 }
 
+fn navigation_destination_backing<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    destination: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    crate::util::get_private_object(scope, destination, NAVIGATION_DESTINATION_BACKING_SLOT)
+        .unwrap_or(destination)
+}
+
 pub(super) fn navigation_destination_for_realm<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     destination: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let destination =
-        crate::util::get_private_object(scope, destination, NAVIGATION_DESTINATION_BACKING_SLOT)
-            .unwrap_or(destination);
+    let destination = navigation_destination_backing(scope, destination);
     let context = scope.get_current_context();
+    if super::world_wrappers::belongs_to_world(scope, destination, context) {
+        return Some(destination);
+    }
     if let Some(wrapper) = super::world_wrappers::get(scope, destination, context) {
         return Some(wrapper);
     }
-    let wrapper = create_navigation_destination(scope, "", false, -1, None);
-    set_private_value(
-        scope,
-        wrapper,
-        NAVIGATION_DESTINATION_BACKING_SLOT,
-        destination.into(),
-    );
-    for property in ["url", "key", "id", "index", "sameDocument"] {
-        let getter = v8::Function::builder(navigation_destination_view_getter)
-            .data(v8str(scope, property).into())
-            .build(scope)?;
-        crate::definitions::define_get_set_property(
-            scope,
-            wrapper,
-            v8str(scope, property).into(),
-            getter.into(),
-            v8::undefined(scope).into(),
-            v8::PropertyAttribute::NONE,
-            "NavigationDestination view",
-        )
-        .ok()?;
-    }
+    let wrapper = create_navigation_destination(scope, "", false, None);
+    set_private_value(scope, wrapper, NAVIGATION_DESTINATION_BACKING_SLOT, destination.into());
     super::world_wrappers::insert(scope, destination, wrapper);
     Some(wrapper)
-}
-
-fn navigation_destination_view_getter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(backing) =
-        crate::util::get_private_object(scope, args.this(), NAVIGATION_DESTINATION_BACKING_SLOT)
-    else {
-        return;
-    };
-    if let Some(key) = args.data().to_string(scope)
-        && let Some(value) = backing.get(scope, key.into())
-    {
-        rv.set(value);
-    }
 }
 
 fn create_navigation_destination_for_entry<'s>(
@@ -1454,97 +1411,21 @@ fn create_navigation_destination_for_entry<'s>(
         .is_some_and(|current| navigation_entries_share_document(scope, current, entry));
     let state =
         clone_navigation_entry_state(scope, entry).unwrap_or_else(|| v8::undefined(scope).into());
-    let destination = NavigationEntryBackedDestinationDeclaration::new(
+    NavigationDestinationDeclaration::new(
         v8_string(scope, &url).unwrap_or_else(|| v8::String::empty(scope)),
         same_document,
-        entry,
+        Some(entry),
         state,
     )
     .bind(scope)
-    .expect("entry-backed NavigationDestination declaration should bind");
-    track_navigation_destination(scope, navigation, destination);
-    destination
-}
-
-pub(super) fn refresh_navigation_destination_indexes<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    history: v8::Local<'s, v8::Object>,
-) {
-    let Some(destinations) =
-        object_hidden_array(scope, navigation, NAVIGATION_TRACKED_DESTINATIONS_SLOT)
-    else {
-        return;
-    };
-    for index in 0..destinations.length() {
-        let Some(destination) = destinations
-            .get_index(scope, index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        else {
-            continue;
-        };
-        let next_index = navigation_destination_live_index(scope, history, destination);
-        define_non_enumerable_number_property(scope, destination, "index", next_index as f64);
-    }
-}
-
-fn track_navigation_destination<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    navigation: v8::Local<'s, v8::Object>,
-    destination: v8::Local<'s, v8::Object>,
-) {
-    let destinations = object_hidden_array(scope, navigation, NAVIGATION_TRACKED_DESTINATIONS_SLOT)
-        .unwrap_or_else(|| {
-            let destinations = v8::Array::new(scope, 0);
-            define_non_enumerable_value_property(
-                scope,
-                navigation,
-                NAVIGATION_TRACKED_DESTINATIONS_SLOT,
-                destinations.into(),
-            );
-            destinations
-        });
-    let _ = destinations.set_index(scope, destinations.length(), destination.into());
-}
-
-fn navigation_destination_live_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    destination: v8::Local<'s, v8::Object>,
-) -> i32 {
-    let Some(destination_entry) = navigation_destination_entry(scope, destination) else {
-        return -1;
-    };
-    let Some(entries) = history_entries(scope, history) else {
-        return -1;
-    };
-    let Some(entry) = super::history_runtime::native::entry(scope, destination_entry) else {
-        return -1;
-    };
-    let owner = runtime_window_owner(scope, history);
-    let current_entry = super::navigation_entry::navigation_current_entry(scope, owner);
-    super::navigation_projection::visible_navigation_index_for_entry(
-        scope,
-        &entries,
-        current_entry,
-        &entry,
-    )
-    .map_or(-1, |index| index as i32)
-}
-
-fn navigation_entry_visible_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-) -> Option<i32> {
-    get_own_static_property(scope, entry, "index")
-        .and_then(|value| value.integer_value(scope))
-        .and_then(|value| i32::try_from(value).ok())
+    .expect("entry-backed NavigationDestination declaration should bind")
 }
 
 fn navigation_destination_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     destination: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let destination = navigation_destination_backing(scope, destination);
     get_private_value(scope, destination, NAVIGATION_DESTINATION_ENTRY_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
@@ -1566,6 +1447,66 @@ fn navigation_destination_entry_is_active<'s>(
 ) -> bool {
     let owner = runtime_window_owner(scope, entry);
     navigation_document_is_active(scope, owner)
+}
+
+pub(super) fn set_navigation_destination_url<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    destination: v8::Local<'s, v8::Object>,
+    url: &str,
+) {
+    let destination = navigation_destination_backing(scope, destination);
+    let value = v8_string(scope, url).unwrap_or_else(|| v8::String::empty(scope));
+    set_private_value(
+        scope,
+        destination,
+        NAVIGATION_DESTINATION_URL_SLOT,
+        value.into(),
+    );
+}
+
+pub(super) fn navigation_destination_url_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    destination: v8::Local<'s, v8::Object>,
+) -> Option<String> {
+    let destination = navigation_destination_backing(scope, destination);
+    get_private_value(scope, destination, NAVIGATION_DESTINATION_URL_SLOT)
+        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
+        .map(|value| value.to_rust_string_lossy(scope))
+}
+
+fn navigation_destination_url_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let destination = navigation_destination_backing(scope, args.this());
+    if let Some(value) = get_private_value(scope, destination, NAVIGATION_DESTINATION_URL_SLOT) {
+        rv.set(value);
+    }
+}
+
+fn navigation_destination_same_document_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    rv.set_bool(navigation_destination_same_document_value(
+        scope,
+        args.this(),
+    ));
+}
+
+fn navigation_destination_same_document_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    destination: v8::Local<'s, v8::Object>,
+) -> bool {
+    let destination = navigation_destination_backing(scope, destination);
+    get_private_value(
+        scope,
+        destination,
+        NAVIGATION_DESTINATION_SAME_DOCUMENT_SLOT,
+    )
+    .is_some_and(|value| value.is_true())
 }
 
 fn navigation_destination_key_getter<'s>(
@@ -1609,8 +1550,7 @@ fn navigation_destination_index_getter<'s>(
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let index = navigation_destination_entry(scope, args.this())
-        .filter(|entry| navigation_destination_entry_is_active(scope, *entry))
-        .and_then(|entry| navigation_entry_visible_index(scope, entry))
+        .map(|entry| navigation_entry_index_value(scope, entry))
         .unwrap_or(-1);
     rv.set(v8::Number::new(scope, index as f64).into());
 }
@@ -1649,11 +1589,10 @@ fn navigation_destination_get_state_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Ok(destination) = v8::Local::<v8::Object>::try_from(args.data()) else {
-        rv.set_null();
-        return;
-    };
-    let state =
-        navigation_destination_state(scope, destination).unwrap_or_else(|| v8::null(scope).into());
-    rv.set(structured_clone_value(scope, state).unwrap_or(state));
+    let destination = navigation_destination_backing(scope, args.this());
+    let state = get_private_value(scope, destination, NAVIGATION_DESTINATION_STATE_SLOT)
+        .unwrap_or_else(|| v8::undefined(scope).into());
+    if let Some(value) = structured_clone_value(scope, state) {
+        rv.set(value);
+    }
 }

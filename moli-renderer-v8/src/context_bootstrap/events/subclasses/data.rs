@@ -6,7 +6,8 @@ use crate::context_bootstrap::navigation_activation::{
     NAVIGATE_EVENT_PRECOMMIT_TRANSITION_RESOLVER_SLOT, install_navigation_transition,
 };
 use crate::context_bootstrap::navigation_events::{
-    NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT, navigation_scroll_event_is_active,
+    NAVIGATE_EVENT_PRECOMMIT_CONTROLLER_SLOT, navigation_destination_url_value,
+    navigation_scroll_event_is_active, set_navigation_destination_url,
 };
 use crate::context_bootstrap::navigation_handler_callbacks::{
     NAVIGATE_EVENT_ADDED_HANDLERS_SLOT, NAVIGATE_EVENT_DEFERRED_HANDLERS_SLOT,
@@ -1532,7 +1533,7 @@ fn precommit_controller_redirect_callback<'s>(
     {
         return;
     }
-    define_non_enumerable_string_property(scope, destination, "url", redirected.as_str());
+    set_navigation_destination_url(scope, destination, redirected.as_str());
     set_navigate_event_private_bool(scope, event, NAVIGATE_EVENT_REDIRECTED_SLOT, true);
 }
 
@@ -1633,9 +1634,7 @@ fn navigate_event_scroll_callback<'s>(
     let Some(target_url) = crate::context_bootstrap::event_backing(scope, event)
         .get(scope, v8str(scope, "destination").into())
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|destination| destination.get(scope, v8str(scope, "url").into()))
-        .and_then(|value| value.to_string(scope))
-        .map(|value| value.to_rust_string_lossy(scope))
+        .and_then(|destination| navigation_destination_url_value(scope, destination))
     else {
         return;
     };

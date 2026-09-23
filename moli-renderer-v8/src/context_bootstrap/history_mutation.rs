@@ -13,8 +13,7 @@ use super::navigation_entry_state::clone_history_entry_state;
 use super::navigation_events::{
     cancel_active_navigation_event, dispatch_navigation_currententrychange,
     dispatch_navigation_entry_dispose, dispatch_navigation_navigate_event_with_outcome,
-    dispatch_navigation_success, refresh_navigation_destination_indexes,
-    run_navigation_precommit_deferred_handlers,
+    dispatch_navigation_success, run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_mutation::sync_same_document_navigation_commit;
@@ -317,7 +316,6 @@ fn mutate_history_object<'s>(
     // Its source Document and frame owner must already reflect this commit.
     sync_navigation_entry_seed_from_owner(scope, owner);
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
-        refresh_navigation_destination_indexes(scope, navigation, history);
         dispatch_navigation_currententrychange(
             scope,
             navigation,

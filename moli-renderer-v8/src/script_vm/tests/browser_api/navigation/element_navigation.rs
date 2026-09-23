@@ -1,6 +1,41 @@
 use super::*;
 
 #[tokio::test]
+async fn navigation_destination_uses_native_webidl_receivers_and_live_entry_state() {
+    let script = include_str!("../../../../tests/fixtures/navigation-destination-webidl.js");
+    for target in ["top", "child"] {
+        let server = StaticHttpServer::spawn(1).await;
+        let base = server.base_url().origin().ascii_serialization();
+        let loader = static_http_loader([]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(&format!("{base}/parent"), &loader);
+        vm.eval(&format!(
+            "{script}\nglobalThis.destinationResult = 'pending';\n\
+             navigationDestinationWebIdl({base:?}, {target:?}).then(\n\
+               value => destinationResult = value, error => destinationResult = String(error));"
+        ))
+        .unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(destinationResult !== 'pending')",
+            "true",
+            target,
+        )
+        .await;
+        let result: serde_json::Value =
+            serde_json::from_str(&vm.eval("JSON.stringify(destinationResult)").unwrap()).unwrap();
+        assert_eq!(
+            result["failures"],
+            serde_json::json!([]),
+            "{target}: {result}"
+        );
+        assert!(result["checks"].as_u64().is_some_and(|count| count >= 99));
+        assert_eq!(server.finish_targets().await.len(), 1);
+    }
+}
+
+#[tokio::test]
 async fn named_element_navigation_prefers_its_source_frame_over_duplicate_names() {
     for action in ["anchor", "submit", "requestSubmit"] {
         for name in ["initial", "renamed", "shadowed"] {
