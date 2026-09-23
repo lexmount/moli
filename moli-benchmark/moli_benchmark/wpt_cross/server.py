@@ -81,8 +81,8 @@ http.client._MAXHEADERS = 512
 DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
-COMMON_ECHO_PATH = "/common/echo.py"
 FETCH_EMPTY_LOCATION_PATH = "/fetch/api/resources/redirect-empty-location.py"
+COMMON_ECHO_PATH = "/common/echo.py"
 XHR_DOCUMENT_FIXTURES = {
     "/xhr/resources/win-1252-xml.py": ("application/xml;charset=windows-1252", b"<\xff/>"),
     # The upstream handler returns a Unicode string, encoded by wptserve as UTF-8.
