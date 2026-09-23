@@ -1,7 +1,7 @@
 use super::*;
 use crate::context_bootstrap::navigation_entry_public_token;
 use crate::native_bridge::OwnerDispatchScope;
-use moli_page_types::{
+use moli_session_history::{
     JointSessionHistory, SessionHistoryContextId, SessionHistoryEntry, SessionHistoryStepId,
 };
 
@@ -212,6 +212,9 @@ impl JsContextHost {
             .find(|entry| navigation_entry_public_token(entry.key.as_str()) == key.as_str())?
             .clone();
         record.seed.current_index = target.history_index;
+        // The parent already selected the joint position. Reattach the child's
+        // historical view without replaying an older load's traversal admission.
+        record.seed.session_history = Default::default();
         record.seed.activation = Some(NavigationActivationSeed {
             entry: target,
             from: None,
