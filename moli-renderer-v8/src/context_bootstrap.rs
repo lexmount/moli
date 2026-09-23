@@ -70,10 +70,12 @@ mod navigation_traversal_execution;
 mod navigation_traversal_plan;
 mod navigation_window;
 mod navigator_runtime;
+mod session_history;
 #[cfg(test)]
 pub(crate) use navigator_runtime::{
     materialized_navigator_subobject_keys, navigator_storage_wrapper_diagnostics,
 };
+pub(crate) use session_history::prune_joint_session_history;
 mod notification_runtime;
 mod observer_template;
 mod opfs;
@@ -251,7 +253,6 @@ pub(crate) use self::file_api::{
 };
 pub(crate) use self::form_data_runtime::form_data_request_body;
 use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
-pub(crate) use self::history_runtime::increment_top_level_history_length_for_runtime_owner;
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object,
@@ -324,7 +325,7 @@ pub(crate) use self::navigation_events::dispatch_srcdoc_navigation_navigate_even
 pub(crate) use self::navigation_mutation::apply_local_window_location_navigation;
 pub(crate) use self::navigation_restore::{
     install_navigation_bootstrap_entry, install_navigation_bootstrap_entry_for_holder,
-    install_session_history_length,
+    install_navigation_entry_view_for_holder,
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
@@ -992,3 +993,7 @@ pub(crate) fn live_ranges_detached_text_split<'s>(
 }
 
 pub(crate) use self::window_accessors::current_window_style_viewport;
+
+pub(crate) use session_history::{
+    initialize_main_session_history, install_session_history_position,
+};

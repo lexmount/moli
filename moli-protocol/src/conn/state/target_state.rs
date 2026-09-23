@@ -749,14 +749,6 @@ impl TargetOwnerState {
         self.navigation_history_state.snapshot()
     }
 
-    pub(crate) fn reset_navigation_history(
-        &mut self,
-        page_snapshot: Option<(String, String)>,
-    ) -> bool {
-        self.reconcile_navigation_history_page_snapshot(page_snapshot);
-        self.navigation_history_state.prune_all_but_current()
-    }
-
     pub(crate) fn can_reset_navigation_history(
         &mut self,
         page_snapshot: Option<(String, String)>,
@@ -783,12 +775,12 @@ impl TargetOwnerState {
         self.clear_loaded_document_context_state();
     }
 
-    pub(crate) fn record_same_document_navigation_history(
+    pub(crate) fn record_session_history_update(
         &mut self,
         page_snapshot: Option<(String, String)>,
         url: String,
         mut title: String,
-        history_update: moli_core::page::SameDocumentHistoryUpdate,
+        history_update: moli_core::page::SessionHistoryUpdateKind,
     ) {
         self.reconcile_navigation_history_page_snapshot(page_snapshot);
         if let Some(committed_title) = self.committed_document_title() {
@@ -796,7 +788,7 @@ impl TargetOwnerState {
         }
         let _ =
             self.navigation_history_state
-                .record_same_document_update(url, title, history_update);
+                .record_session_history_update(url, title, history_update);
     }
 
     pub(crate) fn clear_observable_output_state(&mut self) {

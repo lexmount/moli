@@ -30,6 +30,7 @@ const TRAVERSAL_PRECOMMIT_NAVIGATION_SLOT: &str = "__lmTraversalPrecommitNavigat
 const TRAVERSAL_PRECOMMIT_HISTORY_SLOT: &str = "__lmTraversalPrecommitHistory";
 const TRAVERSAL_PRECOMMIT_EVENT_SLOT: &str = "__lmTraversalPrecommitEvent";
 const TRAVERSAL_PRECOMMIT_SIGNAL_SLOT: &str = "__lmTraversalPrecommitSignal";
+const TRAVERSAL_PRECOMMIT_JOINT_STEP_SLOT: &str = "__lmTraversalPrecommitJointStep";
 const TRAVERSAL_PRECOMMIT_TARGET_INDEX_SLOT: &str = "__lmTraversalPrecommitTargetIndex";
 const TRAVERSAL_PRECOMMIT_PROMISE_SLOT: &str = "__lmTraversalPrecommitPromise";
 const TRAVERSAL_PRECOMMIT_COMMITTED_RESOLVERS_SLOT: &str =
@@ -62,6 +63,9 @@ struct TraversalPrecommitDataDeclaration<'scope> {
 
     #[webapi(slot = TRAVERSAL_PRECOMMIT_SIGNAL_SLOT)]
     signal: Option<v8::Local<'scope, v8::Object>>,
+
+    #[webapi(slot = TRAVERSAL_PRECOMMIT_JOINT_STEP_SLOT)]
+    joint_step: Option<v8::Local<'scope, v8::Value>>,
 
     #[webapi(slot = TRAVERSAL_PRECOMMIT_TARGET_INDEX_SLOT)]
     target_index: u32,
@@ -230,8 +234,24 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
 pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     scope: &mut v8::PinScope<'_, '_>,
     host: &mut JsContextHost,
-    traversal: PendingHistoryTraversal,
+    mut traversal: PendingHistoryTraversal,
 ) {
+    // Earlier queued work can already have installed this frame's entry while
+    // other participants still need to move to the requested joint step.
+    if traversal.results.is_empty()
+        && let Some(step) = traversal.joint_step
+        && let Some(owner) = history_traversal_target_window(scope, host, traversal.target)
+        && let Some(target) = super::super::session_history::targets_at(scope, owner, step)
+            .and_then(|targets| targets.into_iter().next())
+        && let Some(exact) = window_task_target_for_runtime_owner(scope, host, target.owner)
+    {
+        traversal.target = exact;
+        traversal.target_index = target.target_index;
+        traversal.target_key = history_entries(scope, target.history)
+            .and_then(|entries| entries.get_index(scope, target.target_index))
+            .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
+            .and_then(|entry| navigation_entry_key_value(scope, entry));
+    }
     let results = traversal.results;
     let history = history_traversal_target_window(scope, host, traversal.target)
         .and_then(|window| window_history_for_holder(scope, window));
@@ -317,6 +337,7 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
                     navigation,
                     history,
                     traversal.target_index,
+                    traversal.joint_step,
                     outcome,
                     &results,
                 );
@@ -328,8 +349,12 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
                 }
                 return;
             }
-            let Some(applied) = apply_history_entry_commit(scope, history, traversal.target_index)
-            else {
+            let Some(applied) = apply_history_entry_commit(
+                scope,
+                history,
+                traversal.target_index,
+                traversal.joint_step,
+            ) else {
                 let error =
                     navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
                 finish_navigation_error_events(scope, navigation, error, "");
@@ -400,6 +425,7 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
             scope,
             history,
             traversal.target_index,
+            traversal.joint_step,
             true,
             pending_results,
         );
@@ -419,6 +445,21 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
         return;
     }
     let owner = runtime_window_owner(scope, history);
+    if let Some(step) = traversal.joint_step {
+        let Some(delta) = super::super::session_history::commit_traversal(scope, owner, step)
+        else {
+            let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
+            reject_pending_navigation_results(scope, &results, error);
+            return;
+        };
+        if delta != 0 {
+            super::super::session_history::publish(
+                scope,
+                owner,
+                moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
+            );
+        }
+    }
     let resolved_entry = navigation_current_entry(scope, owner)
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::undefined(scope).into());
@@ -468,6 +509,7 @@ fn queue_pending_precommit_history_traversal<'s>(
     navigation: v8::Local<'s, v8::Object>,
     history: v8::Local<'s, v8::Object>,
     target_index: u32,
+    joint_step: Option<moli_page_types::SessionHistoryStepId>,
     outcome: NavigationDispatchOutcome<'s>,
     results: &[crate::native_bridge::PendingNavigationResult],
 ) -> bool {
@@ -496,6 +538,7 @@ fn queue_pending_precommit_history_traversal<'s>(
         history,
         event,
         signal: outcome.signal,
+        joint_step: joint_step.map(|step| v8::BigInt::new_from_u64(scope, step.raw()).into()),
         target_index,
         promise,
         committed_resolvers,
@@ -671,7 +714,12 @@ fn traversal_precommit_fulfilled_callback<'s>(
     if let Ok(data) = v8::Local::<v8::Object>::try_from(args.data()) {
         set_traversal_precommit_inactive(scope, data);
     }
-    let Some(applied) = apply_history_entry_commit(scope, history, target_index) else {
+    let joint_step = v8::Local::<v8::Object>::try_from(args.data())
+        .ok()
+        .and_then(|data| get_private_value(scope, data, TRAVERSAL_PRECOMMIT_JOINT_STEP_SLOT))
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+        .map(|value| moli_page_types::SessionHistoryStepId::from_raw(value.u64_value().0));
+    let Some(applied) = apply_history_entry_commit(scope, history, target_index, joint_step) else {
         let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
         finish_navigation_error_events(scope, navigation, error, "");
         reject_resolver_array(scope, committed_resolvers, error, false);

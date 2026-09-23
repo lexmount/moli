@@ -4406,12 +4406,12 @@ impl PageVm {
             .vm_mut()
             .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
         if env.navigation_bootstrap_entry.is_none()
-            && let Some(length) = env
+            && let Some(position) = env
                 .main_document_commit
                 .as_ref()
-                .and_then(|commit| commit.session_history_length)
+                .and_then(|commit| commit.session_history_position)
         {
-            page_vm.vm_mut().install_session_history_length(length);
+            page_vm.vm_mut().install_session_history_position(position);
         }
         Ok(page_vm)
     }

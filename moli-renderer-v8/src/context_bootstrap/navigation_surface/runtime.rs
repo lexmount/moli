@@ -19,9 +19,6 @@ struct HistoryRuntimeObjectDeclaration<'scope> {
     #[webapi(slot = HISTORY_SCROLL_RESTORATION_SLOT)]
     scroll_restoration: &'static str,
 
-    #[webapi(slot = HISTORY_LENGTH_SLOT)]
-    length: f64,
-
     #[webapi(slot = HISTORY_ENTRIES_SLOT)]
     entries: v8::Local<'scope, v8::Array>,
 
@@ -60,13 +57,11 @@ pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
     let history = HistoryRuntimeObjectDeclaration::new(
         v8::null(scope).into(),
         "auto",
-        0.0,
         entries,
         initial_seed.current_index as f64,
     )
     .bind(scope)
     .map_err(anyhow::Error::from)?;
-    set_history_length_from_visible_entries(scope, history, entries);
     Ok(history)
 }
 

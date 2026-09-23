@@ -140,6 +140,7 @@ pub struct NavigationHistoryEntrySeed {
     pub entries: Vec<NavigationHistorySerializedEntry>,
     pub current_index: u32,
     pub activation: Option<NavigationActivationSeed>,
+    pub session_history: crate::SessionHistorySeed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,17 +163,18 @@ pub enum NavigationHistoryMutation {
     Replace,
 }
 
-/// The browser-side session-history effect of a renderer-completed
-/// same-document navigation.
+/// The browser-side effect of a committed traversable mutation, including
+/// navigations in child Documents.
 ///
 /// Traversal is deliberately represented as a delta rather than another URL
 /// insertion: URLs are not stable entry identities and may repeat in a
 /// session-history list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SameDocumentHistoryUpdate {
+pub enum SessionHistoryUpdateKind {
     Push,
     Replace,
     Traverse { delta: i64 },
+    PruneAllButCurrent,
 }
 
 impl NavigationHistoryMutation {
@@ -214,6 +216,7 @@ pub fn initial_navigation_history_seed(
             ),
         ];
         return NavigationHistoryEntrySeed {
+            session_history: Default::default(),
             current_index: 1,
             activation: Some(NavigationActivationSeed {
                 entry: entries[1].clone(),
@@ -234,6 +237,7 @@ pub fn initial_navigation_history_seed(
         None,
     )];
     NavigationHistoryEntrySeed {
+        session_history: Default::default(),
         current_index: 0,
         activation: (href != "about:blank").then(|| NavigationActivationSeed {
             entry: entries[0].clone(),
@@ -272,6 +276,7 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
             ),
         ];
         return NavigationHistoryEntrySeed {
+            session_history: Default::default(),
             activation: Some(NavigationActivationSeed {
                 entry: entries[1].clone(),
                 from: None,
@@ -292,6 +297,7 @@ pub fn child_browsing_context_single_entry_seed(url: Option<&Url>) -> Navigation
         None,
     )];
     NavigationHistoryEntrySeed {
+        session_history: Default::default(),
         activation: None,
         entries,
         current_index: 0,
@@ -304,6 +310,7 @@ pub fn apply_child_browsing_context_navigation_to_entry_seed(
     history_state_json: Option<String>,
     navigation_state_json: Option<String>,
 ) {
+    seed.session_history.commit = crate::SessionHistoryCommit::Push;
     let next_index = seed.current_index + 1;
     let current_navigation_index = seed
         .entries
@@ -361,6 +368,7 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
     history_state_json: Option<String>,
     navigation_state_json: Option<String>,
 ) {
+    seed.session_history.commit = crate::SessionHistoryCommit::Replace;
     let current_index = seed.current_index;
     let current_navigation_index = seed
         .entries
@@ -404,6 +412,7 @@ pub fn replace_child_browsing_context_navigation_in_entry_seed(
 pub fn apply_child_browsing_context_javascript_url_navigation_to_entry_seed(
     seed: &mut NavigationHistoryEntrySeed,
 ) {
+    seed.session_history.commit = crate::SessionHistoryCommit::Replace;
     let current_index = seed.current_index;
     let Some(previous_entry) = seed
         .entries
@@ -486,6 +495,13 @@ pub fn cross_document_navigation_seed(
     };
 
     NavigationHistoryEntrySeed {
+        session_history: crate::SessionHistorySeed {
+            commit: match mutation {
+                NavigationHistoryMutation::Push => crate::SessionHistoryCommit::Push,
+                NavigationHistoryMutation::Replace => crate::SessionHistoryCommit::Replace,
+            },
+            ..Default::default()
+        },
         entries,
         current_index: destination_index,
         activation: Some(NavigationActivationSeed {
@@ -505,6 +521,10 @@ pub fn reload_navigation_seed(
         .find(|entry| entry.history_index == current_index)
         .cloned()?;
     Some(NavigationHistoryEntrySeed {
+        session_history: crate::SessionHistorySeed {
+            commit: crate::SessionHistoryCommit::Replace,
+            ..Default::default()
+        },
         entries,
         current_index,
         activation: Some(NavigationActivationSeed {
@@ -538,6 +558,10 @@ pub fn traversal_navigation_seed_candidate(
         current_url,
         target_url: target_url.clone(),
         seed: NavigationHistoryEntrySeed {
+            session_history: crate::SessionHistorySeed {
+                commit: crate::SessionHistoryCommit::Traverse,
+                ..Default::default()
+            },
             entries,
             current_index: target_index,
             activation: Some(NavigationActivationSeed {

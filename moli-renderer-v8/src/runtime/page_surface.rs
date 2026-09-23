@@ -14,7 +14,7 @@ pub use moli_page_types::{
     RendererAgentAttachmentId, RendererDevToolsAgentToken,
     RendererDomDebuggerEventListenerBreakpoint, RendererDomDebuggerXhrBreakpoint,
     RendererInspectorProtocolConfiguration, RendererInspectorProtocolConfigurationCommand,
-    RendererInspectorSessionRestoreSnapshot, SameDocumentHistoryUpdate, V8InspectorSessionState,
+    RendererInspectorSessionRestoreSnapshot, V8InspectorSessionState,
 };
 use moli_shared_worker::SharedWorkerInstanceId;
 use parking_lot::Mutex;
@@ -244,7 +244,6 @@ impl RendererPendingFileChooserActivation {
 pub struct RendererPendingSameDocumentNavigation {
     pub url: String,
     pub navigation_type: String,
-    pub history_update: SameDocumentHistoryUpdate,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -813,8 +812,8 @@ pub struct RendererMainDocumentCommit {
     pub security_origin: String,
     pub secure_context_type: String,
     pub timestamp: f64,
-    /// Browser-owned session-history length at this document's commit.
-    pub session_history_length: Option<usize>,
+    /// Browser-owned session-history cursor and length at this document's commit.
+    pub session_history_position: Option<moli_page_types::SessionHistoryPosition>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]

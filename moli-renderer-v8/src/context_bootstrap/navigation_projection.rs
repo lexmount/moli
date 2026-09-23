@@ -1,11 +1,9 @@
 use super::navigation_entry::{
-    history_length_number, navigation_entry_initial_index, navigation_entry_key_value,
-    navigation_entry_url_value, set_history_length,
+    navigation_entry_initial_index, navigation_entry_key_value, navigation_entry_url_value,
 };
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, runtime_top_window_owner,
-    runtime_window_is_global, runtime_window_owner, runtime_window_uses_top_level_history_model,
-    window_history_for_holder,
+    child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
+    runtime_window_owner, runtime_window_uses_top_level_history_model,
 };
 use crate::util::{context_host_ptr_from_global_bridge, serialize_v8_iter_array};
 
@@ -218,81 +216,4 @@ fn entry_origin_url<'s>(
 
 fn child_navigation_entry_url_inherits_origin(url: &url::Url) -> bool {
     url.scheme() == "about" && matches!(url.as_str(), "about:blank" | "about:srcdoc")
-}
-
-pub(super) fn set_history_length_from_visible_entries<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    entries: v8::Local<'s, v8::Array>,
-) {
-    let length = history_length_floor_from_visible_entries(scope, history, entries);
-    set_history_length(scope, history, length);
-    set_top_history_length_at_least(scope, history, length);
-}
-
-pub(super) fn set_history_length_after_push<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    previous_entries: v8::Local<'s, v8::Array>,
-    entries: v8::Local<'s, v8::Array>,
-) {
-    let length = history_length_floor_from_visible_entries(scope, history, entries);
-    let current_length = history_length_number(scope, history)
-        .unwrap_or(0.0)
-        .max(0.0);
-    // Navigation entries can omit earlier Documents and other frames' steps.
-    // Add newly appended entries to the existing joint length; replacing a
-    // forward entry after traversal adds no step.
-    let previous_length =
-        history_length_floor_from_visible_entries(scope, history, previous_entries);
-    let added_entries = entries.length().saturating_sub(previous_entries.length());
-    let length = (current_length.max(previous_length) + f64::from(added_entries)).max(length);
-    set_history_length(scope, history, length);
-    set_top_history_length_at_least(scope, history, length);
-}
-
-fn history_length_floor_from_visible_entries<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    entries: v8::Local<'s, v8::Array>,
-) -> f64 {
-    let visible_length = all_entries(scope, entries)
-        .into_iter()
-        .filter_map(|entry| navigation_entry_initial_index(scope, entry))
-        .max()
-        .map(|index| index + 1)
-        .unwrap_or_else(|| entries.length()) as f64;
-    let owner = runtime_window_owner(scope, history);
-    if runtime_window_uses_top_level_history_model(scope, owner) {
-        return visible_length;
-    }
-
-    // A child sees the joint session-history length. Creating its initial
-    // entry does not add a new joint-history step, so start from the current
-    // top-level length and only grow it when the child gains a visible entry.
-    let top_owner = runtime_top_window_owner(scope, owner);
-    let top_length = window_history_for_holder(scope, top_owner)
-        .and_then(|history| history_length_number(scope, history))
-        .unwrap_or(visible_length)
-        .max(0.0);
-    visible_length.max(top_length)
-}
-
-fn set_top_history_length_at_least<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    length: f64,
-) {
-    let owner = runtime_window_owner(scope, history);
-    if runtime_window_uses_top_level_history_model(scope, owner) {
-        return;
-    }
-    let top_window = runtime_top_window_owner(scope, owner);
-    let Some(top_history) = window_history_for_holder(scope, top_window) else {
-        return;
-    };
-    let current_length = history_length_number(scope, top_history)
-        .unwrap_or(0.0)
-        .max(0.0);
-    set_history_length(scope, top_history, current_length.max(length));
 }

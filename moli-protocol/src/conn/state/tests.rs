@@ -1,6 +1,6 @@
 use crate::devtools_runtime::DevToolsNetworkResourceType;
 use moli_cookie_jar::new_shared_browser_cookie_store;
-use moli_core::page::{SameDocumentHistoryUpdate, SubresourceResourceType};
+use moli_core::page::{SessionHistoryUpdateKind, SubresourceResourceType};
 
 use super::super::fetch_support::{
     FetchAuthChallenge, PendingFetchAuthNavigation, PendingFetchNavigation,
@@ -1130,10 +1130,10 @@ fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
         transition_type: "typed".to_owned(),
         document_sequence_number: None,
     });
-    assert!(history.record_same_document_update(
+    assert!(history.record_session_history_update(
         "https://example.test/pushed".to_owned(),
         "pushed".to_owned(),
-        SameDocumentHistoryUpdate::Push,
+        SessionHistoryUpdateKind::Push,
     ));
     let pushed_id = history.snapshot().1[1].id;
 
@@ -1168,10 +1168,10 @@ fn navigation_history_traversal_reuses_same_document_entries() {
         transition_type: "typed".to_owned(),
         document_sequence_number: None,
     });
-    assert!(history.record_same_document_update(
+    assert!(history.record_session_history_update(
         "https://example.test/page?state=pushed".to_owned(),
         "page".to_owned(),
-        SameDocumentHistoryUpdate::Push,
+        SessionHistoryUpdateKind::Push,
     ));
 
     let (_, entries) = history.snapshot();
@@ -1183,10 +1183,10 @@ fn navigation_history_traversal_reuses_same_document_entries() {
     assert_eq!(entries[1].user_typed_url, "https://example.test/page");
     assert_eq!(entries[1].transition_type, "link");
 
-    assert!(history.record_same_document_update(
+    assert!(history.record_session_history_update(
         "https://example.test/page".to_owned(),
         "page".to_owned(),
-        SameDocumentHistoryUpdate::Traverse { delta: -1 },
+        SessionHistoryUpdateKind::Traverse { delta: -1 },
     ));
     let (current_index, entries) = history.snapshot();
     assert_eq!(current_index, 0);
@@ -1194,10 +1194,10 @@ fn navigation_history_traversal_reuses_same_document_entries() {
     assert_eq!(entries[0].id, initial_id);
     assert_eq!(entries[1].id, pushed_id);
 
-    assert!(history.record_same_document_update(
+    assert!(history.record_session_history_update(
         "https://example.test/page?state=pushed".to_owned(),
         "page".to_owned(),
-        SameDocumentHistoryUpdate::Traverse { delta: 1 },
+        SessionHistoryUpdateKind::Traverse { delta: 1 },
     ));
     let (current_index, entries) = history.snapshot();
     assert_eq!(current_index, 1);

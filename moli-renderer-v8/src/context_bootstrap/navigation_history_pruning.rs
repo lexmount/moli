@@ -1,6 +1,6 @@
 use super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_entry_key_value,
-    set_history_entries, set_history_index, set_history_length, set_navigation_entry_initial_index,
+    set_history_entries, set_history_index, set_navigation_entry_initial_index,
 };
 use super::navigation_events::dispatch_navigation_entry_dispose;
 use super::navigation_window::window_history_for_holder;
@@ -86,7 +86,7 @@ pub(crate) fn apply_navigation_history_prune_plan(
     }
     set_history_entries(scope, history, retained_entries_array);
     set_history_index(scope, history, current_index as u32);
-
+    super::navigation_serialize::sync_child_navigation_entry_seed_from_owner(scope, owner);
     for removed_key in &plan.removed_entry_keys {
         if let Some((_, entry)) = removed_entries.iter().find(|(key, _)| key == removed_key) {
             dispatch_navigation_entry_dispose(scope, *entry);
@@ -97,11 +97,7 @@ pub(crate) fn apply_navigation_history_prune_plan(
 
 pub(crate) fn finalize_navigation_history_prune(scope: &mut v8::PinScope<'_, '_>) -> bool {
     let owner = scope.get_current_context().global(scope);
-    let Some(history) = window_history_for_holder(scope, owner) else {
-        return false;
-    };
-    set_history_length(scope, history, 1.0);
-    true
+    window_history_for_holder(scope, owner).is_some()
 }
 
 fn navigation_history_prune_state<'s>(

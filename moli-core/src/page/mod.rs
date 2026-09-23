@@ -71,7 +71,7 @@ pub use moli_page_types::{
     RendererDomDebuggerDomBreakpointType, RendererDomDebuggerEventListenerBreakpoint,
     RendererDomDebuggerXhrBreakpoint, RendererInspectorProtocolConfiguration,
     RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
-    SameDocumentHistoryUpdate, V8InspectorSessionAttach, V8InspectorSessionState,
+    SessionHistoryUpdateKind, V8InspectorSessionAttach, V8InspectorSessionState,
     renderer_inspector_protocol_configuration_command_from_message,
     renderer_inspector_protocol_configuration_command_from_method,
 };

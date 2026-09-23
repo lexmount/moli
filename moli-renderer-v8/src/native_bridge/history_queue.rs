@@ -54,6 +54,7 @@ pub(crate) struct QueuedNavigationApiTask {
 }
 
 pub(crate) struct PendingHistoryTraversal {
+    pub(crate) joint_step: Option<moli_page_types::SessionHistoryStepId>,
     pub(crate) target: WindowTaskTarget,
     pub(crate) target_index: u32,
     pub(crate) target_key: Option<String>,
@@ -134,6 +135,7 @@ impl HistoryQueueState {
         relevant_context: WindowExecutionContextBinding,
         target: WindowTaskTarget,
         target_index: u32,
+        joint_step: Option<moli_page_types::SessionHistoryStepId>,
         target_key: Option<String>,
         info: Option<v8::Global<v8::Value>>,
         result: Option<PendingNavigationResult>,
@@ -152,6 +154,7 @@ impl HistoryQueueState {
             })
         {
             pending.target_index = target_index;
+            pending.joint_step = joint_step;
             pending.target_key = target_key;
             pending.info = info;
             if let Some(result) = result {
@@ -170,6 +173,7 @@ impl HistoryQueueState {
                 execution_context,
                 relevant_context,
                 action: PendingHistoryTraversalAction::SameDocument(PendingHistoryTraversal {
+                    joint_step,
                     target,
                     target_index,
                     target_key,
@@ -387,11 +391,32 @@ impl JsContextHost {
             .pending_history_traversal_target_index(target)
     }
 
+    pub(crate) fn pending_joint_history_step(
+        &self,
+        history: &moli_page_types::JointSessionHistory,
+    ) -> Option<moli_page_types::SessionHistoryStepId> {
+        self.history_queue
+            .pending_history_traversal_tasks
+            .iter()
+            .rev()
+            .find_map(|queued| {
+                let step = match &queued.action {
+                    PendingHistoryTraversalAction::SameDocument(pending) => pending.joint_step,
+                    PendingHistoryTraversalAction::ChildCrossDocument(pending) => {
+                        pending.seed.session_history.target_step
+                    }
+                }?;
+                history.entries_at(step).map(|_| step)
+            })
+    }
+
     pub(crate) fn queue_history_traversal<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
         target_index: u32,
+        joint_step: Option<moli_page_types::SessionHistoryStepId>,
+        target_key: Option<String>,
     ) -> Option<RendererPageHistoryTraversalProducer> {
         let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
         let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
@@ -401,7 +426,8 @@ impl JsContextHost {
             relevant_context,
             target,
             target_index,
-            None,
+            joint_step,
+            target_key,
             None,
             None,
         )?;
@@ -499,6 +525,7 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'s, '_>,
         target: WindowTaskTarget,
         target_index: u32,
+        joint_step: Option<moli_page_types::SessionHistoryStepId>,
         target_key: Option<String>,
         info: Option<v8::Local<'s, v8::Value>>,
     ) -> Option<(
@@ -522,6 +549,7 @@ impl JsContextHost {
                 &mut self.history_queue.pending_history_traversal_tasks[existing_index].action
             && !pending.results.is_empty()
         {
+            pending.joint_step = joint_step;
             pending.target_key = target_key;
             pending.info = info.map(|info| v8::Global::new(scope, info));
             let result = &pending.results[0];
@@ -551,6 +579,7 @@ impl JsContextHost {
             relevant_context,
             target,
             target_index,
+            joint_step,
             target_key,
             info.map(|info| v8::Global::new(scope, info)),
             Some(PendingNavigationResult {

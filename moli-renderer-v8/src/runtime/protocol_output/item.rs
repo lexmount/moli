@@ -52,6 +52,10 @@ pub enum RendererOwnerAction {
         event: ChildFrameNavigationSnapshot,
     },
     SameDocumentNavigation(RendererDocumentSourcedSameDocumentNavigation),
+    SessionHistoryUpdate {
+        source_document: RendererDocumentLifecycleIdentity,
+        update: moli_page_types::SessionHistoryUpdate,
+    },
     TopLevelLocationNavigation(RendererDocumentSourcedTopLevelLocationNavigation),
     TopLevelHistoryTraversal(RendererPendingTopLevelHistoryTraversal),
     SubresourceFetchPause {

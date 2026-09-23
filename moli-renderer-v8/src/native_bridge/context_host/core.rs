@@ -195,6 +195,7 @@ impl JsContextHost {
         let visual_resource_generation =
             super::visual_resource_generation::VisualResourceGeneration::default();
         let mut host = Self {
+            session_histories: Default::default(),
             runtime: runtime as *mut DocumentRuntime,
             layout_policy: moli_page_types::LayoutPolicy::default(),
             document_layout_state: RefCell::new(super::layout_state::DocumentLayoutState::default()),

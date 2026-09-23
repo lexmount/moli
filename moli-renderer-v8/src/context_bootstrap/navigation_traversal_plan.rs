@@ -67,6 +67,7 @@ pub(super) fn navigation_delta_traversal_plan<'s>(
         history,
         current_index: current_index as u32,
         target_index: next_index as u32,
+        joint_step: None,
     }))
 }
 
@@ -98,6 +99,7 @@ pub(super) fn navigation_index_traversal_plan<'s>(
             history,
             current_index: history_index(scope, history),
             target_index,
+            joint_step: None,
         }));
     }
     let current_index = pending_target_index.unwrap_or_else(|| history_index(scope, history));
@@ -109,6 +111,7 @@ pub(super) fn navigation_index_traversal_plan<'s>(
         history,
         current_index,
         target_index,
+        joint_step: None,
     }))
 }
 
@@ -117,18 +120,24 @@ pub(super) fn history_delta_traversal_target<'s>(
     history: v8::Local<'s, v8::Object>,
     delta: i64,
 ) -> Option<TraversalTarget<'s>> {
-    let current_index = pending_history_traversal_target_index(scope, history)
-        .unwrap_or_else(|| history_index(scope, history)) as i64;
-    let entries = history_entries(scope, history)?;
-    let next_index = current_index + delta;
-    if next_index < 0 || next_index >= entries.length() as i64 {
-        return None;
-    }
     let owner = runtime_window_owner(scope, history);
-    Some(TraversalTarget {
-        history,
+    let host = unsafe { &mut *crate::util::context_host_ptr_from_global_bridge(scope)? };
+    let binding = super::session_history::binding(scope, host, owner);
+    let mut model = host.session_histories.get_mut(binding.popup).clone();
+    if let Some(step) = host.pending_joint_history_step(&model) {
+        model.traverse(step);
+    }
+    let step = model.step_by_delta(delta)?;
+    let target = super::session_history::targets_at(scope, owner, step)?
+        .into_iter()
+        .next();
+    // Steps whose only changed frame has been detached still advance the
+    // traversable asynchronously, without a synthetic popstate or reload.
+    Some(target.unwrap_or_else(|| TraversalTarget {
         owner,
-        current_index: current_index as u32,
-        target_index: next_index as u32,
-    })
+        history,
+        current_index: history_index(scope, history),
+        target_index: history_index(scope, history),
+        joint_step: Some(step),
+    }))
 }

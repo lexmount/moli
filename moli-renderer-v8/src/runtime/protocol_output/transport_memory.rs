@@ -197,6 +197,13 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
             string_charge(&navigation.url)
                 .saturating_add(string_charge(&navigation.navigation_type))
         }
+        RendererOwnerAction::SessionHistoryUpdate { update, .. } => string_charge(&update.root_url)
+            .saturating_add(
+                update
+                    .root_entry_steps
+                    .len()
+                    .saturating_mul(std::mem::size_of::<usize>()),
+            ),
         RendererOwnerAction::TopLevelLocationNavigation(event) => string_charge(event.url())
             .saturating_add(string_charge(event.request_method()))
             .saturating_add(

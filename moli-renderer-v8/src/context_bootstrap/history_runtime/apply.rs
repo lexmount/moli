@@ -2,30 +2,25 @@ use super::super::location_runtime::{
     is_same_document_fragment_navigation, location_href_slot, sync_location_object,
 };
 use super::super::navigation_entry::{
-    history_entries, history_index, navigation_current_entry, navigation_current_entry_index,
-    navigation_entries_share_document, navigation_entry_initial_index,
-    navigation_entry_joint_top_index, navigation_entry_url_value,
-    restore_current_navigation_entry_scroll_position, set_history_index, set_history_state,
-    sync_navigation_current_entry_from_history_entry,
+    history_entries, history_index, navigation_current_entry, navigation_entries_share_document,
+    navigation_entry_url_value, restore_current_navigation_entry_scroll_position,
+    set_history_index, set_history_state, sync_navigation_current_entry_from_history_entry,
 };
 use super::super::navigation_events::{
     dispatch_navigation_currententrychange, dispatch_navigation_success, dispatch_popstate_event,
     navigation_has_active_scroll_event, queue_hash_change_for_runtime_owner,
 };
 use super::super::navigation_mutation::sync_local_document_front_from_window;
-use super::super::navigation_projection::build_visible_navigation_entries_array;
 use super::super::navigation_result::perform_navigation_scroll_if_needed;
 use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::super::navigation_window::{
-    navigation_document_has_opaque_origin, runtime_top_window_owner, runtime_window_is_global,
-    runtime_window_owner, window_history_for_holder, window_location_for_holder,
-    window_navigation_for_holder,
+    navigation_document_has_opaque_origin, runtime_window_is_global, runtime_window_owner,
+    window_location_for_holder, window_navigation_for_holder,
 };
 use super::super::*;
 use super::results::{resolve_pending_navigation_committed, resolve_pending_navigation_finished};
 use crate::native_bridge::PendingNavigationResult;
 use crate::script_vm::perform_microtask_checkpoint_and_report_pending_promise_rejections;
-use moli_page_types::SameDocumentHistoryUpdate;
 
 pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
     pub(in crate::context_bootstrap) owner: v8::Local<'s, v8::Object>,
@@ -38,16 +33,26 @@ pub(in crate::context_bootstrap) struct AppliedHistoryEntry<'s> {
     history_index: u32,
     entry: v8::Local<'s, v8::Object>,
     previous_entry: Option<v8::Local<'s, v8::Object>>,
+    additional: Vec<AppliedHistoryEntry<'s>>,
 }
 
 pub(in crate::context_bootstrap) fn apply_history_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     index: u32,
+    joint_step: Option<moli_page_types::SessionHistoryStepId>,
     dispatch_popstate: bool,
     pending_results: Option<&[PendingNavigationResult]>,
 ) {
-    let Some(applied) = apply_history_entry_commit(scope, history, index) else {
+    let Some(applied) = apply_history_entry_commit(scope, history, index, joint_step) else {
+        if let Some(results) = pending_results {
+            let error = super::super::navigation_result::navigation_dom_exception(
+                scope,
+                "Navigation was canceled",
+                "AbortError",
+            );
+            super::results::reject_pending_navigation_results(scope, results, error);
+        }
         return;
     };
     if let Some(results) = pending_results {
@@ -81,6 +86,99 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
     index: u32,
+    joint_step: Option<moli_page_types::SessionHistoryStepId>,
+) -> Option<AppliedHistoryEntry<'s>> {
+    let owner = runtime_window_owner(scope, history);
+    let entry = history_entries(scope, history)?
+        .get_index(scope, index)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let step =
+        joint_step.or_else(|| super::super::session_history::step_for_entry(scope, owner, entry));
+    let targets = match step {
+        Some(step) => super::super::session_history::targets_at(scope, owner, step)?,
+        None => Vec::new(),
+    };
+    let mut additional = Vec::new();
+    let mut cross_document = Vec::new();
+    for target in targets {
+        if target.history.strict_equals(history.into()) {
+            continue;
+        }
+        let entries = history_entries(scope, target.history)?;
+        let current = entries
+            .get_index(scope, target.current_index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+        let next = entries
+            .get_index(scope, target.target_index)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+        if !navigation_entries_share_document(scope, current, next) {
+            cross_document.push(target);
+            continue;
+        }
+        if let Some(navigation) = window_navigation_for_holder(scope, target.owner)
+            && !super::super::navigation_events::dispatch_navigation_traverse_event(
+                scope,
+                navigation,
+                target.history,
+                target.target_index,
+            )
+        {
+            return None;
+        }
+        additional.push(target);
+    }
+    // Admission can run script, so validate the stable step again before any
+    // local entry is changed. Forward pruning invalidates it atomically.
+    if let Some(step) = step {
+        let host = unsafe { &mut *context_host_ptr_from_global_bridge(scope)? };
+        let binding = super::super::session_history::binding(scope, host, owner);
+        let expected = host
+            .session_histories
+            .get_mut(binding.popup)
+            .entries_at(step)?
+            .get(&binding.context)?
+            .clone();
+        let live = history_entries(scope, history)?
+            .get_index(scope, index)
+            .and_then(|entry| v8::Local::<v8::Object>::try_from(entry).ok())
+            .and_then(|entry| super::super::session_history::entry_reference(scope, entry))?;
+        if live != expected {
+            return None;
+        }
+    }
+    let delta = match step {
+        Some(step) => Some(super::super::session_history::commit_traversal(
+            scope, owner, step,
+        )?),
+        None => None,
+    };
+    let mut applied = apply_local_history_entry_commit(scope, history, index)?;
+    for target in additional {
+        if let Some(entry) =
+            apply_local_history_entry_commit(scope, target.history, target.target_index)
+        {
+            applied.additional.push(entry);
+        }
+    }
+    if let Some(delta) = delta.filter(|delta| *delta != 0) {
+        super::super::session_history::publish(
+            scope,
+            owner,
+            moli_page_types::SessionHistoryUpdateKind::Traverse { delta },
+        );
+    }
+    for target in cross_document {
+        super::super::navigation_traversal_execution::queue_history_traversal_without_result(
+            scope, target,
+        );
+    }
+    Some(applied)
+}
+
+fn apply_local_history_entry_commit<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    history: v8::Local<'s, v8::Object>,
+    index: u32,
 ) -> Option<AppliedHistoryEntry<'s>> {
     let owner = runtime_window_owner(scope, history);
     let previous_history_index = history_index(scope, history);
@@ -103,7 +201,6 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
         return None;
     };
     sync_navigation_current_entry_from_history_entry(scope, owner, entry);
-    sync_top_history_after_child_traversal(scope, owner, entry, previous_entry);
     let resolved_entry = navigation_current_entry(scope, owner)
         .map(v8::Local::<v8::Value>::from)
         .unwrap_or_else(|| v8::undefined(scope).into());
@@ -119,78 +216,7 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
         history_index: index,
         entry,
         previous_entry,
-    })
-}
-
-fn sync_top_history_after_child_traversal<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    owner: v8::Local<'s, v8::Object>,
-    child_entry: v8::Local<'s, v8::Object>,
-    previous_child_entry: Option<v8::Local<'s, v8::Object>>,
-) {
-    if runtime_window_is_global(scope, owner) {
-        return;
-    }
-    let Some(previous_child_index) =
-        previous_child_entry.and_then(|entry| navigation_entry_initial_index(scope, entry))
-    else {
-        return;
-    };
-    let Some(target_index) = navigation_entry_joint_top_index(scope, child_entry)
-        .or_else(|| navigation_entry_initial_index(scope, child_entry))
-    else {
-        return;
-    };
-    let top_owner = runtime_top_window_owner(scope, owner);
-    if top_owner.strict_equals(owner.into()) {
-        return;
-    }
-    if navigation_current_entry_index(scope, top_owner)
-        .is_none_or(|top_index| top_index <= previous_child_index)
-    {
-        return;
-    }
-    let Some(top_history) = window_history_for_holder(scope, top_owner) else {
-        return;
-    };
-    let Some(top_entries) = history_entries(scope, top_history) else {
-        return;
-    };
-    let top_current_entry = navigation_current_entry(scope, top_owner);
-    let visible_entries =
-        build_visible_navigation_entries_array(scope, top_entries, top_current_entry);
-    let Some(top_entry) = visible_entries
-        .get_index(scope, target_index)
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-    else {
-        return;
-    };
-    let Some(raw_index) = raw_index_for_entry(scope, top_entries, top_entry) else {
-        return;
-    };
-
-    set_history_index(scope, top_history, raw_index);
-    let state = super::super::navigation_entry_state::clone_history_entry_state(scope, top_entry)
-        .unwrap_or_else(|| v8::null(scope).into());
-    set_history_state(scope, top_history, state);
-    if let Some(url) = navigation_entry_url_value(scope, top_entry)
-        && let Some(location) = window_location_for_holder(scope, top_owner)
-    {
-        sync_location_object(scope, location, &url);
-    }
-    sync_navigation_current_entry_from_history_entry(scope, top_owner, top_entry);
-}
-
-fn raw_index_for_entry<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entries: v8::Local<'s, v8::Array>,
-    target: v8::Local<'s, v8::Object>,
-) -> Option<u32> {
-    (0..entries.length()).find(|index| {
-        entries
-            .get_index(scope, *index)
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-            .is_some_and(|entry| entry.strict_equals(target.into()))
+        additional: Vec::new(),
     })
 }
 
@@ -198,6 +224,9 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_currententrychange<'s
     scope: &mut v8::PinScope<'s, '_>,
     applied: &AppliedHistoryEntry<'s>,
 ) {
+    for other in &applied.additional {
+        dispatch_history_entry_currententrychange(scope, other);
+    }
     if !navigation_document_has_opaque_origin(scope, applied.owner)
         && let Some(navigation) = window_navigation_for_holder(scope, applied.owner)
     {
@@ -215,6 +244,9 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
     applied: &AppliedHistoryEntry<'s>,
     dispatch_popstate: bool,
 ) {
+    for other in &applied.additional {
+        dispatch_history_entry_post_commit_events(scope, other, dispatch_popstate);
+    }
     if runtime_window_is_global(scope, applied.owner) {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
             return;
@@ -222,14 +254,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
         let host = unsafe { &mut *host_ptr };
         host.set_document_url(applied.parsed_url.clone());
         if dispatch_popstate && applied.previous_history_index != applied.history_index {
-            host.record_same_document_navigation(
-                &applied.parsed_url,
-                "fragment",
-                SameDocumentHistoryUpdate::Traverse {
-                    delta: i64::from(applied.history_index)
-                        - i64::from(applied.previous_history_index),
-                },
-            );
+            host.record_same_document_navigation(&applied.parsed_url, "fragment");
         }
         if dispatch_popstate {
             dispatch_popstate_event(scope, host_ptr, None, applied.state);

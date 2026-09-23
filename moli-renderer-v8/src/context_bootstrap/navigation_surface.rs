@@ -1,7 +1,7 @@
 use super::history_mutation::{history_push_state_callback, history_replace_state_callback};
 use super::location_history_storage::{
-    HISTORY_ENTRIES_SLOT, HISTORY_INDEX_SLOT, HISTORY_LENGTH_SLOT, HISTORY_SCROLL_RESTORATION_SLOT,
-    HISTORY_STATE_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
+    HISTORY_ENTRIES_SLOT, HISTORY_INDEX_SLOT, HISTORY_SCROLL_RESTORATION_SLOT, HISTORY_STATE_SLOT,
+    NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_EVENT_LISTENERS_SLOT,
 };
 use super::navigation_activation::install_navigation_activation_runtime_state;
 use super::navigation_callbacks::{
@@ -9,7 +9,6 @@ use super::navigation_callbacks::{
     navigation_update_current_entry_callback,
 };
 use super::navigation_events::navigation_error_event_active;
-use super::navigation_projection::set_history_length_from_visible_entries;
 use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_array_from_seed,
 };

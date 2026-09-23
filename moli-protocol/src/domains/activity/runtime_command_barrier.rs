@@ -484,7 +484,6 @@ mod tests {
             RendererDocumentSourcedTopLevelLocationNavigation, RendererDocumentToken,
             RendererFrameToken, RendererLifecycleEpoch, RendererPendingSameDocumentNavigation,
             RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
-            SameDocumentHistoryUpdate,
         },
     };
     use serde_json::Value;
@@ -589,7 +588,6 @@ mod tests {
                         RendererPendingSameDocumentNavigation {
                             url: format!("data:text/html,runtime-command-barrier#{fragment}"),
                             navigation_type: "fragment".to_owned(),
-                            history_update: SameDocumentHistoryUpdate::Push,
                         },
                     ),
                 ),

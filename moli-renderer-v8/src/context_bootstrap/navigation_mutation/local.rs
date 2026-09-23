@@ -44,7 +44,18 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             let _ = next_entries.set_index(scope, next_index, next_entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_after_push(scope, history, entries, next_entries);
+            if super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
+                scope, owner,
+            )
+            .is_none()
+            {
+                super::super::session_history::commit(
+                    scope,
+                    owner,
+                    next_entry,
+                    moli_page_types::SessionHistoryCommit::Push,
+                );
+            }
             set_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, next_entry);
             dispatch_navigation_currententrychange(scope, navigation, previous_entry, Some("push"));
@@ -72,6 +83,18 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             set_history_entries(scope, history, entries);
             set_history_state(scope, history, state);
             set_navigation_current_entry(scope, navigation, entry);
+            if super::super::navigation_window::child_browsing_context_handle_for_runtime_owner(
+                scope, owner,
+            )
+            .is_none()
+            {
+                super::super::session_history::commit(
+                    scope,
+                    owner,
+                    entry,
+                    moli_page_types::SessionHistoryCommit::Replace,
+                );
+            }
             dispatch_navigation_currententrychange(
                 scope,
                 navigation,
@@ -108,7 +131,16 @@ pub(crate) fn apply_local_window_location_navigation<'s>(
             }
         }
     }
-    sync_child_pending_navigation_entry_seed_from_owner(scope, owner);
+    sync_child_pending_navigation_entry_seed_from_owner(
+        scope,
+        owner,
+        match kind {
+            LocationNavigationKind::Assign => moli_page_types::SessionHistoryCommit::Push,
+            LocationNavigationKind::Replace | LocationNavigationKind::Reload => {
+                moli_page_types::SessionHistoryCommit::Replace
+            }
+        },
+    );
 }
 
 fn replacement_keeps_navigation_key<'s>(

@@ -3,8 +3,7 @@ use super::super::navigation_activation::{
     navigation_activation_value, navigation_current_entry_value, navigation_transition_value,
 };
 use super::super::navigation_entry::{
-    history_length_value, history_scroll_restoration_value, history_state_value,
-    set_history_scroll_restoration,
+    history_scroll_restoration_value, history_state_value, set_history_scroll_restoration,
 };
 use super::*;
 use moli_webapi_declare::WebApiObject;
@@ -152,12 +151,10 @@ fn history_length_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    if require_fully_active_history_owner(scope, args.this()).is_none() {
+    let Some(owner) = require_fully_active_history_owner(scope, args.this()) else {
         return;
-    }
-    let value = history_length_value(scope, args.this())
-        .unwrap_or_else(|| v8::Number::new(scope, 0.0).into());
-    rv.set(value);
+    };
+    rv.set_double(super::super::session_history::length(scope, owner) as f64);
 }
 
 fn history_state_getter_function<'s>(

@@ -543,12 +543,15 @@ fn queue_browser_owned_top_level_history_traversal<'s>(
     delta: i64,
 ) {
     let owner = runtime_window_owner(scope, history);
-    if !runtime_window_is_global(scope, owner) {
-        return;
-    }
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
+    if super::session_history::binding(scope, unsafe { &mut *host_ptr }, owner)
+        .popup
+        .is_some()
+    {
+        return;
+    }
     unsafe { &mut *host_ptr }.record_pending_top_level_history_traversal(delta);
 }
 
@@ -563,7 +566,7 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     let Some(target) = history_delta_traversal_target(scope, history, delta) else {
         return false;
     };
-    let Some(entries) = history_entries(scope, history) else {
+    let Some(entries) = history_entries(scope, target.history) else {
         return false;
     };
     let Some(current_entry) = entries
@@ -578,7 +581,9 @@ pub(crate) fn queue_top_level_history_traversal_by_delta(
     else {
         return false;
     };
-    if !navigation_entries_share_document(scope, current_entry, target_entry) {
+    if runtime_window_is_global(scope, target.owner)
+        && !navigation_entries_share_document(scope, current_entry, target_entry)
+    {
         return false;
     }
     queue_history_traversal_without_result(scope, target);

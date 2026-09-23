@@ -180,7 +180,7 @@ pub(crate) struct TargetNavigationLoadInputs {
         (bool, Option<moli_core::page::SubresourceResourceType>),
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
-    session_history_length: Option<usize>,
+    session_history_position: Option<moli_page_types::SessionHistoryPosition>,
 }
 
 impl TargetNavigationLoadInputs {
@@ -199,7 +199,7 @@ impl TargetNavigationLoadInputs {
     ) -> Option<RendererMainDocumentCommit> {
         self.main_document_commit_seed.as_ref().map(|seed| {
             let mut commit = seed.resolve(final_url, network_error_page);
-            commit.session_history_length = self.session_history_length;
+            commit.session_history_position = self.session_history_position;
             commit
         })
     }
@@ -340,11 +340,11 @@ impl TargetNavigationLoadInputs {
                 .subresource_interception_config(),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
-            session_history_length: Some(
+            session_history_position: Some(
                 target
                     .owner_state
                     .navigation_history_state
-                    .length_after_navigation(),
+                    .position_after_navigation(),
             ),
         }
     }
@@ -411,7 +411,7 @@ impl TargetNavigationLoadInputs {
             fetch_subresource_interception: (false, None),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
-            session_history_length: None,
+            session_history_position: None,
         }
     }
 
@@ -862,15 +862,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .navigation_history_entry_url(page_snapshot, entry_id)
     }
 
-    pub(super) fn reset_navigation_history(&mut self) -> Option<bool> {
-        let page_snapshot = self.page_snapshot();
-        Some(
-            self.target_mut()
-                .owner_state
-                .reset_navigation_history(page_snapshot),
-        )
-    }
-
     pub(super) fn can_reset_navigation_history(&mut self) -> Option<bool> {
         let page_snapshot = self.page_snapshot();
         Some(
@@ -897,10 +888,10 @@ impl<'a> TargetSessionOwnerMut<'a> {
         Some(())
     }
 
-    pub(super) fn record_same_document_navigation(
+    pub(super) fn record_session_history_update(
         &mut self,
         url: &Url,
-        history_update: moli_core::page::SameDocumentHistoryUpdate,
+        history_update: moli_core::page::SessionHistoryUpdateKind,
     ) -> Option<String> {
         let next_url = url.to_string();
         let security_origin = url.origin().ascii_serialization();
@@ -910,7 +901,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .map(|(_, title)| title.clone())
             .unwrap_or_default();
         let target = self.target_mut();
-        target.owner_state.record_same_document_navigation_history(
+        target.owner_state.record_session_history_update(
             page_snapshot,
             next_url.clone(),
             title,
@@ -2352,14 +2343,6 @@ impl CdpConnection {
             .navigation_history_entry_url(entry_id)
     }
 
-    pub(crate) fn reset_navigation_history_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<bool> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .reset_navigation_history()
-    }
-
     pub(crate) fn can_reset_navigation_history_for_session_owner(
         &mut self,
         session_id: Option<&str>,
@@ -2385,14 +2368,33 @@ impl CdpConnection {
             .mark_next_navigation_history_traverse_to_entry(entry_id)
     }
 
-    pub(crate) fn record_same_document_navigation_for_owner(
+    pub(crate) fn record_session_history_update_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        url: &Url,
-        history_update: moli_core::page::SameDocumentHistoryUpdate,
-    ) -> Option<String> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .record_same_document_navigation(url, history_update)
+        update: &moli_page_types::SessionHistoryUpdate,
+    ) {
+        let Ok(url) = Url::parse(&update.root_url) else {
+            return;
+        };
+        let Some(mut target_owner) = self.target_session_owner_mut_for_owner(owner) else {
+            return;
+        };
+        target_owner.record_session_history_update(&url, update.update);
+        target_owner
+            .target_mut()
+            .owner_state
+            .navigation_history_state
+            .synchronize_root_entry_url(&update.root_entry_steps, &update.root_url);
+        let (index, entries) = target_owner
+            .target_mut()
+            .owner_state
+            .navigation_history_state
+            .snapshot();
+        debug_assert_eq!(
+            (index, entries.len()),
+            (update.position.index(), update.position.length()),
+            "browser and renderer joint history positions must agree"
+        );
     }
 
     pub(super) fn target_session_owner_mut(
@@ -3290,7 +3292,7 @@ mod tests {
             security_origin: "https://nav.example".to_owned(),
             secure_context_type: "Secure".to_owned(),
             timestamp: 0.0,
-            session_history_length: None,
+            session_history_position: None,
         };
         {
             let mut owner = TargetSessionOwnerMut {

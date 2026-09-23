@@ -1,8 +1,8 @@
 use super::location_history_storage::{
     HISTORY_ENTRIES_SLOT, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, HISTORY_INDEX_SLOT,
-    HISTORY_LENGTH_SLOT, HISTORY_SCROLL_RESTORATION_SLOT, HISTORY_STATE_SLOT,
-    NAVIGATION_CURRENT_ENTRY_SLOT, NAVIGATION_ENTRY_DOCUMENT_ID_SLOT,
-    NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT, NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
+    HISTORY_SCROLL_RESTORATION_SLOT, HISTORY_STATE_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT,
+    NAVIGATION_ENTRY_DOCUMENT_ID_SLOT, NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
+    NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
 };
 use super::location_runtime::urls_refer_to_same_document;
 use super::navigation_activation::set_navigation_current_entry;
@@ -19,7 +19,6 @@ use moli_page_types::{NavigationHistoryEntryId, NavigationHistoryEntryKey};
 use moli_webapi_declare::WebApiObject;
 
 const NAVIGATION_ENTRY_INITIAL_INDEX_SLOT: &str = "__lmNavigationEntryInitialIndex";
-const NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT: &str = "__lmNavigationEntryJointTopIndex";
 const NAVIGATION_ENTRY_URL_SLOT: &str = "__lmNavigationEntryUrl";
 const NAVIGATION_ENTRY_REFERRER_POLICY_SLOT: &str = "__lmNavigationEntryReferrerPolicy";
 const NAVIGATION_ENTRY_ID_SLOT: &str = "__lmNavigationEntryId";
@@ -53,9 +52,6 @@ struct NavigationHistoryEntryObjectDeclaration<'scope, 'value> {
 
     #[webapi(slot = NAVIGATION_ENTRY_INITIAL_INDEX_SLOT)]
     initial_index: f64,
-
-    #[webapi(slot = NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT, init = "undefined")]
-    joint_top_index: (),
 
     #[webapi(slot = NAVIGATION_ENTRY_SCROLL_X_SLOT, init = "undefined")]
     scroll_x: (),
@@ -259,29 +255,6 @@ pub(super) fn set_navigation_entry_initial_index<'s>(
         scope,
         entry,
         NAVIGATION_ENTRY_INITIAL_INDEX_SLOT,
-        index as f64,
-    );
-}
-
-pub(super) fn navigation_entry_joint_top_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-) -> Option<u32> {
-    navigation_entry_slot_value(scope, entry, NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT)
-        .and_then(|value| value.integer_value(scope))
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
-}
-
-pub(super) fn set_navigation_entry_joint_top_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    entry: v8::Local<'s, v8::Object>,
-    index: u32,
-) {
-    set_navigation_entry_number_slot(
-        scope,
-        entry,
-        NAVIGATION_ENTRY_JOINT_TOP_INDEX_SLOT,
         index as f64,
     );
 }
@@ -624,22 +597,6 @@ fn set_history_slot_value<'s>(
     set_private_value(scope, history, slot, value);
 }
 
-pub(super) fn history_length_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    history_slot_value(scope, history, HISTORY_LENGTH_SLOT).filter(|value| !value.is_undefined())
-}
-
-pub(super) fn history_length_number<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> Option<f64> {
-    history_length_value(scope, history)
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite())
-}
-
 pub(super) fn history_scroll_restoration_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     history: v8::Local<'s, v8::Object>,
@@ -690,19 +647,6 @@ pub(super) fn set_history_state<'s>(
     state: v8::Local<'s, v8::Value>,
 ) {
     set_history_slot_value(scope, history, HISTORY_STATE_SLOT, state);
-}
-
-pub(super) fn set_history_length<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    length: f64,
-) {
-    set_history_slot_value(
-        scope,
-        history,
-        HISTORY_LENGTH_SLOT,
-        v8::Number::new(scope, length).into(),
-    );
 }
 
 pub(super) fn stringify_history_state<'s>(

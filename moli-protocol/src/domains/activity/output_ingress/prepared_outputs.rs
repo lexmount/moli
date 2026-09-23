@@ -278,6 +278,18 @@ impl PreparedProtocolOutputs {
                 )
                 .append_to_child_frame_output_sink(&mut prepared);
             }
+            RendererOwnerAction::SessionHistoryUpdate {
+                source_document,
+                update,
+            } => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_session_history_update(
+                    conn,
+                    owner,
+                    source_document,
+                    update,
+                )
+                .append_to_session_history_output_sink(&mut prepared);
+            }
             RendererOwnerAction::SameDocumentNavigation(navigation) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_same_document_navigation(
                     conn, owner, navigation,

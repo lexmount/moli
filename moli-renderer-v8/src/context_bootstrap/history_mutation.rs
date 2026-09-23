@@ -16,7 +16,6 @@ use super::navigation_events::{
     run_navigation_precommit_deferred_handlers,
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
-use super::navigation_projection::set_history_length_after_push;
 use super::navigation_result::{
     cancel_pending_same_document_navigation_finishes,
     cancel_pending_same_document_navigation_finishes_including_reentrant,
@@ -28,7 +27,6 @@ use super::navigation_window::{
 };
 use super::*;
 use crate::webidl;
-use moli_page_types::SameDocumentHistoryUpdate;
 
 struct ParsedHistoryMutationArgs<'s> {
     state: v8::Local<'s, v8::Value>,
@@ -184,8 +182,17 @@ fn mutate_history_object<'s>(
     let current_index = history_index(scope, history);
     let current_navigation_index = navigation_current_entry_index(scope, owner).unwrap_or(0);
     let previous_entry = navigation_current_entry(scope, owner);
+    let mut pruned = Vec::new();
     let entry = match kind {
         HistoryMutationKind::Push => {
+            for index in current_index + 1..entries.length() {
+                if let Some(entry) = entries
+                    .get_index(scope, index)
+                    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+                {
+                    pruned.push(entry);
+                }
+            }
             let next_entries = v8::Array::new(scope, (current_index + 2) as i32);
             for index in 0..=current_index {
                 if let Some(entry) = entries.get_index(scope, index) {
@@ -211,7 +218,6 @@ fn mutate_history_object<'s>(
             let _ = next_entries.set_index(scope, next_index, entry.into());
             set_history_entries(scope, history, next_entries);
             set_history_index(scope, history, next_index);
-            set_history_length_after_push(scope, history, entries, next_entries);
             entry
         }
         HistoryMutationKind::Replace => {
@@ -247,6 +253,16 @@ fn mutate_history_object<'s>(
     set_history_state(scope, history, current_state);
     sync_location_object(scope, location, url.as_str());
     sync_navigation_current_entry_from_history_entry(scope, owner, entry);
+    super::session_history::commit(
+        scope,
+        owner,
+        entry,
+        match kind {
+            HistoryMutationKind::Push => moli_page_types::SessionHistoryCommit::Push,
+            HistoryMutationKind::Replace => moli_page_types::SessionHistoryCommit::Replace,
+        },
+    );
+    pruned.extend(super::session_history::prune_views(scope, owner));
     if let Some(navigation) = window_navigation_for_holder(scope, owner) {
         refresh_navigation_destination_indexes(scope, navigation, history);
         dispatch_navigation_currententrychange(
@@ -290,6 +306,9 @@ fn mutate_history_object<'s>(
             );
         }
     }
+    for entry in pruned {
+        dispatch_navigation_entry_dispose(scope, entry);
+    }
     sync_child_navigation_entry_seed_from_owner(scope, owner);
     if runtime_window_is_global(scope, owner) {
         let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
@@ -297,11 +316,7 @@ fn mutate_history_object<'s>(
         };
         let host = unsafe { &mut *host_ptr };
         host.set_document_url(url.clone());
-        let history_update = match kind {
-            HistoryMutationKind::Push => SameDocumentHistoryUpdate::Push,
-            HistoryMutationKind::Replace => SameDocumentHistoryUpdate::Replace,
-        };
-        host.record_same_document_navigation(&url, "historyApi", history_update);
+        host.record_same_document_navigation(&url, "historyApi");
     } else if let Some(popup_id) =
         crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)

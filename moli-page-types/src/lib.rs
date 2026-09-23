@@ -11,6 +11,12 @@ mod layout;
 mod navigation_history;
 mod navigator_overrides;
 mod renderer_transport_memory;
+mod session_history;
+
+pub use session_history::{
+    JointSessionHistory, SessionHistoryCommit, SessionHistoryContextId, SessionHistoryEntry,
+    SessionHistoryPosition, SessionHistorySeed, SessionHistoryStepId, SessionHistoryUpdate,
+};
 
 use std::{
     borrow::Cow,
@@ -188,7 +194,7 @@ pub use inspector_state::{
 pub use navigation_history::{
     NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistoryMutation,
-    NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate, SameDocumentHistoryUpdate,
+    NavigationHistorySerializedEntry, NavigationTraversalSeedCandidate, SessionHistoryUpdateKind,
     apply_child_browsing_context_javascript_url_navigation_to_entry_seed,
     apply_child_browsing_context_navigation_to_entry_seed,
     child_browsing_context_single_entry_seed, cross_document_navigation_seed,

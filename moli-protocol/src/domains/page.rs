@@ -531,6 +531,7 @@ enum PageOutputProjectionStep {
     DocumentLifecycle,
     ChildFrameActivity,
     SameDocumentNavigation,
+    SessionHistoryUpdate,
     TopLevelLocationNavigation,
     TopLevelHistoryTraversal,
 }
@@ -544,6 +545,11 @@ pub(crate) struct PagePreparedOutputs {
     document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
     child_frame_activities: Vec<PagePreparedChildFrameActivity>,
     same_document_navigations: Vec<PagePreparedSameDocumentNavigation>,
+    session_history_updates: Vec<(
+        crate::conn::TargetPageResidenceIdentity,
+        RendererDocumentLifecycleIdentity,
+        moli_page_types::SessionHistoryUpdate,
+    )>,
     top_level_location_navigation: Option<PagePreparedTopLevelLocationNavigation>,
     top_level_history_traversal: Option<RendererPendingTopLevelHistoryTraversal>,
 }
@@ -613,6 +619,31 @@ impl PagePreparedOutputs {
                 event,
             )],
             ..Self::default()
+        }
+    }
+
+    pub(crate) fn from_renderer_session_history_update(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        source_document: RendererDocumentLifecycleIdentity,
+        update: moli_page_types::SessionHistoryUpdate,
+    ) -> Self {
+        let Some(residence) = conn.target_page_residence_identity_for_owner(owner) else {
+            return Self::default();
+        };
+        Self {
+            session_history_updates: vec![(residence, source_document, update)],
+            ..Self::default()
+        }
+    }
+
+    pub(in crate::domains) fn append_to_session_history_output_sink(
+        self,
+        sink: &mut (impl ProtocolOutputSink + ?Sized),
+    ) {
+        if !self.session_history_updates.is_empty() {
+            sink.push_produced_slot(ProtocolOutputSlot::SessionHistoryUpdate);
+            sink.push_prepared_payload(PagePreparedOutputSlot::from_outputs(self).into());
         }
     }
 
@@ -972,6 +1003,7 @@ impl PagePreparedOutputs {
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
             same_document_navigations: Vec::new(),
+            session_history_updates: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -998,6 +1030,7 @@ impl PagePreparedOutputs {
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
             same_document_navigations: Vec::new(),
+            session_history_updates: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -1045,6 +1078,7 @@ impl PagePreparedOutputs {
             document_lifecycle_events: Vec::new(),
             child_frame_activities: vec![activity],
             same_document_navigations: Vec::new(),
+            session_history_updates: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -1068,6 +1102,7 @@ impl PagePreparedOutputs {
                     PagePreparedSameDocumentNavigation::new(owner.clone(), navigation)
                 })
                 .collect(),
+            session_history_updates: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         }
@@ -1086,6 +1121,7 @@ impl PagePreparedOutputs {
             document_lifecycle_events: Vec::new(),
             child_frame_activities: Vec::new(),
             same_document_navigations: Vec::new(),
+            session_history_updates: Vec::new(),
             top_level_location_navigation: navigation
                 .map(|navigation| PagePreparedTopLevelLocationNavigation::new(owner, navigation)),
             top_level_history_traversal: None,
@@ -1336,6 +1372,19 @@ impl PageOutputProjectionStep {
                     context.command.protocol_events_mut().extend(events);
                 }
             }
+            PageOutputProjectionStep::SessionHistoryUpdate => {
+                if let Some(slot) = prepared_outputs.and_then(ProtocolOutputPayloads::page_mut) {
+                    for (residence, _source_document, update) in
+                        std::mem::take(&mut slot.outputs.session_history_updates)
+                    {
+                        // document.open() does not undo committed history. Page
+                        // residence, not current Document identity, is authority.
+                        if conn.target_page_residence_identity_is_current(&residence) {
+                            conn.record_session_history_update_for_owner(&owner, &update);
+                        }
+                    }
+                }
+            }
             PageOutputProjectionStep::SameDocumentNavigation => {
                 let mut events = Vec::new();
                 emit_same_document_navigation_activity_background_events_async(
@@ -1384,6 +1433,7 @@ pub(in crate::domains) async fn project_page_output_async(
         ProtocolOutputSlot::DocumentTitleChanged => PageOutputProjectionStep::DocumentTitleChanged,
         ProtocolOutputSlot::DocumentLifecycle => PageOutputProjectionStep::DocumentLifecycle,
         ProtocolOutputSlot::ChildFrameActivity => PageOutputProjectionStep::ChildFrameActivity,
+        ProtocolOutputSlot::SessionHistoryUpdate => PageOutputProjectionStep::SessionHistoryUpdate,
         ProtocolOutputSlot::SameDocumentNavigation => {
             PageOutputProjectionStep::SameDocumentNavigation
         }
@@ -2646,7 +2696,6 @@ mod producer_tests {
             RendererPendingSameDocumentNavigation {
                 url: url.to_owned(),
                 navigation_type: "fragment".to_owned(),
-                history_update: moli_core::page::SameDocumentHistoryUpdate::Push,
             },
         )
     }
@@ -4445,6 +4494,7 @@ mod producer_tests {
                 document,
             )],
             same_document_navigations: Vec::new(),
+            session_history_updates: Vec::new(),
             top_level_location_navigation: None,
             top_level_history_traversal: None,
         };
@@ -4902,6 +4952,47 @@ mod producer_tests {
         );
     }
 
+    async fn emit_committed_history_and_navigation_for_test(
+        conn: &mut CdpConnection,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        owner: &CommandOwnerScope,
+        mut prepared: Option<&mut ProtocolOutputPayloads>,
+    ) {
+        // Production sends a separate committed-history action before the
+        // observer notification. Exercise both projections and their authority.
+        if let Some(slot) = prepared
+            .as_deref_mut()
+            .and_then(ProtocolOutputPayloads::page_mut)
+        {
+            slot.outputs.session_history_updates = slot
+                .outputs
+                .same_document_navigations
+                .iter()
+                .map(|navigation| {
+                    (
+                        navigation.owner().clone(),
+                        navigation.source_document(),
+                        moli_page_types::SessionHistoryUpdate {
+                            position: moli_page_types::SessionHistoryPosition::INITIAL,
+                            update: moli_page_types::SessionHistoryUpdateKind::Push,
+                            root_url: navigation.clone().into_navigation().url,
+                            root_entry_steps: vec![0],
+                        },
+                    )
+                })
+                .collect();
+        }
+        let mut command = crate::conn::CommandDispatchContext::default();
+        let mut context = ProtocolOutputProjectionContext::new(owner, &mut command);
+        super::PageOutputProjectionStep::SessionHistoryUpdate
+            .project_async(conn, &mut context, prepared.as_deref_mut())
+            .await;
+        super::emit_same_document_navigation_activity_background_events_async(
+            conn, out, owner, prepared,
+        )
+        .await;
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn same_document_drain_consumes_prepared_navigations_without_page_readback() {
         let mut conn = CdpConnection::default();
@@ -4924,7 +5015,7 @@ mod producer_tests {
                 ),
             ));
 
-        super::emit_same_document_navigation_activity_background_events_async(
+        emit_committed_history_and_navigation_for_test(
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-1"),
@@ -5012,7 +5103,7 @@ mod producer_tests {
             ));
         let mut out = Vec::new();
 
-        super::emit_same_document_navigation_activity_background_events_async(
+        emit_committed_history_and_navigation_for_test(
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-document-open-same-document"),
@@ -5064,7 +5155,7 @@ mod producer_tests {
             ));
         let mut out = Vec::new();
 
-        super::emit_same_document_navigation_activity_background_events_async(
+        emit_committed_history_and_navigation_for_test(
             &mut conn,
             &mut out,
             &CommandOwnerScope::for_session("SID-stale-page-same-document"),

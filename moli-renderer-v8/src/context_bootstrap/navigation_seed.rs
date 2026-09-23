@@ -103,7 +103,9 @@ pub(super) fn history_entry_seed_for_reload<'s>(
     let history = window_history_for_holder(scope, owner)?;
     let entries = serialize_history_entries(scope, history);
     let current_index = history_index(scope, history);
-    reload_navigation_seed(entries, current_index)
+    let mut seed = reload_navigation_seed(entries, current_index)?;
+    super::session_history::capture_for_navigation(scope, owner, &mut seed);
+    Some(seed)
 }
 
 pub(super) fn history_entry_seed_for_traversal<'s>(
@@ -120,11 +122,12 @@ pub(super) fn history_entry_seed_for_traversal<'s>(
         current_index,
         &mut entries,
     );
-    let candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
+    let mut candidate = traversal_navigation_seed_candidate(entries, current_index, target_index)?;
 
     if is_same_document_fragment_navigation(Some(&candidate.current_url), &candidate.target_url) {
         return None;
     }
 
+    super::session_history::capture_for_navigation(scope, owner, &mut candidate.seed);
     Some((candidate.target_url, candidate.seed))
 }

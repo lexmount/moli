@@ -57,6 +57,7 @@ pub(in crate::domains) enum ProtocolOutputSlot {
     DomStorage,
     ChildFrameActivity,
     SameDocumentNavigation,
+    SessionHistoryUpdate,
 }
 
 impl ProtocolOutputSlot {
@@ -74,6 +75,7 @@ impl ProtocolOutputSlot {
             | Self::RuntimeInspectorPostResponseMessages
             | Self::RuntimeObservable
             | Self::ChildFrameActivity
+            | Self::SessionHistoryUpdate
             | Self::SameDocumentNavigation
             | Self::TopLevelLocationNavigation
             | Self::TopLevelHistoryTraversal => ProtocolOutputDelivery::OwnerAction,
@@ -134,6 +136,7 @@ impl ProtocolOutputSlot {
             | Self::DocumentLifecycle
             | Self::RuntimeObservable
             | Self::DomStorage
+            | Self::SessionHistoryUpdate
             | Self::SameDocumentNavigation => ProtocolOutputResponseOrder::BeforeResponse,
         }
     }
@@ -228,6 +231,7 @@ impl ProtocolOutputSlot {
                 | Self::DocumentTitleChanged
                 | Self::DocumentLifecycle
                 | Self::ChildFrameActivity
+                | Self::SessionHistoryUpdate
                 | Self::SameDocumentNavigation
                 | Self::TopLevelLocationNavigation
                 | Self::TopLevelHistoryTraversal => {
@@ -305,6 +309,7 @@ mod tests {
             (DomStorage, ProtocolObservation, BeforeResponse),
             (ChildFrameActivity, OwnerAction, AfterResponse),
             (SameDocumentNavigation, OwnerAction, BeforeResponse),
+            (SessionHistoryUpdate, OwnerAction, BeforeResponse),
         ];
 
         let unique = cases

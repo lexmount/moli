@@ -1,4 +1,5 @@
 use super::{bridge::NativeDomBridge, history_queue::HistoryQueueState};
+mod session_history;
 use crate::{
     network::context::DocumentResourceLoaderRegistry,
     {
@@ -797,6 +798,7 @@ pub(crate) type JsContextHostPageTaskCapabilities =
     crate::page_task_queue::RendererPageJsContextTaskSenders;
 
 pub(crate) struct JsContextHost {
+    pub(crate) session_histories: session_history::RendererSessionHistories,
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
     document_layout_state: RefCell<layout_state::DocumentLayoutState>,

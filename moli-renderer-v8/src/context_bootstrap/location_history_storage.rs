@@ -1,6 +1,5 @@
 pub(super) const HISTORY_ENTRIES_SLOT: &str = "__lmHistoryEntries";
 pub(super) const HISTORY_INDEX_SLOT: &str = "__lmHistoryIndex";
-pub(super) const HISTORY_LENGTH_SLOT: &str = "__lmHistoryLength";
 pub(super) const HISTORY_STATE_SLOT: &str = "__lmHistoryState";
 pub(super) const HISTORY_SCROLL_RESTORATION_SLOT: &str = "__lmHistoryScrollRestoration";
 pub(super) const HISTORY_ENTRY_STATE_SNAPSHOT_SLOT: &str = "__lmHistoryEntryStateSnapshot";

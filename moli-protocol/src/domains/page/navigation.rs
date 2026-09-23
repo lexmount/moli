@@ -10,10 +10,7 @@ use crate::devtools_runtime::{
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
 };
-use moli_core::page::{
-    ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand,
-    SameDocumentHistoryUpdate,
-};
+use moli_core::page::{ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand};
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use serde_json::{Value, json};
@@ -2523,14 +2520,9 @@ pub(super) fn complete_reset_navigation_history_command(
             ));
         }
     }
-    match conn.reset_navigation_history_for_owner(owner) {
-        Some(true) => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Some(false) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "History cannot be pruned",
-        )),
-        None => PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded")),
-    }
+    // The renderer publishes the prune before disposal callbacks run. Its
+    // owner-action FIFO also preserves any history pushes from those callbacks.
+    PageCommandTaskStep::Complete(CommandOutputPlan::success())
 }
 
 fn reloaded_after_crash_session_ids(
@@ -3427,11 +3419,8 @@ fn emit_same_document_navigation_background_event(
     owner: &CommandOwnerScope,
     url: Url,
     navigation_type: &str,
-    history_update: SameDocumentHistoryUpdate,
 ) {
-    let Some(frame_id) =
-        conn.record_same_document_navigation_for_owner(owner, &url, history_update)
-    else {
+    let Some(frame_id) = conn.runtime_session_owner_frame_id_for_owner(owner) else {
         return;
     };
     for event_session_id in conn.page_event_session_ids_for_owner(owner) {
@@ -3487,7 +3476,6 @@ pub(crate) async fn emit_same_document_navigation_background_events_async(
             owner,
             url,
             &navigation.navigation_type,
-            navigation.history_update,
         );
     }
 }

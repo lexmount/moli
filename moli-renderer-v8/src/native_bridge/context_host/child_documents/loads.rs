@@ -464,7 +464,6 @@ impl JsContextHost {
                 self.clear_child_browsing_context_pending_navigation(handle);
                 if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
                     entry.restore_navigation_entry_seed_from_committed();
-                    entry.clear_pending_top_level_history_length_increment();
                 }
                 self.sync_existing_child_browsing_context_window_state(scope, handle);
                 self.reject_replaced_service_worker_child_client_navigation(

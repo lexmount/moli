@@ -7,7 +7,6 @@ use super::navigation_activation::{
     install_navigation_activation_runtime_state, set_navigation_current_entry,
 };
 use super::navigation_entry::{set_history_entries, set_history_index};
-use super::navigation_projection::set_history_length_from_visible_entries;
 use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_seed::{
     build_current_navigation_entry_from_seed, build_history_entries_array_from_seed,
@@ -62,6 +61,9 @@ pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
     let navigation = build_navigation_runtime_state(scope, window, &initial_seed)?;
     set_runtime_window_owner(scope, navigation, window);
     set_private_value(scope, window, WINDOW_NAVIGATION_SLOT, navigation.into());
+    if crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_some() {
+        super::session_history::initialize(scope, window, &initial_seed);
+    }
     if !window.strict_equals(scope.get_current_context().global(scope).into()) {
         sync_window_location_history_navigation_runtime_surface(scope, window);
     }
@@ -108,7 +110,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
         });
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, initial_seed.current_index);
-    set_history_length_from_visible_entries(scope, history, entries);
+    super::session_history::initialize(scope, window, &initial_seed);
     set_private_value(scope, window, WINDOW_HISTORY_SLOT, history.into());
 
     let navigation = match window_runtime_object(scope, window, WINDOW_NAVIGATION_SLOT) {

@@ -191,7 +191,7 @@ impl JsContextHost {
         self.clear_child_browsing_context_pending_navigation(handle);
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.clear_pending_document_load();
-            entry.clear_pending_top_level_history_length_increment();
+
             entry.restore_navigation_entry_seed_from_committed();
         }
     }

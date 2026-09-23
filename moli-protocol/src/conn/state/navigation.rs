@@ -1,4 +1,4 @@
-use moli_core::page::SameDocumentHistoryUpdate;
+use moli_core::page::SessionHistoryUpdateKind;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageNavigationHistoryEntry {
@@ -47,19 +47,27 @@ impl TargetNavigationHistoryState {
         self.entries.is_empty()
     }
 
-    pub(crate) fn length_after_navigation(&self) -> usize {
-        match self.pending_update {
+    pub(crate) fn position_after_navigation(&self) -> moli_page_types::SessionHistoryPosition {
+        let (index, length) = match self.pending_update {
             Some(
                 PendingNavigationHistoryUpdate::ReplaceCurrent
                 | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument,
-            ) => self.entries.len().max(1),
-            Some(PendingNavigationHistoryUpdate::TraverseToEntry(entry_id))
-                if self.entries.iter().any(|entry| entry.id == entry_id) =>
-            {
-                self.entries.len()
+            ) => (self.current_index.unwrap_or(0), self.entries.len().max(1)),
+            Some(PendingNavigationHistoryUpdate::TraverseToEntry(entry_id)) => {
+                if let Some(index) = self.entries.iter().position(|entry| entry.id == entry_id) {
+                    (index, self.entries.len())
+                } else {
+                    let index = self.current_index.map_or(0, |index| index + 1);
+                    (index, index + 1)
+                }
             }
-            _ => self.current_index.map_or(1, |index| index + 2),
-        }
+            None => {
+                let index = self.current_index.map_or(0, |index| index + 1);
+                (index, index + 1)
+            }
+        };
+        moli_page_types::SessionHistoryPosition::new(index, length)
+            .expect("browser session history position must be valid")
     }
 
     pub(crate) fn allocate_entry_id(&mut self) -> i32 {
@@ -165,6 +173,14 @@ impl TargetNavigationHistoryState {
         (self.current_index.unwrap_or(0), self.entries.clone())
     }
 
+    pub(crate) fn synchronize_root_entry_url(&mut self, steps: &[usize], url: &str) {
+        for &index in steps {
+            if let Some(entry) = self.entries.get_mut(index) {
+                entry.url = url.to_owned();
+            }
+        }
+    }
+
     pub(crate) fn can_prune_all_but_current(&self) -> bool {
         !matches!(
             self.pending_update,
@@ -222,14 +238,14 @@ impl TargetNavigationHistoryState {
         }
     }
 
-    pub(crate) fn record_same_document_update(
+    pub(crate) fn record_session_history_update(
         &mut self,
         url: String,
         title: String,
-        history_update: SameDocumentHistoryUpdate,
+        history_update: SessionHistoryUpdateKind,
     ) -> bool {
         match history_update {
-            SameDocumentHistoryUpdate::Push | SameDocumentHistoryUpdate::Replace => {
+            SessionHistoryUpdateKind::Push | SessionHistoryUpdateKind::Replace => {
                 let mut entry = PageNavigationHistoryEntry {
                     id: self.allocate_entry_id(),
                     url,
@@ -244,13 +260,15 @@ impl TargetNavigationHistoryState {
                 };
                 self.assign_current_document_sequence_number(&mut entry);
                 match history_update {
-                    SameDocumentHistoryUpdate::Push => self.push_entry(entry),
-                    SameDocumentHistoryUpdate::Replace => self.replace_current_entry(entry),
-                    SameDocumentHistoryUpdate::Traverse { .. } => unreachable!(),
+                    SessionHistoryUpdateKind::Push => self.push_entry(entry),
+                    SessionHistoryUpdateKind::Replace => self.replace_current_entry(entry),
+                    SessionHistoryUpdateKind::Traverse { .. }
+                    | SessionHistoryUpdateKind::PruneAllButCurrent => unreachable!(),
                 }
                 true
             }
-            SameDocumentHistoryUpdate::Traverse { delta } => {
+            SessionHistoryUpdateKind::PruneAllButCurrent => self.prune_all_but_current(),
+            SessionHistoryUpdateKind::Traverse { delta } => {
                 let Some(current_index) = self.current_index else {
                     return false;
                 };
@@ -285,21 +303,21 @@ mod tests {
     #[test]
     fn same_document_traversal_moves_cursor_without_allocating_or_appending() {
         let mut history = TargetNavigationHistoryState::default();
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/a".to_owned(),
             "A".to_owned(),
-            SameDocumentHistoryUpdate::Push,
+            SessionHistoryUpdateKind::Push,
         ));
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/b".to_owned(),
             "B".to_owned(),
-            SameDocumentHistoryUpdate::Push,
+            SessionHistoryUpdateKind::Push,
         ));
 
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/a".to_owned(),
             "ignored during traversal".to_owned(),
-            SameDocumentHistoryUpdate::Traverse { delta: -1 },
+            SessionHistoryUpdateKind::Traverse { delta: -1 },
         ));
         let (current_index, entries) = history.snapshot();
         assert_eq!(current_index, 0);
@@ -309,10 +327,10 @@ mod tests {
             vec![1, 2]
         );
 
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/c".to_owned(),
             "C".to_owned(),
-            SameDocumentHistoryUpdate::Push,
+            SessionHistoryUpdateKind::Push,
         ));
         let (current_index, entries) = history.snapshot();
         assert_eq!(current_index, 1);
@@ -329,25 +347,25 @@ mod tests {
     #[test]
     fn same_document_replace_preserves_entry_id_and_out_of_range_traverse_is_atomic() {
         let mut history = TargetNavigationHistoryState::default();
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/a".to_owned(),
             "A".to_owned(),
-            SameDocumentHistoryUpdate::Push,
+            SessionHistoryUpdateKind::Push,
         ));
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/replaced".to_owned(),
             "Replaced".to_owned(),
-            SameDocumentHistoryUpdate::Replace,
+            SessionHistoryUpdateKind::Replace,
         ));
         let before = history.snapshot();
         assert_eq!(before.0, 0);
         assert_eq!(before.1[0].id, 1);
         assert_eq!(before.1[0].url, "https://example.test/replaced");
 
-        assert!(!history.record_same_document_update(
+        assert!(!history.record_session_history_update(
             "https://example.test/missing".to_owned(),
             String::new(),
-            SameDocumentHistoryUpdate::Traverse { delta: -1 },
+            SessionHistoryUpdateKind::Traverse { delta: -1 },
         ));
         assert_eq!(history.snapshot(), before);
     }

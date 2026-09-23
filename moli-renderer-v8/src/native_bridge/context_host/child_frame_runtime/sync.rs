@@ -2,7 +2,7 @@ use super::super::JsContextHost;
 use super::document_slots::sync_child_document_window_slots;
 use crate::{
     context_bootstrap::{
-        bind_window_performance_seed, install_navigation_bootstrap_entry_for_holder,
+        bind_window_performance_seed, install_navigation_entry_view_for_holder,
         reset_window_location_history_navigation_runtime_state, set_window_origin_runtime_state,
         sync_window_location_history_navigation_runtime_surface,
     },
@@ -94,7 +94,12 @@ impl JsContextHost {
         } else {
             sync_window_location_history_navigation_runtime_surface(scope, wrapper);
         }
-        install_navigation_bootstrap_entry_for_holder(scope, wrapper, &visible_state.entry_seed);
+        install_navigation_entry_view_for_holder(
+            scope,
+            wrapper,
+            &visible_state.entry_seed,
+            visible_state.seed_is_committed,
+        );
         let performance_navigation_type = self.child_performance_navigation_type(handle);
         let _ = bind_window_performance_seed(
             scope,
@@ -159,7 +164,7 @@ impl JsContextHost {
             wrapper,
             &current_entry.url,
         );
-        install_navigation_bootstrap_entry_for_holder(scope, wrapper, &entry_seed);
+        install_navigation_entry_view_for_holder(scope, wrapper, &entry_seed, false);
         let performance_navigation_type = self.child_performance_navigation_type(handle);
         let _ = bind_window_performance_seed(
             scope,

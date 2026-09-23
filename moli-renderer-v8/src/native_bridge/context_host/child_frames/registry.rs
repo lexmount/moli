@@ -8,6 +8,8 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
     ) -> Option<ChildBrowsingContextEntry> {
+        self.session_histories
+            .detach(super::super::OwnerDispatchScope::Child(handle));
         self.child_browsing_contexts.shift_remove(&handle)
     }
 
@@ -424,10 +426,6 @@ impl JsContextHost {
                         pending_service_worker_client_navigation: existing
                             .as_ref()
                             .and_then(|entry| entry.pending_service_worker_client_navigation()),
-                        pending_top_level_history_length_increment: existing
-                            .as_ref()
-                            .map(|entry| entry.pending_top_level_history_length_increment())
-                            .unwrap_or(false),
                     },
                 );
                 if attribute_bootstrap_changed {

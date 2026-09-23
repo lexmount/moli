@@ -10353,6 +10353,184 @@ fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
 }
 
 #[tokio::test]
+async fn joint_history_branch_shrinks_after_traversal() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://joint-history.test/", &loader);
+    vm.eval("history.replaceState('A', ''); for (const state of ['B', 'C', 'D']) history.pushState(state, ''); history.go(-2); 'queued'")
+        .expect("queue traversal to B");
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("traverse");
+    assert_eq!(
+        vm.eval("[history.state, history.length].join('|')")
+            .unwrap(),
+        "B|4"
+    );
+    assert_eq!(vm.eval("history.pushState('E', ''); [history.state, history.length, navigation.entries().length, navigation.canGoForward].join('|')").unwrap(), "E|3|3|false");
+}
+
+#[tokio::test]
+async fn joint_history_siblings_share_steps_and_forward_pruning() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://joint-history.test/", &loader);
+    vm.eval(
+        r#"
+      for (const id of ['a', 'b']) {
+        const frame = document.createElement('iframe'); frame.id = id;
+        frame.srcdoc = '<p>child</p>';
+        (document.body || document.documentElement || document).appendChild(frame);
+      }
+      'ready'
+    "#,
+    )
+    .expect("create siblings");
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("load siblings");
+    assert_eq!(vm.eval(r#"
+      globalThis.a = document.getElementById('a').contentWindow;
+      globalThis.b = document.getElementById('b').contentWindow;
+      globalThis.held = [history, a.history, b.history];
+      globalThis.snapshot = () => held.map(h => h.length).concat(held.map(h => h.state)).join('|');
+      history.replaceState('top', ''); a.history.replaceState('a0', ''); b.history.replaceState('b0', '');
+      a.history.pushState('a1', ''); b.history.pushState('b1', ''); a.history.pushState('a2', '');
+      snapshot()
+    "#).unwrap(), "4|4|4|top|a2|b1");
+    vm.eval("history.back(); 'queued'").unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("back targets a, not last iframe b");
+    assert_eq!(vm.eval("snapshot()").unwrap(), "4|4|4|top|a1|b1");
+    vm.eval("a.history.back(); 'queued'").unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .expect("child caller traverses joint history to b0");
+    assert_eq!(vm.eval("snapshot()").unwrap(), "4|4|4|top|a1|b0");
+    assert_eq!(
+        vm.eval("b.history.pushState('b2', ''); snapshot()")
+            .unwrap(),
+        "3|3|3|top|a1|b2"
+    );
+    assert_eq!(vm.eval("[a.navigation.entries().length, b.navigation.entries().length, a.navigation.canGoForward, b.navigation.canGoForward].join('|')").unwrap(), "2|2|false|false");
+}
+
+#[tokio::test]
+async fn joint_history_navigation_traverse_uses_nearest_shared_step() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://joint-history.test/", &loader);
+    vm.eval(
+        r#"
+      const frame = document.createElement('iframe'); frame.srcdoc = '<p>child</p>';
+      (document.body || document.documentElement || document).appendChild(frame); 'ready'
+    "#,
+    )
+    .unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    vm.eval(
+        r#"
+      globalThis.child = document.querySelector('iframe').contentWindow;
+      history.replaceState('top0', ''); child.history.replaceState('child0', '');
+      child.history.pushState('child1', ''); history.pushState('top1', '');
+      child.history.pushState('child2', ''); child.navigation.back(); 'queued'
+    "#,
+    )
+    .unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("[history.state, child.history.state, history.length].join('|')")
+            .unwrap(),
+        "top1|child1|4"
+    );
+    assert_eq!(
+        vm.eval("history.pushState('top2', ''); [history.length, child.history.length].join('|')")
+            .unwrap(),
+        "4|4"
+    );
+    // A History traversal can change more than one Document's entry; all live
+    // views must be updated before observers see the committed state.
+    vm.eval("history.go(-2); 'queued'").unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("[history.state, child.history.state, history.length].join('|')")
+            .unwrap(),
+        "top0|child1|4"
+    );
+    vm.eval(r#"
+      history.pushState('top3', '');
+      globalThis.jointTraversalResult = 'pending';
+      child.navigation.traverseTo(child.navigation.entries()[0].key).finished.then(entry => {
+        jointTraversalResult = entry === child.navigation.currentEntry ? 'child-entry' : 'wrong-entry';
+      }); 'queued'
+    "#).unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("[history.state, child.history.state, jointTraversalResult].join('|')")
+            .unwrap(),
+        "top0|child0|child-entry"
+    );
+}
+
+#[tokio::test]
+async fn joint_history_pending_cursor_is_shared_and_detached_steps_remain_traversable() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://joint-history.test/", &loader);
+    vm.eval(
+        r#"
+        for (const id of ['a', 'b']) {
+            const f = document.createElement('iframe'); f.id = id; f.srcdoc = '<p>child</p>';
+            (document.body || document.documentElement || document).append(f);
+        }
+        'ready'
+    "#,
+    )
+    .unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    vm.eval(
+        r#"
+        globalThis.a = document.getElementById('a').contentWindow;
+        globalThis.b = document.getElementById('b').contentWindow;
+        a.history.replaceState('a0', ''); b.history.replaceState('b0', '');
+        a.history.pushState('a1', ''); b.history.pushState('b1', ''); a.history.pushState('a2', '');
+        globalThis.childDocuments = [a.document, b.document];
+        history.replaceState('replaced', '', '#replaced');
+        history.back(); a.history.back(); 'queued'
+    "#,
+    )
+    .unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("[a.history.state, b.history.state, history.length, a.document === childDocuments[0], b.document === childDocuments[1]].join('|')")
+            .unwrap(),
+        "a1|b0|4|true|true"
+    );
+    vm.eval("document.getElementById('a').remove(); document.getElementById('b').remove(); globalThis.pops=0; onpopstate=()=>pops++; history.back(); 'queued'").unwrap();
+    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        .await
+        .unwrap();
+    assert_eq!(
+        vm.eval("history.pushState('branch', ''); [history.length, pops].join('|')")
+            .unwrap(),
+        "2|0"
+    );
+}
+
+#[tokio::test]
 async fn child_history_push_preserves_existing_top_history_length() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     for parent_steps in [0, 1, 3] {

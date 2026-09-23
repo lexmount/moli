@@ -5,7 +5,6 @@ use super::super::{
 };
 use crate::native_bridge::context_host::child_documents::ChildDocumentNavigationInitiator;
 use crate::{
-    context_bootstrap::increment_top_level_history_length_for_runtime_owner,
     document_runtime::DomHandle,
     document_script_scheduler::FrameDocumentClassicScriptSchedulerWork,
     frame_owner_model::{
@@ -416,10 +415,6 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
-        let increment_top_level_history_length = self
-            .child_browsing_contexts
-            .get_mut(&handle)
-            .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
@@ -430,11 +425,6 @@ impl JsContextHost {
             ChildDocumentNavigationInitiator::BrowsingContext,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
-        if increment_top_level_history_length
-            && let Some(window) = self.child_browsing_context_window_wrapper(scope, handle)
-        {
-            increment_top_level_history_length_for_runtime_owner(scope, window);
-        }
         commit_result
     }
 
@@ -508,7 +498,7 @@ impl JsContextHost {
             return false;
         };
         entry.clear_pending_navigation();
-        entry.clear_pending_top_level_history_length_increment();
+
         entry.restore_navigation_entry_seed_from_committed();
         self.clear_pending_form_submission_child_target(handle);
         self.reject_replaced_service_worker_child_client_navigation(

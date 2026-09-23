@@ -2093,6 +2093,8 @@ impl ScriptVmPageRealmBootstrap {
                 context_host
                     .borrow_mut()
                     .install_page_default_context(scope, local_context);
+                let scope = &mut v8::ContextScope::new(scope, local_context);
+                super::context_bootstrap::initialize_main_session_history(scope);
                 Ok(())
             })
         {
@@ -5845,9 +5847,12 @@ impl ScriptVm {
         })
     }
 
-    pub(super) fn install_session_history_length(&mut self, length: usize) {
+    pub(super) fn install_session_history_position(
+        &mut self,
+        position: moli_page_types::SessionHistoryPosition,
+    ) {
         let _ = self.with_default_context_scope(|scope, _runtime_ptr| {
-            super::context_bootstrap::install_session_history_length(scope, length);
+            super::context_bootstrap::install_session_history_position(scope, position);
             Ok(())
         });
     }

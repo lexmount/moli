@@ -27,6 +27,7 @@ fn capture_navigation_entry_seed_for_holder<'s>(
     let history = window_history_for_holder(scope, owner)?;
     let navigation = window_navigation_for_holder(scope, owner)?;
     Some(NavigationHistoryEntrySeed {
+        session_history: Default::default(),
         entries: serialize_history_entries(scope, history),
         current_index: history_index(scope, history),
         activation: serialize_navigation_activation_seed(scope, navigation),
@@ -37,20 +38,27 @@ pub(super) fn sync_child_navigation_entry_seed_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) {
-    sync_child_navigation_entry_seed_from_owner_with_document_url(scope, owner, true);
+    sync_child_navigation_entry_seed_from_owner_with_document_url(
+        scope,
+        owner,
+        true,
+        moli_page_types::SessionHistoryCommit::Attach,
+    );
 }
 
 pub(super) fn sync_child_pending_navigation_entry_seed_from_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
+    commit: moli_page_types::SessionHistoryCommit,
 ) {
-    sync_child_navigation_entry_seed_from_owner_with_document_url(scope, owner, false);
+    sync_child_navigation_entry_seed_from_owner_with_document_url(scope, owner, false, commit);
 }
 
 fn sync_child_navigation_entry_seed_from_owner_with_document_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     sync_document_url: bool,
+    commit: moli_page_types::SessionHistoryCommit,
 ) {
     if runtime_window_is_global(scope, owner) {
         return;
@@ -58,9 +66,10 @@ fn sync_child_navigation_entry_seed_from_owner_with_document_url<'s>(
     let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) else {
         return;
     };
-    let Some(entry_seed) = capture_navigation_entry_seed_for_holder(scope, owner) else {
+    let Some(mut entry_seed) = capture_navigation_entry_seed_for_holder(scope, owner) else {
         return;
     };
+    entry_seed.session_history.commit = commit;
     let Some(host_ptr) = context_host_ptr_for_navigation_seed_owner(scope, owner) else {
         return;
     };

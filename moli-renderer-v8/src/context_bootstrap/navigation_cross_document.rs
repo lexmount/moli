@@ -66,13 +66,14 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
     };
 
     if runtime_window_is_global(scope, owner) {
-        let entry_seed = cross_document_navigation_seed(
+        let mut entry_seed = cross_document_navigation_seed(
             entries,
             current_index,
             current_navigation_index,
             next_url,
             mutation,
         );
+        super::session_history::capture_for_navigation(scope, owner, &mut entry_seed);
         dispatch_beforeunload_for_runtime_owner(scope, owner);
         dispatch_pagehide_for_runtime_owner(scope, owner);
         dispatch_unload_for_runtime_owner(scope, owner);

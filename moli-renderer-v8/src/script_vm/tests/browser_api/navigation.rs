@@ -4130,14 +4130,10 @@ async fn reset_navigation_history_updates_all_live_window_realms() {
 (() => {
   const child = document.querySelector("iframe").contentWindow;
   globalThis.__lmResetRealmOrder = [];
-  globalThis.__lmResetTopLengthBeforeDispose = history.length;
-  globalThis.__lmResetChildLengthBeforeDispose = child.history.length;
   __lmResetRealmEntries[0].addEventListener("dispose", () => {
     __lmResetRealmOrder.push({
       listener: "top",
-      lengthsUnchanged:
-        history.length === __lmResetTopLengthBeforeDispose &&
-        child.history.length === __lmResetChildLengthBeforeDispose,
+      sharedLengthPruned: history.length === 1 && child.history.length === 1,
       topEntries: navigation.entries().length,
       childEntries: child.navigation.entries().length
     });
@@ -4152,9 +4148,7 @@ async fn reset_navigation_history_updates_all_live_window_realms() {
 __lmResetRealmEntries[0].addEventListener("dispose", () => {
   parent.__lmResetRealmOrder.push({
     listener: "child",
-    lengthsUnchanged:
-      history.length === parent.__lmResetChildLengthBeforeDispose &&
-      parent.history.length === parent.__lmResetTopLengthBeforeDispose,
+    sharedLengthPruned: history.length === 1 && parent.history.length === 1,
     topEntries: parent.navigation.entries().length,
     childEntries: navigation.entries().length
   });
@@ -4208,7 +4202,7 @@ JSON.stringify({
     assert_eq!(
         vm.eval("JSON.stringify(__lmResetRealmOrder)")
             .expect("cross-realm reset order should evaluate"),
-        r#"[{"listener":"top","lengthsUnchanged":true,"topEntries":1,"childEntries":2},{"listener":"child","lengthsUnchanged":true,"topEntries":1,"childEntries":1}]"#
+        r#"[{"listener":"top","sharedLengthPruned":true,"topEntries":1,"childEntries":2},{"listener":"child","sharedLengthPruned":true,"topEntries":1,"childEntries":1}]"#
     );
 }
 
@@ -4286,7 +4280,7 @@ JSON.stringify({
 "#,
         )
         .expect("reentrant child reset history state should evaluate"),
-        r#"{"historyLength":1,"navigationLength":2,"currentIndex":1,"retainedPreviousCurrent":true,"appendedCurrent":true,"stateRealm":"child-during-top-dispose","disposed":[0]}"#
+        r#"{"historyLength":2,"navigationLength":2,"currentIndex":1,"retainedPreviousCurrent":true,"appendedCurrent":true,"stateRealm":"child-during-top-dispose","disposed":[0]}"#
     );
 }
 

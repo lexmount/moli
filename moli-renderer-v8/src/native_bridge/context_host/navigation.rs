@@ -7,7 +7,7 @@ use crate::runtime::{
 };
 use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerClientNavigateError};
 use moli_fetch::BrowserNavigationRequestKind;
-use moli_page_types::{NavigationHistoryEntrySeed, SameDocumentHistoryUpdate};
+use moli_page_types::NavigationHistoryEntrySeed;
 use url::Url;
 
 pub(crate) struct PendingReservedServiceWorkerClient {
@@ -92,6 +92,25 @@ pub(crate) enum PendingTopLevelNavigation {
 }
 
 impl JsContextHost {
+    pub(crate) fn record_session_history_update(
+        &mut self,
+        update: moli_page_types::SessionHistoryUpdate,
+    ) {
+        let Some(source_document) = self
+            .root_document_lifecycle
+            .as_ref()
+            .map(RendererDocumentLifecycleJournalHandle::identity)
+        else {
+            return;
+        };
+        self.append_live_turn_owner_action(
+            crate::runtime::RendererOwnerAction::SessionHistoryUpdate {
+                source_document,
+                update,
+            },
+        );
+    }
+
     /// Replace the dynamically scoped Runtime command cause and return the
     /// previous scope for exact restoration after V8 dispatch.
     ///
@@ -337,12 +356,7 @@ impl JsContextHost {
             })
     }
 
-    pub(crate) fn record_same_document_navigation(
-        &mut self,
-        url: &Url,
-        navigation_type: &str,
-        history_update: SameDocumentHistoryUpdate,
-    ) {
+    pub(crate) fn record_same_document_navigation(&mut self, url: &Url, navigation_type: &str) {
         let Some(source_document) = self
             .root_document_lifecycle
             .as_ref()
@@ -364,7 +378,6 @@ impl JsContextHost {
             crate::runtime::RendererPendingSameDocumentNavigation {
                 url: url.to_string(),
                 navigation_type: navigation_type.to_owned(),
-                history_update,
             },
         );
         if !self.append_live_turn_owner_action(

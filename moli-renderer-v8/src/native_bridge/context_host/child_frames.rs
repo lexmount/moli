@@ -62,7 +62,6 @@ pub(super) struct ChildBrowsingContextEntry {
     service_worker_client_id: Option<ServiceWorkerClientId>,
     pending_service_worker_client_id: Option<ServiceWorkerClientId>,
     pending_service_worker_client_navigation: Option<ServiceWorkerClientNavigateContinuation>,
-    pending_top_level_history_length_increment: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -162,7 +161,18 @@ impl ChildBrowsingContextEntry {
         &self,
         bootstrap: &ChildBrowsingContextBootstrap,
     ) -> bool {
-        self.attribute_bootstrap != *bootstrap
+        match (&self.attribute_bootstrap, bootstrap) {
+            (
+                ChildBrowsingContextBootstrap::Srcdoc { markup: before, .. },
+                ChildBrowsingContextBootstrap::Srcdoc { markup: after, .. },
+            ) => {
+                // The inherited base URL is input to document creation, not
+                // a navigation attribute. Parent pushState/replaceState must
+                // not replace the child Document or retire its queued tasks.
+                before != after
+            }
+            (before, after) => before != after,
+        }
     }
 
     pub(super) fn pending_attribute_bootstrap_commit(&self) -> bool {
@@ -696,14 +706,6 @@ impl ChildBrowsingContextEntry {
         self.navigation_entry_seed = entry_seed;
     }
 
-    pub(super) fn replace_navigation_entry_seed_and_clear_pending_history_increment(
-        &mut self,
-        entry_seed: NavigationHistoryEntrySeed,
-    ) {
-        self.replace_navigation_entry_seed(entry_seed);
-        self.clear_pending_top_level_history_length_increment();
-    }
-
     pub(super) fn apply_navigation_to_entry_seed(&mut self, url: &Url) {
         apply_child_navigation_to_seed(&mut self.navigation_entry_seed, url, None, None);
     }
@@ -732,7 +734,6 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn apply_deferred_navigation_to_entry_seed(&mut self, url: &Url) {
         self.apply_navigation_to_entry_seed(url);
-        self.clear_pending_top_level_history_length_increment();
     }
 
     pub(super) fn clear_navigation_activation(&mut self) {
@@ -884,27 +885,8 @@ impl ChildBrowsingContextEntry {
         self.pending_document_load_id == Some(load_id)
     }
 
-    pub(super) fn mark_pending_top_level_history_length_increment(&mut self) {
-        self.pending_top_level_history_length_increment = true;
-    }
-
-    pub(super) fn pending_top_level_history_length_increment(&self) -> bool {
-        self.pending_top_level_history_length_increment
-    }
-
-    pub(super) fn clear_pending_top_level_history_length_increment(&mut self) {
-        self.pending_top_level_history_length_increment = false;
-    }
-
-    pub(super) fn take_pending_top_level_history_length_increment(&mut self) -> bool {
-        let increment = self.pending_top_level_history_length_increment;
-        self.clear_pending_top_level_history_length_increment();
-        increment
-    }
-
     pub(super) fn clear_pending_form_submission_navigation(&mut self) {
         self.pending_live_navigation = None;
-        self.clear_pending_top_level_history_length_increment();
     }
 
     pub(super) fn has_pending_live_navigation(&self) -> bool {

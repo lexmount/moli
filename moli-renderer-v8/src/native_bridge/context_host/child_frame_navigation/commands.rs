@@ -104,7 +104,7 @@ impl JsContextHost {
             return false;
         };
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.replace_navigation_entry_seed_and_clear_pending_history_increment(entry_seed);
+            entry.replace_navigation_entry_seed(entry_seed);
         }
         if self
             .set_child_browsing_context_pending_navigation(
@@ -172,15 +172,6 @@ impl JsContextHost {
             return false;
         }
         self.queue_child_browsing_context_navigation_commit(handle)
-    }
-
-    pub(crate) fn mark_child_browsing_context_top_level_history_increment(
-        &mut self,
-        handle: DomHandle,
-    ) {
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.mark_pending_top_level_history_length_increment();
-        }
     }
 
     pub(crate) fn queue_child_browsing_context_reload_from_existing_seed(

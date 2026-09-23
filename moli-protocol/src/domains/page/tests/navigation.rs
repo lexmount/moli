@@ -360,6 +360,131 @@ async fn renderer_fragment_navigation_preserves_initial_document_residence() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn joint_session_history_syncs_child_steps_cursor_and_reload_bootstrap() {
+    async fn page() -> impl axum::response::IntoResponse {
+        (
+            [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><body><script>globalThis.initialHistoryLength=history.length</script>",
+        )
+    }
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            axum::Router::new().route("/page", axum::routing::get(page)),
+        )
+        .await
+        .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
+    ctx.process_async(json!({"id": 9280, "method":"Page.navigate", "sessionId":"SID-1", "params":{"url":format!("http://{addr}/page")}})).await;
+    assert!(take_response_by_id(&mut ctx, 9280)["error"].is_null());
+    wait_until_message(
+        &mut ctx,
+        Some("SID-1"),
+        "joint history page load",
+        |message| message["method"] == json!("Page.domContentEventFired"),
+    )
+    .await;
+
+    let operations = [
+        (
+            r#"(async () => {
+            for (const id of ['a', 'b']) {
+                const f = document.createElement('iframe'); f.id = id; f.srcdoc = '<p>child</p>';
+                await new Promise(resolve => { f.onload = resolve; document.body.append(f); });
+            }
+            globalThis.a = document.getElementById('a').contentWindow;
+            globalThis.b = document.getElementById('b').contentWindow;
+            globalThis.held = [history, a.history, b.history];
+            history.replaceState('top', ''); a.history.replaceState('a0', ''); b.history.replaceState('b0', '');
+            a.history.pushState('a1', ''); b.history.pushState('b1', ''); a.history.pushState('a2', '');
+            return held.map(h => h.length);
+        })()"#,
+            json!([5, 5, 5]),
+            4,
+            5,
+        ),
+        (
+            r#"new Promise(resolve => {
+            b.addEventListener('popstate', () => resolve(held.map(h => h.length)), {once:true});
+            history.go(-2);
+        })"#,
+            json!([5, 5, 5]),
+            2,
+            5,
+        ),
+        (
+            "b.history.pushState('b2', ''); held.map(h => h.length)",
+            json!([4, 4, 4]),
+            3,
+            4,
+        ),
+    ];
+    for (expression, expected, index, length) in operations {
+        ctx.process_async(json!({"id":9281,"method":"Runtime.evaluate","sessionId":"SID-1", "params":{"expression":expression,"awaitPromise":true,"returnByValue":true}})).await;
+        wait_until_message(
+            &mut ctx,
+            Some("SID-1"),
+            "joint history operation",
+            |message| message["id"] == json!(9281),
+        )
+        .await;
+        let value = take_response_by_id(&mut ctx, 9281);
+        assert!(value["error"].is_null(), "{value}");
+        assert_eq!(value["result"]["result"]["value"], expected, "{value}");
+        ctx.process_async(
+            json!({"id":9282,"method":"Page.getNavigationHistory","sessionId":"SID-1"}),
+        )
+        .await;
+        let browser = take_response_by_id(&mut ctx, 9282);
+        assert_eq!(browser["result"]["currentIndex"], json!(index), "{browser}");
+        assert_eq!(
+            browser["result"]["entries"].as_array().unwrap().len(),
+            length,
+            "{browser}"
+        );
+    }
+    ctx.process_async(json!({"id":9285,"method":"Runtime.evaluate","sessionId":"SID-1", "params":{"expression":r#"
+        history.pushState('before-reset', '');
+        navigation.entries()[0].addEventListener('dispose', () => history.pushState('from-dispose', ''));
+        'armed'
+    "#}})).await;
+    assert!(take_response_by_id(&mut ctx, 9285)["result"]["exceptionDetails"].is_null());
+    ctx.process_async(
+        json!({"id":9286,"method":"Page.resetNavigationHistory","sessionId":"SID-1"}),
+    )
+    .await;
+    assert!(take_response_by_id(&mut ctx, 9286)["error"].is_null());
+    ctx.process_async(json!({"id":9287,"method":"Runtime.evaluate","sessionId":"SID-1", "params":{"expression":"[...held.map(h => h.length), a.navigation.entries().length, b.navigation.entries().length, history.state]","returnByValue":true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 9287)["result"]["result"]["value"],
+        json!([2, 2, 2, 1, 1, "from-dispose"])
+    );
+    ctx.process_async(json!({"id":9288,"method":"Page.getNavigationHistory","sessionId":"SID-1"}))
+        .await;
+    let reset = take_response_by_id(&mut ctx, 9288);
+    assert_eq!(reset["result"]["currentIndex"], json!(1), "{reset}");
+    assert_eq!(reset["result"]["entries"].as_array().unwrap().len(), 2);
+    ctx.sent.clear();
+    ctx.process_async(json!({"id":9283,"method":"Page.reload","sessionId":"SID-1"}))
+        .await;
+    assert!(take_response_by_id(&mut ctx, 9283)["error"].is_null());
+    wait_until_message(&mut ctx, Some("SID-1"), "joint history reload", |message| {
+        message["method"] == json!("Page.domContentEventFired")
+    })
+    .await;
+    ctx.process_async(json!({"id":9284,"method":"Runtime.evaluate","sessionId":"SID-1", "params":{"expression":"[initialHistoryLength, history.length]","returnByValue":true}})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 9284)["result"]["result"]["value"],
+        json!([2, 2])
+    );
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn navigation_bootstraps_browser_history_length_before_author_scripts() {
     async fn page() -> impl axum::response::IntoResponse {
         (
@@ -1284,7 +1409,7 @@ async fn reset_navigation_history_prunes_browser_and_renderer_history() {
     assert_eq!(
         reentrant_renderer_state["result"]["result"]["value"],
         json!({
-            "historyLength": 1,
+            "historyLength": 2,
             "navigationLength": 2,
             "currentIndex": 1,
             "currentUrl": format!("{page_url}#during-dispose"),

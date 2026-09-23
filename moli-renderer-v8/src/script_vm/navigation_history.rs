@@ -70,6 +70,11 @@ impl ScriptVm {
             plans.push((realm, plan));
         }
 
+        self.with_default_context_scope(|scope, _host_ptr| {
+            crate::context_bootstrap::prune_joint_session_history(scope);
+            Ok(())
+        })?;
+
         for (realm, plan) in plans {
             let Some(context_ptr) = self.navigation_history_realm_context_ptr(realm) else {
                 continue;
@@ -84,9 +89,8 @@ impl ScriptVm {
             }
         }
 
-        // Dispose handlers can create a new child realm. Re-enumerate before
-        // publishing the pruned joint session history length so those realms
-        // observe the same traversable state.
+        // Dispose handlers can create a new child realm. Check its view without
+        // pruning again: callbacks may have appended valid new joint steps.
         for realm in self.live_navigation_history_realms() {
             let Some(context_ptr) = self.navigation_history_realm_context_ptr(realm) else {
                 continue;

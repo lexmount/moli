@@ -3,24 +3,16 @@ use super::navigation_activation::{
     set_navigation_current_entry,
 };
 use super::navigation_entry::{
-    create_navigation_entry, set_history_entries, set_history_index, set_history_length,
-    set_history_state, set_navigation_entry_document_id,
+    create_navigation_entry, set_history_entries, set_history_index, set_history_state,
+    set_navigation_entry_document_id,
 };
 use super::navigation_entry_state::clone_history_entry_state;
-use super::navigation_projection::set_history_length_from_visible_entries;
 use super::navigation_result::clear_active_cross_document_navigation_if_matches;
 use super::navigation_window::{window_history_for_holder, window_navigation_for_holder};
 use crate::native_bridge::NavigationHistoryEntrySeed;
 use moli_page_types::{
     NavigationHistoryDocumentId, NavigationHistoryEntryId, NavigationHistoryEntryKey,
 };
-
-pub(crate) fn install_session_history_length(scope: &mut v8::PinScope<'_, '_>, length: usize) {
-    let global = scope.get_current_context().global(scope);
-    if let Some(history) = window_history_for_holder(scope, global) {
-        set_history_length(scope, history, length as f64);
-    }
-}
 
 pub(crate) fn install_navigation_bootstrap_entry(
     scope: &mut v8::PinScope<'_, '_>,
@@ -34,6 +26,17 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     entry_seed: &NavigationHistoryEntrySeed,
+) {
+    install_navigation_entry_view_for_holder(scope, owner, entry_seed, true);
+}
+
+/// A pending child navigation may expose its entry view before replacing the
+/// live Document. Only a committed seed advances the shared traversable.
+pub(crate) fn install_navigation_entry_view_for_holder<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    entry_seed: &NavigationHistoryEntrySeed,
+    committed: bool,
 ) {
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
@@ -86,7 +89,9 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     });
     set_history_entries(scope, history, entries);
     set_history_index(scope, history, entry_seed.current_index);
-    set_history_length_from_visible_entries(scope, history, entries);
+    if committed {
+        super::session_history::restore(scope, owner, entry_seed);
+    }
     set_history_state(
         scope,
         history,

@@ -39,9 +39,7 @@ use super::*;
 use crate::native_bridge::NavigationHistoryEntrySeed;
 use crate::util::context_host_ptr_from_window_object;
 use crate::webidl;
-use moli_page_types::{
-    NavigationHistoryMutation, SameDocumentHistoryUpdate, cross_document_navigation_seed,
-};
+use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LocationNavigationKind {
@@ -424,13 +422,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
                 let host = unsafe { &mut *host_ptr };
                 host.set_document_url(resolved.clone());
-                let history_update = match effective_kind {
-                    LocationNavigationKind::Assign => SameDocumentHistoryUpdate::Push,
-                    LocationNavigationKind::Replace | LocationNavigationKind::Reload => {
-                        SameDocumentHistoryUpdate::Replace
-                    }
-                };
-                host.record_same_document_navigation(&resolved, "fragment", history_update);
+                host.record_same_document_navigation(&resolved, "fragment");
             }
         } else {
             sync_local_document_front_from_window(scope, owner);
@@ -549,13 +541,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             {
                 let host = unsafe { &mut *host_ptr };
                 host.set_document_url(url.clone());
-                let history_update = match effective_kind {
-                    LocationNavigationKind::Assign => SameDocumentHistoryUpdate::Push,
-                    LocationNavigationKind::Replace | LocationNavigationKind::Reload => {
-                        SameDocumentHistoryUpdate::Replace
-                    }
-                };
-                host.record_same_document_navigation(&url, "fragment", history_update);
+                host.record_same_document_navigation(&url, "fragment");
             }
             settle_location_intercepted_same_document_navigation(
                 scope,
@@ -608,9 +594,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
-            if matches!(kind, LocationNavigationKind::Assign) && !is_javascript_url {
-                host.mark_child_browsing_context_top_level_history_increment(handle);
-            }
             if matches!(kind, LocationNavigationKind::Reload) {
                 host.queue_child_browsing_context_reload_from_existing_seed(
                     handle,
@@ -861,13 +844,15 @@ fn history_entry_seed_for_cross_document_location<'s>(
         LocationNavigationKind::Replace => NavigationHistoryMutation::Replace,
         LocationNavigationKind::Reload => return None,
     };
-    Some(cross_document_navigation_seed(
+    let mut seed = cross_document_navigation_seed(
         serialize_history_entries(scope, history),
         current_index,
         current_navigation_index,
         resolved,
         mutation,
-    ))
+    );
+    super::session_history::capture_for_navigation(scope, owner, &mut seed);
+    Some(seed)
 }
 
 fn context_host_ptr_for_navigation_owner(
