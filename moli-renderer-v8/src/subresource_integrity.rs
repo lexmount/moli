@@ -175,6 +175,18 @@ mod tests {
                     );
                 }
             }
+            assert!(!integrity_metadata_allows_preload_consumption(
+                &valid,
+                Some(malformed)
+            ));
+            assert!(integrity_metadata_allows_preload_consumption(
+                malformed,
+                Some(malformed)
+            ));
+            assert!(!integrity_metadata_allows_preload_consumption(
+                "",
+                Some(malformed)
+            ));
         }
     }
 
@@ -183,6 +195,7 @@ mod tests {
         let body = b"noncanonical integrity";
         let digest = base64::engine::general_purpose::STANDARD
             .encode(DigestAlgorithm::Sha256.digest_bytes(body));
+        let metadata = format!("sha256-{digest}");
         for padding in ["", "=", "===", "======="] {
             let padded = format!("sha256-{}{padding}", digest.trim_end_matches('='));
             assert!(response_matches_subresource_integrity_metadata(
@@ -195,6 +208,10 @@ mod tests {
                 Some(&padded),
                 false
             ));
+            assert_eq!(
+                integrity_metadata_allows_preload_consumption(&metadata, Some(&padded)),
+                metadata == padded
+            );
         }
         // Only the top four bits of the final SHA-256 base64 symbol carry data.
         let mut noncanonical = digest.trim_end_matches('=').as_bytes().to_vec();
@@ -206,6 +223,10 @@ mod tests {
             body,
             Some(&noncanonical),
             true
+        ));
+        assert!(!integrity_metadata_allows_preload_consumption(
+            &metadata,
+            Some(&noncanonical)
         ));
     }
 
