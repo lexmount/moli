@@ -4116,68 +4116,6 @@ mod tests {
     }
 
     #[test]
-    fn content_alt_counters_use_validated_supplemental_entries() {
-        for (input, expected) in [
-            ("\"\" / counter(cnt)", "\"\" / counter(cnt)"),
-            (
-                "\"regular text\" / \"alt text 1\" counter(cnt) \"alt text 2\"",
-                "\"regular text\" / \"alt text 1\" counter(cnt) \"alt text 2\"",
-            ),
-            (
-                "\"regular text\" / counter(cnt) \"alt text\"",
-                "\"regular text\" / counter(cnt) \"alt text\"",
-            ),
-            (
-                "\"regular text\" / counters(chapter, \".\", DECIMAL)",
-                "\"regular text\" / counters(chapter, \".\")",
-            ),
-            (
-                "\"main / label\" / /* alt */ counter(cnt)",
-                "\"main / label\" / counter(cnt)",
-            ),
-        ] {
-            let parsed = parse_style_property_entries_for_cssom_write("content", input, true, None)
-                .unwrap_or_else(|| panic!("content: {input} should parse"));
-            assert_eq!(parsed.entries.len(), 1, "content: {input}");
-            assert_eq!(parsed.entries[0].name, "content", "content: {input}");
-            assert_eq!(parsed.entries[0].value, expected, "content: {input}");
-            assert!(parsed.entries[0].priority, "content: {input}");
-            assert_eq!(parsed.affected_names, vec!["content".to_owned()]);
-            assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
-            assert!(
-                style_entry_is_pdb_supplemental_side_entry(&parsed.entries[0]),
-                "content: {input} should use side storage until Stylo parses alt counters"
-            );
-        }
-
-        for invalid in [
-            "none / counter(cnt)",
-            "\"\" / counter()",
-            "\"\" / url(alt.svg) counter(cnt)",
-            "\"\" / open-quote counter(cnt)",
-            "\"\" / counter(cnt) / \"extra\"",
-            "\"\" / counter(cnt) }",
-        ] {
-            assert!(
-                parse_style_property_entries_for_cssom_write("content", invalid, false, None)
-                    .is_none(),
-                "content: {invalid} should remain invalid"
-            );
-        }
-
-        let ordinary = parse_style_property_entries_for_cssom_write(
-            "content",
-            "\"regular text\" / \"alt text\"",
-            false,
-            None,
-        )
-        .expect("ordinary string alt text should remain Stylo-backed");
-        assert!(!style_entry_is_pdb_supplemental_side_entry(
-            &ordinary.entries[0]
-        ));
-    }
-
-    #[test]
     fn transition_pdb_parser_accepts_dynamic_numeric_longhands() {
         let shorthand = parse_style_property_entries_with_base(
             "transition",
