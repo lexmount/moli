@@ -1112,7 +1112,7 @@ fn parser_connected_head_document_write_keeps_later_head_tokens_in_head() {
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
         let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
