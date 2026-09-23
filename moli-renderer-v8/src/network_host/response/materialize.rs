@@ -440,9 +440,9 @@ fn materialize_response_head_for_purpose<'s>(
         }
         if headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("vary")
-                && value
-                    .split(|byte| *byte == b',')
-                    .any(|field| field.trim_ascii() == b"*")
+                && moli_fetch::decode_header_value(value)
+                    .split(',')
+                    .any(|field| field.trim_matches([' ', '\t']) == "*")
         }) {
             return Err(format!("{context} rejected a Response with Vary: *."));
         }

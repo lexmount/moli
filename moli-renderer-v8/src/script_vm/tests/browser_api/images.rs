@@ -361,7 +361,7 @@ async fn image_current_src_distinguishes_initial_and_replacement_requests() {
     vm.fulfill_pending_subresource_fetch(
         first[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("initial image request should fulfill");
@@ -388,7 +388,7 @@ async fn image_current_src_distinguishes_initial_and_replacement_requests() {
     vm.fulfill_pending_subresource_fetch(
         replacement[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("replacement image request should fulfill");
@@ -414,7 +414,7 @@ async fn image_current_src_distinguishes_initial_and_replacement_requests() {
     vm.fulfill_pending_subresource_fetch(
         broken[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         crate::runtime::RendererSyntheticResponseBody::from_bytes(b"invalid GIF".to_vec()),
     )
     .expect("broken image response should settle");
@@ -833,7 +833,7 @@ async fn image_update_microtask_freezes_request_after_observing_live_base_url() 
     vm.fulfill_pending_subresource_fetch(
         pending[0].internal_id,
         200,
-        vec![("Content-Type".to_owned(), "image/gif".to_owned())],
+        vec![("Content-Type".to_owned(), b"image/gif".to_vec())],
         one_by_one_gif_response_body(),
     )
     .expect("base-selected image response should complete");
