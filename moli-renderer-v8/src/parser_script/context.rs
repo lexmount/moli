@@ -51,9 +51,3 @@ pub(crate) trait ParserClassicScriptSourceLoadCompletionState {
 
     fn parser_classic_source_load_owner(&self) -> Option<Self::SourceLoadOwner>;
 }
-
-pub(crate) trait ParserClassicScriptSourceLoadWaitState {
-    type SourceLoadWait;
-
-    fn parser_classic_source_load_wait(&self) -> Option<Self::SourceLoadWait>;
-}

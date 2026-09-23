@@ -123,9 +123,7 @@ impl DocumentRuntime {
             document_write_script_preload_scanner: None,
             main_document_script_preloads: Default::default(),
             document_write_script_preloads: HashMap::new(),
-            pending_document_write_external_script_load: None,
-            pending_document_write_stylesheet_blocked_script: None,
-            pending_document_write_stylesheet_parser_pause: None,
+            pending_parser_blocking_work: None,
         }
     }
 
@@ -246,9 +244,7 @@ impl DocumentRuntime {
             document_write_script_preload_scanner: _,
             main_document_script_preloads: _,
             document_write_script_preloads: _,
-            pending_document_write_external_script_load: _,
-            pending_document_write_stylesheet_blocked_script: _,
-            pending_document_write_stylesheet_parser_pause: _,
+            pending_parser_blocking_work: _,
         } = self;
         dom_host.into_dom_host()
     }

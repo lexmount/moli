@@ -8,14 +8,12 @@ use crate::parser_script::action::{
     ParserPendingClassicScriptSourceLoadClientAction,
     ParserPendingClassicScriptSourceLoadCompletionAction,
     ParserPendingClassicScriptSourceLoadCompletionRecord,
-    ParserPendingClassicScriptSourceLoadRequest, ParserPendingClassicScriptSourceLoadWaitAction,
-    ParserPendingClassicScriptSourceResultAction,
+    ParserPendingClassicScriptSourceLoadRequest, ParserPendingClassicScriptSourceResultAction,
 };
 use crate::parser_script::context::{
     ParserClassicScriptExecutionGateState, ParserClassicScriptSourceLoadCompletionState,
     ParserClassicScriptSourceLoadOutcomeState, ParserClassicScriptSourceLoadStartState,
-    ParserClassicScriptSourceLoadState, ParserClassicScriptSourceLoadWaitState,
-    ParserClassicScriptSourceResultState,
+    ParserClassicScriptSourceLoadState, ParserClassicScriptSourceResultState,
 };
 use crate::parser_script::item::ParserClassicScriptRunnerItem;
 use crate::parser_script::owner::{
@@ -23,7 +21,7 @@ use crate::parser_script::owner::{
     ParserScriptDisposeReadyOwner, ParserScriptExecutionGate, ParserScriptFinishExecutionOwner,
     ParserScriptOwner, ParserScriptReadyOwner, ParserScriptSourceFailureOwner,
     ParserScriptSourceLoadClientOwner, ParserScriptSourceLoadCompletionOwner,
-    ParserScriptSourceLoadWaitOwner, ParserScriptSourceResultOwner,
+    ParserScriptSourceResultOwner,
 };
 #[cfg(test)]
 use crate::parser_script::payload::{
@@ -35,9 +33,8 @@ use crate::parser_script::payload::{
 #[cfg(test)]
 use crate::parser_script::pending::ParserPendingClassicScriptEntry;
 use crate::parser_script::projection::{
-    ParserClassicScriptBlockedOnExecution, ParserClassicScriptBlockedOnSourceLoad,
-    ParserClassicScriptExecutionGateProjection, ParserClassicScriptNextActionWithBlockedScript,
-    ParserClassicScriptSourceResultApplication,
+    ParserClassicScriptBlockedOnExecution, ParserClassicScriptExecutionGateProjection,
+    ParserClassicScriptNextActionWithBlockedScript, ParserClassicScriptSourceResultApplication,
 };
 use crate::parser_script::queue::ParserClassicScriptRunnerQueue;
 #[cfg(test)]
@@ -97,8 +94,10 @@ where
         Some(action)
     }
 
-    pub(crate) fn has_parser_blocking_script(&self) -> bool {
-        self.parser_blocking_scripts.has_current()
+    pub(crate) fn take_current_parser_blocking_script(
+        &mut self,
+    ) -> Option<ParserClassicScriptRunnerItem<C>> {
+        self.parser_blocking_scripts.take_current()
     }
 
     pub(crate) fn current_parser_blocking_context(&self) -> Option<&C> {
@@ -127,33 +126,6 @@ where
             .current()?
             .runner_metadata()
             .map(|metadata| metadata.script_handle())
-    }
-
-    pub(crate) fn install_parser_blocking_script_blocked_on_execution(
-        &mut self,
-        blocked: ParserClassicScriptBlockedOnExecution<C>,
-    ) {
-        self.parser_blocking_scripts
-            .install_current(blocked.into_script());
-    }
-
-    pub(crate) fn install_parser_blocking_script_blocked_on_source_load(
-        &mut self,
-        blocked: ParserClassicScriptBlockedOnSourceLoad<C>,
-    ) {
-        self.parser_blocking_scripts
-            .install_current(blocked.into_script());
-    }
-
-    pub(crate) fn discard_current_parser_blocking_script_if_handle(
-        &mut self,
-        script_handle: DomHandle,
-    ) -> bool {
-        if self.current_parser_blocking_script_handle() != Some(script_handle) {
-            return false;
-        }
-        self.parser_blocking_scripts.finish_current();
-        true
     }
 
     pub(crate) fn discard_current_deferred_script_if_handle(
@@ -289,24 +261,6 @@ where
                 ),
             )
         })
-    }
-
-    pub(crate) fn current_parser_blocking_source_load_wait_action_with_owner<Owner>(
-        &self,
-        owner: &mut Owner,
-    ) -> Option<Owner::SourceLoadWaitAction>
-    where
-        C: ParserClassicScriptSourceLoadWaitState,
-        Owner: ParserScriptSourceLoadWaitOwner<C>,
-    {
-        let script = self.current_parser_blocking_script()?;
-        if !owner.is_current_parser_script_owner(script.context()) {
-            return None;
-        }
-        let action = ParserPendingClassicScriptSourceLoadWaitAction::new(
-            script.context().parser_classic_source_load_wait(),
-        );
-        owner.parser_script_source_load_wait_action(action)
     }
 
     pub(crate) fn take_current_parser_blocking_next_action_with_owner<Owner, Action>(
@@ -994,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn parser_script_runner_discards_current_only_when_handle_still_matches() {
+    fn parser_script_runner_takes_current_without_removing_following_work() {
         let first_script_handle = DomHandle::new(11);
         let second_script_handle = DomHandle::new(12);
         let mut runner = ParserClassicScriptRunner::new_parser_blocking(vec![
@@ -1022,21 +976,25 @@ mod tests {
             runner.current_parser_blocking_script_handle(),
             Some(first_script_handle)
         );
-        assert!(
-            runner.discard_current_parser_blocking_script_if_handle(first_script_handle),
-            "first pending script should be discarded when it is still current"
+        let first = runner.take_current_parser_blocking_script().unwrap();
+        assert_eq!(
+            first.runner_metadata().unwrap().script_handle(),
+            first_script_handle
         );
         assert_eq!(
             runner.current_parser_blocking_script_handle(),
             Some(second_script_handle)
         );
-        assert!(
-            !runner.discard_current_parser_blocking_script_if_handle(first_script_handle),
-            "stale handle must not discard the next pending script"
-        );
+        drop(first);
         assert_eq!(
             runner.current_parser_blocking_script_handle(),
             Some(second_script_handle)
         );
+        let second = runner.take_current_parser_blocking_script().unwrap();
+        assert_eq!(
+            second.runner_metadata().unwrap().script_handle(),
+            second_script_handle
+        );
+        assert!(runner.take_current_parser_blocking_script().is_none());
     }
 }

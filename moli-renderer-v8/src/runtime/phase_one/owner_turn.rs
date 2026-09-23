@@ -82,7 +82,6 @@ impl ConcurrentParseTimeRuntime {
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
-                    pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                     buffered_document_preloads: &mut state.buffered_document_preloads,
                     service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                     input_closed: &state.input_closed,
@@ -102,9 +101,11 @@ impl ConcurrentParseTimeRuntime {
                     pending_parsing_blocking_wait,
                     PendingParsingBlockingWait::None,
                 );
-                let has_pending_parsing_blocking_script = state
-                    .pending_parsing_blocking_script
-                    .has_parser_blocking_script();
+                let has_pending_parsing_blocking_script = page_vm
+                    .vm()
+                    .document_runtime
+                    .pending_main_parser_script()
+                    .is_some();
                 let mut context = DocumentTurnContext {
                     scheduler: &mut state.scheduler,
                     parser_session: &state.parser_session,

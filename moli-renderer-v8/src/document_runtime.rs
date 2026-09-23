@@ -16,6 +16,7 @@ mod lifecycle;
 mod main_parser_continuation;
 mod meta_refresh;
 mod mutation_commands;
+mod parser_blocking;
 mod parser_modulepreload;
 mod query_facade;
 mod runtime_core;
@@ -76,6 +77,7 @@ pub(crate) use devtools_mutations::{
 };
 pub(crate) use inspector_issues::PendingInspectorIssue;
 pub(crate) use meta_refresh::MetaRefreshNavigation;
+use parser_blocking::{ParserInsertionWork, PendingParserBlockingWork, PendingParserInsertion};
 pub(crate) use parser_modulepreload::MainDocumentModulepreloadFetchOutcome;
 pub(crate) use script_lifecycle::{
     DeferredPageTask, DeferredPageTaskLane, DeferredPageTaskState, DocumentScriptLifecycle,
@@ -450,6 +452,7 @@ struct DocumentWriteExternalScriptStart {
 #[derive(Debug)]
 struct SuspendedDocumentWriteInsertion {
     document_handle: DomHandle,
+    document_incarnation: DocumentRuntimeIncarnationIdentity,
     parser_bridge: ParserConnectedScriptBridge,
     resume_permit: ParserResumePermit,
     resume_permit_consumed: bool,
@@ -468,19 +471,6 @@ enum SuspendedDocumentWriteContinuation {
     },
 }
 
-#[derive(Debug)]
-struct PendingDocumentWriteExternalScriptLoad {
-    target: crate::types::DocumentWriteExternalScriptFetchTarget,
-    start: DocumentWriteExternalScriptStart,
-    insertion: SuspendedDocumentWriteInsertion,
-    /// Stylesheets preceding this parser-inserted script.  Their fetches run
-    /// in parallel with the script source, but their owner events and style
-    /// installation must complete before the source can execute.
-    blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
-    ready_completion: Option<crate::types::DocumentWriteExternalScriptLoadCompletion>,
-    resume_after_completion: VecDeque<SuspendedDocumentWriteContinuation>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DocumentWriteExternalScriptLoadApplication {
     Applied,
@@ -493,31 +483,6 @@ struct DocumentWriteScriptPreload {
     request: crate::runtime::BufferedScriptPreloadRequest,
     target: crate::types::DocumentWriteExternalScriptFetchTarget,
     ready_completion: Option<crate::types::DocumentWriteExternalScriptLoadCompletion>,
-}
-
-/// A parser-blocking script reached by a live `document.write`-style parser
-/// while one of the stylesheets that preceded it is still unresolved.
-///
-/// The parser stream and its insertion point stay owned by the document
-/// runtime.  A stylesheet-completion owner turn resumes this exact handoff;
-/// CDP/document callers never wait on the network operation themselves.
-#[derive(Debug)]
-struct PendingDocumentWriteStylesheetBlockedScript {
-    node: DomHandle,
-    start_line: u64,
-    start_column: u64,
-    script: PreparedScript,
-    blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
-    insertion: SuspendedDocumentWriteInsertion,
-}
-
-/// Parser-created blocking stylesheet boundary with no script attached to it.
-/// Blink pauses token consumption at this boundary until the stylesheet owner
-/// settles, even when the next token is an ordinary element.
-#[derive(Debug)]
-struct PendingDocumentWriteStylesheetParserPause {
-    blocking_signatures: HashSet<DocumentBlockingStylesheetSignature>,
-    insertion: SuspendedDocumentWriteInsertion,
 }
 
 #[derive(Debug)]
@@ -802,11 +767,7 @@ pub(super) struct DocumentRuntime {
     main_document_script_preloads: crate::runtime::DocumentScriptPreloadStore,
     document_write_script_preloads:
         HashMap<crate::runtime::BufferedScriptPreloadKey, DocumentWriteScriptPreload>,
-    pending_document_write_external_script_load: Option<PendingDocumentWriteExternalScriptLoad>,
-    pending_document_write_stylesheet_blocked_script:
-        Option<PendingDocumentWriteStylesheetBlockedScript>,
-    pending_document_write_stylesheet_parser_pause:
-        Option<PendingDocumentWriteStylesheetParserPause>,
+    pending_parser_blocking_work: Option<PendingParserBlockingWork>,
 }
 
 #[derive(Clone, Debug)]

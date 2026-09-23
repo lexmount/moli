@@ -286,9 +286,7 @@ impl DocumentRuntime {
         self.document_write_script_preload_scanner = None;
         self.main_document_script_preloads = Default::default();
         self.document_write_script_preloads.clear();
-        self.pending_document_write_external_script_load = None;
-        self.pending_document_write_stylesheet_blocked_script = None;
-        self.pending_document_write_stylesheet_parser_pause = None;
+        self.pending_parser_blocking_work = None;
         self.root_document_parser = None;
         self.delivered_meta_content_security_policies
             .get_mut()

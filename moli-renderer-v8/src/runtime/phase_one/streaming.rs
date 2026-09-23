@@ -1088,7 +1088,7 @@ mod tests {
             runtime_hooks.owner_wake(),
             runtime_hooks.resource_task_runner(),
         );
-        let page_vm = PageVm::new(
+        let mut page_vm = PageVm::new(
             PageId::new_for_testing(1),
             local_executor,
             &loader,
@@ -1104,21 +1104,21 @@ mod tests {
             .vm()
             .current_main_document_task_owner()
             .expect("main parser test owner");
-        state.pending_parsing_blocking_script =
-            PendingParsingBlockingClassicScriptRunner::from_parser_blocking_script(
-                main_parser_blocking_classic_script_item(
-                    parser_document_owner,
-                    crate::parser_script::payload::ParserPreparedClassicScript::new(
-                        crate::parser_script::payload::ParserClassicScriptMetadata::new(
-                            script.node_id,
-                            1,
-                        ),
-                        script,
+        page_vm
+            .vm_mut()
+            .document_runtime
+            .install_pending_main_parser_script(main_parser_blocking_classic_script_item(
+                parser_document_owner,
+                crate::parser_script::payload::ParserPreparedClassicScript::new(
+                    crate::parser_script::payload::ParserClassicScriptMetadata::new(
+                        script.node_id,
+                        1,
                     ),
-                    HashSet::new(),
-                    Some(PendingParserBlockingSourceLoad::ReusablePreload(load)),
+                    script,
                 ),
-            );
+                HashSet::new(),
+                Some(PendingParserBlockingSourceLoad::ReusablePreload(load)),
+            ));
         TestConcurrentParseTimeRuntime {
             runtime: ConcurrentParseTimeRuntime::new_parser_owner(
                 loader,
@@ -1129,6 +1129,28 @@ mod tests {
             _js_runtime_owner: js_runtime_owner,
             _loader_owner: loader_owner,
         }
+    }
+
+    #[tokio::test]
+    async fn main_resource_failure_retires_the_document_owned_parser_script() {
+        let load = crate::planning::SharedScriptSourceLoad::spawn_for_test(std::future::pending());
+        let fixture = streaming_runtime_with_pending_parser_blocking_source_load(load);
+        assert!(fixture.has_pending_parser_blocking_source_load());
+        let page_vm = fixture.runtime.into_main_resource_load_failed_page_vm();
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .pending_main_parser_script()
+                .is_none()
+        );
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .main_parser_continuation_producer()
+                .is_none()
+        );
     }
 
     #[tokio::test]

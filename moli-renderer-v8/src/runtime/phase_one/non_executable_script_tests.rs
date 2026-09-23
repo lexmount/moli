@@ -36,7 +36,6 @@ fn data_block_completes_in_parser_turn_without_page_task() {
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,

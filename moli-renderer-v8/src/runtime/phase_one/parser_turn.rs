@@ -469,8 +469,6 @@ pub(super) struct ParserDriver<'loader, 'state> {
     pub(super) final_url: &'state Url,
     pub(super) parser_session: &'state mut DocumentParserSession,
     pub(super) scheduler: &'state mut DocumentScriptScheduler,
-    pub(super) pending_parsing_blocking_script:
-        &'state mut PendingParsingBlockingClassicScriptRunner,
     pub(super) buffered_document_preloads: &'state mut BufferedDocumentPreloadState,
     pub(super) service_worker_preload_context: Option<&'state ServiceWorkerScriptPreloadContext>,
     pub(super) input_closed: &'state bool,
@@ -593,9 +591,11 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             !pending_parsing_blocking_wait.is_pending(),
             "parser owner should not enqueue a new parsing turn while a blocking-wait document turn is still pending"
         );
-        if !self
-            .pending_parsing_blocking_script
-            .has_parser_blocking_script()
+        if page_vm
+            .vm()
+            .document_runtime
+            .pending_main_parser_script()
+            .is_none()
         {
             if self.parser_session.input_is_empty() {
                 if *self.input_closed {
@@ -608,15 +608,19 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 return Ok(OwnerStepProgress::Continue);
             }
         }
-        if self
-            .pending_parsing_blocking_script
-            .has_parser_blocking_script()
+        if let Some(pending) = page_vm
+            .vm_mut()
+            .document_runtime
+            .take_pending_main_parser_script()
         {
-            let parser_blocking_script_handle = self
-                .pending_parsing_blocking_script
-                .current_parser_blocking_script_handle();
-            let preload_candidate = self
-                .pending_parsing_blocking_script
+            // Release the Document's pending slot before any script or callback
+            // can reenter. The local runner owns only this execution, and may
+            // never clear a newer blocker installed by document.write().
+            let mut pending_runner =
+                PendingParsingBlockingClassicScriptRunner::from_parser_blocking_script(pending);
+            let parser_blocking_script_handle =
+                pending_runner.current_parser_blocking_script_handle();
+            let preload_candidate = pending_runner
                 .current_parser_blocking_script()
                 .filter(|pending| pending.context().source_load.is_none())
                 .and_then(|pending| pending.runner_script().cloned());
@@ -645,31 +649,37 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 && applied_preload.is_some()
             {
                 debug_assert!(
-                    self.pending_parsing_blocking_script
-                        .apply_current_parser_blocking_preloaded_script(
-                            script_handle,
-                            prepared_script,
-                        ),
+                    pending_runner.apply_current_parser_blocking_preloaded_script(
+                        script_handle,
+                        prepared_script,
+                    ),
                     "a parser-blocking preload must complete the same external pending script"
                 );
             }
-            if !apply_pending_parser_blocking_source_load_if_ready(
-                page_vm,
-                self.pending_parsing_blocking_script,
-            ) {
+            if !apply_pending_parser_blocking_source_load_if_ready(page_vm, &mut pending_runner) {
+                page_vm
+                    .vm_mut()
+                    .document_runtime
+                    .install_pending_main_parser_script(
+                        pending_runner
+                            .take_current_parser_blocking_script()
+                            .expect("waiting script remains pending"),
+                    );
                 return Ok(OwnerStepProgress::BlockedOnParserScriptSourceLoad);
             }
             let progress = match resolve_main_parser_blocking_classic_after_runtime_gate(
                 self.parser_session,
                 page_vm,
-                self.pending_parsing_blocking_script,
+                &mut pending_runner,
                 "executing stylesheet-unblocked parser-blocking classic script",
             )
             .await?
             {
                 MainParserBlockingExecutionOutcome::BlockedOnStylesheet(pending) => {
-                    self.pending_parsing_blocking_script
-                        .install_parser_blocking_script_blocked_on_execution(*pending);
+                    page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .install_pending_main_parser_script(pending.into_script());
                     None
                 }
                 MainParserBlockingExecutionOutcome::StoppedCurrentDocument => {
@@ -680,10 +690,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                 }
                 MainParserBlockingExecutionOutcome::BlockedOnDocumentWriteExternalLoad => {
                     self.finish_parser_blocking_pause();
-                    if let Some(script_handle) = parser_blocking_script_handle {
-                        self.pending_parsing_blocking_script
-                            .discard_current_parser_blocking_script_if_handle(script_handle);
-                    }
                     *pending_parsing_blocking_wait = if page_vm.has_page_resource_completion_route()
                     {
                         PendingParsingBlockingWait::PageNetworkingDocumentWriteExternalScript
@@ -700,10 +706,6 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
             };
             if let Some(progress) = progress {
                 self.finish_parser_blocking_pause();
-                if let Some(script_handle) = parser_blocking_script_handle {
-                    self.pending_parsing_blocking_script
-                        .discard_current_parser_blocking_script_if_handle(script_handle);
-                }
                 return Ok(progress);
             }
             return Ok(suspend_parser_for_stylesheet_page_task(
@@ -782,16 +784,20 @@ impl<'loader, 'state> ParserDriver<'loader, 'state> {
                     owner_step_progress_after_current_document_stop(page_vm)
                 }
                 ParserStepAdvanceOutcome::BlockedOnStylesheet(script) => {
-                    self.pending_parsing_blocking_script
-                        .install_parser_blocking_script_blocked_on_execution(*script);
+                    page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .install_pending_main_parser_script(script.into_script());
                     suspend_parser_for_stylesheet_page_task(owner, pending_parsing_blocking_wait)
                 }
                 ParserStepAdvanceOutcome::BlockedOnStylesheetParserPause => {
                     suspend_parser_for_stylesheet_page_task(owner, pending_parsing_blocking_wait)
                 }
                 ParserStepAdvanceOutcome::BlockedOnExternalSource(script) => {
-                    self.pending_parsing_blocking_script
-                        .install_parser_blocking_script_blocked_on_source_load(*script);
+                    page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .install_pending_main_parser_script(script.into_script());
                     *pending_parsing_blocking_wait = PendingParsingBlockingWait::None;
                     *owner = ParseTimeOwner::Parser;
                     OwnerStepProgress::NeedMoreInput

@@ -1083,6 +1083,7 @@ impl DocumentWriteExternalScriptFetchTarget {
         self.task_owner
     }
 
+    #[cfg(test)]
     pub(crate) fn load_id(self) -> u64 {
         self.load_id
     }

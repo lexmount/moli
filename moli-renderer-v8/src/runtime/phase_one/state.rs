@@ -1,4 +1,3 @@
-use super::parser_blocking_owner::MainParserBlockingSourceLoadWaitOwner;
 use super::*;
 use crate::document_script_scheduler::ParseTimeDocumentScriptEvent;
 
@@ -7,7 +6,6 @@ pub(super) struct ParseTimeDriverState {
     pub(super) document_character_set: String,
     pub(super) parser_session: DocumentParserSession,
     pub(super) scheduler: DocumentScriptScheduler,
-    pub(super) pending_parsing_blocking_script: PendingParsingBlockingClassicScriptRunner,
     pub(super) buffered_document_preloads: Box<BufferedDocumentPreloadState>,
     pub(super) service_worker_preload_context: Option<ServiceWorkerScriptPreloadContext>,
     pub(super) input_closed: bool,
@@ -28,7 +26,6 @@ impl ParseTimeDriverState {
             final_url,
             document_character_set: "UTF-8".to_owned(),
             scheduler: DocumentScriptScheduler::new(),
-            pending_parsing_blocking_script: PendingParsingBlockingClassicScriptRunner::empty(),
             buffered_document_preloads: Box::default(),
             service_worker_preload_context: None,
             input_closed: false,
@@ -41,7 +38,6 @@ impl ParseTimeDriverState {
             final_url,
             document_character_set: "UTF-8".to_owned(),
             scheduler: DocumentScriptScheduler::new(),
-            pending_parsing_blocking_script: PendingParsingBlockingClassicScriptRunner::empty(),
             buffered_document_preloads: Box::default(),
             service_worker_preload_context: None,
             input_closed: false,
@@ -154,10 +150,12 @@ impl ConcurrentParseTimeRuntime {
         Vec<ParseTimeDocumentScriptEvent>,
         Vec<PostParsePageOwnedWork>,
     ) {
-        self.page_vm
-            .vm_mut()
-            .document_runtime
-            .deactivate_main_parser_continuation();
+        let document = &mut self.page_vm.vm_mut().document_runtime;
+        document.deactivate_main_parser_continuation();
+        // The Document outlives this driver on main-resource failure and
+        // navigation. Retire its pending script with the execution owner.
+        // A replacement document.write parser owns its own insertion work.
+        let _ = document.take_pending_main_parser_script();
         (
             self.page_vm
                 .page_task_queue
@@ -265,10 +263,12 @@ impl ConcurrentParseTimeRuntime {
     pub(super) fn pending_parser_blocking_source_load(
         &self,
     ) -> Option<crate::planning::SharedScriptSourceLoad> {
-        let mut owner = MainParserBlockingSourceLoadWaitOwner;
-        self.state
-            .pending_parsing_blocking_script
-            .current_parser_blocking_source_load_wait_action_with_owner(&mut owner)
+        self.page_vm
+            .vm()
+            .document_runtime
+            .pending_main_parser_script()
+            .and_then(|script| script.context().source_load.as_ref())
+            .map(|source| source.shared_load())
     }
 
     pub(super) fn has_unready_pending_parser_blocking_source_load(&self) -> bool {

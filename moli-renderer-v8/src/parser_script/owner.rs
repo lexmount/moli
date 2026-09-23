@@ -11,11 +11,11 @@ use crate::parser_script::action::{
     ParserPendingClassicScriptSourceLoadCandidate,
     ParserPendingClassicScriptSourceLoadClientAction,
     ParserPendingClassicScriptSourceLoadCompletionAction,
-    ParserPendingClassicScriptSourceLoadWaitAction, ParserPendingClassicScriptSourceResultAction,
+    ParserPendingClassicScriptSourceResultAction,
 };
 use crate::parser_script::context::{
     ParserClassicScriptExecutionGateState, ParserClassicScriptSourceLoadCompletionState,
-    ParserClassicScriptSourceLoadStartState, ParserClassicScriptSourceLoadWaitState,
+    ParserClassicScriptSourceLoadStartState,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,19 +156,6 @@ where
         &mut self,
         completion: ParserPendingClassicScriptSourceLoadCompletionAction<Context::SourceLoadOwner>,
     ) -> Option<Self::SourceLoadCompletionAction>;
-}
-
-pub(crate) trait ParserScriptSourceLoadWaitOwner<Context>:
-    ParserScriptOwner<Context>
-where
-    Context: ParserClassicScriptExecutionGateState + ParserClassicScriptSourceLoadWaitState,
-{
-    type SourceLoadWaitAction;
-
-    fn parser_script_source_load_wait_action(
-        &mut self,
-        action: ParserPendingClassicScriptSourceLoadWaitAction<Context::SourceLoadWait>,
-    ) -> Option<Self::SourceLoadWaitAction>;
 }
 
 pub(crate) trait ParserScriptSourceResultOwner<Context>: ParserScriptOwner<Context>

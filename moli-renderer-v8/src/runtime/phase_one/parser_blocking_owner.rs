@@ -17,16 +17,15 @@ use crate::parser_script::action::{
     ParserPendingClassicScriptFinishedExecutionAction, ParserPendingClassicScriptNotification,
     ParserPendingClassicScriptReadyAction, ParserPendingClassicScriptSourceFailureAction,
     ParserPendingClassicScriptSourceLoadAction, ParserPendingClassicScriptSourceLoadRequest,
-    ParserPendingClassicScriptSourceLoadWaitAction, ParserPendingClassicScriptSourceResultAction,
+    ParserPendingClassicScriptSourceResultAction,
 };
 use crate::parser_script::context::ParserClassicScriptDocumentOwnerState;
 use crate::parser_script::owner::{
     ParserScriptBeginExecutionOwner, ParserScriptBeginSourceLoadOwner,
     ParserScriptExecutionBlocker, ParserScriptExecutionGate, ParserScriptFinishExecutionOwner,
     ParserScriptOwner, ParserScriptReadyOwner, ParserScriptSourceFailureOwner,
-    ParserScriptSourceLoadWaitOwner, ParserScriptSourceResultOwner,
+    ParserScriptSourceResultOwner,
 };
-use crate::planning::SharedScriptSourceLoad;
 use crate::script_vm::ParserOwnedClassicScriptCompletion;
 use std::collections::HashSet;
 
@@ -47,8 +46,6 @@ pub(super) struct MainParserBlockingBeginExecutionOwner {
     pub(super) parser_bridge: Option<ParserConnectedScriptBridge>,
     pub(super) completion_target: MainDocumentClassicScriptTarget,
 }
-
-pub(super) struct MainParserBlockingSourceLoadWaitOwner;
 
 pub(super) struct MainParserBlockingLifecycleOwner {
     target: MainDocumentClassicScriptTarget,
@@ -213,24 +210,6 @@ impl ParserScriptOwner<PendingParsingBlockingClassicScriptContext>
         } else {
             ParserScriptExecutionGate::Ready
         }
-    }
-}
-
-impl ParserScriptOwner<PendingParsingBlockingClassicScriptContext>
-    for MainParserBlockingSourceLoadWaitOwner
-{
-}
-
-impl ParserScriptSourceLoadWaitOwner<PendingParsingBlockingClassicScriptContext>
-    for MainParserBlockingSourceLoadWaitOwner
-{
-    type SourceLoadWaitAction = SharedScriptSourceLoad;
-
-    fn parser_script_source_load_wait_action(
-        &mut self,
-        action: ParserPendingClassicScriptSourceLoadWaitAction<SharedScriptSourceLoad>,
-    ) -> Option<Self::SourceLoadWaitAction> {
-        action.into_source_load_wait()
     }
 }
 

@@ -650,6 +650,196 @@ async fn evaluate_pending_on_owner_local_task(
     .expect("pending document.write result should evaluate")
 }
 
+async fn spawn_gated_parser_resource(
+    content_type: &'static str,
+    body: &'static str,
+) -> (Url, tokio::sync::oneshot::Sender<()>, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (release, released) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let read = stream.read(&mut request).await.unwrap();
+        assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /resource "));
+        released.await.expect("release parser resource");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len(),
+        );
+        stream.write_all(response.as_bytes()).await.unwrap();
+        stream.shutdown().await.unwrap();
+    });
+    (
+        Url::parse(&format!("http://{address}/resource")).unwrap(),
+        release,
+        server,
+    )
+}
+
+fn retain_pending_parser_page(
+    outcome: ParseTimePageVmCreationOutcome,
+    owner_wake_rx: tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
+) -> PendingStandaloneDocumentWritePage {
+    let ParseTimePageVmCreationOutcome::PendingPhaseOne(
+        PendingPhaseOneResidence::ClosedInputPageWork { runtime, started },
+    ) = outcome
+    else {
+        panic!("the remaining resource must keep the parser suspended");
+    };
+    PendingStandaloneDocumentWritePage {
+        runtime,
+        started,
+        owner_wake_rx,
+    }
+}
+
+async fn resume_after_stylesheet_completion(
+    mut pending: PendingStandaloneDocumentWritePage,
+) -> (
+    ParseTimePageVmCreationOutcome,
+    tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
+) {
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        wait_for_standalone_stylesheet_completion(&mut pending),
+    )
+    .await
+    .expect("stylesheet completion");
+    let pending = run_standalone_selected_page_task(
+        pending,
+        crate::runtime::page_vm::PageSelectedTaskTestSelector::StylesheetCompletion,
+    )
+    .await;
+    let PendingStandaloneDocumentWritePage {
+        runtime,
+        started,
+        owner_wake_rx,
+    } = pending;
+    resume_standalone_main_parser_continuation_if_ready(
+        ParseTimePageVmCreationOutcome::PendingPhaseOne(
+            PendingPhaseOneResidence::ClosedInputPageWork { runtime, started },
+        ),
+        owner_wake_rx,
+    )
+    .await
+}
+
+#[test]
+fn document_write_source_before_stylesheet_executes_once_after_both_are_ready() {
+    assert_parser_insertion_resource_order(true);
+}
+
+#[test]
+fn document_write_stylesheet_before_source_executes_once_after_both_are_ready() {
+    assert_parser_insertion_resource_order(false);
+}
+
+fn assert_parser_insertion_resource_order(source_first: bool) {
+    super::tests::run_phase_one_large_stack_test("parser-insertion-resource-order", move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let _js_runtime = crate::JsRuntime::initialize();
+            let (css, release_css, css_server) = spawn_gated_parser_resource(
+                "text/css", "html { color: rgb(1, 2, 3); }",
+            ).await;
+            let (js, release_js, js_server) = spawn_gated_parser_resource(
+                "text/javascript", "events.push('external'); globalThis.tailAtScript = !!document.getElementById('tail');",
+            ).await;
+            let mut release_css = Some(release_css);
+            let mut release_js = Some(release_js);
+            let html = format!(r#"<!doctype html><html><head><script>
+globalThis.events = [];
+document.write(`<link rel="stylesheet" href="{css}"><script src="{js}" onload="events.push('load')"><\/script><span id="written">written</span>`);
+events.push('outer');
+</script></head><body><p id="tail">tail</p></body></html>"#);
+            let pending = start_standalone_document_write_page(html, css.join("page.html").unwrap()).await;
+            let (outcome, wake) = if source_first {
+                release_js.take().unwrap().send(()).unwrap();
+                resume_standalone_document_write_page(pending).await
+            } else {
+                release_css.take().unwrap().send(()).unwrap();
+                resume_after_stylesheet_completion(pending).await
+            };
+            let pending = retain_pending_parser_page(outcome, wake);
+            let (pending, result) = evaluate_pending_on_owner_local_task(pending,
+                "JSON.stringify({events, tail: !!document.getElementById('tail'), written: !!document.getElementById('written')})",
+            ).await;
+            assert_eq!(result["value"], r#"{"events":["outer"],"tail":false,"written":false}"#);
+            let (outcome, wake) = if source_first {
+                release_css.take().unwrap().send(()).unwrap();
+                resume_after_stylesheet_completion(pending).await
+            } else {
+                release_js.take().unwrap().send(()).unwrap();
+                resume_standalone_document_write_page(pending).await
+            };
+            let (outcome, _) = resume_standalone_main_parser_continuation_if_ready(outcome, wake).await;
+            let ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } = outcome else {
+                panic!("both resources must release the same parser blocker");
+            };
+            let result = evaluate_on_owner_local_task(page_vm,
+                "JSON.stringify({events, tailAtScript, tail: !!document.getElementById('tail'), written: !!document.getElementById('written')})",
+            ).await;
+            assert_eq!(result["value"], r#"{"events":["outer","external","load"],"tailAtScript":false,"tail":true,"written":true}"#);
+            css_server.await.unwrap();
+            js_server.await.unwrap();
+        }));
+    });
+}
+
+#[test]
+fn resumed_main_parser_script_preserves_the_blocker_installed_by_its_nested_write() {
+    super::tests::run_phase_one_large_stack_test("main-parser-reentrant-blocker", || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let _js_runtime = crate::JsRuntime::initialize();
+            let (css, release_css, css_server) = spawn_gated_parser_resource(
+                "text/css", "html { color: rgb(1, 2, 3); }",
+            ).await;
+            let (js, release_js, js_server) = spawn_gated_parser_resource(
+                "text/javascript", "events.push('inner');",
+            ).await;
+            let html = format!(r#"<!doctype html><html><head><link rel="stylesheet" href="{css}"><script>
+globalThis.events = ['outer-before'];
+document.write(`<script src="{js}"><\/script><span id="written">written</span>`);
+events.push('outer-after');
+</script></head><body><p id="tail">tail</p></body></html>"#);
+            let pending = start_standalone_parser_page(
+                PageId::new_for_testing(903), html, css.join("page.html").unwrap(),
+            ).await;
+            assert!(pending.runtime.page_vm.vm().document_runtime.pending_main_parser_script().is_some());
+            release_css.send(()).unwrap();
+            let (outcome, wake) = resume_after_stylesheet_completion(pending).await;
+            let pending = retain_pending_parser_page(outcome, wake);
+            let document = &pending.runtime.page_vm.vm().document_runtime;
+            assert!(document.pending_main_parser_script().is_none());
+            assert!(document.has_pending_document_write_external_script_load());
+            let (pending, result) = evaluate_pending_on_owner_local_task(pending,
+                "JSON.stringify({events, tail: !!document.getElementById('tail'), written: !!document.getElementById('written')})",
+            ).await;
+            assert_eq!(result["value"], r#"{"events":["outer-before","outer-after"],"tail":false,"written":false}"#);
+            release_js.send(()).unwrap();
+            let (outcome, wake) = resume_standalone_document_write_page(pending).await;
+            let (outcome, _) = resume_standalone_main_parser_continuation_if_ready(outcome, wake).await;
+            let ParseTimePageVmCreationOutcome::ContinuePhaseTwo { page_vm, .. } = outcome else {
+                panic!("the nested blocker must retain its own continuation");
+            };
+            let result = evaluate_on_owner_local_task(page_vm,
+                "JSON.stringify({events, tail: !!document.getElementById('tail'), written: !!document.getElementById('written')})",
+            ).await;
+            assert_eq!(result["value"], r#"{"events":["outer-before","outer-after","inner"],"tail":true,"written":true}"#);
+            css_server.await.unwrap();
+            js_server.await.unwrap();
+        }));
+    });
+}
+
 #[test]
 fn parser_driver_retains_stylesheet_suspension_until_its_continuation() {
     assert_stylesheet_suspension_resume_owner(ParserResumeOwner::ParserDriver);

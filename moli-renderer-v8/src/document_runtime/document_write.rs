@@ -990,25 +990,30 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn has_pending_document_write_external_script_load(&self) -> bool {
-        self.pending_document_write_external_script_load.is_some()
+        self.document_write_external_script_fetch_target().is_some()
+    }
+
+    fn document_write_external_script_fetch_target(
+        &self,
+    ) -> Option<crate::types::DocumentWriteExternalScriptFetchTarget> {
+        match &self.pending_parser_insertion()?.work {
+            ParserInsertionWork::ExternalScript { target, .. } => Some(*target),
+            _ => None,
+        }
     }
 
     #[cfg(test)]
     pub(crate) fn pending_document_write_external_script_fetch_target(
         &self,
     ) -> Option<crate::types::DocumentWriteExternalScriptFetchTarget> {
-        self.pending_document_write_external_script_load
-            .as_ref()
-            .map(|pending| pending.target)
+        self.document_write_external_script_fetch_target()
     }
 
     pub(crate) fn has_document_write_external_script_fetch_target(
         &self,
         target: crate::types::DocumentWriteExternalScriptFetchTarget,
     ) -> bool {
-        self.pending_document_write_external_script_load
-            .as_ref()
-            .is_some_and(|pending| pending.target == target)
+        self.document_write_external_script_fetch_target() == Some(target)
             || self
                 .document_write_script_preloads
                 .values()
@@ -1016,13 +1021,7 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn has_pending_document_write_parser_blocking_work(&self) -> bool {
-        self.pending_document_write_external_script_load.is_some()
-            || self
-                .pending_document_write_stylesheet_blocked_script
-                .is_some()
-            || self
-                .pending_document_write_stylesheet_parser_pause
-                .is_some()
+        self.pending_parser_insertion().is_some()
     }
 
     pub(crate) fn has_unfinished_root_document_parser_stream(&self) -> bool {
@@ -1030,33 +1029,15 @@ impl DocumentRuntime {
     }
 
     pub(crate) fn has_pending_document_write_stylesheet_blocked_script(&self) -> bool {
-        self.pending_document_write_stylesheet_blocked_script
-            .is_some()
-            || self
-                .pending_document_write_stylesheet_parser_pause
-                .is_some()
-            || self
-                .pending_document_write_external_script_load
-                .as_ref()
-                .is_some_and(|pending| !pending.blocking_signatures_before.is_empty())
+        self.pending_parser_insertion()
+            .is_some_and(|pending| !pending.blocking_signatures.is_empty())
     }
 
     pub(crate) fn document_write_stylesheet_blocked_script_is_ready(&mut self) -> bool {
         let Some(signatures) = self
-            .pending_document_write_stylesheet_parser_pause
-            .as_ref()
+            .pending_parser_insertion()
+            .filter(|pending| !pending.blocking_signatures.is_empty())
             .map(|pending| pending.blocking_signatures.clone())
-            .or_else(|| {
-                self.pending_document_write_stylesheet_blocked_script
-                    .as_ref()
-                    .map(|pending| pending.blocking_signatures_before.clone())
-            })
-            .or_else(|| {
-                self.pending_document_write_external_script_load
-                    .as_ref()
-                    .filter(|pending| !pending.blocking_signatures_before.is_empty())
-                    .map(|pending| pending.blocking_signatures_before.clone())
-            })
         else {
             return false;
         };
@@ -1185,63 +1166,17 @@ impl DocumentRuntime {
         }
     }
 
-    fn append_to_pending_document_write_external_script_load(&mut self, html: &str) -> bool {
-        let Some(pending) = self.pending_document_write_external_script_load.as_mut() else {
+    fn append_to_pending_parser_insertion(&mut self, html: &str) -> bool {
+        let Some(pending) = self.pending_parser_insertion() else {
             return false;
         };
-        pending
+        let input = pending
             .insertion
             .parser_bridge
             .insertion_controller()
-            .input_session()
-            .enqueue_script_input_html(html.to_owned());
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_preload_html(html.to_owned());
-        true
-    }
-
-    fn append_to_pending_document_write_stylesheet_blocked_script(&mut self, html: &str) -> bool {
-        let Some(pending) = self
-            .pending_document_write_stylesheet_blocked_script
-            .as_mut()
-        else {
-            return false;
-        };
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_html(html.to_owned());
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_preload_html(html.to_owned());
-        true
-    }
-
-    fn append_to_pending_document_write_stylesheet_parser_pause(&mut self, html: &str) -> bool {
-        let Some(pending) = self.pending_document_write_stylesheet_parser_pause.as_mut() else {
-            return false;
-        };
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_html(html.to_owned());
-        pending
-            .insertion
-            .parser_bridge
-            .insertion_controller()
-            .input_session()
-            .enqueue_script_input_preload_html(html.to_owned());
+            .input_session();
+        input.enqueue_script_input_html(html.to_owned());
+        input.enqueue_script_input_preload_html(html.to_owned());
         true
     }
 
@@ -1253,11 +1188,10 @@ impl DocumentRuntime {
         insertion: SuspendedDocumentWriteInsertion,
         blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
     ) -> bool {
-        if let Some(pending) = self.pending_document_write_external_script_load.as_mut() {
+        if let Some(pending) = self.pending_parser_insertion_mut() {
             tracing::error!(
-                pending_load_id = pending.target.load_id(),
                 queued_url = %start.script.url,
-                "document.write external script load attempted while another load is pending"
+                "document.write external script load attempted while another parser blocker is pending"
             );
             pending.resume_after_completion.push_back(
                 SuspendedDocumentWriteContinuation::StartExternal {
@@ -1294,33 +1228,21 @@ impl DocumentRuntime {
             start.script.url.clone(),
         );
         let script_for_load = start.script.clone();
-        self.pending_document_write_external_script_load =
-            Some(PendingDocumentWriteExternalScriptLoad {
+        let source_ready = ready_completion.is_some();
+        self.install_pending_parser_insertion(PendingParserInsertion {
+            insertion,
+            blocking_signatures: blocking_signatures_before,
+            work: ParserInsertionWork::ExternalScript {
                 target,
                 start,
-                insertion,
-                blocking_signatures_before,
-                ready_completion: None,
-                resume_after_completion: VecDeque::new(),
-            });
-        if let Some(completion) = ready_completion {
-            if self
-                .pending_document_write_external_script_load
-                .as_ref()
-                .is_some_and(|pending| !pending.blocking_signatures_before.is_empty())
-            {
-                self.pending_document_write_external_script_load
-                    .as_mut()
-                    .expect("preloaded script must retain its pending owner")
-                    .ready_completion = Some(completion);
-                return true;
-            }
-            let pending = self
-                .pending_document_write_external_script_load
-                .take()
-                .expect("ready preloaded script must retain its pending owner");
-            let _ = self
-                .finish_document_write_external_script_load(scope, host_ptr, pending, completion);
+                ready_completion: ready_completion.map(Box::new),
+            },
+            resume_after_completion: VecDeque::new(),
+        });
+        // Both source and stylesheet completion use the same readiness check.
+        // Take the work before executing; nested writes may install a new one.
+        if source_ready {
+            let _ = self.resume_ready_parser_insertion(scope, host_ptr);
             return true;
         }
         if preload_was_started {
@@ -1355,7 +1277,7 @@ impl DocumentRuntime {
         &mut self,
         mut continuations: VecDeque<SuspendedDocumentWriteContinuation>,
     ) {
-        let Some(pending) = self.pending_document_write_external_script_load.as_mut() else {
+        let Some(pending) = self.pending_parser_insertion_mut() else {
             debug_assert!(
                 continuations.is_empty(),
                 "document.write continuations should only be queued behind an active pending load"
@@ -1402,20 +1324,23 @@ impl DocumentRuntime {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
-        first: SuspendedDocumentWriteContinuation,
         mut remaining: VecDeque<SuspendedDocumentWriteContinuation>,
     ) -> bool {
         let mut changed = false;
-        let mut next = Some(first);
-        while let Some(continuation) = next {
-            if self.resume_document_write_continuation(scope, host_ptr, continuation) {
-                changed = true;
+        while let Some(continuation) = remaining.pop_front() {
+            let insertion = match &continuation {
+                SuspendedDocumentWriteContinuation::ResumeAfterCompleted { insertion, .. }
+                | SuspendedDocumentWriteContinuation::StartExternal { insertion, .. } => insertion,
+            };
+            if insertion.document_incarnation != self.document_incarnation {
+                continue;
             }
-            if self.pending_document_write_external_script_load.is_some() {
+            if self.has_pending_document_write_parser_blocking_work() {
+                remaining.push_front(continuation);
                 self.queue_document_write_continuations_after_pending(remaining);
                 return true;
             }
-            next = remaining.pop_front();
+            changed |= self.resume_document_write_continuation(scope, host_ptr, continuation);
         }
         changed
     }
@@ -1426,6 +1351,9 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         mut insertion: SuspendedDocumentWriteInsertion,
     ) -> bool {
+        if insertion.document_incarnation != self.document_incarnation {
+            return false;
+        }
         if self.park_suspended_insertion_behind_reentrant_parser_work(&mut insertion) {
             return true;
         }
@@ -1562,11 +1490,7 @@ impl DocumentRuntime {
         completion: crate::types::DocumentWriteExternalScriptLoadCompletion,
     ) -> super::DocumentWriteExternalScriptLoadApplication {
         let completion_target = completion.target();
-        if self
-            .pending_document_write_external_script_load
-            .as_ref()
-            .is_none_or(|pending| pending.target != completion_target)
-        {
+        if self.document_write_external_script_fetch_target() != Some(completion_target) {
             return if self.complete_document_write_script_preload(completion) {
                 super::DocumentWriteExternalScriptLoadApplication::Applied
             } else {
@@ -1578,44 +1502,46 @@ impl DocumentRuntime {
         {
             return super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget;
         }
-        let mut pending = self
-            .pending_document_write_external_script_load
-            .take()
-            .expect("matching document-write script completion must retain its pending owner");
-        if pending.target != completion_target
-            || unsafe { &*host_ptr }.current_main_document_task_owner()
-                != Some(completion_target.task_owner())
-        {
-            self.pending_document_write_external_script_load = Some(pending);
+        let pending = self
+            .pending_parser_insertion_mut()
+            .expect("matching script completion must retain its pending owner");
+        let ParserInsertionWork::ExternalScript {
+            ready_completion, ..
+        } = &mut pending.work
+        else {
+            unreachable!()
+        };
+        // A repeated delivery is stale even if stylesheets still keep the
+        // first terminal parked. It must never replace an accepted result.
+        if ready_completion.is_some() {
             return super::DocumentWriteExternalScriptLoadApplication::RejectedStaleTarget;
         }
-        if !pending.blocking_signatures_before.is_empty() {
-            debug_assert!(
-                pending.ready_completion.is_none(),
-                "one external parser script load must produce exactly one completion"
-            );
-            pending.ready_completion = Some(completion);
-            self.pending_document_write_external_script_load = Some(pending);
-            return super::DocumentWriteExternalScriptLoadApplication::Applied;
-        }
-
-        self.finish_document_write_external_script_load(scope, host_ptr, pending, completion)
+        *ready_completion = Some(Box::new(completion));
+        self.resume_ready_parser_insertion(scope, host_ptr)
+            .unwrap_or(super::DocumentWriteExternalScriptLoadApplication::Applied)
     }
 
     fn finish_document_write_external_script_load(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
-        pending: PendingDocumentWriteExternalScriptLoad,
-        completion: crate::types::DocumentWriteExternalScriptLoadCompletion,
+        pending: PendingParserInsertion,
     ) -> super::DocumentWriteExternalScriptLoadApplication {
-        let completion_target = completion.target();
-        let PendingDocumentWriteExternalScriptLoad {
-            start,
+        let PendingParserInsertion {
             mut insertion,
             mut resume_after_completion,
+            work,
             ..
         } = pending;
+        let ParserInsertionWork::ExternalScript {
+            start,
+            ready_completion: Some(completion),
+            ..
+        } = work
+        else {
+            unreachable!("only a ready external source can be executed")
+        };
+        let completion_target = completion.target();
         if !Self::resume_document_write_insertion_permit(&mut insertion) {
             tracing::debug!(
                 target = ?completion_target,
@@ -1699,19 +1625,10 @@ impl DocumentRuntime {
             return super::DocumentWriteExternalScriptLoadApplication::SupersededDuringApplication;
         }
 
-        let first = SuspendedDocumentWriteContinuation::ResumeAfterCompleted { start, insertion };
-        if self.pending_document_write_external_script_load.is_some() {
-            resume_after_completion.push_front(first);
-            self.queue_document_write_continuations_after_pending(resume_after_completion);
-            return super::DocumentWriteExternalScriptLoadApplication::Applied;
-        }
-
-        let _ = self.resume_document_write_continuations(
-            scope,
-            host_ptr,
-            first,
-            resume_after_completion,
+        resume_after_completion.push_front(
+            SuspendedDocumentWriteContinuation::ResumeAfterCompleted { start, insertion },
         );
+        let _ = self.resume_document_write_continuations(scope, host_ptr, resume_after_completion);
         let _ = self.finish_root_document_parser_stream_if_ready(scope, host_ptr);
         if unsafe { &*host_ptr }.current_main_document_task_owner()
             == Some(completion_target.task_owner())
@@ -1767,6 +1684,7 @@ impl DocumentRuntime {
     ) -> SuspendedDocumentWriteInsertion {
         SuspendedDocumentWriteInsertion {
             document_handle,
+            document_incarnation: self.document_incarnation.clone(),
             parser_bridge: parser_bridge.clone(),
             resume_permit: parser_bridge.suspend(cause),
             resume_permit_consumed: false,
@@ -1783,11 +1701,6 @@ impl DocumentRuntime {
         script: PreparedScript,
         blocking_signatures_before: HashSet<DocumentBlockingStylesheetSignature>,
     ) -> bool {
-        debug_assert!(
-            self.pending_document_write_stylesheet_blocked_script
-                .is_none(),
-            "a live parser can only have one pending parser-blocking script"
-        );
         self.note_parser_script_start_position(node, start_line, start_column);
         let _ = self.dom_host_mut().set_script_already_started(node, true);
         let insertion = self.take_suspended_document_write_insertion(
@@ -1795,15 +1708,17 @@ impl DocumentRuntime {
             parser_bridge,
             ParserSuspensionCause::ParserClassicStylesheets { script: node },
         );
-        self.pending_document_write_stylesheet_blocked_script =
-            Some(PendingDocumentWriteStylesheetBlockedScript {
+        self.install_pending_parser_insertion(PendingParserInsertion {
+            insertion,
+            blocking_signatures: blocking_signatures_before,
+            work: ParserInsertionWork::Script {
                 node,
                 start_line,
                 start_column,
                 script,
-                blocking_signatures_before,
-                insertion,
-            });
+            },
+            resume_after_completion: VecDeque::new(),
+        });
         true
     }
 
@@ -1815,11 +1730,6 @@ impl DocumentRuntime {
         stylesheet_owner: DomHandle,
         blocking_signatures: HashSet<DocumentBlockingStylesheetSignature>,
     ) -> bool {
-        debug_assert!(
-            self.pending_document_write_stylesheet_parser_pause
-                .is_none(),
-            "a live parser can only have one stylesheet parser boundary"
-        );
         let insertion = self.take_suspended_document_write_insertion(
             document_handle,
             parser_bridge,
@@ -1831,11 +1741,12 @@ impl DocumentRuntime {
             .insertion_controller()
             .with_parser_stream(DocumentStream::snapshot_pending_input);
         self.scan_document_write_script_preloads(host_ptr, &preload_html, true);
-        self.pending_document_write_stylesheet_parser_pause =
-            Some(PendingDocumentWriteStylesheetParserPause {
-                blocking_signatures,
-                insertion,
-            });
+        self.install_pending_parser_insertion(PendingParserInsertion {
+            insertion,
+            blocking_signatures,
+            work: ParserInsertionWork::StylesheetBoundary,
+            resume_after_completion: VecDeque::new(),
+        });
         true
     }
 
@@ -1884,53 +1795,82 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
     ) -> bool {
-        if !self.document_write_stylesheet_blocked_script_is_ready() {
-            return false;
+        self.resume_ready_parser_insertion(scope, host_ptr)
+            .is_some()
+    }
+
+    /// Resource notifications update the pending work, then enter this common
+    /// gate. Neither source completion nor stylesheet completion can execute
+    /// a script while the other prerequisite remains unresolved.
+    fn resume_ready_parser_insertion(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+    ) -> Option<DocumentWriteExternalScriptLoadApplication> {
+        let signatures = self.pending_parser_insertion()?.blocking_signatures.clone();
+        if self.has_pending_parser_script_blocking_stylesheet_signatures(signatures.iter()) {
+            return None;
         }
-        if let Some(pending) = self.pending_document_write_stylesheet_parser_pause.take() {
-            self.document_write_script_preload_scanner = None;
-            let _ =
-                self.resume_suspended_document_write_insertion(scope, host_ptr, pending.insertion);
-            let _ = self.finish_root_document_parser_stream_if_ready(scope, host_ptr);
-            return true;
+        let pending = self.pending_parser_insertion_mut()?;
+        pending.blocking_signatures.clear();
+        if matches!(
+            &pending.work,
+            ParserInsertionWork::ExternalScript {
+                ready_completion: None,
+                ..
+            }
+        ) {
+            return (!signatures.is_empty())
+                .then_some(DocumentWriteExternalScriptLoadApplication::Applied);
         }
-        if self
-            .pending_document_write_stylesheet_blocked_script
-            .is_none()
-        {
-            let ready_completion = {
-                let Some(pending) = self.pending_document_write_external_script_load.as_mut()
-                else {
-                    return false;
-                };
-                pending.blocking_signatures_before.clear();
-                pending.ready_completion.take()
-            };
-            let Some(completion) = ready_completion else {
-                // The stylesheet side is ready; the same pending parser script
-                // now waits only for its source. Element events are separate
-                // tasks and do not participate in this gate.
-                return true;
-            };
-            let pending = self
-                .pending_document_write_external_script_load
-                .take()
-                .expect("ready external parser script must retain its pending owner");
-            let _ = self
-                .finish_document_write_external_script_load(scope, host_ptr, pending, completion);
-            return true;
+        let pending = self.take_pending_parser_insertion()?;
+        match &pending.work {
+            ParserInsertionWork::ExternalScript { .. } => {
+                Some(self.finish_document_write_external_script_load(scope, host_ptr, pending))
+            }
+            ParserInsertionWork::Script { .. } => {
+                self.finish_stylesheet_blocked_parser_script(scope, host_ptr, pending);
+                Some(DocumentWriteExternalScriptLoadApplication::Applied)
+            }
+            ParserInsertionWork::StylesheetBoundary => {
+                self.document_write_script_preload_scanner = None;
+                let _ = self.resume_suspended_document_write_insertion(
+                    scope,
+                    host_ptr,
+                    pending.insertion,
+                );
+                let _ = self.resume_document_write_continuations(
+                    scope,
+                    host_ptr,
+                    pending.resume_after_completion,
+                );
+                let _ = self.finish_root_document_parser_stream_if_ready(scope, host_ptr);
+                Some(DocumentWriteExternalScriptLoadApplication::Applied)
+            }
         }
-        let Some(pending) = self.pending_document_write_stylesheet_blocked_script.take() else {
-            return false;
-        };
-        let PendingDocumentWriteStylesheetBlockedScript {
+    }
+
+    fn finish_stylesheet_blocked_parser_script(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        pending: PendingParserInsertion,
+    ) -> bool {
+        let PendingParserInsertion {
+            mut insertion,
+            work,
+            resume_after_completion,
+            ..
+        } = pending;
+        let ParserInsertionWork::Script {
             node,
             start_line,
             start_column,
             script,
-            blocking_signatures_before: _,
-            mut insertion,
-        } = pending;
+        } = work
+        else {
+            unreachable!()
+        };
         if !Self::resume_document_write_insertion_permit(&mut insertion) {
             return false;
         }
@@ -1944,6 +1884,9 @@ impl DocumentRuntime {
             Some(insertion.parser_bridge.clone()),
         ) {
             DocumentWriteScriptRunOutcome::Complete => {
+                if insertion.document_incarnation != self.document_incarnation {
+                    return false;
+                }
                 let parser_bridge = insertion.parser_bridge.clone();
                 self.set_current_script_context(CurrentScriptContextSpec {
                     handle: Some(node),
@@ -1952,10 +1895,18 @@ impl DocumentRuntime {
                 });
                 let _ = self.resume_suspended_document_write_insertion(scope, host_ptr, insertion);
                 self.clear_current_script_handle();
+                let _ = self.resume_document_write_continuations(
+                    scope,
+                    host_ptr,
+                    resume_after_completion,
+                );
                 let _ = self.finish_root_document_parser_stream_if_ready(scope, host_ptr);
                 true
             }
             DocumentWriteScriptRunOutcome::Suspend(start) => {
+                if insertion.document_incarnation != self.document_incarnation {
+                    return false;
+                }
                 Self::resuspend_document_write_insertion(
                     &mut insertion,
                     ParserSuspensionCause::ParserClassicSource { script: node },
@@ -1966,6 +1917,11 @@ impl DocumentRuntime {
                     *start,
                     insertion,
                     HashSet::new(),
+                );
+                let _ = self.resume_document_write_continuations(
+                    scope,
+                    host_ptr,
+                    resume_after_completion,
                 );
                 true
             }
@@ -2537,13 +2493,7 @@ impl DocumentRuntime {
         if self.has_pending_document_write_parser_blocking_work() {
             self.scan_document_write_script_preloads(host_ptr, html, false);
         }
-        if self.append_to_pending_document_write_external_script_load(html) {
-            return true;
-        }
-        if self.append_to_pending_document_write_stylesheet_blocked_script(html) {
-            return true;
-        }
-        if self.append_to_pending_document_write_stylesheet_parser_pause(html) {
+        if self.append_to_pending_parser_insertion(html) {
             return true;
         }
 

@@ -457,21 +457,6 @@ impl<Target> ParserClassicScriptSourceLoadCompletionAction<Target> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ParserPendingClassicScriptSourceLoadWaitAction<SourceLoadWait> {
-    source_load_wait: Option<SourceLoadWait>,
-}
-
-impl<SourceLoadWait> ParserPendingClassicScriptSourceLoadWaitAction<SourceLoadWait> {
-    pub(crate) fn new(source_load_wait: Option<SourceLoadWait>) -> Self {
-        Self { source_load_wait }
-    }
-
-    pub(crate) fn into_source_load_wait(self) -> Option<SourceLoadWait> {
-        self.source_load_wait
-    }
-}
-
 pub(crate) struct ParserPendingClassicScriptSourceResultAction<'a> {
     notification: ParserPendingClassicScriptNotification,
     network_result: Option<&'a SharedNavigationResponseResult>,

@@ -60,6 +60,7 @@ use self::page_task_turn::{
     execute_page_owned_document_script_turn_on_local_task,
     execute_page_owned_work_turn_on_local_task,
 };
+#[cfg(test)]
 use self::parser_blocking_pending::PendingParsingBlockingClassicScriptRunner;
 #[cfg(test)]
 use self::parser_blocking_pending::{
@@ -453,7 +454,7 @@ mod tests {
             scheduler: &mut state.scheduler,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
             input_closed: &state.input_closed,
         };
 
@@ -3517,7 +3518,6 @@ document.body.setAttribute('data-error-state', [
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
-                    pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                     buffered_document_preloads: &mut state.buffered_document_preloads,
                     service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                     input_closed: &state.input_closed,
@@ -3635,7 +3635,6 @@ document.body.setAttribute('data-error-state', [
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
-                    pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                     buffered_document_preloads: &mut state.buffered_document_preloads,
                     service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                     input_closed: &state.input_closed,
@@ -3683,7 +3682,6 @@ document.body.setAttribute('data-error-state', [
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
-                    pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                     buffered_document_preloads: &mut state.buffered_document_preloads,
                     service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                     input_closed: &state.input_closed,
@@ -4459,7 +4457,6 @@ document.body.setAttribute('data-error-state', [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -4928,7 +4925,6 @@ document.body.setAttribute('data-error-state', [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5004,7 +5000,6 @@ document.body.setAttribute('data-error-state', [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5079,7 +5074,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5154,7 +5148,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5338,7 +5331,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5457,7 +5449,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5523,7 +5514,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5612,7 +5602,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5636,9 +5625,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 .context_mut()
                 .blocking_signatures_before
                 .clear();
-            driver
-                .pending_parsing_blocking_script
-                .install_parser_blocking_script_blocked_on_execution(*pending);
+            page_vm.vm_mut().document_runtime.install_pending_main_parser_script(pending.into_script());
             stylesheet_release.notify_one();
             let mut owner = ParseTimeOwner::Parser;
             let mut parser_step_ready = true;
@@ -5736,7 +5723,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -5814,7 +5800,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -6065,7 +6050,6 @@ globalThis.__outerContinued = true;
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -6197,7 +6181,6 @@ globalThis.__outerContinued = true;
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
@@ -6255,7 +6238,6 @@ globalThis.__outerContinued = true;
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -6323,7 +6305,6 @@ globalThis.__outerContinued = true;
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
@@ -6398,9 +6379,11 @@ globalThis.__outerContinued = true;
         assert_eq!(progress, OwnerStepProgress::Continue);
         assert_eq!(owner, ParseTimeOwner::Document);
         assert!(
-            !state
-                .pending_parsing_blocking_script
-                .has_parser_blocking_script(),
+            page_vm
+                .vm()
+                .document_runtime
+                .pending_main_parser_script()
+                .is_none(),
             "initial parser boundary should not invent a pending parser-blocking script"
         );
         assert!(
@@ -6527,7 +6510,6 @@ globalThis.__outerContinued = true;
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
@@ -6583,7 +6565,6 @@ globalThis.__outerContinued = true;
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
@@ -6647,7 +6628,6 @@ globalThis.__outerContinued = true;
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
@@ -14206,7 +14186,6 @@ document.body.append(window.jsRemovedLazyMedia, window.parserRemovedLazyMedia);
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -14287,7 +14266,6 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -14385,7 +14363,6 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -14504,7 +14481,6 @@ document.body.setAttribute('data-result', [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -14720,7 +14696,7 @@ document.body.setAttribute('data-result', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -14887,7 +14863,7 @@ document.body.setAttribute('data-result', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -15129,7 +15105,7 @@ document.body.setAttribute('data-result', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -15340,7 +15316,7 @@ document.body.setAttribute('data-result', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -15506,7 +15482,7 @@ for (const [id, flag] of [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -15582,7 +15558,7 @@ document.body.setAttribute('data-result', 'done');
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -15666,7 +15642,7 @@ document.body.setAttribute('data-result', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -15840,7 +15816,7 @@ document.body.setAttribute('data-parser-returned', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16009,7 +15985,7 @@ document.body.setAttribute('data-idl-nonce', element.nonce);
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16247,7 +16223,7 @@ document.body.setAttribute('data-input', [
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16425,7 +16401,7 @@ document.body.setAttribute('data-face-disabled', String(face.matches(':disabled'
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16539,7 +16515,7 @@ document.body.setAttribute('data-after-visible', String(!!document.getElementByI
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16661,7 +16637,7 @@ document.body.setAttribute('data-after-body-visible', String(!!document.getEleme
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16751,7 +16727,7 @@ document.body.setAttribute('data-token', instance.getAttribute('data-token') || 
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16895,7 +16871,7 @@ document.body.setAttribute('data-bad-write', String(!!document.getElementById('b
                 scheduler: &mut state.scheduler,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
+
                 input_closed: &state.input_closed,
             };
 
@@ -16955,7 +16931,6 @@ document.body.setAttribute("data-range", [
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
-            pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
             buffered_document_preloads: &mut state.buffered_document_preloads,
             service_worker_preload_context: state.service_worker_preload_context.as_ref(),
             input_closed: &state.input_closed,
@@ -17012,7 +16987,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17113,7 +17087,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17246,7 +17219,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17368,7 +17340,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17556,7 +17527,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17679,7 +17649,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17775,7 +17744,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -17883,7 +17851,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -18012,7 +17979,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -18124,7 +18090,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,
@@ -18212,7 +18177,6 @@ document.body.setAttribute("data-range", [
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
-                pending_parsing_blocking_script: &mut state.pending_parsing_blocking_script,
                 buffered_document_preloads: &mut state.buffered_document_preloads,
                 service_worker_preload_context: state.service_worker_preload_context.as_ref(),
                 input_closed: &state.input_closed,

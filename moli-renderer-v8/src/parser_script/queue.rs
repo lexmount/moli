@@ -36,16 +36,14 @@ impl<C> ParserClassicScriptRunnerQueue<C> {
         self.scripts.push(script);
     }
 
-    pub(crate) fn has_current(&self) -> bool {
-        self.scripts.current().is_some()
-    }
-
-    pub(crate) fn install_current(&mut self, script: ParserClassicScriptRunnerItem<C>) {
-        self.scripts.install_current(script);
-    }
-
     pub(crate) fn finish_current(&mut self) {
         self.scripts.finish_current();
+    }
+
+    pub(crate) fn take_current(&mut self) -> Option<ParserClassicScriptRunnerItem<C>> {
+        let script = self.scripts.current.take()?;
+        self.scripts.finish_current();
+        Some(script)
     }
 
     #[cfg(test)]
@@ -132,10 +130,6 @@ impl<T> ParserBlockingClassicScriptQueue<T> {
         } else {
             self.queued_after_current.push_back(script);
         }
-    }
-
-    fn install_current(&mut self, script: T) {
-        self.current = Some(script);
     }
 
     #[cfg(test)]
