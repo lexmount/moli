@@ -761,7 +761,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver
             .parser_session
@@ -821,68 +821,68 @@ fn phase_transition_syncs_parser_created_style_sources_for_later_reads() {
         .build()
         .expect("runtime");
     runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-            let final_url = Url::parse("https://example.test/").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
-            let state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
-            let _js_runtime = crate::JsRuntime::initialize();
-            let html =
-                r#"<!doctype html><style>div { color: red } .foo { color: lime }</style><body><div id="target"></div></body>"#;
-            let crate::parser::ParserPumpOutcome {
-                result,
-                discovered_async_prefetch_scripts: _,
-                discovered_modulepreload_link_candidates: _,
-                discovered_blocking_stylesheet_inputs: _,
-            } = state.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
-            assert!(
-                matches!(result, ParserPumpStep::InputDrained),
-                "non-script parser input should drain"
-            );
-            let parser_dom_host = state.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
-            let local_executor = JsLocalExecutor::new();
-            let page_vm = PageVm::new(
-                PageId::new_for_testing(102),
-                local_executor.clone(),
-                &loader,
-                &default_test_page_vm_env_config(),
-                PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
-                parser_dom_host,
-                Instant::now(),
-            )
-            .expect("page vm");
-            let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
-                crate::renderer::PageVmInitStage::Load,
-                state,
-                page_vm,
-            );
-            let (mut page_vm, _, _, _) = super::scaffold::run_phase_one_local_task(
-                &local_executor,
-                "phase-one parser-created final style sync handoff",
-                async move {
-                    runtime
-                        .into_phase_two_execution(
-                            Instant::now(),
-                            super::loop_protocol::ParseTimePhaseTransitionReason::ParserCompleted,
-                        )
-                        .await
-                },
-            )
-            .await
-            .expect("phase transition should complete");
+        let final_url = Url::parse("https://example.test/").expect("test url");
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+        let state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
+        let _js_runtime = crate::JsRuntime::initialize();
+        let html =
+            r#"<!doctype html><style>div { color: red } .foo { color: lime }</style><body><div id="target"></div></body>"#;
+        let crate::parser::ParserPumpOutcome {
+            result,
+            discovered_async_prefetch_scripts: _,
+            discovered_preload_link_candidates: _,
+            discovered_blocking_stylesheet_inputs: _,
+        } = state.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
+        assert!(
+            matches!(result, ParserPumpStep::InputDrained),
+            "non-script parser input should drain"
+        );
+        let parser_dom_host = state.parser_session.stream_handle().borrow_mut().take_parser_stream_dom_host();
+        let local_executor = JsLocalExecutor::new();
+        let page_vm = PageVm::new(
+            PageId::new_for_testing(102),
+            local_executor.clone(),
+            &loader,
+            &default_test_page_vm_env_config(),
+            PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
+            parser_dom_host,
+            Instant::now(),
+        )
+        .expect("page vm");
+        let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
+            loader.clone(),
+            crate::renderer::PageVmInitStage::Load,
+            state,
+            page_vm,
+        );
+        let (mut page_vm, _, _, _) = super::scaffold::run_phase_one_local_task(
+            &local_executor,
+            "phase-one parser-created final style sync handoff",
+            async move {
+                runtime
+                    .into_phase_two_execution(
+                        Instant::now(),
+                        super::loop_protocol::ParseTimePhaseTransitionReason::ParserCompleted,
+                    )
+                    .await
+            },
+        )
+        .await
+        .expect("phase transition should complete");
 
-            let result = page_vm
-                .evaluate_expression(
-                    r#"JSON.stringify([
+        let result = page_vm
+            .evaluate_expression(
+                r#"JSON.stringify([
                         getComputedStyle(target).color,
                         (target.classList.add('foo'), getComputedStyle(target).color)
                     ])"#,
-                )
-                .expect("style read should evaluate");
-            assert_eq!(
-                result.get("value").and_then(serde_json::Value::as_str),
-                Some(r#"["rgb(255, 0, 0)","rgb(0, 255, 0)"]"#)
-            );
-        }));
+            )
+            .expect("style read should evaluate");
+        assert_eq!(
+            result.get("value").and_then(serde_json::Value::as_str),
+            Some(r#"["rgb(255, 0, 0)","rgb(0, 255, 0)"]"#)
+        );
+    }));
 }
 #[test]
 fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
@@ -912,7 +912,7 @@ fn parser_connected_head_script_does_not_push_later_head_tokens_into_body() {
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(html);
         let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
@@ -1082,7 +1082,7 @@ fn parser_connected_external_head_script_with_live_head_and_body_mutation_keeps_
         let crate::parser::ParserPumpOutcome {
             result,
             discovered_async_prefetch_scripts: _,
-            discovered_modulepreload_link_candidates: _,
+            discovered_preload_link_candidates: _,
             discovered_blocking_stylesheet_inputs: _,
         } = driver.parser_session.stream_handle().borrow_mut().pump_parser_step(&html);
         let ParserPumpStep::Yield(ParserYield::Script(handoff)) = result else {
