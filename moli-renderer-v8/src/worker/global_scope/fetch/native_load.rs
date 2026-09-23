@@ -1,25 +1,27 @@
 use super::*;
 
-pub(super) struct NativeWorkerFetchRequest {
+pub(super) struct NativeWorkerFetchRequest<'s> {
     pub(super) request: Request,
     pub(super) blob_url_entry: Option<CapturedBlobUrl>,
+    pub(super) kind: WorkerFetchKind,
+    pub(super) font_face: Option<v8::Local<'s, v8::Object>>,
 }
 
 pub(super) fn start<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     state: &Rc<RefCell<WorkerGlobalState>>,
-    request: NativeWorkerFetchRequest,
+    request: NativeWorkerFetchRequest<'s>,
     document_url: Url,
     signal_id: Option<u32>,
     metadata: ServiceWorkerFetchRequestMetadata,
     policy_context: SubresourcePolicyContext,
 ) -> Option<v8::Local<'s, v8::Promise>> {
-    let NativeWorkerFetchRequest { request, blob_url_entry } = request;
+    let NativeWorkerFetchRequest { request, blob_url_entry, kind, font_face } = request;
     let resolver = v8::PromiseResolver::new(scope)?;
     let promise = resolver.get_promise(scope);
     let cancel = FetchCancelHandle::new();
     let load = state.borrow().loader.register_load(
-        ResourceLoadKind::Fetch,
+        kind.resource_type().into(),
         if metadata.keepalive {
             ResourceLoadDisposition::Keepalive
         } else {
@@ -49,7 +51,7 @@ pub(super) fn start<'s>(
         method: request.method.clone(),
 
         request_body_bytes: request.body.clone(),
-        resource_type: SubresourceResourceType::Fetch,
+        resource_type: kind.resource_type(),
         request_cookie_report: None,
     };
     let (fetch_id, completion, control, resource_timing) = {
@@ -60,6 +62,8 @@ pub(super) fn start<'s>(
         state.pending_fetches.insert(
             fetch_id,
             PendingWorkerFetch {
+                kind,
+                font_face: font_face.map(|face| v8::Global::new(scope, face)),
                 resolver: v8::Global::new(scope, resolver),
                 resource_timing: resource_timing.clone(),
                 signal_id,
@@ -71,12 +75,9 @@ pub(super) fn start<'s>(
                 streaming_needs_orb_body_validation: false,
             },
         );
-        (
-            fetch_id,
-            state.fetch_completion_tx.clone(),
-            state.resource_load_control(),
-            resource_timing,
-        )
+        let mut control = state.resource_load_control();
+        control.connect_policy = control.connect_policy.for_resource_kind(kind.csp_resource_kind());
+        (fetch_id, state.fetch_completion_tx.clone(), control, resource_timing)
     };
     let service_worker = state.borrow().service_worker_runtime.clone();
     let service_worker_client = state.borrow().service_worker_client_id;

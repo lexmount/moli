@@ -23,6 +23,9 @@ pub(crate) enum InterceptionPhase {
 /// Consuming a decision cannot enter V8, run DOM work, or wait for a Page turn.
 #[derive(Clone, Debug)]
 pub struct ResourceInterceptionPause {
+    #[cfg(test)]
+    pub(crate) request_policy_for_test:
+        Option<(moli_fetch::RequestMode, moli_fetch::RequestCredentialsMode)>,
     #[cfg(any(test, feature = "devtools"))]
     internal_id: u64,
     worker_network: bool,
@@ -90,6 +93,8 @@ impl ResourceInterceptionPause {
         let (tx, rx) = oneshot::channel();
         (
             Self {
+                #[cfg(test)]
+                request_policy_for_test: None,
                 #[cfg(any(test, feature = "devtools"))]
                 internal_id,
                 worker_network: false,

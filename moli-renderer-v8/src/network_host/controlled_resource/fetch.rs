@@ -260,7 +260,7 @@ impl super::ControlledResourceLoad {
             self.load.clone(),
             resource_timing.clone(),
         ));
-        let result = self.run_inner(integrity.is_empty().then_some(&mut stream)).await;
+        let result = self.run_inner((integrity.is_empty() && self.info.resource_type != crate::types::SubresourceResourceType::Font).then_some(&mut stream)).await;
         let result = self.normalize_cancellation(result);
         stream.policy_violations(std::mem::take(&mut self.csp_violations));
         if stream.body_source_id().is_some() {

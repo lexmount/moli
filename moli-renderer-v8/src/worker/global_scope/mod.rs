@@ -100,6 +100,7 @@ mod content_security_policy;
 mod event_handlers;
 mod extendable_events;
 mod fetch;
+mod font_loading;
 mod import_scripts;
 mod messaging;
 mod nested_workers;
@@ -123,6 +124,7 @@ pub(crate) use self::service_worker_api::{
 
 use content_security_policy::*;
 pub(crate) use fetch::*;
+pub(crate) use font_loading::{queue_worker_font_task, start_worker_font_face_fetch};
 use import_scripts::*;
 use timers::*;
 pub(crate) use xhr::*;

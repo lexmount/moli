@@ -3,6 +3,8 @@
 use super::*;
 
 pub(in crate::worker) struct PendingWorkerFetch {
+    pub(in crate::worker) kind: fetch::WorkerFetchKind,
+    pub(in crate::worker) font_face: Option<v8::Global<v8::Object>>,
     pub(in crate::worker) resolver: v8::Global<v8::PromiseResolver>,
     pub(in crate::worker) resource_timing: crate::context_bootstrap::FetchResourceTiming,
     pub(in crate::worker) signal_id: Option<u32>,

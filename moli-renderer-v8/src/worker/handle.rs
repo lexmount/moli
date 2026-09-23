@@ -177,6 +177,8 @@ pub(crate) enum WorkerMessage {
     DispatchPendingPromiseRejections,
     /// Run one task from the worker's networking task source.
     RunNetworkingTask,
+    /// Run one task from the worker's font loading task source.
+    RunFontLoadingTask,
     /// Dispatch a CSP violation queued while the current worker was still evaluating script.
     DispatchContentSecurityPolicyViolation(
         Box<crate::content_security_policy::ContentSecurityPolicyUrlViolation>,
@@ -542,6 +544,8 @@ pub(crate) enum WorkerErrorSource {
 #[cfg(test)]
 #[derive(Debug, Clone)]
 pub(crate) struct WorkerPendingSubresourceFetch {
+    pub(crate) request_policy:
+        Option<(moli_fetch::RequestMode, moli_fetch::RequestCredentialsMode)>,
     pub(crate) fetch_id: u64,
     pub(crate) network_partition_key: Option<String>,
     pub(crate) info: PendingSubresourceFetchInfo,
