@@ -803,10 +803,11 @@ async fn font_face_binary_source_union_rejects_invalid_font_data() {
         r#"{"source":"","status":"error","samePromise":true,"readyChanged":false,"setStatus":"loaded","events":[],"rejection":"SyntaxError"}"#
     );
 }
-#[test]
-fn font_face_set_bindings_share_event_target_and_validate_native_receivers() {
-    let mut vm = new_storage_test_vm("https://font-face-set-bindings.test/");
-    vm.eval(&format!(
+#[tokio::test]
+async fn font_face_set_bindings_share_event_target_and_validate_native_receivers() {
+    let result = eval_font_loading_fixture(
+        "https://font-face-set-bindings.test/",
+        &format!(
             r#"(async () => {{
                 {}
                 const frame = (document.body || document.documentElement || document)
@@ -847,16 +848,11 @@ fn font_face_set_bindings_share_event_target_and_validate_native_receivers() {
                 let illegal = false;
                 try {{ new FontFaceSet([]); }} catch (error) {{ illegal = error instanceof TypeError; }}
                 return JSON.stringify({{main, other, crossRealm, illegal, creation}});
-            }})().then(
-                result => globalThis.__fontFaceSetBindings = result,
-                error => globalThis.__fontFaceSetBindings = String(error.stack || error)
-            )"#,
+            }})()"#,
             include_str!("../../../../../../tests/fixtures/fontfaceset-bindings.js"),
-        ))
-        .expect("FontFaceSet binding probe should evaluate");
-    let result = vm
-        .eval("__fontFaceSetBindings")
-        .expect("FontFaceSet binding probe should settle");
+        ),
+    )
+    .await;
     let result: serde_json::Value = serde_json::from_str(&result).unwrap();
     for realm in ["main", "other"] {
         assert_eq!(result[realm]["failures"], serde_json::json!([]), "{result}");
