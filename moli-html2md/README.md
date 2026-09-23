@@ -87,8 +87,9 @@ default is `false`, which collapses ordinary HTML whitespace and moves boundary
 spaces outside code delimiters. Fenced blocks always preserve nonempty code's
 spaces and blank lines. Empty blocks still separate surrounding text.
 
-This is a structural content dump. It does not evaluate CSS, visibility, layout,
-or JavaScript, and cannot preserve all HTML presentation (for example, arbitrary
+This is a structural content dump. It omits non-rendered serialized state blobs
+but retains content in collapsed panels and inactive tabs. It does not evaluate
+stylesheets, layout, or JavaScript, and cannot preserve all HTML presentation (for example, arbitrary
 ordered-list numbering or table spanning). DOM snapshots used by Moli's optional
 strip/base/frame transformations remain the responsibility of the caller.
 

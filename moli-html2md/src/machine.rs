@@ -1,5 +1,6 @@
 use crate::output::Output;
 use crate::table::Table;
+use crate::visibility::nonrendered_serialized_state;
 use crate::writer::{Style, Writer, longest_run};
 use crate::{Dom, NodeKind, Options};
 
@@ -198,6 +199,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             NodeKind::Other => return,
             NodeKind::Element(tag) => tag,
         };
+        if nonrendered_serialized_state(self.dom, node) {
+            return;
+        }
         if let Some(table) = self.tables.last_mut() {
             table.visit_element(tag);
         }
@@ -378,6 +382,9 @@ impl<'a, D: Dom + ?Sized> Machine<'a, D> {
             inline,
         ));
         if depth >= self.options.max_depth {
+            return;
+        }
+        if nonrendered_serialized_state(self.dom, node) {
             return;
         }
         match self.dom.node_kind(node) {

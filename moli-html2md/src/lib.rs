@@ -4,6 +4,7 @@ mod machine;
 mod options;
 mod output;
 mod table;
+mod visibility;
 mod writer;
 
 pub use converter::{Converter, convert};

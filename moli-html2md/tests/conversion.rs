@@ -86,6 +86,44 @@ impl Dom for Tree {
 }
 
 #[test]
+fn hidden_page_state_is_omitted_without_losing_inactive_tab_content() {
+    let mut dom = Tree::new();
+    let page = dom.element(0, "main");
+    dom.leaf(page, "h1", "Article title");
+    let state: &'static str =
+        Box::leak(format!("{{\"state\":\"{}\"}}", "x".repeat(512)).into_boxed_str());
+    let hidden = dom.leaf(page, "div", state);
+    dom.attr(hidden, "style", "color:red; DISPLAY : none !important");
+    let hidden_attribute = dom.leaf(page, "p", "Collapsed details");
+    dom.attr(hidden_attribute, "hidden", "");
+    let visible_override = dom.leaf(page, "p", "Visible details");
+    dom.attr(visible_override, "style", "display:none; display:block");
+    let important_hidden = dom.leaf(page, "p", "Important hidden details");
+    dom.attr(
+        important_hidden,
+        "style",
+        "display:none!important; display:block",
+    );
+    let table = dom.element(page, "table");
+    let header = dom.element(table, "tr");
+    dom.leaf(header, "th", "Name");
+    let hidden_row = dom.element(table, "tr");
+    dom.attr(hidden_row, "hidden", "");
+    dom.leaf(hidden_row, "td", "Hidden row");
+    let row = dom.element(table, "tr");
+    dom.leaf(row, "td", "Visible row");
+
+    let text = Converter::default().convert(&dom, 0);
+    assert!(text.contains("Article title"));
+    assert!(text.contains("Visible details"));
+    assert!(text.contains("Visible row"));
+    assert!(!text.contains(state));
+    assert!(text.contains("Collapsed details"));
+    assert!(text.contains("Important hidden details"));
+    assert!(text.contains("Hidden row"));
+}
+
+#[test]
 fn coalesces_styles_without_changing_the_tree() {
     let mut dom = Tree::new();
     dom.leaf(0, "em", "foo");
