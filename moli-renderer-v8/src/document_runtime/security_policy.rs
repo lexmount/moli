@@ -2755,7 +2755,7 @@ mod tests {
             "Content-Security-Policy-Report-Only",
         ] {
             for _ in 0..2 {
-                headers.push((name.to_owned(), policy_text.clone()));
+                headers.push((name.to_owned(), policy_text.as_bytes().to_vec()));
             }
         }
         let policy = DocumentPolicyContainer::from_navigation_response_headers(
@@ -2958,11 +2958,11 @@ mod tests {
             &[
                 (
                     "Content-Security-Policy".to_owned(),
-                    "frame-ancestors 'none', frame-ancestors 'self'".to_owned(),
+                    b"frame-ancestors 'none', frame-ancestors 'self'".to_vec(),
                 ),
                 (
                     "Content-Security-Policy-Report-Only".to_owned(),
-                    "frame-ancestors 'none', frame-ancestors 'self'".to_owned(),
+                    b"frame-ancestors 'none', frame-ancestors 'self'".to_vec(),
                 ),
             ],
             &protected_url,
@@ -3232,7 +3232,7 @@ mod tests {
         let policy = DocumentPolicyContainer::from_navigation_response_headers(
             &[(
                 "Content-Security-Policy".to_owned(),
-                "base-uri 'self'; report-uri /reports".to_owned(),
+                b"base-uri 'self'; report-uri /reports".to_vec(),
             )],
             &creator_url,
         );
@@ -3367,7 +3367,7 @@ mod tests {
         let child_policy = DocumentPolicyContainer::from_navigation_response_headers(
             &[(
                 "Reporting-Endpoints".to_owned(),
-                "csp=\"/child-reports\"".to_owned(),
+                b"csp=\"/child-reports\"".to_vec(),
             )],
             &child_url,
         );

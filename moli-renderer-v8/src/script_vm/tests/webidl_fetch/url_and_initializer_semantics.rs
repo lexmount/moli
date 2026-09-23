@@ -1433,7 +1433,7 @@ fn opaque_window_fetch_keeps_blocked_bytes_out_of_internal_clone_consumers() {
                     status_text: None,
                     final_url: pending.url.clone(),
                     status: 200,
-                    headers: vec![("Content-Type".to_owned(), mime.to_owned())],
+                    headers: vec![("Content-Type".to_owned(), mime.as_bytes().to_vec())],
                     request_cookie_report: None,
                     cookie_set_reports: Vec::new(),
                     redirected: false,

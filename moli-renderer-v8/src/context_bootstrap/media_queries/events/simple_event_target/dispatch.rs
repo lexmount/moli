@@ -466,7 +466,8 @@ fn invoke_simple_event_callback_with_invocation<'s>(
                         &report,
                     );
                 } else {
-                    let _ = crate::worker::dispatch_current_worker_callback_exception(scope, *report);
+                    let _ =
+                        crate::worker::dispatch_current_worker_callback_exception(scope, *report);
                 }
                 SimpleEventCallbackResult {
                     invoked: true,

@@ -103,7 +103,7 @@ async fn worker_fetch_request_initializers_use_request_header_guards() {
                 handle.fulfill_pending_fetch(
                     request,
                     200,
-                    vec![("content-type".to_owned(), "application/json".to_owned())],
+                    vec![("content-type".to_owned(), b"application/json".to_vec())],
                     RendererSyntheticResponseBody::from_bytes(body.into_bytes()),
                 );
             }
