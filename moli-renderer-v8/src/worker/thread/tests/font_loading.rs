@@ -3,6 +3,36 @@ use super::*;
 const FONT: &[u8] = include_bytes!("../../../../../moli-layout/tests/fixtures/moli-ahem.ttf");
 
 #[tokio::test]
+async fn worker_font_face_set_bindings_share_event_target_and_validate_native_receivers() {
+    ensure_v8();
+    for kind in [WorkerScriptKind::Classic, WorkerScriptKind::Module] {
+        let source = format!(
+            "{}\n{}fontFaceSetBindingsProbe(globalThis, fonts).then(value => {{ postMessage(value); close(); }}, error => {{ postMessage({{error: String(error.stack || error)}}); close(); }});",
+            include_str!("../../../../tests/fixtures/fontfaceset-bindings.js"),
+            if kind == WorkerScriptKind::Module {
+                "await "
+            } else {
+                ""
+            },
+        );
+        let mut handle = spawn_worker_with_request_client_and_kind(
+            source,
+            "https://fonts.test/worker.js".to_owned(),
+            worker_test_request_client(),
+            kind,
+        );
+        let result: serde_json::Value =
+            serde_json::from_str(&recv_post_json(&mut handle).await).unwrap();
+        assert_eq!(
+            result["failures"],
+            serde_json::json!([]),
+            "{kind:?}: {result}"
+        );
+        assert_eq!(result["checks"], 221, "{kind:?}: {result}");
+    }
+}
+
+#[tokio::test]
 async fn worker_font_loading_exposes_native_fonts_and_settles_tasks() {
     ensure_v8();
     for kind in [WorkerScriptKind::Classic, WorkerScriptKind::Module] {

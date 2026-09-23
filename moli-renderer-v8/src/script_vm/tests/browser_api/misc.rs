@@ -2143,6 +2143,69 @@ fn font_face_variation_settings_use_stylo_descriptor_serialization() {
 }
 
 #[tokio::test]
+async fn font_face_set_bindings_share_event_target_and_validate_native_receivers() {
+    let result = eval_font_loading_fixture(
+        "https://font-face-set-bindings.test/",
+        &format!(
+            r#"(async () => {{
+                {}
+                const frame = (document.body || document.documentElement || document)
+                    .appendChild(document.createElement('iframe'));
+                const child = frame.contentWindow;
+                const getter = Object.getOwnPropertyDescriptor(Document.prototype, 'fonts').get;
+                const windowless = document.implementation.createHTMLDocument('');
+                const mainConstructor = Object.getOwnPropertyDescriptor(window, 'FontFaceSet');
+                const childConstructor = Object.getOwnPropertyDescriptor(child, 'FontFaceSet');
+                const mainPrototype = FontFaceSet.prototype;
+                const childPrototype = child.FontFaceSet.prototype;
+                const poison = {{configurable: true, get() {{ throw new Error('author constructor'); }}}};
+                let creation;
+                try {{
+                    Object.defineProperty(window, 'FontFaceSet', poison);
+                    Object.defineProperty(child, 'FontFaceSet', poison);
+                    const childFonts = getter.call(child.document);
+                    creation = [
+                        Object.getPrototypeOf(document.fonts) === mainPrototype,
+                        Object.getPrototypeOf(windowless.fonts) === mainPrototype,
+                        Object.getPrototypeOf(childFonts) === childPrototype,
+                        childFonts === child.document.fonts,
+                    ];
+                }} finally {{
+                    Object.defineProperty(window, 'FontFaceSet', mainConstructor);
+                    Object.defineProperty(child, 'FontFaceSet', childConstructor);
+                }}
+                const main = await fontFaceSetBindingsProbe(window, document.fonts);
+                const other = await fontFaceSetBindingsProbe(child, child.document.fonts);
+                const parentSize = Object.getOwnPropertyDescriptor(FontFaceSet.prototype, 'size').get;
+                const childSize = Object.getOwnPropertyDescriptor(child.FontFaceSet.prototype, 'size').get;
+                const face = new FontFace('CrossRealm', 'url(unused.ttf)');
+                child.FontFaceSet.prototype.add.call(document.fonts, face);
+                FontFaceSet.prototype.add.call(child.document.fonts, face);
+                const crossRealm = [parentSize.call(child.document.fonts), childSize.call(document.fonts),
+                    child.FontFaceSet.prototype.has.call(document.fonts, face)];
+                frame.remove();
+                let illegal = false;
+                try {{ new FontFaceSet([]); }} catch (error) {{ illegal = error instanceof TypeError; }}
+                return JSON.stringify({{main, other, crossRealm, illegal, creation}});
+            }})()"#,
+            include_str!("../../../../tests/fixtures/fontfaceset-bindings.js"),
+        ),
+    )
+    .await;
+    let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+    for realm in ["main", "other"] {
+        assert_eq!(result[realm]["failures"], serde_json::json!([]), "{result}");
+        assert_eq!(result[realm]["checks"], 221, "{result}");
+    }
+    assert_eq!(result["crossRealm"], serde_json::json!([1, 1, true]));
+    assert_eq!(result["illegal"], true);
+    assert_eq!(
+        result["creation"],
+        serde_json::json!([true, true, true, true])
+    );
+}
+
+#[tokio::test]
 async fn font_face_set_load_event_copies_and_freezes_fontfaces() {
     let result = eval_font_loading_fixture(
         "https://font-face-set-load-event.test/",
