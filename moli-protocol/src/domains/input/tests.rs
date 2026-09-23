@@ -5,6 +5,7 @@ use moli_core::LayoutPolicy;
 
 mod element_click;
 mod keyboard_events;
+mod text_control_compat;
 
 const INPUT_HIT_X: u32 = 20;
 const INPUT_HIT_Y: u32 = 20;
