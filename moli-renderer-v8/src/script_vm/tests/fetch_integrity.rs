@@ -58,7 +58,7 @@ async fn fetch_integrity_validates_local_bytes_in_window_and_worker() {
 async fn fetch_integrity_validates_network_responses_in_window_and_worker() {
     for worker in [false, true] {
         let server =
-            StaticHttpServer::spawn_with_bodies(vec!["hello integrity".to_owned(); 8]).await;
+            StaticHttpServer::spawn_with_bodies(vec!["hello integrity".to_owned(); 16]).await;
         let expression = format!(
             r#"(async () => {{
               const checks = [];
@@ -74,6 +74,14 @@ async fn fetch_integrity_validates_network_responses_in_window_and_worker() {
                 ['whitespace', ' ', 'GET', true],
                 ['no-integrity', '', 'GET', true],
                 ['null-body', 'sha1-ignored', 'HEAD', false],
+                ['excess-padding-mismatch', 'sha384-AAAA===', 'GET', false],
+                ['interior-padding-mismatch', 'sha384-A=AAA', 'GET', false],
+                ['padding-only-mismatch', 'sha384-====', 'GET', false],
+                ['malformed-stronger-hash', valid + ' sha512-AAAA===', 'GET', false],
+                ['excess-padding-match', valid + '====', 'GET', true],
+                ['noncanonical-padding-bits', valid.replace('6A=', '6B='), 'GET', true],
+                ['non-base64-ignored', 'sha384-***', 'GET', true],
+                ['malformed-and-matching', 'sha256-A=AAA ' + valid, 'GET', true],
               ]) {{
                 try {{
                   const response = await fetch({} + label, {{integrity, method}});
@@ -85,7 +93,7 @@ async fn fetch_integrity_validates_network_responses_in_window_and_worker() {
             }})()"#,
             serde_json::to_string(server.base_url().as_str()).unwrap(),
         );
-        run_integrity_probe(server.base_url().as_str(), worker, &expression, 13).await;
-        assert_eq!(server.finish().await.len(), 8);
+        run_integrity_probe(server.base_url().as_str(), worker, &expression, 25).await;
+        assert_eq!(server.finish().await.len(), 16);
     }
 }

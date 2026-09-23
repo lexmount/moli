@@ -196,7 +196,7 @@ async fn document_preloads_supply_pending_and_completed_consumers_including_fail
             .context("preload consumption results")?,
     )?;
     assert_eq!(value["basic"]["rows"].as_array().unwrap().len(), 24);
-    assert_eq!(value["integrity"]["rows"].as_array().unwrap().len(), 32);
+    assert_eq!(value["integrity"]["rows"].as_array().unwrap().len(), 40);
     assert_eq!(value["basic"]["failures"], serde_json::json!([]));
     assert_eq!(value["integrity"]["failures"], serde_json::json!([]));
     assert_eq!(value["basic"]["executions"], 12);
