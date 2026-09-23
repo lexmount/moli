@@ -18,6 +18,24 @@ async fn font_faces_enforce_document_csp_before_initial_and_redirect_requests() 
 }
 
 async fn run_font_probe(probe: &str, count: usize) -> Result<()> {
+    run_font_probe_with_argument(probe, count, None).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn font_faces_validate_binary_data_and_buffer_source_inputs() -> Result<()> {
+    let fonts = serde_json::json!({
+        "ttf": include_bytes!("../../../moli-layout/tests/fixtures/moli-ahem.ttf").as_slice(),
+        "woff": include_bytes!("../../../moli-layout/tests/fixtures/moli-ahem.woff").as_slice(),
+        "woff2": include_bytes!("../../../moli-layout/tests/fixtures/moli-ahem.woff2").as_slice(),
+    });
+    run_font_probe_with_argument(include_str!("../fixtures/font-binary.js"), 58, Some(fonts)).await
+}
+
+async fn run_font_probe_with_argument(
+    probe: &str,
+    count: usize,
+    argument: Option<serde_json::Value>,
+) -> Result<()> {
     let server = PreloadServer::spawn().await?;
     let cross = PreloadServer::spawn().await?;
     let mut config = AppConfig::default();
@@ -26,7 +44,7 @@ async fn run_font_probe(probe: &str, count: usize) -> Result<()> {
     let mut page = browser.fetch(&server.origin).await?;
     let expression = format!(
         "({probe})({}).then(JSON.stringify, error => JSON.stringify({{error: String(error.stack || error)}}))",
-        serde_json::to_string(&cross.origin)?
+        serde_json::to_string(&argument.unwrap_or_else(|| serde_json::json!(cross.origin)))?
     );
     let result = tokio::time::timeout(
         Duration::from_secs(30),
