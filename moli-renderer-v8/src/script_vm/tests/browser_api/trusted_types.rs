@@ -1134,27 +1134,19 @@ fn service_worker_register_gates_script_url_before_url_resolution() {
     let mut vm = new_storage_test_vm("https://service-worker-register-trusted-types.test/");
     vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
 
-    let result = vm
-        .eval(
+    vm.eval(
             r#"
 (() => {
-  const errorName = callback => {
-    try {
-      callback();
-      return "none";
-    } catch (error) {
-      return error && error.name;
-    }
-  };
+  const errorName = promise => promise.then(() => 'resolved', error => error && error.name);
   const policy = trustedTypes.createPolicy("service-worker-register", {
     createHTML: value => value,
     createScriptURL: value => value
   });
-  const blockedString = errorName(() => navigator.serviceWorker.register("worker.js"));
-  const blockedWrongType = errorName(() =>
+  const blockedString = errorName(navigator.serviceWorker.register("worker.js"));
+  const blockedWrongType = errorName(
     navigator.serviceWorker.register(policy.createHTML("worker.js"))
   );
-  const missing = errorName(() => navigator.serviceWorker.register());
+  const missing = errorName(navigator.serviceWorker.register());
 
   const trustedPromise = navigator.serviceWorker.register(
     policy.createScriptURL("http://[")
@@ -1171,19 +1163,24 @@ fn service_worker_register_gates_script_url_before_url_resolution() {
   const defaultPromise = navigator.serviceWorker.register("worker.potato");
   defaultPromise.catch(() => {});
 
-  return JSON.stringify({
-    blockedString,
-    blockedWrongType,
-    missing,
-    trustedPromise: trustedPromise instanceof Promise,
-    defaultPromise: defaultPromise instanceof Promise,
-    defaultCalls
+  Promise.all([blockedString, blockedWrongType, missing]).then(([blockedString, blockedWrongType, missing]) => {
+    globalThis.serviceWorkerTrustedUrlResult = {
+      blockedString,
+      blockedWrongType,
+      missing,
+      trustedPromise: trustedPromise instanceof Promise,
+      defaultPromise: defaultPromise instanceof Promise,
+      defaultCalls
+    };
   });
 })()
 "#,
         )
         .expect("ServiceWorkerContainer.register TrustedScriptURL probe should evaluate");
 
+    let result = vm
+        .eval("JSON.stringify(globalThis.serviceWorkerTrustedUrlResult)")
+        .expect("ServiceWorkerContainer.register errors should reject their Promises");
     assert_eq!(
         result,
         r#"{"blockedString":"TypeError","blockedWrongType":"TypeError","missing":"TypeError","trustedPromise":true,"defaultPromise":true,"defaultCalls":[["worker.potato","TrustedScriptURL","ServiceWorkerContainer register"]]}"#
@@ -1268,5 +1265,141 @@ fn dom_parser_gates_converted_union_source_after_webidl_argument_conversion() {
     assert_eq!(
         result,
         r#"{"blocked":["TypeError","TypeError","TypeError"],"accepted":["trusted","root"],"defaultValues":["default","null","root"],"sourceConversions":2,"invalidType":"TypeError","invalidTypeSkippedPolicy":true,"symbolSource":"TypeError","defaultCalls":[["source","TrustedHTML","DOMParser parseFromString"],["null","TrustedHTML","DOMParser parseFromString"],["<root/>","TrustedHTML","DOMParser parseFromString"]]}"#
+    );
+}
+
+#[test]
+fn service_worker_register_converts_options_before_the_default_policy() {
+    let mut vm = new_storage_test_vm("https://service-worker-register-options.test/");
+    vm.set_response_content_security_policies(&["require-trusted-types-for 'script'".to_owned()]);
+    vm.eval(
+        r#"
+(async () => {
+  const sw = navigator.serviceWorker;
+  const marker = {sentinel: true};
+  const rows = [];
+  async function probe(label, callback, log) {
+    const promise = callback();
+    log.push('returned');
+    try {
+      await promise;
+      rows.push([label, 'fulfilled']);
+    } catch (error) {
+      rows.push([label, promise instanceof Promise, error === marker ? 'sentinel' : error.name, [...log]]);
+    }
+  }
+  const options = log => ({
+    get scope() { log.push('scope'); return './'; },
+    get type() { log.push('type'); return 'classic'; },
+    get updateViaCache() { log.push('cache'); return 'imports'; }
+  });
+  let log = [];
+  await probe('blocked-after-options', () => sw.register(
+    {toString() { log.push('script'); return 'worker.js'; }}, options(log)
+  ), log);
+  log = [];
+  await probe('options-exception-before-policy', () => sw.register('worker.js', {
+    get scope() { log.push('scope'); throw marker; }
+  }), log);
+  log = [];
+  await probe('script-exception', () => sw.register(
+    {toString() { log.push('script'); throw marker; }}, options(log)
+  ), log);
+  const policy = trustedTypes.createPolicy('registration-tests', {createScriptURL: v => v});
+  const trusted = policy.createScriptURL('https://[');
+  trusted.toString = () => { throw marker; };
+  log = [];
+  await probe('trusted-input', () => sw.register(trusted, options(log)), log);
+  let defaultThrows = false;
+  let policyLog = [];
+  trustedTypes.createPolicy('default', {
+    createScriptURL(value, type, sink) {
+      policyLog.push(['policy', value, type, sink]);
+      if (defaultThrows) throw marker;
+      return 'https://[';
+    }
+  });
+  log = []; policyLog = log;
+  await probe('default-after-options', () => sw.register(
+    {toString() { log.push('script'); return 'worker\ud800.js'; }}, options(log)
+  ), log);
+  log = []; policyLog = log; defaultThrows = true;
+  await probe('default-exception', () => sw.register('worker.js', options(log)), log);
+  log = []; policyLog = log;
+  await probe('invalid-options-before-default', () => sw.register('worker.js', {
+    get type() { log.push('type'); return null; }
+  }), log);
+  return rows;
+})().then(rows => { globalThis.serviceWorkerOptionsResult = rows; });
+"#,
+    )
+    .expect("ServiceWorkerContainer.register argument and policy probes should evaluate");
+    let result = vm
+        .eval("JSON.stringify(globalThis.serviceWorkerOptionsResult)")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&result).unwrap(),
+        serde_json::json!([
+            [
+                "blocked-after-options",
+                true,
+                "TypeError",
+                ["script", "scope", "type", "cache", "returned"]
+            ],
+            [
+                "options-exception-before-policy",
+                true,
+                "sentinel",
+                ["scope", "returned"]
+            ],
+            ["script-exception", true, "sentinel", ["script", "returned"]],
+            [
+                "trusted-input",
+                true,
+                "TypeError",
+                ["scope", "type", "cache", "returned"]
+            ],
+            [
+                "default-after-options",
+                true,
+                "TypeError",
+                [
+                    "script",
+                    "scope",
+                    "type",
+                    "cache",
+                    [
+                        "policy",
+                        "worker�.js",
+                        "TrustedScriptURL",
+                        "ServiceWorkerContainer register"
+                    ],
+                    "returned"
+                ]
+            ],
+            [
+                "default-exception",
+                true,
+                "sentinel",
+                [
+                    "scope",
+                    "type",
+                    "cache",
+                    [
+                        "policy",
+                        "worker.js",
+                        "TrustedScriptURL",
+                        "ServiceWorkerContainer register"
+                    ],
+                    "returned"
+                ]
+            ],
+            [
+                "invalid-options-before-default",
+                true,
+                "TypeError",
+                ["type", "returned"]
+            ]
+        ])
     );
 }
