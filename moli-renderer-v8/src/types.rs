@@ -727,6 +727,8 @@ pub(super) enum AsyncSubresourceFetchResult {
         encoded: moli_parkable_image::ParkableImage,
     },
     Failure(String),
+    /// The preload producer already reported this failed fetch.
+    PreloadFailure(String),
 }
 
 impl AsyncSubresourceFetchResult {
@@ -771,7 +773,7 @@ impl AsyncSubresourceFetchResult {
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
+            Self::Failure(error) | Self::PreloadFailure(error) => Err(error),
         }
     }
 
@@ -781,7 +783,7 @@ impl AsyncSubresourceFetchResult {
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => Ok(response),
-            Self::Failure(error) => Err(error),
+            Self::Failure(error) | Self::PreloadFailure(error) => Err(error),
         }
     }
 
@@ -789,19 +791,19 @@ impl AsyncSubresourceFetchResult {
     pub(super) fn encoded(&self) -> Option<&moli_parkable_image::ParkableImage> {
         match self {
             Self::Image { encoded, .. } => Some(encoded),
-            Self::Response(_) | Self::ChildDocumentResponse { .. } | Self::Failure(_) => None,
+            Self::Response(_) | Self::ChildDocumentResponse { .. } | Self::Failure(_) | Self::PreloadFailure(_) => None,
         }
     }
 
     #[cfg(test)]
     pub(super) fn is_ok(&self) -> bool {
-        !matches!(self, Self::Failure(_))
+        !matches!(self, Self::Failure(_) | Self::PreloadFailure(_))
     }
 
     #[cfg(test)]
     pub(super) fn err(self) -> Option<String> {
         match self {
-            Self::Failure(error) => Some(error),
+            Self::Failure(error) | Self::PreloadFailure(error) => Some(error),
             Self::Response(_) | Self::Image { .. } | Self::ChildDocumentResponse { .. } => None,
         }
     }
@@ -812,14 +814,14 @@ impl AsyncSubresourceFetchResult {
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => response,
-            Self::Failure(error) => panic!("{message}: {error:?}"),
+            Self::Failure(error) | Self::PreloadFailure(error) => panic!("{message}: {error:?}"),
         }
     }
 
     #[cfg(test)]
     pub(super) fn expect_err(self, message: &str) -> String {
         match self {
-            Self::Failure(error) => error,
+            Self::Failure(error) | Self::PreloadFailure(error) => error,
             Self::Response(response)
             | Self::Image { response, .. }
             | Self::ChildDocumentResponse { response, .. } => {
@@ -881,6 +883,28 @@ impl AsyncSubresourceFetchResponseFilter {
 
     pub(super) fn is_readable(&self) -> bool {
         self.response_type().is_readable()
+    }
+}
+
+impl From<AsyncSubresourceFetchResponseFilter> for moli_fetch::PreloadResponseFilter {
+    fn from(filter: AsyncSubresourceFetchResponseFilter) -> Self {
+        match filter {
+            AsyncSubresourceFetchResponseFilter::Network(kind) => Self::Network(kind),
+            AsyncSubresourceFetchResponseFilter::ServiceWorker(metadata) => {
+                Self::ServiceWorker((*metadata).clone())
+            }
+        }
+    }
+}
+
+impl From<moli_fetch::PreloadResponseFilter> for AsyncSubresourceFetchResponseFilter {
+    fn from(filter: moli_fetch::PreloadResponseFilter) -> Self {
+        match filter {
+            moli_fetch::PreloadResponseFilter::Network(kind) => Self::Network(kind),
+            moli_fetch::PreloadResponseFilter::ServiceWorker(metadata) => {
+                Self::service_worker(metadata)
+            }
+        }
     }
 }
 

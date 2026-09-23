@@ -1844,6 +1844,12 @@ async fn unattached_child_frame_activity_uses_captured_owner_for_network_and_lif
             response_body: Some(SubresourceResponseBody::from_bytes(b"child body".to_vec())),
             from_cache: false,
             cache_state: Default::default(),
+            preload_state: Default::default(),
+            resource_timing_body_visible: false,
+            resource_timing_response: None,
+            resource_timing_allowed: false,
+            resource_timing_redirected: false,
+            resource_timing_protocol: None,
         };
         let mut document = super::PagePreparedChildFrameDocumentActivity::from_parts(
             12.5,
@@ -1984,6 +1990,8 @@ async fn child_frame_activity_emits_document_network_events_before_load_completi
         response_body: Some(SubresourceResponseBody::from_bytes(vec![0x00, 0xff, b'a'])),
         from_cache: true,
         cache_state: moli_fetch::ResponseCacheState::Local,
+
+        preload_state: Default::default(),
     };
     let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
         12.5,
@@ -2135,6 +2143,7 @@ async fn stale_child_document_response_emits_network_without_navigation_or_lifec
                 )),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
             },
         }],
         Vec::new(),
@@ -2236,6 +2245,7 @@ async fn child_document_network_without_body_records_known_no_data() {
         response_body: None,
         from_cache: false,
         cache_state: Default::default(),
+        preload_state: Default::default(),
     };
     let mut background_events = Vec::new();
 
@@ -2521,6 +2531,12 @@ async fn prepared_child_frame_activity_keeps_implicit_owner_after_foreground_cha
                 response_body: Some(SubresourceResponseBody::from_bytes(b"child".to_vec())),
                 from_cache: false,
                 cache_state: Default::default(),
+                preload_state: Default::default(),
+                resource_timing_body_visible: false,
+                resource_timing_response: None,
+                resource_timing_allowed: false,
+                resource_timing_redirected: false,
+                resource_timing_protocol: None,
             },
         }],
         Vec::new(),
