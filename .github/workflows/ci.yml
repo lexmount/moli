@@ -118,6 +118,7 @@ jobs:
   nextest:
     name: Nextest
     runs-on: [self-hosted, moli-ci]
+    timeout-minutes: 45
     container:
       image: rust:1.96.1-bookworm
       # Docker seeds new named volumes from the pinned image. Keep toolchains
