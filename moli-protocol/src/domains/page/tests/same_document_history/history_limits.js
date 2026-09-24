@@ -12,7 +12,7 @@ function exhaustHistoryUpdates(target) {
 
 async function historyLimitFrame() {
   const frame = document.createElement('iframe');
-  frame.src = '/history.html';
+  frame.src = '/history.html?child';
   const loaded = new Promise(resolve => frame.onload = resolve);
   document.body.append(frame);
   await loaded;

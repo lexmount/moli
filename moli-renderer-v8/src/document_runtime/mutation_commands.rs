@@ -730,7 +730,7 @@ impl DocumentRuntime {
         if changed && name == "disabled" && self.dom_host.is_html_element_named(handle, "link") {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
         }
-        if changed
+        if (changed || old_value.as_deref() == Some(value))
             && !Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, name, false,
             )
@@ -843,7 +843,7 @@ impl DocumentRuntime {
         if changed && name == "disabled" && self.dom_host.is_html_element_named(handle, "link") {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
         }
-        if changed
+        if (changed || old_value.as_deref() == Some(value))
             && !Self::apply_frame_owner_attribute_mutation_followup(
                 scope, host_ptr, handle, name, false,
             )
@@ -881,6 +881,9 @@ impl DocumentRuntime {
         runtime.clear_object_fallback_for_attribute_change(handle, name);
         let is_navigation_attribute =
             runtime.frame_owner_navigation_attribute_matches(handle, name);
+        if is_navigation_attribute || is_srcdoc {
+            runtime.clear_ignored_child_frame_navigation_attribute(handle);
+        }
         if is_srcdoc {
             runtime.clear_child_browsing_context_cached_snapshot_for_navigation(handle);
         }
@@ -1157,6 +1160,11 @@ impl DocumentRuntime {
         {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, true);
         }
+        if changed && namespace.is_none() {
+            Self::apply_frame_owner_attribute_mutation_followup(
+                scope, host_ptr, handle, local_name, true,
+            );
+        }
         record_dom_binding_timing("dom.removeAttributeNS", started);
         changed
     }
@@ -1294,6 +1302,11 @@ impl DocumentRuntime {
             && self.dom_host.is_html_element_named(handle, "link")
         {
             let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
+        }
+        if namespace.is_none() && (changed || old_value.as_deref() == Some(value)) {
+            Self::apply_frame_owner_attribute_mutation_followup(
+                scope, host_ptr, handle, local_name, false,
+            );
         }
         record_dom_binding_timing(
             attribute_operation_for_handle(

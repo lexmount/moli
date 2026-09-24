@@ -118,6 +118,25 @@ impl JsContextHost {
                 self.object_fallback_bootstraps.remove(&handle);
                 let existing = self.child_browsing_contexts.get(&handle).cloned();
                 let is_new = existing.is_none();
+                let ignored_attribute_bootstrap = (existing.as_ref().is_some_and(|entry| {
+                    entry.ignored_attribute_bootstrap.as_ref() == Some(&attribute_bootstrap)
+                }) || self
+                    .child_frame_attribute_bootstrap_repeats_ancestor(
+                        handle,
+                        &attribute_bootstrap,
+                    ))
+                .then(|| attribute_bootstrap.clone());
+                let attribute_bootstrap = if ignored_attribute_bootstrap.is_some() {
+                    existing
+                        .as_ref()
+                        .map_or(ChildBrowsingContextBootstrap::AboutBlank, |entry| {
+                            entry.attribute_bootstrap().clone()
+                        })
+                } else {
+                    attribute_bootstrap
+                };
+                let initial_attribute_navigation_ignored =
+                    is_new && ignored_attribute_bootstrap.is_some();
                 let history_identity = existing
                     .as_ref()
                     .and_then(|entry| entry.history_identity.clone())
@@ -334,6 +353,7 @@ impl JsContextHost {
                     });
                 }
                 let initial_about_blank_document_is_complete = is_new
+                    && !initial_attribute_navigation_ignored
                     && restored_history.is_none()
                     && child_browsing_context_bootstrap_is_initial_about_blank(
                         &attribute_bootstrap,
@@ -343,8 +363,8 @@ impl JsContextHost {
                     && child_browsing_context_bootstrap_uses_initial_empty_load(
                         &attribute_bootstrap,
                     );
-                let pending_attribute_bootstrap_commit =
-                    ChildBrowsingContextEntry::pending_attribute_bootstrap_commit_for_refresh(
+                let pending_attribute_bootstrap_commit = !initial_attribute_navigation_ignored
+                    && ChildBrowsingContextEntry::pending_attribute_bootstrap_commit_for_refresh(
                         existing.as_ref(),
                         is_new,
                         attribute_bootstrap_changed,
@@ -487,6 +507,7 @@ impl JsContextHost {
                         name,
                         id: id.filter(|value| !value.is_empty()),
                         attribute_bootstrap,
+                        ignored_attribute_bootstrap,
                         pending_attribute_bootstrap_commit,
                         pending_live_navigation: existing.as_ref().and_then(|entry| {
                             entry.pending_live_navigation_for_refresh(attribute_bootstrap_changed)
@@ -600,7 +621,9 @@ impl JsContextHost {
                             scope,
                             initialization.suppressed_load_delivery,
                         );
-                    } else if !initial_navigation_uses_initial_empty_load {
+                    } else if initial_attribute_navigation_ignored
+                        || !initial_navigation_uses_initial_empty_load
+                    {
                         let suppressed = self.suppress_ready_child_initial_empty_load(
                             initialization.suppressed_load_delivery,
                         );

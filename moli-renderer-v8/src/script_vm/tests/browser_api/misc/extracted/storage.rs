@@ -2128,6 +2128,7 @@ fn retained_storage_bucket_object_uses_bound_owner_after_child_navigation() {
     vm.exec(
         r#"
         globalThis.__storageBucketRetainedOwnerFrame.src = "data:text/html,<body>opaque</body>";
+        globalThis.__storageBucketRetainedOwnerFrame.removeAttribute("srcdoc");
         "#,
         None,
     )

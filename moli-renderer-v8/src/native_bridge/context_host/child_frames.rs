@@ -53,6 +53,9 @@ pub(super) struct ChildBrowsingContextEntry {
     name: Option<String>,
     id: Option<String>,
     attribute_bootstrap: ChildBrowsingContextBootstrap,
+    // Rejected attributes remain reflected without replacing an admitted
+    // navigation. Wrapper refreshes must not retry them after an ancestor moves.
+    ignored_attribute_bootstrap: Option<ChildBrowsingContextBootstrap>,
     pending_attribute_bootstrap_commit: bool,
     pending_live_navigation: Option<ChildBrowsingContextBootstrap>,
     pending_live_navigation_initiator_url: Option<Url>,
