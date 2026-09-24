@@ -6,35 +6,31 @@
 
 mod client;
 mod client_endpoint;
-mod client_owner_lifecycle;
 mod client_removal;
 mod commands;
 mod connection;
 mod diagnostics;
 mod events;
 mod host;
+pub(crate) use host::RendererSharedWorkerNetworkObserver;
 mod host_clients;
 mod host_loading;
 mod host_loading_task;
 mod host_removal;
 mod host_target_output;
 mod host_worker;
+mod inspection;
 mod instances;
 mod load_completion;
 mod loading;
 mod matching;
 mod owner_wake;
-mod protocol_commands;
-mod protocol_routing;
 mod pump;
-mod resource_commands;
-mod resource_routing;
 mod routing;
 mod service;
 mod service_lane;
 mod shutdown;
 mod target_close;
-mod target_output_streams;
 #[cfg(test)]
 mod test_support;
 mod threads;
@@ -45,18 +41,15 @@ pub(crate) use client::{
 };
 pub(crate) use client_endpoint::{
     AppliedSharedWorkerClientErrorTarget, SharedWorkerClientEndpointOwner,
-    SharedWorkerClientEndpointReceiver, SharedWorkerClientFrameIdentity,
+    SharedWorkerClientEndpointReceiver,
 };
 pub use diagnostics::RendererSharedWorkerRuntimeDiagnostics;
 pub(crate) use loading::{
     SharedWorkerExecutionPolicy, SharedWorkerLaunchContext, SharedWorkerLaunchParams,
     SharedWorkerScriptLoad, SharedWorkerScriptRequestPolicy,
 };
-pub(crate) use matching::SharedWorkerClientOwnerIdAllocator;
 pub(crate) use owner_wake::{
     SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
     shared_worker_owner_wake_channel,
 };
-pub(crate) use service::{
-    SharedWorkerRuntimeService, new_shared_worker_runtime_service_with_client_owner_id_allocator,
-};
+pub(crate) use service::SharedWorkerRuntimeService;

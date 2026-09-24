@@ -1,19 +1,136 @@
 use super::{CdpConnection, CdpTurnOutcome};
 use crate::domains::activity::{
-    ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    ReadyProtocolSchedulerWork, RendererCommandResponseCompletion, RendererCommandResponseOrder,
+    RendererCommandResponsePermit,
 };
 use moli_core::RendererOutputTransportMessage;
 
 impl CdpConnection {
+    pub(crate) async fn prepare_renderer_javascript_dialog(
+        &self,
+        owner: &super::CommandOwnerScope,
+        renderer: super::RendererPageResidenceIdentity,
+        opening: std::sync::Arc<moli_core::page::RendererJavaScriptDialogOpening>,
+    ) -> Option<super::TargetPreparedJavaScriptDialog> {
+        // Freeze the frontend attachment before awaiting native admission.
+        let route = self
+            .target_page_protocol_attachment_identity_for_owner(owner)
+            .zip(self.target_session_owner_frame_tree_identity_for_owner(owner))
+            .zip(
+                self.runtime_session_owner_slot_for_owner(owner)
+                    .ok()
+                    .map(|slot| slot.javascript_dialog_scope_observer()),
+            );
+        let dialog = self
+            .browser
+            .wait_for_renderer_javascript_dialog(renderer, opening)
+            .await?;
+        let context = self
+            .browser
+            .context_handle(dialog.document.web_contents().context())
+            .ok()?;
+        let Some(((attachment, (frame, _, _, _)), scope)) = route.filter(|((attachment, _), _)| {
+            attachment.page_owner().document_id() == dialog.document.id()
+        }) else {
+            context.dismiss_document_javascript_dialog(dialog.document, dialog.key);
+            return None;
+        };
+        Some(super::TargetPreparedJavaScriptDialog::capture(
+            attachment, scope, &frame, context, dialog,
+        ))
+    }
+
+    pub(crate) fn native_renderer_page_output_owner(
+        &self,
+        renderer: super::RendererPageResidenceIdentity,
+    ) -> Option<crate::domains::activity::RendererPublicationOwner> {
+        let document = self.browser.document_for_renderer(renderer)?;
+        let context = self.browser_context_by_browser_id(document.web_contents().context())?;
+        let target = context
+            .page_targets
+            .get_for_web_contents(document.web_contents().id())?;
+        Some(
+            crate::domains::activity::RendererPublicationOwner::PageTarget {
+                browser_context_id: context.id.clone(),
+                target_id: Some(target.target_id().to_owned()),
+                renderer_page: renderer,
+                page_owner: super::TargetPageResidenceIdentity::new(
+                    context.id.clone(),
+                    Some(target.target_id().to_owned()),
+                    document.id(),
+                ),
+            },
+        )
+    }
+
+    pub(crate) async fn wait_for_renderer_document_lifecycle(
+        &self,
+        renderer_page: super::RendererPageResidenceIdentity,
+        event: moli_core::page::RendererDocumentLifecycleEvent,
+    ) -> Option<super::DocumentLifecycleEvent> {
+        #[cfg(test)]
+        for context in self.browser_contexts() {
+            for target in context.page_targets.iter() {
+                if !context.target_has_loaded_page(target.target_id())
+                    && context.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                {
+                    let snapshot = context
+                        .renderer_document_lifecycle_authoritative_snapshot_for_target(
+                            target.target_id(),
+                        )?;
+                    return (snapshot.frame == event.frame
+                        && snapshot.document == event.document
+                        && snapshot.sequence() >= event.sequence)
+                        .then(|| {
+                            super::DocumentLifecycleEvent::new(
+                                context.target_document_id(target.target_id()).unwrap(),
+                                event,
+                            )
+                        });
+                }
+            }
+        }
+        self.browser
+            .wait_for_renderer_document_lifecycle(renderer_page, event)
+            .await
+    }
+
+    pub(crate) fn project_document_lifecycle_events_for_owner(
+        &mut self,
+        owner: &super::CommandOwnerScope,
+        events: Vec<super::DocumentLifecycleEvent>,
+    ) -> (
+        Option<super::CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let current = self.current_document_id_for_owner(owner);
+        let events = events
+            .into_iter()
+            .filter(|event| Some(event.document()) == current)
+            .map(|event| event.event())
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_owner(owner, events)
+    }
+
     pub(crate) fn apply_renderer_output_stream_control(
         &mut self,
         control: moli_core::RendererOutputStreamControl,
     ) {
         match control {
-            moli_core::RendererOutputStreamControl::Opened { stream } => {
+            moli_core::RendererOutputStreamControl::Opened {
+                stream,
+                first_sequence,
+            } => {
                 let residence = stream.residence();
-                let owners = crate::domains::activity::renderer_publication_owners(self, residence);
+                let owners = if self
+                    .scheduler_state
+                    .renderer_output_ingress
+                    .has_owner_reservation(residence)
+                {
+                    Vec::new()
+                } else {
+                    crate::domains::activity::renderer_publication_owners(self, residence)
+                };
                 let owner = match owners.as_slice() {
                     [] => None,
                     [owner] => Some(owner.clone()),
@@ -27,7 +144,7 @@ impl CdpConnection {
                 };
                 self.scheduler_state
                     .renderer_output_ingress
-                    .open(stream, owner);
+                    .open(stream, first_sequence, owner);
             }
             moli_core::RendererOutputStreamControl::Closed {
                 stream,
@@ -163,12 +280,7 @@ impl CdpConnection {
                     Vec::new(),
                 )
             }
-            ReadyProtocolSchedulerWork::MainDocumentLoadOwnerAction(completion) => {
-                self.complete_deferred_main_document_load_completion_for_scheduler(
-                    super::CompletedDeferredMainDocumentLoadCompletion::new(*completion),
-                )
-                .await
-            }
+
             ReadyProtocolSchedulerWork::BidiChannelOwnerAction(action) => {
                 let mut protocol_events = Vec::new();
                 self.complete_bidi_channel_owner_action_with_background_events_async(
@@ -197,14 +309,8 @@ impl CdpConnection {
                     self.take_scheduler_events(),
                 )
             }
-            ReadyProtocolSchedulerWork::PopupTargetNavigationOwnerAction(action) => {
-                crate::domains::target::complete_popup_target_navigation_owner_action_async(
-                    self, action,
-                )
-                .await
-            }
-            ReadyProtocolSchedulerWork::PopupTargetActivationAction(action) => {
-                crate::domains::target::complete_popup_target_activation_action_async(self, action)
+            ReadyProtocolSchedulerWork::TargetStartupOwnerAction(action) => {
+                crate::domains::target::complete_target_startup_owner_action_async(self, action)
                     .await
             }
             ReadyProtocolSchedulerWork::PageTargetTerminationOwnerAction(action) => {
@@ -224,13 +330,13 @@ impl CdpConnection {
     pub async fn ingest_renderer_output_turn_async(
         &mut self,
         publication: RendererOutputTransportMessage,
-        barriers: &mut RuntimeCommandOutputBarriers,
+        order: &mut RendererCommandResponseOrder,
     ) -> CdpTurnOutcome {
         let mut command_context = super::CommandDispatchContext::default();
         let protocol_events = crate::domains::activity::ingest_renderer_output_transport_async(
             self,
             publication,
-            barriers,
+            order,
             &mut command_context,
         )
         .await;
@@ -260,14 +366,14 @@ impl CdpConnection {
         )
     }
 
-    pub async fn release_runtime_command_output_barrier_turn_async(
+    pub async fn release_renderer_command_response_permit_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
+        order: &mut RendererCommandResponseOrder,
+        permit: RendererCommandResponsePermit,
+    ) -> RendererCommandResponseCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.release(self, permit, &mut command_context).await;
-        RuntimeCommandOutputBarrierCompletion::new(
+        let terminal = order.release(self, permit, &mut command_context).await;
+        RendererCommandResponseCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 command_context.take_protocol_events(),
@@ -277,14 +383,14 @@ impl CdpConnection {
         )
     }
 
-    pub async fn cancel_runtime_command_output_barrier_turn_async(
+    pub async fn cancel_renderer_command_response_permit_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
+        order: &mut RendererCommandResponseOrder,
+        permit: RendererCommandResponsePermit,
+    ) -> RendererCommandResponseCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.cancel(self, permit, &mut command_context).await;
-        RuntimeCommandOutputBarrierCompletion::new(
+        let terminal = order.cancel(self, permit, &mut command_context).await;
+        RendererCommandResponseCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 command_context.take_protocol_events(),

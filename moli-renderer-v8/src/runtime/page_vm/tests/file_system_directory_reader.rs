@@ -184,10 +184,7 @@ async fn directory_reader_uses_file_reading_batches_and_overlap_semantics() {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::FileReading,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::FileReading)
                 .await?,
             "the first batch must run through the production selected dispatcher"
         );
@@ -200,10 +197,7 @@ async fn directory_reader_uses_file_reading_batches_and_overlap_semantics() {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::FileReading,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::FileReading)
                 .await?,
             "the admitted overlap error must preserve FileReading FIFO"
         );
@@ -214,10 +208,7 @@ async fn directory_reader_uses_file_reading_batches_and_overlap_semantics() {
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::FileReading,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::FileReading)
                 .await?,
             "missing optional error callback and conversion failures must publish no tasks"
         );
@@ -243,10 +234,7 @@ async fn directory_reader_uses_file_reading_batches_and_overlap_semantics() {
             );
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::FileReading,
-                        &loader,
-                    )
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::FileReading)
                     .await?
             );
             let tail = page_vm.vm_mut().eval(
@@ -342,10 +330,7 @@ __directoryReader.readEntries(
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::FileReading,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::FileReading)
                 .await?
         );
         assert_eq!(
@@ -383,10 +368,7 @@ Promise.resolve().then(() => { __directoryRetiredCheckpoint += 1; });
             )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::FileReading,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::FileReading)
                 .await?
         );
         assert_eq!(
@@ -437,7 +419,7 @@ Promise.resolve().then(() => { __directoryStaleCheckpoint += 1; });
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(

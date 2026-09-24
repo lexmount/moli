@@ -161,8 +161,7 @@ async fn selected_child_modulepreload_start_submits_checkpoint_without_runtime_d
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ModulepreloadStart,
-                    &loader,
+                    PageSelectedTaskTestSelector::ModulepreloadStart
                 )
                 .await?,
             "one exact modulepreload-start task must enter the production selected dispatcher",
@@ -223,7 +222,7 @@ async fn stale_claimed_child_modulepreload_start_does_not_checkpoint_replacement
         queue_checkpoint_marker(&mut page_vm, "__staleModulepreloadStartCheckpoint")?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             checkpoint_marker(&mut page_vm, "__staleModulepreloadStartCheckpoint")?,

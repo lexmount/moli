@@ -4,13 +4,12 @@ use crate::{
     module_runtime::DynamicModuleImportOwner,
     page_resource_completion::{
         MainDynamicImportGraphFetchCompletion, MainDynamicImportGraphFetchTarget,
-        MainModuleFetchNetworkAttribution, RendererPageResourceCompletionLocalOwner,
+        RendererPageResourceCompletionLocalOwner,
     },
 };
 
 fn dynamic_import_completion(
     target: MainDynamicImportGraphFetchTarget,
-    document_url: Url,
     request_url: Url,
     source: std::result::Result<&str, &str>,
 ) -> MainDynamicImportGraphFetchCompletion {
@@ -23,12 +22,7 @@ fn dynamic_import_completion(
             )
         })
         .map_err(str::to_owned);
-    MainDynamicImportGraphFetchCompletion::new(
-        target,
-        result,
-        None,
-        MainModuleFetchNetworkAttribution::new(document_url, request_url),
-    )
+    MainDynamicImportGraphFetchCompletion::new(target, result, None, request_url)
 }
 
 async fn spawn_controlled_module_response_http_server(
@@ -83,11 +77,7 @@ async fn spawn_controlled_module_response_http_server(
     )
 }
 
-async fn start_main_dynamic_import(
-    page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
-    request_url: &Url,
-) -> anyhow::Result<()> {
+async fn start_main_dynamic_import(page_vm: &mut PageVm, request_url: &Url) -> anyhow::Result<()> {
     page_vm.vm_mut().eval(&format!(
         r#"
 globalThis.__typedDynamicImportEvents = [];
@@ -106,7 +96,6 @@ import({:?}).then(
                 PageSelectedTaskTestSelector::MainDocumentRuntime(
                     PageMainDocumentRuntimeActionKind::DynamicModuleJob,
                 ),
-                loader,
             )
             .await?
         {
@@ -119,6 +108,7 @@ import({:?}).then(
 }
 
 async fn wait_for_networking_terminal_wake(
+    page_vm: &mut PageVm,
     queue: &mut impl crate::page_resource_completion::RendererPageResourceCompletionTestSource,
     wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
     label: &str,
@@ -132,11 +122,10 @@ async fn wait_for_networking_terminal_wake(
             if wake.source_for_test()
                 == crate::page_task_queue::RendererOwnerWakeSource::NetworkingTask
             {
-                assert!(
-                    queue.has_ready_completion(),
-                    "Networking wake must follow durable terminal publication"
-                );
-                return;
+                run_ready_native_resource_turns(page_vm).expect("native resource Page turn");
+                if resource_result_is_ready(queue) {
+                    return;
+                }
             }
         }
     })
@@ -161,10 +150,11 @@ async fn dynamic_import_graph_body_leaves_user_reaction_for_selected_completion(
         let (mut page_vm, mut queue, mut wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
 
-        start_main_dynamic_import(&mut page_vm, &loader, &request_url).await?;
+        start_main_dynamic_import(&mut page_vm, &request_url).await?;
         request_seen
             .await
             .expect("dynamic-import fetch must reach the controlled server");
+        run_ready_native_resource_turns(&mut page_vm)?;
         while wake_rx.try_recv().is_ok() {}
         assert!(
             !queue.has_ready_completion(),
@@ -173,7 +163,13 @@ async fn dynamic_import_graph_body_leaves_user_reaction_for_selected_completion(
         release_response
             .send(())
             .expect("release typed dynamic-import response");
-        wait_for_networking_terminal_wake(&mut queue, &mut wake_rx, "main dynamic import").await;
+        wait_for_networking_terminal_wake(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "main dynamic import",
+        )
+        .await;
 
         let owner = queue
             .next_ready_owner()
@@ -249,22 +245,26 @@ async fn production_dynamic_import_uses_exact_typed_networking_source() {
         let (mut page_vm, mut queue, mut wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
 
-        start_main_dynamic_import(&mut page_vm, &loader, &request_url).await?;
+        start_main_dynamic_import(&mut page_vm, &request_url).await?;
         request_seen
             .await
             .expect("dynamic-import fetch must reach the controlled server");
         release_response
             .send(())
             .expect("release selected dynamic-import response");
-        wait_for_networking_terminal_wake(&mut queue, &mut wake_rx, "selected main dynamic import")
-            .await;
+        wait_for_networking_terminal_wake(
+            &mut page_vm,
+            &mut queue,
+            &mut wake_rx,
+            "selected main dynamic import",
+        )
+        .await;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "the graph terminal must enter the production selected dispatcher",
@@ -312,10 +312,12 @@ async fn mismatched_import_owner_cannot_consume_colliding_load_id() {
             Url::parse(&format!("{base_url}/colliding-dynamic-import.mjs")).unwrap();
         let (mut page_vm, mut queue, mut wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url.clone());
-        start_main_dynamic_import(&mut page_vm, &loader, &request_url).await?;
+        start_main_dynamic_import(&mut page_vm,
+&request_url).await?;
         request_seen
             .await
             .expect("colliding fetch must reach the controlled server");
+        run_ready_native_resource_turns(&mut page_vm)?;
 
         let current_owner = page_vm
             .vm()
@@ -333,12 +335,9 @@ async fn mismatched_import_owner_cannot_consume_colliding_load_id() {
         queue.enqueue_local_for_test(
             RendererPageResourceCompletion::main_dynamic_import_graph_fetch(
                 root_document,
-                dynamic_import_completion(
-                    forged_target,
-                    document_url,
-                    request_url.clone(),
-                    Ok("export const value = -1;"),
-                ),
+                dynamic_import_completion(forged_target,
+request_url.clone(),
+Ok("export const value = -1;")),
             ),
         );
 
@@ -360,16 +359,16 @@ async fn mismatched_import_owner_cannot_consume_colliding_load_id() {
             "mismatched import owner must not retire a current fetch with the same load id"
         );
 
+        run_ready_native_resource_turns(&mut page_vm)?;
         while wake_rx.try_recv().is_ok() {}
         assert!(!queue.has_ready_completion());
         release_response
             .send(())
             .expect("release real colliding dynamic-import response");
-        wait_for_networking_terminal_wake(
-            &mut queue,
-            &mut wake_rx,
-            "colliding main dynamic import",
-        )
+        wait_for_networking_terminal_wake(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"colliding main dynamic import")
         .await;
         assert_eq!(
             queue.next_ready_owner(),
@@ -438,13 +437,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_dynamic_import_target() 
                     let old_request_url =
                         Url::parse(&format!("{base_url}/old-dynamic-import.mjs"))
                             .expect("old dynamic-import URL");
-                    start_main_dynamic_import(&mut page_vm, &loader, &old_request_url).await?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "old PageVm dynamic-import fetch",
-                    )
+                    start_main_dynamic_import(&mut page_vm,
+&old_request_url).await?;
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"old PageVm dynamic-import fetch")
                     .await;
+                    let (network_records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
                     let (_, old_envelope) = queue
                         .pop_front()
                         .expect("old PageVm dynamic-import terminal should remain queued");
@@ -483,13 +483,13 @@ fn real_page_vm_replacement_rejects_naturally_colliding_dynamic_import_target() 
                     let replacement_request_url =
                         Url::parse(&format!("{base_url}/replacement-dynamic-import.mjs"))
                             .expect("replacement dynamic-import URL");
-                    start_main_dynamic_import(&mut page_vm, &loader, &replacement_request_url)
+                    start_main_dynamic_import(&mut page_vm,
+&replacement_request_url)
                         .await?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "replacement PageVm dynamic-import fetch",
-                    )
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"replacement PageVm dynamic-import fetch")
                     .await;
                     let (_, replacement_envelope) = queue
                         .pop_front()
@@ -529,15 +529,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_dynamic_import_target() 
                     );
                     assert_eq!(
                         stale.action.output_effect,
-                        PageResourceCompletionOutputEffect::CaptureRequired
+                        PageResourceCompletionOutputEffect::None
                     );
                     assert_eq!(
                         page_vm.vm().subresource_activity_epoch(),
                         activity_epoch_before,
                         "historical old-PageVm Network output must not become replacement activity"
                     );
-                    let (network_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "a stale module result must not republish the original request");
                     assert_eq!(network_records.len(), 1);
                     assert_eq!(network_records[0].document_url(), &initial_url);
                     assert_eq!(network_records[0].url(), &old_request_url);
@@ -553,10 +552,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_dynamic_import_target() 
 
                     assert!(
                         page_vm
-                            .run_exact_selected_page_task_for_test(
-                                PageSelectedTaskTestSelector::ResourceCompletion,
-                                &loader,
-                            )
+                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ResourceCompletion)
                             .await?,
                         "replacement dynamic-import terminal should enter the production selected dispatcher",
                     );
@@ -605,7 +601,8 @@ async fn document_open_preserves_inflight_dynamic_import_in_the_same_script_stat
             .vm()
             .current_main_document_resource_loader()
             .expect("initial Document resource authority");
-        start_main_dynamic_import(&mut page_vm, &loader, &request_url).await?;
+        start_main_dynamic_import(&mut page_vm,
+&request_url).await?;
         request_seen
             .await
             .expect("stale fetch must reach the controlled server");
@@ -655,23 +652,20 @@ async fn document_open_preserves_inflight_dynamic_import_in_the_same_script_stat
             "the replacement authority must retain the LocalWindow's in-flight import load"
         );
         let _ = page_vm.vm_mut().take_network_output();
+        run_ready_native_resource_turns(&mut page_vm)?;
         while wake_rx.try_recv().is_ok() {}
         assert!(!queue.has_ready_completion());
         release_response
             .send(())
             .expect("release retained dynamic-import response");
-        wait_for_networking_terminal_wake(
-            &mut queue,
-            &mut wake_rx,
-            "document.open retained dynamic import",
-        )
+        wait_for_networking_terminal_wake(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"document.open retained dynamic import")
         .await;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ResourceCompletion)
                 .await?,
             "the retained import terminal must run through the production Networking source"
         );
@@ -731,14 +725,18 @@ globalThis.__typedDynamicImportGate = new Promise(resolve => {
 "initialized"
 "#,
         )?;
-        start_main_dynamic_import(&mut page_vm, &loader, &request_url).await?;
+        start_main_dynamic_import(&mut page_vm,
+&request_url).await?;
         request_seen
             .await
             .expect("TLA dynamic-import fetch must reach the controlled server");
         release_response
             .send(())
             .expect("release TLA dynamic-import response");
-        wait_for_networking_terminal_wake(&mut queue, &mut wake_rx, "TLA dynamic import").await;
+        wait_for_networking_terminal_wake(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"TLA dynamic import").await;
         let terminal = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("TLA graph terminal should consume one typed turn");
@@ -800,7 +798,7 @@ globalThis.__typedDynamicImportGate = new Promise(resolve => {
             crate::runtime::PageTaskCompletion::CheckpointOnly
         ));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -859,14 +857,18 @@ globalThis.__typedDynamicImportGate = new Promise(resolve => {
 "initialized"
 "#,
         )?;
-        start_main_dynamic_import(&mut page_vm, &loader, &request_url).await?;
+        start_main_dynamic_import(&mut page_vm,
+&request_url).await?;
         request_seen
             .await
             .expect("TLA dynamic-import fetch must reach the controlled server");
         release_response
             .send(())
             .expect("release TLA dynamic-import response");
-        wait_for_networking_terminal_wake(&mut queue, &mut wake_rx, "TLA dynamic import").await;
+        wait_for_networking_terminal_wake(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"TLA dynamic import").await;
         page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("TLA graph terminal should consume one typed turn");
@@ -876,7 +878,7 @@ globalThis.__typedDynamicImportGate = new Promise(resolve => {
             .eval("__resolveTypedDynamicImportGate(); 'resolved'")?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ModuleReaction, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ModuleReaction)
                 .await?,
             "TLA fulfillment must publish one exact ModuleReaction task"
         );

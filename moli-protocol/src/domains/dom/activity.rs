@@ -14,7 +14,8 @@ pub(in crate::domains) struct DomPreparedOutputs {
 
 #[derive(Clone, Debug, PartialEq)]
 struct DomMutationBatch {
-    attachment: crate::conn::TargetPageProtocolAttachmentIdentity,
+    owner: CommandOwnerScope,
+    renderer_attachment: moli_core::page::RendererAgentAttachmentId,
     events: Vec<RendererDomMutationEvent>,
 }
 
@@ -50,12 +51,17 @@ fn append_dom_mutation_batches_to_background_events(
     out: &mut Vec<BackgroundProtocolEvent>,
 ) {
     for batch in batches {
-        if !conn.target_page_protocol_attachment_identity_is_current(&batch.attachment)
-            || !super::dom_agent_enabled_for_session(conn, batch.attachment.session_id())
+        if conn
+            .runtime_session_owner_slot_for_owner(&batch.owner)
+            .ok()
+            .and_then(|slot| slot.current_renderer_inspection_binding())
+            .map(|binding| binding.attachment().id())
+            != Some(batch.renderer_attachment)
+            || !super::dom_agent_enabled_for_owner(conn, &batch.owner)
         {
             continue;
         }
-        let session_id = batch.attachment.session_id();
+        let session_id = batch.owner.session_id();
         out.extend(
             batch
                 .events
@@ -89,7 +95,8 @@ impl DomPreparedOutputs {
         let current_attachment = conn
             .runtime_session_owner_slot_for_owner(source_owner)
             .ok()
-            .and_then(|slot| slot.current_renderer_attachment());
+            .and_then(|slot| slot.current_renderer_inspection_binding())
+            .map(|binding| binding.attachment());
         Self {
             batches: batches
                 .iter()
@@ -112,13 +119,13 @@ impl DomPreparedOutputs {
                     {
                         return None;
                     }
-                    let attachment = conn
-                        .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
-                            source_owner,
-                            batch.session.wire_session_id(),
-                        )?;
+                    let owner = conn.target_protocol_owner_for_renderer_inspector_owner(
+                        source_owner,
+                        batch.session.wire_session_id(),
+                    )?;
                     Some(DomMutationBatch {
-                        attachment,
+                        owner,
+                        renderer_attachment: batch.renderer_agent_attachment_id()?,
                         events: batch.events,
                     })
                 })

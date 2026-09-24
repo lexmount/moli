@@ -60,15 +60,7 @@ pub(crate) enum PageResourceCompletionOutputEffect {
     CaptureRequired,
 }
 
-impl PageResourceCompletionOutputEffect {
-    pub(crate) const fn capture_if(required: bool) -> Self {
-        if required {
-            Self::CaptureRequired
-        } else {
-            Self::None
-        }
-    }
-}
+impl PageResourceCompletionOutputEffect {}
 
 /// What one page-owned resource-completion turn actually consumed.
 ///

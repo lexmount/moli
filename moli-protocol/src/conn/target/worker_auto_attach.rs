@@ -1,6 +1,5 @@
 use crate::conn::{
-    BrowserContext, CdpConnection, ServiceWorkerAutoAttachRelatedOwner,
-    ServiceWorkerAutoAttachRelatedOwnerSession,
+    CdpConnection, ServiceWorkerAutoAttachRelatedOwner, ServiceWorkerAutoAttachRelatedOwnerSession,
 };
 
 impl CdpConnection {
@@ -125,9 +124,7 @@ impl CdpConnection {
                     )
                 })
                 .collect::<Vec<_>>();
-            browser_context
-                .renderer_runtime()
-                .set_service_worker_related_pause_on_start_policies_for_devtools(policies);
+            browser_context.set_service_worker_related_pause_on_start_policies(policies);
         }
     }
 
@@ -145,12 +142,8 @@ impl CdpConnection {
                 .remove(&key);
         }
         let pause = self.service_worker_pause_on_start_for_devtools();
-        let runtimes = self
-            .browser_contexts()
-            .map(BrowserContext::renderer_runtime)
-            .collect::<Vec<_>>();
-        for runtime in runtimes {
-            runtime.set_service_worker_pause_on_start_for_devtools(pause);
+        for context in self.browser_contexts() {
+            context.set_service_worker_pause_on_start(pause);
         }
         pause
     }

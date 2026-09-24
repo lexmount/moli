@@ -714,7 +714,7 @@ async fn text_control_selection_mutations_queue_select_event() {
                     break;
                 }
                 if !vm
-                    .run_one_oldest_ready_page_task_executor_turn(&loader)
+                    .run_one_oldest_ready_page_task_executor_turn()
                     .await
                     .expect($context)
                 {
@@ -889,7 +889,7 @@ async fn text_control_selection_mutations_queue_select_event() {
 
     assert_eq!(result, "0:0:5");
     let _ = vm
-        .run_one_oldest_ready_page_task_executor_turn(&loader)
+        .run_one_oldest_ready_page_task_executor_turn()
         .await
         .expect("wait driver should check repeated select() select event");
     assert_eq!(
@@ -984,7 +984,7 @@ async fn text_control_clone_resets_selection_but_still_queues_select_event() {
             break;
         }
         if !vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance queued clone select events")
         {
@@ -1052,7 +1052,7 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
             break;
         }
         if !vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance queued shadow selectionchange")
         {
@@ -1090,7 +1090,7 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
             break;
         }
         if !vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance caret selectionchange")
         {
@@ -1129,7 +1129,7 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
             break;
         }
         if !vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance document selectionchange")
         {

@@ -1,6 +1,4 @@
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
-#[cfg(test)]
-use moli_core::page::Page;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserContextDocumentCookiePolicySurfaceSnapshot {
@@ -24,11 +22,6 @@ impl BrowserContextDocumentCookiePolicySurface {
             browser_context_overrides: self.browser_context_overrides(),
             generation: self.generation,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn overrides(&self) -> &BrowserCookieFacadeOverrides {
-        &self.overrides
     }
 
     pub(crate) fn cookies_enabled_override(&self) -> Option<bool> {
@@ -94,18 +87,5 @@ impl BrowserContextDocumentCookiePolicySurface {
         overrides.top_frame_origin_url = None;
         overrides.storage_access_status = None;
         self.set_overrides(&overrides)
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn apply_to_page_async(&self, page: &mut Page) {
-        if self.overrides == BrowserCookieFacadeOverrides::default() {
-            // See the sync variant above for why empty policy means clearing
-            // the live document facade rather than applying empty overrides.
-            let _ = page.clear_document_cookie_facade_overrides_async().await;
-        } else {
-            let _ = page
-                .apply_document_cookie_facade_overrides_async(self.overrides())
-                .await;
-        }
     }
 }

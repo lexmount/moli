@@ -36,18 +36,15 @@ fetch({:?}).then(
     pending[0].internal_id
 }
 
-fn failed_fetch_completion(internal_id: u64, request_url: &Url) -> AsyncSubresourceFetchEvent {
+fn failed_fetch_completion(internal_id: u64) -> AsyncSubresourceFetchEvent {
     AsyncSubresourceFetchEvent::Completion(Box::new(AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id,
-        request_url: request_url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: Some("typed test failure".to_owned()),
-        result: Err("typed test failure".to_owned()).into(),
+        result: Err("typed test failure".to_owned().into()),
     }))
 }
 
@@ -105,7 +102,7 @@ async fn async_subresource_completion_uses_exact_typed_networking_owner() {
         let outcome = run_completion(
             &mut page_vm,
             root_document,
-            failed_fetch_completion(internal_id, &request_url),
+            failed_fetch_completion(internal_id),
         );
 
         assert_eq!(outcome.action.owner, owner);
@@ -134,8 +131,6 @@ async fn async_subresource_completion_uses_exact_typed_networking_owner() {
 #[tokio::test(flavor = "current_thread")]
 async fn selected_current_async_subresource_terminal_submits_checkpoint_without_runtime_drain() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let request_url = Url::parse("https://typed-subresource.test/selected").unwrap();
         let mut page_vm = test_page_vm();
         let root_document = page_vm.document_lifecycle.identity().document;
@@ -147,13 +142,12 @@ async fn selected_current_async_subresource_terminal_submits_checkpoint_without_
             .page_resource_completion_queue()
             .enqueue_local_for_test(RendererPageResourceCompletion::async_subresource(
                 root_document,
-                failed_fetch_completion(internal_id, &request_url),
+                failed_fetch_completion(internal_id),
             ));
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "one exact resource terminal must enter the production selected dispatcher",
@@ -192,8 +186,6 @@ async fn selected_current_async_subresource_terminal_submits_checkpoint_without_
 #[tokio::test(flavor = "current_thread")]
 async fn selected_streaming_chunk_settles_reader_reaction_at_its_own_task_end() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let request_url = Url::parse("https://example.com/typed-stream-checkpoint").unwrap();
         let mut page_vm = test_page_vm();
         let root_document = page_vm.document_lifecycle.identity().document;
@@ -230,11 +222,7 @@ fetch({:?})
                         response_filter: None,
                         internal_id,
                         request_url: request_url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
                         body_source_id,
-                        network_request_headers: None,
                         head: moli_fetch::ResponseHead {
                             final_url: request_url,
                             status: 200,
@@ -252,8 +240,7 @@ fetch({:?})
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "stream start must enter the production selected dispatcher"
@@ -281,8 +268,7 @@ fetch({:?})
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ResourceCompletion,
-                    &loader,
+                    PageSelectedTaskTestSelector::ResourceCompletion
                 )
                 .await?,
             "stream chunk must enter the production selected dispatcher"
@@ -329,7 +315,7 @@ async fn stale_root_with_reused_async_subresource_id_cannot_consume_current_requ
         let stale = run_completion(
             &mut page_vm,
             stale_root,
-            failed_fetch_completion(internal_id, &request_url),
+            failed_fetch_completion(internal_id),
         );
         assert_eq!(stale.action.owner, stale_owner);
         assert_eq!(
@@ -353,7 +339,7 @@ async fn stale_root_with_reused_async_subresource_id_cannot_consume_current_requ
         let current = run_completion(
             &mut page_vm,
             current_root,
-            failed_fetch_completion(internal_id, &request_url),
+            failed_fetch_completion(internal_id),
         );
         assert_eq!(
             current.action.document_effect,
@@ -412,7 +398,7 @@ document.close();
         let outcome = run_completion(
             &mut page_vm,
             root_document,
-            failed_fetch_completion(internal_id, &request_url),
+            failed_fetch_completion(internal_id),
         );
         assert_eq!(
             outcome.action.document_effect,
@@ -444,11 +430,7 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
                 response_filter: None,
                 internal_id,
                 request_url: request_url.clone(),
-                request_method: "GET".to_owned(),
-                request_headers: Vec::new().into(),
-                request_body: None,
                 body_source_id,
-                network_request_headers: None,
                 head: moli_fetch::ResponseHead {
                     final_url: request_url,
                     status: 200,
@@ -537,7 +519,7 @@ async fn streaming_finish_requires_matching_request_and_body_source_identity() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn stale_observed_network_record_is_captured_without_consuming_current_request() {
+async fn stale_native_network_receipt_is_captured_without_consuming_current_request() {
     run_page_vm_async_test(async move {
         let request_url = Url::parse("https://typed-subresource.test/historical").unwrap();
         let document_url = Url::parse("https://typed-subresource.test/retired-document").unwrap();
@@ -560,14 +542,20 @@ async fn stale_observed_network_record_is_captured_without_consuming_current_req
         let outcome = run_completion(
             &mut page_vm,
             stale_root,
-            AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(record)),
+            AsyncSubresourceFetchEvent::NativeNetwork(
+                crate::runtime::RendererNetworkRequest::unobserved_for_test().report(
+                    crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
+                        record,
+                    )),
+                ),
+            ),
         );
         assert_eq!(
             outcome.action.document_effect,
             PageResourceCompletionDocumentEffect::DiscardedStaleOwner {
                 current_owner: Some(RendererPageResourceCompletionOwner::async_subresource(
                     current_root,
-                    AsyncSubresourceFetchEventTarget::ObservedNetworkRecord,
+                    AsyncSubresourceFetchEventTarget::NativeNetwork,
                 )),
             }
         );

@@ -1,6 +1,114 @@
 use moli_fetch::RedirectInfo;
 use url::Url;
 
+impl crate::runtime::RendererDedicatedWorkerHost {
+    pub(crate) fn start_main_script_request(
+        &self,
+        script_url: &Url,
+        initiator_url: &Url,
+    ) -> Option<std::sync::Arc<crate::network::ResourceTransfer>> {
+        crate::network::ResourceTransfer::start_main_script(
+            self.network(),
+            super::WorkerNetworkObserver::Dedicated(self.network_observer()),
+            script_url,
+            initiator_url,
+        )
+    }
+}
+
+impl crate::network::ResourceTransfer {
+    pub(crate) fn start_script(
+        source: &crate::runtime::RendererWorkerNetworkReporter,
+        observer: super::WorkerNetworkObserver,
+        script_url: &Url,
+        initiator_url: &Url,
+    ) -> Option<std::sync::Arc<Self>> {
+        Self::for_worker(source, observer, |request| {
+            super::global_scope::worker_request_started(
+                request,
+                initiator_url,
+                script_url,
+                "GET",
+                &moli_fetch::RequestHeaders::default(),
+                &None,
+                moli_page_types::SubresourceResourceType::Script,
+            )
+        })
+    }
+
+    pub(crate) fn materialize_script_response<T>(
+        &self,
+        response: moli_fetch::Response,
+        materialize: impl FnOnce(moli_fetch::Response) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let body = moli_page_types::SubresourceResponseBody::from_fetch_response(&response);
+        let head = crate::network::ResourceResponseHead {
+            status_text: None,
+            head: response.head(),
+            network_request_headers: response
+                .network_request_extra_info()
+                .map(|info| info.headers.clone()),
+        };
+        self.finish_script_response(head, body, materialize(response))
+    }
+
+    pub(crate) fn start_main_script(
+        source: &crate::runtime::RendererWorkerNetworkReporter,
+        observer: super::WorkerNetworkObserver,
+        script_url: &Url,
+        initiator_url: &Url,
+    ) -> Option<std::sync::Arc<Self>> {
+        let mut url = script_url.clone();
+        url.set_fragment(None);
+        crate::network::ResourceTransfer::for_worker(source, observer, |request| {
+            moli_page_types::SubresourceRequestStarted::new(
+                request.handle(),
+                None,
+                initiator_url.clone(),
+                url,
+                "GET".into(),
+                moli_fetch::RequestHeaders::default(),
+                None,
+                moli_page_types::SubresourceResourceType::Script,
+                moli_page_types::SubresourceRequestInitiatorType::Other,
+                None,
+            )
+            .with_worker_main_script()
+        })
+    }
+
+    pub(crate) fn main_script_response<T>(
+        &self,
+        response: &crate::protocol_types::NavigationResponse,
+        result: Result<T, String>,
+    ) -> Result<T, String> {
+        let body = moli_page_types::SubresourceResponseBody::from_navigation_response(response);
+        let head = crate::network::ResourceResponseHead {
+            status_text: None,
+            head: response.head(),
+            network_request_headers: response.network_request_headers().map(<[_]>::to_vec),
+        };
+        self.finish_script_response(head, body, result)
+    }
+
+    fn finish_script_response<T>(
+        &self,
+        head: crate::network::ResourceResponseHead,
+        body: moli_page_types::SubresourceResponseBody,
+        result: Result<T, String>,
+    ) -> Result<T, String> {
+        match &result {
+            Ok(_) => self.body_completed(head, body),
+            Err(message) => self.failed(&crate::network::ResourceResponseFailure::PartialBody {
+                message: message.clone(),
+                response: std::sync::Arc::new(head),
+                body,
+            }),
+        }
+        result
+    }
+}
+
 pub(crate) fn ensure_worker_script_redirect_chain_same_origin(
     initiator_url: &Url,
     redirect_chain: &[RedirectInfo],

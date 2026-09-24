@@ -1,6 +1,272 @@
 use super::*;
 use std::path::Path;
 
+mod csp_reports;
+
+#[tokio::test]
+async fn websocket_cdp_created_target_queues_runtime_until_its_initial_url_commits() {
+    let (release, body_ready) = tokio::sync::watch::channel(false);
+    let (requested, mut request_seen) = tokio::sync::watch::channel(false);
+    let fixture = Router::new().route(
+        "/",
+        get(move || {
+            let mut body_ready = body_ready.clone();
+            let requested = requested.clone();
+            async move {
+                requested.send_replace(true);
+                let _ = body_ready.wait_for(|ready| *ready).await;
+                axum::response::Html("<title>created native URL</title>")
+            }
+        }),
+    );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "created-native-url");
+    let url = format!("http://{fixture_addr}/");
+    let (cdp_addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .unwrap();
+    let completed = timeout(Duration::from_secs(5), async {
+        socket.send(WsMessage::Text(json!({"id": 1, "method": "Target.setAutoAttach",
+            "params": {"autoAttach": true, "waitForDebuggerOnStart": false, "flatten": true}
+        }).to_string().into())).await.unwrap();
+        recv_until_id(&mut socket, 1).await;
+        socket.send(WsMessage::Text(json!({"id": 2, "method": "Target.createTarget",
+            "params": {"url": url}}).to_string().into())).await.unwrap();
+        let created = recv_until_id(&mut socket, 2).await;
+        let target = created.iter().find(|message| message["id"] == 2).unwrap()["result"]["targetId"]
+            .as_str().unwrap().to_owned();
+        let attached = created.iter().find(|message| message["method"] == "Target.attachedToTarget"
+            && message["params"]["targetInfo"]["targetId"] == target).unwrap();
+        let session = attached["params"]["sessionId"].as_str().unwrap().to_owned();
+        request_seen.wait_for(|seen| *seen).await.unwrap();
+        socket.send(WsMessage::Text(json!({"id": 3, "method": "Runtime.evaluate", "sessionId": session,
+            "params": {"expression": "[document.URL, document.title]", "returnByValue": true}
+        }).to_string().into())).await.unwrap();
+        // An IO response is a deterministic ordering barrier while the Main
+        // command waits for this exact native Document, not a timing probe.
+        socket.send(WsMessage::Text(json!({"id": 4, "method": "Page.getNavigationHistory",
+            "sessionId": session}).to_string().into())).await.unwrap();
+        let before_commit = recv_until_id(&mut socket, 4).await;
+        release.send(true).unwrap();
+        let evaluation = match before_commit.iter().find(|message| message["id"] == 3) {
+            Some(early) => early.clone(),
+            None => recv_until_id(&mut socket, 3).await.into_iter()
+                .find(|message| message["id"] == 3).unwrap(),
+        };
+        (session, before_commit, evaluation)
+    }).await;
+    release.send_replace(true);
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    let (session, before_commit, evaluation) =
+        completed.expect("native creation must unblock its queued Runtime command");
+    assert!(
+        !before_commit.iter().any(|message| message["id"] == 3),
+        "Runtime crossed the initial navigation hold: {before_commit:?}"
+    );
+    let history = before_commit
+        .iter()
+        .find(|message| message["id"] == 4)
+        .unwrap();
+    assert!(history.get("error").is_none(), "{history}");
+    assert!(evaluation.get("error").is_none(), "{evaluation}");
+    assert_eq!(evaluation["sessionId"], session);
+    assert_eq!(
+        evaluation["result"]["result"]["value"],
+        json!([url, "created native URL"])
+    );
+}
+
+#[tokio::test]
+async fn websocket_cdp_native_popup_commit_releases_queued_startup_commands() {
+    assert_native_popup_startup_during_fetch_pause("Response").await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_native_popup_request_pause_keeps_initial_document_accessible() {
+    assert_native_popup_startup_during_fetch_pause("Request").await;
+}
+
+async fn assert_native_popup_startup_during_fetch_pause(stage: &str) {
+    let fixture = Router::new().route(
+        "/",
+        get(|| async { axum::response::Html("<main>native popup startup</main>") }),
+    );
+    let (fixture_addr, _fixture_server) =
+        spawn_dedicated_fixture_server(fixture, "native-popup-startup");
+    let url = format!("http://{fixture_addr}/");
+    let (cdp_addr, server) = spawn_test_protocol_server().await;
+    let (mut socket, _) = connect_async(format!(
+        "ws://{cdp_addr}/devtools/browser/{DEFAULT_BROWSER_ID}"
+    ))
+    .await
+    .unwrap();
+    let opener = cdp_create_session_and_navigate(&mut socket, &url).await;
+    socket
+        .send(WsMessage::Text(
+            json!({"id": 10, "method": "Target.setAutoAttach", "params": {
+                "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true
+            }})
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+    recv_until_id(&mut socket, 10).await;
+    let popup_url = format!("{url}?popup=startup");
+    socket.send(WsMessage::Text(json!({"id": 11, "method": "Runtime.evaluate", "sessionId": opener,
+        "params": {"expression": format!("window.open('{popup_url}', '_blank') !== null"), "returnByValue": true}
+    }).to_string().into())).await.unwrap();
+    let opened = recv_until_id(&mut socket, 11).await;
+    let attached = opened
+        .iter()
+        .find(|message| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["openerId"].is_string()
+        })
+        .expect("exact popup attachment");
+    let session = attached["params"]["sessionId"].as_str().unwrap();
+    let target = attached["params"]["targetInfo"]["targetId"]
+        .as_str()
+        .unwrap();
+    assert_eq!(attached["params"]["waitingForDebugger"], true);
+    for (id, method, params) in [
+        (
+            12,
+            "Fetch.enable",
+            json!({"patterns": [{"urlPattern": "*", "requestStage": stage}]}),
+        ),
+        (13, "Runtime.runIfWaitingForDebugger", json!({})),
+    ] {
+        socket
+            .send(WsMessage::Text(
+                json!({"id": id, "method": method, "sessionId": session,
+            "params": params})
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let paused = recv_until_match(&mut socket, |message| {
+        message["method"] == "Fetch.requestPaused"
+            && message["sessionId"] == session
+            && message["params"]["request"]["url"] == popup_url
+    })
+    .await;
+    let request = paused.last().unwrap()["params"]["requestId"]
+        .as_str()
+        .unwrap();
+    let release_method = if stage == "Request" {
+        "Fetch.continueRequest"
+    } else {
+        "Fetch.continueResponse"
+    };
+    let release = json!({"id": 24, "method": release_method, "sessionId": session,
+        "params": {"requestId": request}});
+    // Request-stage decisions leave the real initial Document accessible;
+    // response-stage decisions must still hold startup until the native commit.
+    for (id, method) in [
+        (20, "Page.enable"),
+        (21, "Page.getFrameTree"),
+        (22, "Runtime.enable"),
+        (23, "Page.getNavigationHistory"),
+    ] {
+        socket
+            .send(WsMessage::Text(
+                json!({"id": id, "method": method, "sessionId": session})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    let mut replies = std::collections::HashSet::new();
+    let mut context_created = false;
+    let completed = timeout(Duration::from_secs(5), async {
+        let mut messages = recv_until_id(&mut socket, 23).await;
+        if stage == "Response" {
+            assert!(
+                !messages
+                    .iter()
+                    .any(|message| message["id"] == 21 || message["id"] == 22),
+                "response-stage startup crossed its Document projection hold: {messages:?}"
+            );
+            socket
+                .send(WsMessage::Text(release.to_string().into()))
+                .await
+                .unwrap();
+        }
+        let mut observe = |message: &serde_json::Value| {
+            if let Some(id) = message["id"].as_u64().filter(|id| (20..=23).contains(id)) {
+                assert!(replies.insert(id), "duplicate startup response: {message}");
+            }
+            context_created |= message["method"] == "Runtime.executionContextCreated"
+                && message["sessionId"] == session
+                && message["params"]["context"]["auxData"]["frameId"] == target;
+            replies.len() == 4 && context_created
+        };
+        let mut ready = false;
+        for message in &messages {
+            ready |= observe(message);
+        }
+        if !ready {
+            messages.extend(recv_until_match(&mut socket, observe).await);
+        }
+        if stage == "Request" {
+            let tree = messages.iter().find(|message| message["id"] == 21).unwrap();
+            assert_eq!(
+                tree["result"]["frameTree"]["frame"]["loaderId"],
+                format!("LID-INITIAL-{target}")
+            );
+            assert!(messages.iter().any(|message| message["method"]
+                == "Runtime.executionContextCreated"
+                && message["sessionId"] == session
+                && message["params"]["context"]["auxData"]["frameId"] == target
+                && message["params"]["context"]["name"] == "about:blank"));
+            socket
+                .send(WsMessage::Text(release.to_string().into()))
+                .await
+                .unwrap();
+            messages.extend(
+                recv_until_match(&mut socket, |message| {
+                    message["method"] == "Page.frameNavigated"
+                        && message["sessionId"] == session
+                        && message["params"]["frame"]["id"] == target
+                        && message["params"]["frame"]["url"] == popup_url
+                })
+                .await,
+            );
+        }
+        messages
+    })
+    .await;
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    let messages =
+        completed.expect("native Document commit must release every queued startup command");
+    for id in 20..=23 {
+        let reply = messages.iter().find(|message| message["id"] == id).unwrap();
+        assert!(
+            reply.get("error").is_none(),
+            "startup command {id}: {reply}"
+        );
+        assert_eq!(reply["sessionId"], session);
+    }
+    let tree = messages.iter().find(|message| message["id"] == 21).unwrap();
+    assert_eq!(tree["result"]["frameTree"]["frame"]["id"], target);
+    // Target identity advertises the requested URL even before its first commit.
+    assert_eq!(tree["result"]["frameTree"]["frame"]["url"], popup_url);
+    assert!(messages.iter().any(
+        |message| message["method"] == "Runtime.executionContextCreated"
+            && message["sessionId"] == session
+            && message["params"]["context"]["auxData"]["frameId"] == target
+    ));
+}
+
 fn assert_cdp_event_precedes_response(
     messages: &[serde_json::Value],
     method: &str,
@@ -3755,23 +4021,41 @@ addEventListener('DOMContentLoaded', () => {
 
 #[tokio::test]
 async fn websocket_cdp_external_writer_with_two_document_writes_reaches_defer_and_dcl() {
-    async fn page() -> impl IntoResponse {
+    external_writer_with_two_document_writes_reaches_defer_and_dcl(false).await;
+}
+
+#[tokio::test]
+async fn websocket_cdp_external_writer_with_ready_document_write_source_reaches_defer_and_dcl() {
+    external_writer_with_two_document_writes_reaches_defer_and_dcl(true).await;
+}
+
+async fn external_writer_with_two_document_writes_reaches_defer_and_dcl(source_ready: bool) {
+    async fn page(source_ready: bool) -> impl IntoResponse {
+        let prepare_source = if source_ready {
+            r#"<script src="/first.js"></script>
+<script>documentWriteOrder = ['head'];</script>"#
+        } else {
+            ""
+        };
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
-            r#"<!doctype html>
+            format!(
+                r#"<!doctype html>
 <html>
 <head>
 <script>
 globalThis.documentWriteOrder = ['head'];
 document.addEventListener('DOMContentLoaded', () => documentWriteOrder.push('dcl'));
 </script>
+{prepare_source}
 <script src="/writer.js"></script>
 <script>documentWriteOrder.push('tail');</script>
 <script defer src="/defer.js"></script>
 <script>documentWriteOrder.push('after-defer');</script>
 </head>
 <body><main id="ready">ready</main></body>
-</html>"#,
+</html>"#
+            ),
         )
     }
 
@@ -3802,7 +4086,7 @@ documentWriteOrder.push('writer-end');"#,
     let defer_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let defer_requests_for_route = Arc::clone(&defer_requests);
     let fixture_app = Router::new()
-        .route("/", get(page))
+        .route("/", get(move || page(source_ready)))
         .route("/writer.js", get(writer))
         .route("/first.js", get(first))
         .route("/second.js", get(second))
@@ -4384,11 +4668,11 @@ addEventListener('DOMContentLoaded', () => fetch('/stale-source-observed'));
 
     let defer_requested = Arc::new(tokio::sync::Notify::new());
     let release_defer = Arc::new(tokio::sync::Notify::new());
-    let defer_response_sent = Arc::new(tokio::sync::Notify::new());
+    let defer_response_produced = Arc::new(tokio::sync::Notify::new());
     let stale_source_observed = Arc::new(tokio::sync::Notify::new());
     let requested_for_route = Arc::clone(&defer_requested);
     let release_for_route = Arc::clone(&release_defer);
-    let response_sent_for_route = Arc::clone(&defer_response_sent);
+    let response_produced_for_route = Arc::clone(&defer_response_produced);
     let stale_for_route = Arc::clone(&stale_source_observed);
     let fixture_app = Router::new()
         .route("/source", get(source_page))
@@ -4398,15 +4682,22 @@ addEventListener('DOMContentLoaded', () => fetch('/stale-source-observed'));
             get(move || {
                 let requested_for_route = Arc::clone(&requested_for_route);
                 let release_for_route = Arc::clone(&release_for_route);
-                let response_sent_for_route = Arc::clone(&response_sent_for_route);
+                let response_produced_for_route = Arc::clone(&response_produced_for_route);
                 async move {
-                    requested_for_route.notify_one();
-                    release_for_route.notified().await;
-                    response_sent_for_route.notify_one();
-                    (
-                        [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
-                        "fetch('/stale-source-observed');",
-                    )
+                    // Replacement may cancel HTTP and drop this handler. The
+                    // deliberately late producer must still observe release;
+                    // its completion is not proof of delivery to a closed socket.
+                    tokio::spawn(async move {
+                        requested_for_route.notify_one();
+                        release_for_route.notified().await;
+                        response_produced_for_route.notify_one();
+                        (
+                            [(axum::http::header::CONTENT_TYPE.as_str(), "text/javascript")],
+                            "fetch('/stale-source-observed');",
+                        )
+                    })
+                    .await
+                    .expect("produce the source defer response")
                 }
             }),
         )
@@ -4485,9 +4776,9 @@ addEventListener('DOMContentLoaded', () => fetch('/stale-source-observed'));
     );
 
     release_defer.notify_one();
-    timeout(Duration::from_secs(1), defer_response_sent.notified())
+    timeout(Duration::from_secs(1), defer_response_produced.notified())
         .await
-        .expect("stale defer response should leave the fixture server");
+        .expect("the source fixture should finish producing its stale defer response");
     assert!(
         timeout(Duration::from_millis(250), stale_source_observed.notified())
             .await
@@ -5412,6 +5703,10 @@ async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_se
         .as_str()
         .expect("parser script requestId")
         .to_owned();
+    let network_request_id = paused["params"]["networkId"]
+        .as_str()
+        .expect("parser script Network requestId")
+        .to_owned();
     assert!(
         !observed.iter().any(|message| {
             message["sessionId"].as_str() == Some(active.session_id.as_str())
@@ -5470,6 +5765,18 @@ async fn websocket_cdp_fetch_routes_pending_background_parser_script_to_exact_se
             .iter()
             .any(|message| message["id"] == json!(12_u64)),
         "Page.navigate should reply while parser script abort is handled: {observed:#?}"
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|message| {
+                message["sessionId"].as_str() == Some(background.session_id.as_str())
+                    && message["method"] == "Network.loadingFailed"
+                    && message["params"]["requestId"] == network_request_id
+            })
+            .count(),
+        1,
+        "the original script request must publish exactly one terminal before Page load: {observed:#?}"
     );
 
     let execution = cdp_runtime_evaluate_string(
@@ -9026,19 +9333,34 @@ async fn websocket_cdp_parser_script_network_backlog_flushes_before_domcontentlo
         json!({ "url": page_url }),
     )
     .await;
-    messages.extend(
-        recv_until_match(&mut socket, |message| {
-            message["sessionId"] == json!(target.session_id)
-                && message["method"] == json!("Page.domContentEventFired")
-        })
-        .await,
-    );
+    let loader_id = messages
+        .iter()
+        .find(|message| message["id"] == 40)
+        .and_then(|message| message["result"]["loaderId"].as_str())
+        .expect("navigation loaderId")
+        .to_owned();
+    // The asynchronous initial about:blank load can also publish DCL. Select
+    // the requested Document, including when it finished before the reply.
+    let is_document_dcl = |message: &serde_json::Value| {
+        message["sessionId"] == target.session_id
+            && message["method"] == "Page.lifecycleEvent"
+            && message["params"]["loaderId"] == loader_id
+            && message["params"]["name"] == "DOMContentLoaded"
+    };
+    if !messages.iter().any(is_document_dcl) {
+        messages.extend(recv_until_match(&mut socket, is_document_dcl).await);
+    }
+    let dcl_timestamp = &messages
+        .iter()
+        .find(|message| is_document_dcl(message))
+        .unwrap()["params"]["timestamp"];
 
     let dcl_index = messages
         .iter()
         .position(|message| {
             message["sessionId"] == json!(target.session_id)
                 && message["method"] == json!("Page.domContentEventFired")
+                && &message["params"]["timestamp"] == dcl_timestamp
         })
         .expect("Page.domContentEventFired should be emitted");
     let script_request = messages
@@ -9062,7 +9384,9 @@ async fn websocket_cdp_parser_script_network_backlog_flushes_before_domcontentlo
                 && message["params"]["type"] == json!("Script")
                 && message["params"]["requestId"] == json!(script_request_id)
         })
-        .expect("parser script responseReceived should be emitted before DCL");
+        .unwrap_or_else(|| {
+            panic!("parser script responseReceived should be emitted before DCL: {messages:#?}")
+        });
     let script_finished = messages
         .iter()
         .position(|message| {
@@ -10056,4 +10380,71 @@ async fn websocket_cdp_playwright_auto_attach_child_frame_events_precede_main_lo
     let _ = socket.close(None).await;
     abort_test_cdp_server(protocol_server).await;
     fixture_server.abort();
+}
+
+#[tokio::test]
+async fn websocket_cdp_errors_preserve_the_request_frontend_and_session() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let (mut socket, _) = connect_async(&endpoint).await.unwrap();
+    let context = cdp_create_browser_context(&mut socket, 1).await;
+    let target = cdp_create_attached_target(&mut socket, 2, &context).await;
+    let (mut peer, _) = connect_async(&endpoint).await.unwrap();
+
+    for (route, session) in [None, Some(target.session_id.as_str())]
+        .into_iter()
+        .enumerate()
+    {
+        for (method, params, codes) in [
+            (
+                "Target.attachToTarget",
+                json!({"flatten": true}),
+                [-32602, -32602],
+            ),
+            (
+                "Target.attachToTarget",
+                json!({"targetId": 42}),
+                [-32602, -32602],
+            ),
+            (
+                "Target.attachToTarget",
+                json!({"targetId": "missing"}),
+                [-31998, -31998],
+            ),
+            ("Target.setDiscoverTargets", json!({}), [-32602, -32602]),
+            ("Target.autoAttachRelated", json!({}), [-32602, -32000]),
+            (
+                "Target.createBrowserContext",
+                json!({"proxyServer": 42}),
+                [-32602, -32000],
+            ),
+            (
+                "Target.getTargetInfo",
+                json!({"targetId": 42}),
+                [-32602, -32602],
+            ),
+        ] {
+            send_cdp_command_without_wait(&mut socket, 10, method, session, params).await;
+            // These validation failures are synchronous. A subsequent reply
+            // proves the actor processed the command even if its error was lost.
+            let messages =
+                send_cdp_command(&mut socket, 11, "Browser.getVersion", None, json!({})).await;
+            let replies: Vec<_> = messages
+                .iter()
+                .filter(|message| message["id"] == 10)
+                .collect();
+            assert_eq!(replies.len(), 1, "{method} on {session:?}: {messages:?}");
+            assert_eq!(replies[0]["error"]["code"], codes[route], "{method}");
+            assert_eq!(replies[0]["sessionId"].as_str(), session, "{method}");
+
+            let peer_messages =
+                send_cdp_command(&mut peer, 10, "Browser.getVersion", None, json!({})).await;
+            let peer_reply = peer_messages.last().unwrap();
+            assert!(peer_reply["result"]["product"].is_string(), "{peer_reply}");
+            assert!(peer_reply.get("sessionId").is_none(), "{peer_reply}");
+        }
+    }
+    socket.close(None).await.unwrap();
+    peer.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
 }

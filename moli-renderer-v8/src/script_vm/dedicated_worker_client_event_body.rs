@@ -62,7 +62,6 @@ impl ScriptVm {
             RendererDedicatedWorkerClientEvent::ScriptLoaded {
                 script_url,
                 script_source,
-                network_response,
                 script_kind,
                 secure_context,
                 response_referrer_policy,
@@ -72,17 +71,6 @@ impl ScriptVm {
                 content_security_report_only_policies,
                 content_security_reporting_endpoints,
             } => {
-                let recorded = self
-                    ._context_host
-                    .borrow_mut()
-                    .record_dedicated_worker_target_script_loaded(
-                        worker_id,
-                        script_url.clone(),
-                        network_response,
-                    );
-                if !recorded {
-                    return Ok(DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared);
-                }
                 let handled = self._context_host.borrow_mut().finish_loading_worker(
                     worker_id,
                     script_url,
@@ -118,7 +106,6 @@ impl ScriptVm {
                 if let RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
                     script_url,
                     error_message,
-                    network_response,
                     ..
                 } = &event
                 {
@@ -129,7 +116,6 @@ impl ScriptVm {
                             worker_id,
                             script_url.clone(),
                             error_message.clone(),
-                            network_response.clone(),
                         );
                     if !recorded {
                         return Ok(DedicatedWorkerClientEventBodyEffect::CurrentTargetDisappeared);

@@ -31,6 +31,10 @@ that directory to view the report; no web server is required.
 
 ## Common workflows
 
+The [Browser owner acceptance report](reports/browser-owner-split3.md) documents
+the local multi-page timing and output-retention probe, isolated instrumentation,
+fixed revisions, calibration limits and unresolved acceptance failures.
+
 Run a compact fetch/CDP comparison across the configured engines:
 
 ```bash

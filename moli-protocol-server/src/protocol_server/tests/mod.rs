@@ -1193,7 +1193,9 @@ async fn cdp_runtime_evaluate_string(
         .iter()
         .find(|message| message["id"] == json!(id))
         .and_then(|message| message["result"]["result"]["value"].as_str())
-        .expect("Runtime.evaluate string result")
+        .unwrap_or_else(|| {
+            panic!("Runtime.evaluate {expression:?} expected a string: {messages:?}")
+        })
         .to_owned()
 }
 
@@ -1232,6 +1234,7 @@ async fn rejected_websocket_status(url: String) -> u16 {
 }
 
 mod bidi;
+mod browser_events;
 mod cdp_dynamic_page;
 mod classic;
 mod download;

@@ -3,7 +3,7 @@ use crate::native_bridge::{
     JsContextHost, MediaLoadSequenceId, OwnerDispatchScope, PendingMediaLoadOwner,
 };
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchResultSender, ServiceWorkerRequestDestination,
     service_worker_fetch_request_metadata,
 };
 use crate::types::{
@@ -84,13 +84,14 @@ pub(crate) fn start_media_element_resource_fetch(
     if let Some(response) = local_url_response(&request_url) {
         let response: crate::protocol_types::NavigationResponse = response.into();
         let successful = media_response_status_is_successful(response.status);
-        host.record_get_subresource_network_result_with_initiator(
+        host.record_local_subresource_response(
             frame_id,
             document_url,
             request_url,
             resource_type,
             SubresourceRequestInitiatorType::Other,
-            &Ok(response),
+            &response,
+            None,
         );
         return Ok(MediaElementResourceFetchStart::Local { successful });
     }
@@ -180,25 +181,28 @@ pub(crate) fn start_media_element_resource_fetch(
                 resource_type,
                 policy_context,
             },
-            completion_tx: host.resource_completion_sender(),
+            result_tx: ServiceWorkerFetchResultSender::Page {
+                completion_tx: host.resource_completion_sender(),
+                network: host.pending_subresource_response_stream(internal_id),
+            },
             request_client: loader,
             resource_task_runner: resource_loader.task_runner(),
             cancel_handle,
-            direct_completion_tx: None,
         };
         if !host.dispatch_service_worker_fetch(dispatch) {
-            let _ = host.resource_completion_sender().send_async_subresource(
+            crate::network_host::send_resource_completion(
+                &host.resource_completion_sender(),
+                host.pending_subresource_response_stream(internal_id),
                 AsyncSubresourceFetchCompletion {
+                    network_request_headers: None,
                     internal_id,
-                    request_url,
-                    request_method: "GET".to_owned(),
-                    request_headers: Default::default(),
-                    request_body: None,
                     response_status_text: None,
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
-                    result: Err("service worker media fetch dispatch failed".to_owned()).into(),
+                    result: Err("service worker media fetch dispatch failed"
+                        .to_owned()
+                        .into()),
                 },
             );
         }
@@ -213,17 +217,9 @@ pub(crate) fn start_media_element_resource_fetch(
         Some(cancel_handle),
         Vec::new(),
         internal_id,
-        AsyncSubresourceNetworkContext {
-            frame_id,
-            request_origin: request_origin.clone(),
-            document_url,
-            resource_type,
-            policy_context,
-        },
+        host.pending_subresource_response_stream(internal_id),
+        host.pending_subresource_preflight_observer(internal_id),
         request_url,
-        "GET".to_owned(),
-        Default::default(),
-        None,
     );
     Ok(MediaElementResourceFetchStart::Pending)
 }

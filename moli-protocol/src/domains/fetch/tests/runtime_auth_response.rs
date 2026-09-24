@@ -23,6 +23,23 @@ fn take_fetch_event_for_request(
     })
 }
 
+fn take_response_body_stream_handle(
+    ctx: &mut TestContext,
+    command_id: u64,
+    session_id: &str,
+) -> String {
+    let response = take_response_by_id(ctx, command_id);
+    assert_eq!(response["sessionId"], session_id, "{response}");
+    let handle = response["result"]["stream"]
+        .as_str()
+        .expect("response body stream handle");
+    assert!(
+        handle.starts_with("BID-1:TID-1:STREAM-"),
+        "stream must remain scoped to the owning target: {response}"
+    );
+    handle.to_owned()
+}
+
 fn network_events_for_request<'a>(
     ctx: &'a TestContext,
     method: &str,
@@ -35,6 +52,21 @@ fn network_events_for_request<'a>(
                 && message["params"]["requestId"].as_str() == Some(request_id)
         })
         .collect()
+}
+
+// Continuing now releases a live body. Audit the same complete response after
+// its own terminal arrives rather than treating the command reply as body EOF.
+async fn wait_for_network_finish(ctx: &mut TestContext, request: &serde_json::Value) {
+    wait_until_message(
+        ctx,
+        "SID-1",
+        "continued response body terminal",
+        |message| {
+            message["method"] == "Network.loadingFinished"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        },
+    )
+    .await;
 }
 
 fn assert_chromium_successful_http_extra_info(
@@ -167,6 +199,7 @@ async fn runtime_fetch_subresource_intercept_response_pauses_after_response_unti
         .expect("network id")
         .to_owned();
     assert_eq!(request_paused["params"]["request"]["url"], api_url);
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -222,18 +255,22 @@ async fn runtime_fetch_subresource_intercept_response_pauses_after_response_unti
     }))
     .await;
     ctx.expect_result(387, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")
         .to_owned();
     assert_eq!(request["params"]["type"], "Fetch");
+    // Include the admission captured before the pause in the whole-request audit.
+    ctx.sent.insert(0, request);
     assert_chromium_successful_http_extra_info(&ctx, &network_request_id, &addr.to_string());
     let response = ctx
         .sent
@@ -379,16 +416,12 @@ async fn runtime_fetch_subresource_response_stage_preserves_binary_body_for_cdp_
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        36_015,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 36_015, "SID-1");
 
     ctx.process_async(json!({
         "id": 36_016,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -470,7 +503,10 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     let child_url = format!("http://{addr}/child");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    with_loaded_http_document(&mut ctx, &top_url, "SID-1", "TID-1").await;
+    let bc = attached_browser_context(&ctx.conn);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    // Subscribe before native navigation: the fully loaded fixture has already
+    // routed the child commit by the time it returns.
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.conn
         .browser_context
@@ -480,7 +516,8 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .inspector_enabled = true;
-    ctx.sent.clear();
+    ctx.install_navigation_fixture_for_session_owner(&top_url, Some("SID-1"))
+        .await;
     let child_frame_id = child_frame_id_for_single_iframe_async(&mut ctx, 36_400).await;
 
     ctx.process_async(json!({
@@ -498,19 +535,30 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     }))
     .await;
     ctx.expect_result(36_402, json!({}), Some("SID-1"));
-    // The Runtime.enable helper clears collected events. Consume the child
-    // navigation first, even when it finishes during the preceding commands.
+    // Exercise the case where the child commits before Runtime.enable finishes.
+    // Enabling another domain must not discard that already observed lifecycle.
+    let child_frame_navigated = |message: &Value| {
+        message["sessionId"] == json!("SID-1")
+            && message["method"] == json!("Page.frameNavigated")
+            && message["params"]["frame"]["id"] == json!(child_frame_id)
+            && message["params"]["frame"]["url"] == json!(child_url)
+    };
     wait_until_message(
         &mut ctx,
         "SID-1",
-        "child frame navigated before child fetch",
-        |message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["params"]["frame"]["id"] == json!(child_frame_id)
-        },
+        "child frame committed before Runtime.enable",
+        child_frame_navigated,
     )
     .await;
-    enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
+    ctx.process_async(json!({
+        "id": 36_403, "method": "Runtime.enable", "sessionId": "SID-1",
+    }))
+    .await;
+    ctx.expect_result(36_403, json!({}), Some("SID-1"));
+    assert!(
+        ctx.sent.iter().any(child_frame_navigated),
+        "preserve the child commit event while consuming only the Runtime.enable response"
+    );
 
     ctx.process_async(json!({
         "id": 36_404,
@@ -834,6 +882,7 @@ async fn runtime_xhr_subresource_intercept_response_pauses_after_response_until_
         .to_owned();
     assert_eq!(request_paused["params"]["resourceType"], "XHR");
     assert_eq!(request_paused["params"]["request"]["url"], xhr_url);
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -884,13 +933,15 @@ async fn runtime_xhr_subresource_intercept_response_pauses_after_response_until_
     }))
     .await;
     ctx.expect_result(394, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")
@@ -1018,6 +1069,7 @@ async fn runtime_fetch_subresource_redirect_preserves_request_id_under_fetch_int
         .as_str()
         .expect("network id")
         .to_owned();
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1052,10 +1104,10 @@ async fn runtime_fetch_subresource_redirect_preserves_request_id_under_fetch_int
     }))
     .await;
     ctx.expect_result(400, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
-    let fetch_requests = ctx
-        .sent
-        .iter()
+    let fetch_requests = std::iter::once(&request)
+        .chain(ctx.sent.iter())
         .filter(|message| {
             message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["requestId"] == json!(network_id)
@@ -1202,6 +1254,7 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
         .as_str()
         .expect("network id")
         .to_owned();
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1237,10 +1290,10 @@ async fn runtime_xhr_subresource_redirect_preserves_request_id_under_fetch_inter
     }))
     .await;
     ctx.expect_result(406, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
-    let xhr_requests = ctx
-        .sent
-        .iter()
+    let xhr_requests = std::iter::once(&request)
+        .chain(ctx.sent.iter())
         .filter(|message| {
             message["method"] == json!("Network.requestWillBeSent")
                 && message["params"]["requestId"] == json!(network_id)
@@ -4133,6 +4186,7 @@ async fn runtime_fetch_subresource_continue_response_can_override_status_and_hea
         .expect("request id")
         .to_owned();
     assert_eq!(request_paused["params"]["request"]["url"], api_url);
+    let request = request_started_before_fetch_pause(&ctx, &request_paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -4170,13 +4224,15 @@ async fn runtime_fetch_subresource_continue_response_can_override_status_and_hea
     }))
     .await;
     ctx.expect_result(416, json!({}), Some("SID-1"));
+    wait_for_network_finish(&mut ctx, &request).await;
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")
@@ -4311,16 +4367,12 @@ async fn runtime_fetch_subresource_take_response_body_as_stream_at_response_stag
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        422,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 422, "SID-1");
 
     ctx.process_async(json!({
         "id": 423,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2", "size": 8 }
+        "params": { "handle": &stream_handle, "size": 8 }
     }))
     .await;
     ctx.expect_result(
@@ -4336,7 +4388,7 @@ async fn runtime_fetch_subresource_take_response_body_as_stream_at_response_stag
     ctx.process_async(json!({
         "id": 424,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4407,7 +4459,7 @@ async fn runtime_fetch_subresource_take_response_body_as_stream_at_response_stag
     ctx.process_async(json!({
         "id": 429,
         "method": "IO.close",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(429, json!({}), None);
@@ -4514,16 +4566,12 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        457,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 457, "SID-1");
 
     ctx.process_async(json!({
         "id": 458,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2", "size": 8 }
+        "params": { "handle": &stream_handle, "size": 8 }
     }))
     .await;
     ctx.expect_result(
@@ -4539,7 +4587,7 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
     ctx.process_async(json!({
         "id": 459,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4584,7 +4632,7 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
     ctx.process_async(json!({
         "id": 462,
         "method": "IO.close",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(462, json!({}), None);
@@ -4699,16 +4747,12 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        467,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 467, "SID-1");
 
     ctx.process_async(json!({
         "id": 468,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2", "size": 15 }
+        "params": { "handle": &stream_handle, "size": 15 }
     }))
     .await;
     ctx.expect_result(
@@ -4724,7 +4768,7 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
     ctx.process_async(json!({
         "id": 469,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4769,7 +4813,7 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
     ctx.process_async(json!({
         "id": 472,
         "method": "IO.close",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(472, json!({}), None);
@@ -5776,12 +5820,7 @@ async fn crash_aborts_paused_runtime_fetch_subresource() {
     ctx.expect_error(905, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.target_is_crashed(bc.active_target_id().unwrap()));
     assert!(!bc.has_loaded_page());
 
     server.abort();
@@ -5925,12 +5964,7 @@ async fn crash_aborts_paused_response_stage_runtime_xhr_subresource() {
     ctx.expect_error(912, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.target_is_crashed(bc.active_target_id().unwrap()));
     assert!(!bc.has_loaded_page());
 
     server.abort();
@@ -6107,12 +6141,7 @@ async fn crash_aborts_paused_runtime_xhr_auth_subresource() {
     ctx.expect_error(919, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.target_is_crashed(bc.active_target_id().unwrap()));
     assert!(!bc.has_loaded_page());
 
     server.abort();

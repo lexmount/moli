@@ -66,7 +66,7 @@ async fn parser_owned_module_body_leaves_turn_exit_to_selected_completion() {
         )?;
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("parser-owned module must retain one exact body turn");
         assert_eq!(
@@ -111,7 +111,7 @@ async fn selected_parser_owned_module_submits_its_turn_exit() {
         )?;
 
         assert!(
-            run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm, &loader)
+            run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm)
                 .await?
         );
         assert_eq!(
@@ -152,9 +152,7 @@ async fn parser_owned_module_ticket_consumes_only_one_ready_action() {
             "globalThis.__secondParserOwnedModuleRan = true;",
         )?;
 
-        assert!(
-            run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm, &loader).await?
-        );
+        assert!(run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm).await?);
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -200,9 +198,7 @@ Promise.resolve().then(() => __spentParserOwnedModuleBoundary.push("microtask"))
             )?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
 
-        assert!(
-            run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm, &loader).await?
-        );
+        assert!(run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm).await?);
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -254,12 +250,9 @@ Promise.resolve().then(() => __staleParserOwnedModuleBoundary.push("microtask"))
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::ParserOwnedModuleContinuation,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?
         );
         assert_eq!(

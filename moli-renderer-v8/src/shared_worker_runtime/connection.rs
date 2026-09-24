@@ -11,7 +11,7 @@ use super::{
     client::RendererSharedWorkerClient,
     host::{RendererSharedWorkerHost, SharedRendererSharedWorkerHost},
     loading::{
-        SharedWorkerLaunchParams, SharedWorkerScriptLoadKind, load_shared_worker_blob_script_source,
+        SharedWorkerLaunchParams, SharedWorkerScriptLoadKind, load_shared_worker_local_script,
     },
     service::SharedWorkerRuntimeService,
 };
@@ -31,6 +31,7 @@ fn connect_with_runtime_service(
     descriptor: SharedWorkerDescriptor,
     params: SharedWorkerLaunchParams,
 ) -> SharedWorkerClientId {
+    let _admission = runtime_service.connection_admission();
     let action = runtime_service.connect_registry_entry(descriptor, &params);
     let client_id = match &action {
         SharedWorkerConnectAction::StartLoading { client_id, .. }
@@ -102,7 +103,7 @@ impl SharedWorkerRuntimeService {
         descriptor: SharedWorkerDescriptor,
         params: &SharedWorkerLaunchParams,
     ) -> SharedWorkerConnectAction<SharedRendererSharedWorkerHost> {
-        self.connect_matching(params.key.clone(), descriptor, params.client_owner_id)
+        self.connect_matching(params.key.clone(), descriptor)
     }
 
     fn loading_host_for_connect(
@@ -130,32 +131,51 @@ impl SharedWorkerRuntimeService {
         params.reserve_service_worker_worker_client_for_main_script();
         let target_output = self.open_target_output_stream(instance_id);
         let host = Arc::new(RendererSharedWorkerHost::new_loading(
-            instance_id,
+            params
+                .launch_context
+                .execution_policy
+                .worker_context_runtime
+                .network_for_worker(crate::runtime::RendererWorkerIdentity::Shared(instance_id)),
             self.required_owner_local_host_id(),
             self.downgrade(),
             params.key.script_url().to_owned(),
             params.launch_context.name.clone(),
             target_output,
+            self.worker_lifecycle(),
         ));
         host.add_client(client_id, client);
         self.store_loading_host_for_connect(instance_id, host.clone());
-        match params.script_load.clone().into_kind() {
-            SharedWorkerScriptLoadKind::Ready(script) => {
-                host.enqueue_loading_completion(params, Ok(script))
+        host.publish_created_target_event();
+        let script_url = url::Url::parse(params.key.script_url())
+            .expect("SharedWorker key has a resolved script URL");
+        let Some(network) = crate::network::ResourceTransfer::start_main_script(
+            &host.network,
+            host.network_observer(),
+            &script_url,
+            &params
+                .launch_context
+                .execution_policy
+                .module_static_import_initiator_url,
+        ) else {
+            params.unregister_reserved_service_worker_client();
+            return;
+        };
+        let result = match params.script_load.clone().into_kind() {
+            SharedWorkerScriptLoadKind::Local { script_url } => {
+                load_shared_worker_local_script(&script_url, &network)
             }
-            SharedWorkerScriptLoadKind::Blob { script_url } => host.enqueue_loading_completion(
-                params,
-                load_shared_worker_blob_script_source(&script_url),
-            ),
-            SharedWorkerScriptLoadKind::Failure { message } => {
-                host.enqueue_loading_completion(params, Err(message))
-            }
+            SharedWorkerScriptLoadKind::Failure { message } => Err(message),
             SharedWorkerScriptLoadKind::Fetch(fetch) => {
-                if let Err(message) = host.start_script_fetch(params.clone(), *fetch) {
-                    host.enqueue_loading_completion(params, Err(message));
-                }
+                host.start_script_fetch(params, *fetch, network);
+                return;
             }
+        };
+        if let Err(message) = &result {
+            network.failed(&crate::network::ResourceResponseFailure::Request(
+                message.clone(),
+            ));
         }
+        host.enqueue_loading_completion(params, result);
     }
 }
 
@@ -165,7 +185,7 @@ fn shared_worker_compatibility_error_message(error: &SharedWorkerCompatibilityEr
 
 #[cfg(test)]
 mod tests {
-    use moli_shared_worker::{SharedWorkerClientOwnerId, SharedWorkerDescriptor, SharedWorkerKey};
+    use moli_shared_worker::{SharedWorkerDescriptor, SharedWorkerKey};
     use url::Url;
 
     use crate::{
@@ -210,7 +230,6 @@ mod tests {
     fn test_launch_params(
         browser_context_runtime: &RendererBrowserContextRuntimeOwner,
         key: SharedWorkerKey,
-        owner_id: SharedWorkerClientOwnerId,
         message_port_registry: &SharedMessagePortRegistry,
         message_port_owner: &test_support::SharedWorkerPageClientHarness,
         worker_context_runtime: RendererWorkerContextRuntime,
@@ -223,7 +242,6 @@ mod tests {
             launch_context: test_launch_context(browser_context_runtime, worker_context_runtime),
             client_port_id,
             worker_port_id,
-            client_owner_id: owner_id,
             client_event_realm: message_port_owner.shared_worker_client_event_realm(),
             worker_host_bridge_sender: message_port_owner.worker_host_bridge_sender(),
             parent_service_worker_client_id: None,
@@ -231,8 +249,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn runtime_connect_and_remove_drive_owner_lifecycle_projection() {
+    #[tokio::test]
+    async fn runtime_connect_and_remove_update_registry_clients() {
         let service = test_support::runtime_service();
         let message_port_owner = test_support::SharedWorkerPageClientHarness::new();
         let message_port_registry = crate::message_port_runtime::new_message_port_registry();
@@ -240,13 +258,12 @@ mod tests {
             message_port_registry.clone(),
             crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
             service.clone(),
+            crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap(),
         );
         let key = test_support::shared_worker_key();
-        let owner_id = service.next_client_owner_id();
         let params = test_launch_params(
             &browser_context_runtime,
             key,
-            owner_id,
             &message_port_registry,
             &message_port_owner,
             browser_context_runtime.worker_context_runtime(),
@@ -255,18 +272,18 @@ mod tests {
         let client_id = service.connect(SharedWorkerDescriptor::default(), params);
         let instance_id = SharedWorkerInstanceId::from_u64(1);
         assert_eq!(
-            test_support::active_owner_ids_for_instance(&service, instance_id),
-            vec![owner_id]
+            test_support::matching_clients_for_instance(&service, instance_id),
+            vec![client_id]
         );
 
         service.remove_client(client_id);
 
-        assert!(test_support::owner_lifecycle_is_empty(&service));
+        assert!(test_support::matching_is_empty(&service));
         drop(browser_context_runtime);
     }
 
-    #[test]
-    fn owner_lifecycle_projection_collapses_multiple_clients_from_same_owner() {
+    #[tokio::test]
+    async fn registry_keeps_peer_client_until_its_own_removal() {
         let service = test_support::runtime_service();
         let message_port_owner = test_support::SharedWorkerPageClientHarness::new();
         let message_port_registry = crate::message_port_runtime::new_message_port_registry();
@@ -274,13 +291,12 @@ mod tests {
             message_port_registry.clone(),
             crate::broadcast_channel_runtime::new_broadcast_channel_registry(),
             service.clone(),
+            crate::network::RendererResourceTaskRunner::from_current_tokio().unwrap(),
         );
         let key = test_support::shared_worker_key();
-        let owner_id = service.next_client_owner_id();
         let first = test_launch_params(
             &browser_context_runtime,
             key.clone(),
-            owner_id,
             &message_port_registry,
             &message_port_owner,
             browser_context_runtime.worker_context_runtime(),
@@ -288,7 +304,6 @@ mod tests {
         let second = test_launch_params(
             &browser_context_runtime,
             key,
-            owner_id,
             &message_port_registry,
             &message_port_owner,
             browser_context_runtime.worker_context_runtime(),
@@ -298,19 +313,19 @@ mod tests {
         let second_client_id = service.connect(SharedWorkerDescriptor::default(), second);
         let instance_id = SharedWorkerInstanceId::from_u64(1);
         assert_eq!(
-            test_support::active_owner_ids_for_instance(&service, instance_id),
-            vec![owner_id]
+            test_support::matching_clients_for_instance(&service, instance_id),
+            vec![first_client_id, second_client_id]
         );
 
         service.remove_client(first_client_id);
         assert_eq!(
-            test_support::active_owner_ids_for_instance(&service, instance_id),
-            vec![owner_id],
-            "removing one of two wrapper-level clients must not emit owner removal"
+            test_support::matching_clients_for_instance(&service, instance_id),
+            vec![second_client_id],
+            "removing one of two clients must preserve the other connection"
         );
 
         service.remove_client(second_client_id);
-        assert!(test_support::owner_lifecycle_is_empty(&service));
+        assert!(test_support::matching_is_empty(&service));
         drop(browser_context_runtime);
     }
 }

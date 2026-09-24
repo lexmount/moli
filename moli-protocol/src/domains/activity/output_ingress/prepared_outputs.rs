@@ -14,8 +14,8 @@ use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIG
 ///
 /// The batch owns typed payload exactly once and preserves the producer's
 /// explicit FIFO order. It cannot select renderer work or inspect current renderer state. Consumers
-/// must either project it, hold its remaining after-response slots behind an
-/// exact command barrier, or consume only its owner actions during stale
+/// must either project it, hold its remaining after-response slots for an
+/// exact command response permit, or consume only its owner actions during stale
 /// cleanup.
 #[derive(Debug)]
 #[must_use = "prepared protocol outputs must be projected, held, or cleaned up exactly once"]
@@ -26,6 +26,38 @@ pub(in crate::domains::activity) struct PreparedProtocolOutputs {
 }
 
 impl PreparedProtocolOutputs {
+    pub(in crate::domains::activity) fn from_worker_fetch(
+        outputs: crate::domains::network::NetworkPreparedOutputs,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        outputs.append_to_output_sink(&mut prepared);
+        prepared
+    }
+
+    pub(in crate::domains::activity) fn from_browser_worker_network(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        residence: moli_core::RendererOutputResidenceIdentity,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        let slot = match residence {
+            moli_core::RendererOutputResidenceIdentity::DedicatedWorker { .. } => {
+                ProtocolOutputSlot::DedicatedWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::SharedWorker { .. } => {
+                ProtocolOutputSlot::SharedWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => {
+                ProtocolOutputSlot::ServiceWorkerTargetLifecycle
+            }
+            moli_core::RendererOutputResidenceIdentity::Page { .. } => return prepared,
+        };
+        crate::domains::target::worker_network_prepared_outputs(conn, owner, residence, committed)
+            .append_to_target_lifecycle_output_sink_for_slots(&mut prepared, &[slot]);
+        prepared
+    }
+
     pub(in crate::domains::activity) fn empty() -> Self {
         Self {
             ordered_slots: Vec::new(),
@@ -40,20 +72,17 @@ impl PreparedProtocolOutputs {
     /// The resulting prepared tokens are move-owned by this publication.
     /// Projection cannot later scan the target backlog, while `Network.enable`
     /// and `Log.enable` retain their independent Chromium-compatible policies.
-    pub(in crate::domains::activity) fn from_renderer_network_observation(
+    pub(in crate::domains::activity) fn from_browser_network_observation(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
         source_renderer_page: Option<crate::conn::RendererPageResidenceIdentity>,
-        source_document: moli_core::RendererDocumentLifecycleIdentity,
-        item: &moli_core::page::ScriptNetworkOutputItem,
+        committed: &moli_core::page::RendererCommittedNetworkObservation,
     ) -> Option<Self> {
-        let renderer_live = conn
-            .ingest_renderer_page_network_output_item_and_prepare_live_delivery_for_owner(
-                owner,
-                source_renderer_page,
-                source_document,
-                item,
-            )?;
+        let renderer_live = conn.ingest_browser_network_observation_for_owner(
+            owner,
+            source_renderer_page,
+            committed,
+        )?;
 
         let mut prepared = Self::empty();
         crate::domains::observable_output::live_log_prepared_outputs_for_renderer_network_fact(
@@ -66,6 +95,31 @@ impl PreparedProtocolOutputs {
         Some(prepared)
     }
 
+    pub(in crate::domains::activity) fn from_browser_worker_lifecycle(
+        conn: &mut CdpConnection,
+        committed: moli_core::page::RendererCommittedWorkerLifecycle,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        let slot = match committed.lifecycle() {
+            moli_core::page::RendererWorkerLifecycle::Service(_) => {
+                crate::domains::activity::ProtocolOutputSlot::ServiceWorkerTargetLifecycle
+            }
+            moli_core::page::RendererWorkerLifecycle::SharedCreated(_)
+            | moli_core::page::RendererWorkerLifecycle::SharedStarted(_)
+            | moli_core::page::RendererWorkerLifecycle::SharedDestroyed(_) => {
+                crate::domains::activity::ProtocolOutputSlot::SharedWorkerTargetLifecycle
+            }
+            moli_core::page::RendererWorkerLifecycle::DedicatedCreated(_)
+            | moli_core::page::RendererWorkerLifecycle::DedicatedScriptCompleted { .. }
+            | moli_core::page::RendererWorkerLifecycle::DedicatedDestroyed(_) => {
+                crate::domains::activity::ProtocolOutputSlot::DedicatedWorkerTargetLifecycle
+            }
+        };
+        let outputs = crate::domains::target::worker_lifecycle_prepared_outputs(conn, committed);
+        outputs.append_to_target_lifecycle_output_sink_for_slots(&mut prepared, &[slot]);
+        prepared
+    }
+
     pub(in crate::domains::activity) fn from_renderer_observation(
         conn: &mut CdpConnection,
         owner: &CommandOwnerScope,
@@ -75,8 +129,49 @@ impl PreparedProtocolOutputs {
     ) -> Self {
         let mut prepared = Self::empty();
         match observation {
+            RendererProtocolObservation::WorkerLifecycle(_) => {
+                unreachable!("Worker projection requires native commit acknowledgement first")
+            }
+            RendererProtocolObservation::DedicatedWorker(event) => {
+                crate::domains::target::dedicated_worker_observation_prepared_outputs(
+                    conn,
+                    owner,
+                    source_residence,
+                    event.clone(),
+                )
+                .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
+            }
+            RendererProtocolObservation::ServiceWorker(event) => {
+                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
+                    crate::domains::target::service_worker_observation_prepared_outputs(
+                        conn,
+                        browser_context_id,
+                        event.clone(),
+                    )
+                    .append_to_service_worker_target_lifecycle_output_sink(&mut prepared);
+                }
+            }
+            RendererProtocolObservation::SharedWorker(event) => {
+                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
+                    crate::domains::target::shared_worker_observation_prepared_outputs(
+                        conn,
+                        browser_context_id,
+                        event.clone(),
+                    )
+                    .append_to_shared_worker_target_lifecycle_output_sink(&mut prepared);
+                }
+            }
+            RendererProtocolObservation::JavaScriptDialog(_) => {
+                unreachable!("dialog projection must observe native admission first")
+            }
             RendererProtocolObservation::MainDocumentCommit(commit) => {
+                let Some(renderer) =
+                    crate::conn::RendererPageResidenceIdentity::from_residence(source_residence)
+                else {
+                    return prepared;
+                };
                 crate::domains::page::append_renderer_main_document_commit_to_output_sink(
+                    renderer,
                     commit.clone(),
                     &mut prepared,
                 );
@@ -87,18 +182,15 @@ impl PreparedProtocolOutputs {
                 )
                 .append_to_document_title_output_sink(&mut prepared);
             }
-            RendererProtocolObservation::DocumentLifecycle(event) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_document_lifecycle_event(
-                    *event,
-                )
-                .append_to_document_lifecycle_output_sink(&mut prepared);
-            }
-            RendererProtocolObservation::Network { .. } => unreachable!(
+            RendererProtocolObservation::DocumentLifecycle(_) => unreachable!(
+                "renderer lifecycle must be admitted by the Browser before preparing projection"
+            ),
+            RendererProtocolObservation::Network(_) => unreachable!(
                 "renderer Network facts require the ingress-bound live projection constructor"
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
                 crate::domains::runtime::RuntimePreparedOutputs::
-                    from_renderer_runtime_binding_call(conn, owner, call.clone())
+                    from_renderer_runtime_binding_call(conn, owner, source_renderer_agent, call.clone())
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {
@@ -113,18 +205,10 @@ impl PreparedProtocolOutputs {
             }
             RendererProtocolObservation::RuntimeInspector(batch) => {
                 let worker_output = match source_residence {
-                    moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
+                    moli_core::RendererOutputResidenceIdentity::DedicatedWorker { .. }
+                    | moli_core::RendererOutputResidenceIdentity::SharedWorker { .. }
                     | moli_core::RendererOutputResidenceIdentity::ServiceWorker { .. } => true,
-                    moli_core::RendererOutputResidenceIdentity::Page { .. } => batch
-                        .session
-                        .wire_session_id()
-                        .and_then(|session_id| conn.session_route(Some(session_id)))
-                        .is_some_and(|route| {
-                            matches!(
-                                route,
-                                crate::conn::CdpSessionRoute::DedicatedWorkerTarget { .. }
-                            )
-                        }),
+                    moli_core::RendererOutputResidenceIdentity::Page { .. } => false,
                 };
                 if worker_output {
                     crate::domains::runtime::RuntimePreparedOutputs::
@@ -164,6 +248,12 @@ impl PreparedProtocolOutputs {
                 )
                 .append_to_output_sink(&mut prepared);
             }
+            RendererProtocolObservation::Popup(opening) => {
+                crate::domains::page::PagePreparedOutputs::from_renderer_popup_opening(
+                    opening.clone(),
+                )
+                .append_to_popup_output_sink(&mut prepared);
+            }
             RendererProtocolObservation::WindowOpen(event) => {
                 crate::domains::page::PagePreparedOutputs::from_renderer_window_open_event(
                     conn,
@@ -185,6 +275,24 @@ impl PreparedProtocolOutputs {
                 .append_to_output_sink(&mut prepared);
             }
         }
+        prepared
+    }
+
+    pub(in crate::domains::activity) fn from_browser_document_lifecycle_event(
+        event: crate::conn::DocumentLifecycleEvent,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        crate::domains::page::PagePreparedOutputs::from_browser_document_lifecycle_event(event)
+            .append_to_document_lifecycle_output_sink(&mut prepared);
+        prepared
+    }
+
+    pub(in crate::domains::activity) fn from_browser_javascript_dialog(
+        dialog: crate::conn::TargetPreparedJavaScriptDialog,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        crate::domains::page::PagePreparedOutputs::from_browser_javascript_dialog(dialog)
+            .append_to_javascript_dialog_output_sink(&mut prepared);
         prepared
     }
 
@@ -212,21 +320,9 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::Download(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_download_activation(
-                    activation,
-                )
-                .append_to_output_sink(&mut prepared);
-            }
-            RendererOwnerAction::JavaScriptDialog(dialog) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_javascript_dialog(
-                    conn, owner, dialog,
-                )
-                .append_to_javascript_dialog_output_sink(&mut prepared);
-            }
-            RendererOwnerAction::Popup(activation) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_popup_activation(
                     conn, owner, activation,
                 )
-                .append_to_popup_output_sink(&mut prepared);
+                .append_to_output_sink(&mut prepared);
             }
             RendererOwnerAction::ChildFrameTree {
                 source_document,
@@ -253,18 +349,15 @@ impl PreparedProtocolOutputs {
                     )
                     .append_to_child_frame_output_sink(&mut prepared);
             }
-            RendererOwnerAction::ChildFrameDocumentNetwork {
+            RendererOwnerAction::ChildFrameNavigationStarted {
                 source_document,
-                event,
+                frame_id,
+                loader_id,
+                url,
             } => {
-                crate::domains::page::PagePreparedOutputs::
-                    from_renderer_child_frame_document_network(
-                        conn,
-                        owner,
-                        source_document,
-                        event,
-                    )
-                    .append_to_child_frame_output_sink(&mut prepared);
+                crate::domains::page::PagePreparedOutputs::from_renderer_child_frame_navigation_started(
+                    conn, owner, source_document, frame_id, loader_id, url,
+                ).append_to_child_frame_output_sink(&mut prepared);
             }
             RendererOwnerAction::ChildFrameLoad {
                 source_document,
@@ -352,41 +445,6 @@ impl PreparedProtocolOutputs {
                     )
                     .await
                     .append_to_output_sink(&mut prepared);
-            }
-            RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
-                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
-                    crate::domains::target::
-                        shared_worker_target_lifecycle_prepared_outputs_for_event(
-                            conn,
-                            browser_context_id,
-                            event,
-                        )
-                        .append_to_shared_worker_target_lifecycle_output_sink(
-                            &mut prepared,
-                        );
-                }
-            }
-            RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
-                if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
-                    crate::domains::target::
-                        service_worker_target_lifecycle_prepared_outputs_for_event(
-                            conn,
-                            browser_context_id,
-                            event,
-                        )
-                        .append_to_service_worker_target_lifecycle_output_sink(
-                            &mut prepared,
-                        );
-                }
-            }
-            RendererOwnerAction::DedicatedWorkerTargetLifecycle(event) => {
-                crate::domains::target::
-                    dedicated_worker_target_lifecycle_prepared_outputs_for_event(
-                        conn,
-                        owner,
-                        event,
-                    )
-                    .append_to_dedicated_worker_target_lifecycle_output_sink(&mut prepared);
             }
         }
         prepared
@@ -529,7 +587,7 @@ impl PreparedProtocolOutputs {
         (!self.ordered_slots.is_empty()).then_some(self)
     }
 
-    /// Completes browser-owner cleanup for a canceled or superseded barrier
+    /// Completes owner/attachment cleanup for a canceled or superseded barrier
     /// without projecting protocol-only observations from the stale command.
     pub(in crate::domains::activity) async fn project_owner_actions_async(
         mut self,

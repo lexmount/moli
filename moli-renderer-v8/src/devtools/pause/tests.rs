@@ -475,7 +475,8 @@ fn page_detach_does_not_close_target_persistent_bridge_or_new_page_route() {
             state.route.as_ref().and_then(|route| {
                 match route.output_journal.stream().residence() {
                     RendererOutputResidenceIdentity::Page { page_id, .. } => Some(page_id),
-                    RendererOutputResidenceIdentity::SharedWorker { .. }
+                    RendererOutputResidenceIdentity::DedicatedWorker { .. }
+                    | RendererOutputResidenceIdentity::SharedWorker { .. }
                     | RendererOutputResidenceIdentity::ServiceWorker { .. } => None,
                 }
             }),

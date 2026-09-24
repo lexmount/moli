@@ -369,7 +369,6 @@ async fn child_parser_connected_write_resumes_after_external_script_load() {
     release.send(()).unwrap();
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(childParserLoaded)",
         "true",
         "nested parser external script",
@@ -438,7 +437,6 @@ async fn child_parser_nested_close_dispatches_readiness_once() {
     .unwrap();
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(childParserLoaded)",
         "true",
         "closed parser load",
@@ -586,7 +584,6 @@ async fn child_parser_srcdoc_invokes_insertion_reactions_before_following_tokens
     .unwrap();
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(childParserLoaded)",
         "true",
         "child srcdoc reaction order",
@@ -715,7 +712,6 @@ async fn child_parser_srcdoc_checkpoints_mutations_before_custom_element_constru
         .expect("srcdoc parser probe should queue");
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(childParserLoaded)",
             "true",
             "child parser load",

@@ -43,8 +43,7 @@ import({request_url:?}).catch(() => {{}});
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::DynamicModuleJob,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the concrete dynamic-module graph job must enter its selected dispatcher"
@@ -115,8 +114,7 @@ import("./spent.mjs").catch(() => {});
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::DynamicModuleJob,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the spent stable reservation must still be consumed exactly once"
@@ -135,8 +133,7 @@ import("./spent.mjs").catch(() => {});
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::DynamicModuleJob,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "a spent reservation must not create a phantom successor"
@@ -186,8 +183,7 @@ document.head.appendChild(link);
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the modulepreload owner event must run through the selected dispatcher"
@@ -248,12 +244,9 @@ for (let index = 0; index < 2; index++) {
         for index in 0..2 {
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::MainDocumentRuntime(
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                             PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission,
-                        ),
-                        &loader,
-                    )
+                        ))
                     .await?,
                 "runtime module {index} must enter DynamicScriptOwner through its selected admission"
             );
@@ -317,7 +310,7 @@ for (let index = 0; index < 2; index++) {
         );
 
         page_vm
-            .run_claimed_selected_page_task_for_test(pending_runtime_continuation, &loader)
+            .run_claimed_selected_page_task_for_test(pending_runtime_continuation)
             .await?;
         assert_eq!(
             page_vm
@@ -336,12 +329,9 @@ for (let index = 0; index < 2; index++) {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::PostParseWork,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the first published DocumentScript failure must consume one later selected task"
         );
@@ -355,12 +345,9 @@ for (let index = 0; index < 2; index++) {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptContinuation,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the runtime owner must publish one continuation for the remaining failure"
         );
@@ -374,12 +361,9 @@ for (let index = 0; index < 2; index++) {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::PostParseWork,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the second published DocumentScript failure must consume its own selected task"
         );

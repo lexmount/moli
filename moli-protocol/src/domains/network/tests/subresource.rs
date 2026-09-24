@@ -19,7 +19,7 @@ async fn worker_websocket_runtime_activity_emits_cdp_websocket_events_without_pa
     let socket_url = format!("ws://{addr}/socket");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     ctx.conn.insert_browser_context(bc);
@@ -151,7 +151,7 @@ fetch('/api')
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -300,7 +300,7 @@ async fn enabling_and_disabling_sessions_replays_aggregated_headers_to_loaded_pa
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
@@ -488,7 +488,7 @@ fetch('/binary')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -595,7 +595,7 @@ fetch('/slow')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -722,7 +722,7 @@ fetch('/slow-clone')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -834,7 +834,7 @@ fetch('/partial')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -980,7 +980,7 @@ fetch('/binary')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1093,7 +1093,7 @@ fetch('/large-binary')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1217,7 +1217,7 @@ fetch('/data')
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1302,11 +1302,12 @@ fetch('/api')
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&api_url).unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/api".to_vec())],
@@ -1421,7 +1422,7 @@ xhr.send();
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1544,7 +1545,7 @@ xhr.send('challenge-payload');
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://localhost:{}/child-xhr", addr.port());
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1668,7 +1669,7 @@ xhr.send('challenge-payload');
     let page_url = format!("http://{addr}/page");
     let slow_url = format!("http://{addr}/slow");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1797,7 +1798,7 @@ async fn parser_external_script_applies_extra_http_headers() {
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1902,7 +1903,7 @@ async fn parser_blocking_stylesheet_emits_subresource_network_events_and_capture
     let page_url = format!("http://{addr}/page");
     let stylesheet_url = format!("http://{addr}/style.css");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2041,7 +2042,7 @@ async fn parser_style_import_emits_subresource_network_events_and_captures_body(
     let page_url = format!("http://{addr}/page");
     let stylesheet_url = format!("http://{addr}/imported.css");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2173,7 +2174,7 @@ async fn parser_external_script_emits_subresource_network_events_and_captures_bo
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/script.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2295,7 +2296,7 @@ worker.onmessage = event => {
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2391,7 +2392,7 @@ fetch('/api')
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2534,7 +2535,7 @@ document.body.setAttribute('data-xhr-status', String(xhr.status));
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2664,7 +2665,7 @@ fetch('{api_url}').catch(() => {{ document.body.setAttribute('data-fetch-failed'
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2778,7 +2779,7 @@ xhr.send();
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2905,7 +2906,7 @@ fetch('/api-start')
     let start_url = format!("http://{addr}/api-start");
     let final_url = format!("http://{addr}/api-final");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3092,11 +3093,12 @@ fetch('{start_url}', {{ credentials: 'include' }})
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
             &[(
@@ -3145,7 +3147,7 @@ fetch('{start_url}', {{ credentials: 'include' }})
     assert_eq!(fetch_requests[1]["params"]["request"]["url"], final_url);
     assert_eq!(
         fetch_requests[1]["params"]["redirectHasExtraInfo"],
-        json!(false)
+        json!(true)
     );
     assert_eq!(
         fetch_requests[1]["params"]["cookieAccessReport"]["excludedCookies"][0]["cookie"]["name"],
@@ -3228,10 +3230,27 @@ fetch('{start_url}', {{ credentials: 'include' }})
         .cloned()
         .collect::<Vec<_>>();
     assert_eq!(fetch_extra_infos.len(), 2);
-    let redirected_fetch_extra_info = fetch_extra_infos
+    let hosts = fetch_extra_infos
         .iter()
-        .find(|message| message["params"]["requestId"] == fetch_requests[1]["params"]["requestId"])
-        .expect("redirected fetch should emit requestWillBeSentExtraInfo");
+        .map(|message| {
+            message["params"]["headers"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case("host"))
+                .expect("ExtraInfo retains the physical Host header")
+                .1
+                .as_str()
+                .unwrap()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        hosts,
+        [format!("localhost:{}", addr.port()), addr.to_string()]
+    );
+    // Redirect hops share a request ID; their ordered transport observations
+    // distinguish the original request from the cross-site request.
+    let redirected_fetch_extra_info = &fetch_extra_infos[1];
     assert_eq!(
         redirected_fetch_extra_info["params"]["requestId"],
         fetch_requests[1]["params"]["requestId"]
@@ -3255,13 +3274,22 @@ fetch('{start_url}', {{ credentials: 'include' }})
         .expect("fetch should emit responseReceived");
     assert_eq!(response["params"]["hasExtraInfo"], json!(true));
 
-    let response_extra_info = messages
+    let response_extra_infos = messages
         .iter()
-        .find(|message| {
+        .filter(|message| {
             message["method"] == json!("Network.responseReceivedExtraInfo")
                 && message["params"]["requestId"] == response["params"]["requestId"]
         })
-        .expect("fetch should emit responseReceivedExtraInfo");
+        .collect::<Vec<_>>();
+    assert_eq!(
+        response_extra_infos
+            .iter()
+            .map(|message| message["params"]["statusCode"].clone())
+            .collect::<Vec<_>>(),
+        [json!(307), json!(200)],
+        "both physical responses have ExtraInfo, even without a Set-Cookie header"
+    );
+    let response_extra_info = response_extra_infos[1];
     assert_eq!(
         response_extra_info["params"]["cookieReports"][0]["status"]["kind"],
         json!("Rejected")
@@ -3331,11 +3359,12 @@ fetch('{target_url}', {{ credentials: 'include' }})
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse("http://127.0.0.1:8443/").unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/".to_vec())],
@@ -3424,11 +3453,12 @@ fetch('{target_url}')
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&format!("http://localhost:{}/", addr.port())).unwrap(),
             &[("set-cookie".to_owned(), b"sid=1; Path=/; Secure".to_vec())],
@@ -3518,7 +3548,7 @@ xhr.send();
     let start_url = format!("http://{addr}/xhr-start");
     let final_url = format!("http://{addr}/xhr-final");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3649,7 +3679,7 @@ async fn cdp_utf8_headers_coexist_with_fetch_and_xhr_byte_strings() {
         .unwrap();
     });
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

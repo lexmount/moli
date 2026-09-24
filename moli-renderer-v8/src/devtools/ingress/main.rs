@@ -17,10 +17,10 @@ use crate::{
     },
     render_runtime::RenderRuntimeHandle,
     runtime::{
-        RendererCommandTurnOutput, RendererDevToolsMainCommandEnvelope,
-        RendererDevToolsMainNestedDispatch, RendererInspectorCommandEnvelope,
-        RendererInspectorCommandRoute, RendererInspectorIngressTicket,
-        RendererInspectorPauseCommandEffect, RendererOwnerReply, RendererPageCommand,
+        RendererCommandTurnOutput, RendererDevToolsMainNestedDispatch,
+        RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
+        RendererInspectorIngressTicket, RendererInspectorPauseCommandEffect,
+        RendererMainCommandEnvelope, RendererOwnerReply, RendererPageCommand,
         RendererPageStateCapturePolicy, RendererPageToken, RendererRuntimeInspectorResponseSender,
         RendererRuntimeInspectorSessionResponseSettlement,
     },
@@ -61,7 +61,7 @@ pub(crate) struct RendererInspectorMainCommand {
     page_token: RendererPageToken,
     pub(crate) agent_token: RendererDevToolsAgentToken,
     capture_policy: RendererPageStateCapturePolicy,
-    envelope: RendererDevToolsMainCommandEnvelope,
+    envelope: RendererMainCommandEnvelope,
     claim_tx: Option<tokio::sync::oneshot::Sender<RendererInspectorMainCommandClaim>>,
     owner_reply_tx: Option<tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>>,
     claimed_by: Option<RendererInspectorMainCommandConsumer>,
@@ -73,7 +73,18 @@ impl RendererInspectorMainCommand {
     }
 
     pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
-        self.envelope.ticket()
+        self.envelope
+            .ticket()
+            .expect("only Inspector work has a session ticket")
+    }
+
+    fn lane_key(&self) -> RendererDevToolsSessionLaneKey {
+        self.envelope.ticket().map_or_else(
+            || RendererDevToolsSessionLaneKey::for_page(self.agent_token),
+            |ticket| {
+                RendererDevToolsSessionLaneKey::new(self.agent_token, ticket.session().clone())
+            },
+        )
     }
 
     #[cfg(test)]
@@ -142,7 +153,7 @@ impl RendererDevToolsIngressCommand for RendererInspectorMainCommand {
 
 pub struct RendererRuntimeInspectorMainCommandRoute {
     command_id: u64,
-    ticket: RendererInspectorIngressTicket,
+    ticket: Option<RendererInspectorIngressTicket>,
     claim_rx: Option<tokio::sync::oneshot::Receiver<RendererInspectorMainCommandClaim>>,
     owner_reply_rx: Option<tokio::sync::oneshot::Receiver<anyhow::Result<RendererOwnerReply>>>,
     session_response_settlement_rx:
@@ -152,7 +163,9 @@ pub struct RendererRuntimeInspectorMainCommandRoute {
 
 impl RendererRuntimeInspectorMainCommandRoute {
     pub fn ticket(&self) -> &RendererInspectorIngressTicket {
-        &self.ticket
+        self.ticket
+            .as_ref()
+            .expect("only Inspector work has a session ticket")
     }
 
     pub async fn wait_for_completion(
@@ -336,7 +349,7 @@ pub(crate) struct RendererInspectorMainPostDispatchWakeGuard {
 pub(crate) struct RendererInspectorMainOwnerDispatch {
     page_token: RendererPageToken,
     capture_policy: RendererPageStateCapturePolicy,
-    envelope: RendererDevToolsMainCommandEnvelope,
+    envelope: RendererMainCommandEnvelope,
     first_dispatch: RendererInspectorMainFirstDispatchGuard,
     reply_tx: tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
 }
@@ -347,7 +360,7 @@ impl RendererInspectorMainOwnerDispatch {
     ) -> (
         RendererPageToken,
         RendererPageStateCapturePolicy,
-        RendererDevToolsMainCommandEnvelope,
+        RendererMainCommandEnvelope,
         RendererInspectorMainFirstDispatchGuard,
         tokio::sync::oneshot::Sender<anyhow::Result<RendererOwnerReply>>,
     ) {
@@ -422,6 +435,21 @@ impl Drop for RendererInspectorMainPostDispatchWakeGuard {
 }
 
 impl RendererInspectorMainIngress {
+    pub(crate) fn enqueue_page_command(
+        &self,
+        page_token: RendererPageToken,
+        agent_token: RendererDevToolsAgentToken,
+        command: RendererPageCommand,
+        capture_policy: RendererPageStateCapturePolicy,
+    ) -> RendererRuntimeInspectorMainCommandRoute {
+        self.enqueue_with_policy(
+            page_token,
+            agent_token,
+            RendererMainCommandEnvelope::from_page_command(command),
+            capture_policy,
+        )
+    }
+
     pub(crate) fn new(
         route_id: RendererInspectorSessionExecutorRouteId,
         pause_wake: RendererInspectorPauseLoopWake,
@@ -459,9 +487,9 @@ impl RendererInspectorMainIngress {
         self.enqueue_with_policy(
             page_token,
             agent_token,
-            RendererDevToolsMainCommandEnvelope::from_protocol_command(
-                RendererPageCommand::Inspector(envelope),
-            ),
+            RendererMainCommandEnvelope::from_protocol_command(RendererPageCommand::Inspector(
+                envelope,
+            )),
             RendererPageStateCapturePolicy::ProtocolTurn,
         )
     }
@@ -476,29 +504,30 @@ impl RendererInspectorMainIngress {
         self.enqueue_with_policy(
             page_token,
             agent_token,
-            RendererDevToolsMainCommandEnvelope::from_protocol_command(
-                RendererPageCommand::Inspector(envelope),
-            ),
+            RendererMainCommandEnvelope::from_protocol_command(RendererPageCommand::Inspector(
+                envelope,
+            )),
             capture_policy,
         )
     }
 
-    pub(crate) fn enqueue_protocol_page_command(
+    pub(crate) fn enqueue_bound_protocol_page_command(
         &self,
         page_token: RendererPageToken,
         agent_token: RendererDevToolsAgentToken,
         command: RendererPageCommand,
         inspector_session_id: Option<String>,
-        capture_policy: RendererPageStateCapturePolicy,
+        attachment: crate::RendererAgentAttachmentId,
     ) -> RendererRuntimeInspectorMainCommandRoute {
         self.enqueue_with_policy(
             page_token,
             agent_token,
-            RendererDevToolsMainCommandEnvelope::from_protocol_command_in_session(
+            RendererMainCommandEnvelope::from_protocol_command_in_session(
                 command,
                 inspector_session_id,
-            ),
-            capture_policy,
+            )
+            .with_attachment(attachment),
+            RendererPageStateCapturePolicy::ProtocolTurn,
         )
     }
 
@@ -506,24 +535,24 @@ impl RendererInspectorMainIngress {
         &self,
         page_token: RendererPageToken,
         agent_token: RendererDevToolsAgentToken,
-        envelope: RendererDevToolsMainCommandEnvelope,
+        envelope: RendererMainCommandEnvelope,
         capture_policy: RendererPageStateCapturePolicy,
     ) -> RendererRuntimeInspectorMainCommandRoute {
-        assert_eq!(
-            envelope.ticket().route(),
-            RendererInspectorCommandRoute::MainThread,
-            "only MainThread DevTools commands may enter RendererInspectorMainIngress"
-        );
+        if let Some(ticket) = envelope.ticket() {
+            assert_eq!(
+                ticket.route(),
+                RendererInspectorCommandRoute::MainThread,
+                "only MainThread DevTools commands may enter RendererInspectorMainIngress"
+            );
+        }
         let (claim_tx, claim_rx) = tokio::sync::oneshot::channel();
         let (owner_reply_tx, owner_reply_rx) = tokio::sync::oneshot::channel();
         let session_response_settlement_rx = envelope.response().and_then(
             RendererRuntimeInspectorResponseSender::take_session_response_settlement_receiver,
         );
         let mut state = self.shared.state.lock();
-        let lane_key =
-            RendererDevToolsSessionLaneKey::new(agent_token, envelope.ticket().session().clone());
-        let ticket = envelope.ticket().clone();
-        let command_id = ticket.sequence();
+        let ticket = envelope.ticket().cloned();
+        let command_id = envelope.command_id();
         let command = RendererInspectorMainCommand {
             command_id,
             page_token,
@@ -534,7 +563,7 @@ impl RendererInspectorMainIngress {
             owner_reply_tx: Some(owner_reply_tx),
             claimed_by: None,
         };
-        if let Err(command) = state.lanes.enqueue(lane_key, command) {
+        if let Err(command) = state.lanes.enqueue(command.lane_key(), command) {
             drop(state);
             fail_main_command(command, "Inspector Main target is closed");
         } else {
@@ -605,10 +634,7 @@ impl RendererInspectorMainIngress {
         &self,
         command: &mut RendererInspectorMainCommand,
     ) -> RendererInspectorMainFirstDispatchGuard {
-        let lane_key = RendererDevToolsSessionLaneKey::new(
-            command.agent_token,
-            command.ticket().session().clone(),
-        );
+        let lane_key = command.lane_key();
         let state = self.shared.state.lock();
         state.lanes.assert_active(
             &lane_key,
@@ -712,8 +738,8 @@ impl RendererInspectorMainIngress {
         }
     }
 
-    pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = self.shared.state.lock().lanes.drain_queued();
+    pub(crate) fn cancel_agent_queued(&self, agent: RendererDevToolsAgentToken, message: &str) {
+        let commands = self.shared.state.lock().lanes.drain_agent_queued(agent);
         for command in commands {
             fail_main_command(command, message);
         }
@@ -780,32 +806,19 @@ mod tests {
         runtime::{
             RendererDevToolsSessionOutputHost, RendererInspectorIngressTicket,
             RendererOutputStreamIdentity, RendererPageReply, RendererPageState,
-            RendererPerformanceMetricSnapshot, RendererRuntimeCommandOutput,
-            RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
-            RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
-            renderer_output_transport_channel,
+            RendererRuntimeCommandOutput, RendererRuntimeInspectorAsyncCompletion,
+            RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseChannel,
+            RendererTurnOutputJournal, renderer_output_transport_channel,
         },
-        types::ScriptExecutionReport,
     };
 
     fn page_state() -> Arc<RendererPageState> {
         let url = url::Url::parse("about:blank").expect("test URL");
-        Arc::new(RendererPageState {
-            requested_url: url.clone(),
-            navigation_initiator_url: None,
-            navigation_redirected: false,
-            navigation_redirect_count: 0,
-            navigation_redirect_chain: Vec::new(),
-            final_url: url,
-            document_title: String::new(),
-            status: 200,
-            headers: Vec::new(),
-            script_execution: Arc::new(ScriptExecutionReport::default()),
-            idle_override: None,
-            service_worker_client_id: 0,
-            dedicated_worker_running_worker_isolate_count: 0,
-            performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
-        })
+        Arc::new(RendererPageState::new_for_test(
+            crate::PageId::new_for_testing(1),
+            url.clone(),
+            url,
+        ))
     }
 
     fn ingress() -> RendererInspectorMainIngress {
@@ -907,6 +920,37 @@ mod tests {
         ingress.first_dispatch_guard(&mut first).release();
         let third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
         assert!(third.raw_json().contains(r#""a2""#));
+    }
+
+    #[tokio::test]
+    async fn agent_retirement_preserves_active_and_detach_guards() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let _active_route = enqueue(&ingress, agent, None, "active");
+        let mut active = ingress.claim_for_owner().unwrap();
+        let mut first_dispatch = ingress.first_dispatch_guard(&mut active);
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        let blocked = enqueue(&ingress, agent, None, "blocked");
+        let replacement_agent = RendererDevToolsAgentToken::allocate();
+        let _replacement = enqueue(&ingress, replacement_agent, None, "replacement");
+
+        ingress.cancel_agent_queued(agent, "retired page");
+        assert!(matches!(
+            blocked.wait_for_completion().await,
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
+        ));
+        let mut replacement = ingress.claim_for_owner().unwrap();
+        assert_eq!(replacement.agent_token, replacement_agent);
+        ingress.first_dispatch_guard(&mut replacement).release();
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 1);
+
+        first_dispatch.release();
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 1);
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 0);
+        assert!(ingress.claim_for_owner().is_none());
     }
 
     #[tokio::test]
@@ -1149,12 +1193,12 @@ mod tests {
         let agent = RendererDevToolsAgentToken::allocate();
         let page_token =
             RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(1));
-        let _page = ingress.enqueue_protocol_page_command(
+        let _page = ingress.enqueue_bound_protocol_page_command(
             page_token,
             agent,
-            RendererPageCommand::PerformanceMetricSnapshot,
+            RendererPageCommand::RuntimeHeapUsage,
             Some("session-a".to_owned()),
-            RendererPageStateCapturePolicy::ProtocolTurn,
+            crate::RendererAgentAttachmentId::allocate(),
         );
         let _v8 = enqueue(
             &ingress,
@@ -1197,6 +1241,193 @@ mod tests {
             v8.nested_dispatch(),
             RendererDevToolsMainNestedDispatch::InspectorSession
         );
+    }
+
+    #[tokio::test]
+    async fn native_page_admission_is_not_a_frontend_session_lane() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let token = RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(1));
+        let first = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        let second = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        assert!(
+            first.ticket.is_none(),
+            "native work has no synthetic Inspector ticket"
+        );
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        let mut claimed = ingress
+            .claim_for_pause()
+            .expect("session detach cannot block native Page work");
+        assert_eq!(claimed.command_id(), first.command_id);
+        assert_eq!(
+            claimed.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::PageAgent
+        );
+        let handoff = ingress.first_dispatch_guard(&mut claimed);
+        assert!(
+            ingress.claim_for_pause().is_none(),
+            "native work preserves its first-dispatch order"
+        );
+        drop(handoff);
+        let mut claimed_second = ingress.claim_for_pause().unwrap();
+        assert_eq!(claimed_second.command_id(), second.command_id);
+        drop(ingress.first_dispatch_guard(&mut claimed_second));
+        // Late native work is also independent of an armed frontend detach.
+        let late = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        ingress.cancel_agent_queued(agent, "physical Page retired");
+        assert!(matches!(late.wait_for_completion().await.unwrap(),
+            RendererRuntimeInspectorMainCommandCompletion::Canceled(message) if message == "physical Page retired"));
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+    }
+
+    #[tokio::test]
+    async fn native_page_retirement_and_shutdown_keep_exact_agent_boundaries() {
+        let ingress = ingress();
+        let old_agent = RendererDevToolsAgentToken::allocate();
+        let new_agent = RendererDevToolsAgentToken::allocate();
+        let old_token =
+            RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(1));
+        let new_token =
+            RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(2));
+        let old = ingress.enqueue_page_command(
+            old_token,
+            old_agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        let replacement = ingress.enqueue_page_command(
+            new_token,
+            new_agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        ingress.cancel_agent_queued(old_agent, "old Page retired");
+        assert!(matches!(old.wait_for_completion().await.unwrap(),
+            RendererRuntimeInspectorMainCommandCompletion::Canceled(message) if message == "old Page retired"));
+        let mut claimed = ingress
+            .claim_for_pause()
+            .expect("replacement must remain runnable");
+        assert_eq!(claimed.command_id(), replacement.command_id);
+        drop(ingress.first_dispatch_guard(&mut claimed));
+        ingress.close("renderer shutdown");
+        let late = ingress.enqueue_page_command(
+            new_token,
+            new_agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        assert!(matches!(
+            late.wait_for_completion().await.unwrap(),
+            RendererRuntimeInspectorMainCommandCompletion::Canceled(_)
+        ));
+    }
+
+    #[test]
+    fn native_and_inspector_main_work_preserve_their_own_first_dispatch_order() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let token = RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(1));
+        let inspector_first = enqueue(
+            &ingress,
+            agent,
+            None,
+            r#"{"id":1,"method":"Runtime.getProperties","params":{"objectId":"first"}}"#,
+        );
+        let native_first = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        let inspector_second = enqueue(
+            &ingress,
+            agent,
+            None,
+            r#"{"id":2,"method":"Runtime.getProperties","params":{"objectId":"second"}}"#,
+        );
+        let native_second = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+
+        let mut first = ingress.claim_for_pause().unwrap();
+        assert_eq!(first.command_id(), inspector_first.command_id);
+        let first_handoff = ingress.first_dispatch_guard(&mut first);
+        let mut native = ingress.claim_for_pause().unwrap();
+        assert_eq!(native.command_id(), native_first.command_id);
+        let native_handoff = ingress.first_dispatch_guard(&mut native);
+        assert!(ingress.claim_for_pause().is_none());
+        drop(first_handoff);
+        let mut second = ingress.claim_for_pause().unwrap();
+        assert_eq!(second.command_id(), inspector_second.command_id);
+        assert!(
+            ingress.claim_for_pause().is_none(),
+            "native FIFO must retain its handoff"
+        );
+        drop(ingress.first_dispatch_guard(&mut second));
+        drop(native_handoff);
+        let mut second_native = ingress.claim_for_pause().unwrap();
+        assert_eq!(second_native.command_id(), native_second.command_id);
+        drop(ingress.first_dispatch_guard(&mut second_native));
+    }
+
+    #[test]
+    fn native_v8_work_waits_for_owner_without_blocking_the_inspector_receiver() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let token = RendererPageToken::new_for_testing(crate::runtime::PageId::new_for_testing(1));
+        let native = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::InsertTextIntoActiveControl("input".to_owned()),
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        let following = ingress.enqueue_page_command(
+            token,
+            agent,
+            RendererPageCommand::SerializeHtml,
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        );
+        let inspector = enqueue(
+            &ingress,
+            agent,
+            None,
+            r#"{"id":3,"method":"Runtime.getProperties","params":{"objectId":"paused"}}"#,
+        );
+        let mut claimed = ingress.claim_for_pause().unwrap();
+        assert_eq!(claimed.command_id(), inspector.command_id);
+        drop(ingress.first_dispatch_guard(&mut claimed));
+        assert!(
+            ingress.claim_for_pause().is_none(),
+            "native work cannot overtake its V8 predecessor"
+        );
+        let mut owner = ingress.claim_for_owner().unwrap();
+        assert_eq!(owner.command_id(), native.command_id);
+        assert_eq!(
+            owner.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::OwnerOnly
+        );
+        drop(ingress.first_dispatch_guard(&mut owner));
+        let mut next = ingress.claim_for_owner().unwrap();
+        assert_eq!(next.command_id(), following.command_id);
+        drop(ingress.first_dispatch_guard(&mut next));
     }
 
     #[test]

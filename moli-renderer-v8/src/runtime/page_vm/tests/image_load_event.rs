@@ -59,7 +59,7 @@ image.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABA
             "the image body must leave listener and image.decode() reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm.vm_mut().eval("__imageTaskBoundary.join('|')")?,
             "callback|microtask|runtime-script|decode",
@@ -161,10 +161,7 @@ image.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABA
         let task = take_next_image_load_event_task_for_test(&mut page_vm)
             .expect("one exact image-load task should be ready");
         page_vm
-            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
-                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(task),
-                &loader,
-            )
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(task))
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__imageChildOrder.join('|')")?,
@@ -257,7 +254,6 @@ currentImage.src = "/current-without-network.png";
         page_vm
             .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
                 crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(current),
-                &loader,
             )
             .await?;
         assert_eq!(
@@ -364,7 +360,6 @@ currentImage.src = "/current-without-network.png";
                     crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
                         current,
                     ),
-                    &loader,
                 )
                 .await?;
             assert_eq!(

@@ -5,8 +5,8 @@ use crate::module_runtime::{
     ModulePreloadJobRun, NativeModulepreloadFetchStart, NativeModulepreloadLinkClient,
 };
 use crate::page_resource_completion::{
-    MainModuleFetchNetworkAttribution, MainModulepreloadFetchCompletion,
-    MainModulepreloadFetchTarget, RendererPageResourceCompletionLocalOwner,
+    MainModulepreloadFetchCompletion, MainModulepreloadFetchTarget,
+    RendererPageResourceCompletionLocalOwner,
 };
 
 fn modulepreload_request(
@@ -26,7 +26,6 @@ fn modulepreload_request(
 
 fn modulepreload_completion(
     target: MainModulepreloadFetchTarget,
-    document_url: Url,
     request_url: Url,
     source: std::result::Result<&str, &str>,
 ) -> MainModulepreloadFetchCompletion {
@@ -39,12 +38,7 @@ fn modulepreload_completion(
             )
         })
         .map_err(str::to_owned);
-    MainModulepreloadFetchCompletion::new(
-        target,
-        result,
-        None,
-        MainModuleFetchNetworkAttribution::new(document_url, request_url),
-    )
+    MainModulepreloadFetchCompletion::new(target, result, None, request_url)
 }
 
 fn reserve_modulepreload_without_network(
@@ -108,12 +102,9 @@ async fn native_module_owner_event_tail_rearms_one_exact_turn_at_a_time() {
             ))?;
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::MainDocumentRuntime(
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                             PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent,
-                        ),
-                        &loader,
-                    )
+                        ))
                     .await?,
                 "each posted native owner event should retain one selected turn"
             );
@@ -134,12 +125,9 @@ async fn native_module_owner_event_tail_rearms_one_exact_turn_at_a_time() {
         }
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "two posted events must not create a phantom third turn"
         );
@@ -184,7 +172,9 @@ async fn production_main_modulepreload_uses_stable_typed_route_and_applies_modul
                 .map_err(anyhow::Error::msg)?,
             Some(ModulePreloadJobRun::Scheduled)
         );
+        let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "main modulepreload fetch",
@@ -220,8 +210,7 @@ async fn production_main_modulepreload_uses_stable_typed_route_and_applies_modul
         page_vm
             .vm_mut()
             .eval("performance.clearResourceTimings()")?;
-        let _ = page_vm.vm_mut().take_network_output();
-        let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
+        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
             .expect("current modulepreload terminal should consume one typed turn");
@@ -261,7 +250,10 @@ async fn production_main_modulepreload_uses_stable_typed_route_and_applies_modul
             page_vm.vm().subresource_activity_epoch() > activity_epoch_before,
             "current modulepreload Network output should count as current Document activity"
         );
-        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
+        assert!(
+            page_vm.vm_mut().take_network_output().is_empty(),
+            "the business terminal must not republish its physical response"
+        );
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].document_url(), &document_url);
         assert_eq!(records[0].url(), &request_url);
@@ -312,7 +304,9 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
                 .map_err(anyhow::Error::msg)?,
             Some(ModulePreloadJobRun::Scheduled)
         );
+        let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "failed main modulepreload fetch",
@@ -325,8 +319,7 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
         page_vm
             .vm_mut()
             .eval("performance.clearResourceTimings()")?;
-        let _ = page_vm.vm_mut().take_network_output();
-        let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
+        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
 
         let outcome = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
@@ -353,7 +346,10 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
             ModuleMapEntryState::Failed
         );
         assert!(page_vm.vm().subresource_activity_epoch() > activity_epoch_before);
-        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
+        assert!(
+            page_vm.vm_mut().take_network_output().is_empty(),
+            "the module-map result must not republish its request"
+        );
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].document_url(), &document_url);
         assert_eq!(records[0].url(), &request_url);
@@ -372,8 +368,7 @@ async fn failed_main_modulepreload_queues_joined_client_fanout_for_a_later_turn(
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "joined-client notification should consume one selected main runtime turn"
@@ -420,6 +415,7 @@ async fn document_open_preserves_queued_main_modulepreload_realm_cache_without_d
             .native_module_entry_id(&old_key)
             .expect("modulepreload should reserve one module-map entry");
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "old Document modulepreload fetch",
@@ -447,7 +443,7 @@ async fn document_open_preserves_queued_main_modulepreload_realm_cache_without_d
         page_vm
             .vm_mut()
             .eval("performance.clearResourceTimings()")?;
-        let _ = page_vm.vm_mut().take_network_output();
+        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
         let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
 
         let outcome = page_vm
@@ -459,7 +455,7 @@ async fn document_open_preserves_queued_main_modulepreload_realm_cache_without_d
         ));
         assert_eq!(
             outcome.action.output_effect,
-            PageResourceCompletionOutputEffect::CaptureRequired
+            PageResourceCompletionOutputEffect::None
         );
         assert_eq!(
             page_vm.vm().subresource_activity_epoch(),
@@ -488,7 +484,10 @@ async fn document_open_preserves_queued_main_modulepreload_realm_cache_without_d
             "historical Network output must not leak into replacement Resource Timing"
         );
         assert!(!page_vm.vm_mut().has_ready_native_module_owner_actions());
-        let (records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
+        assert!(
+            page_vm.vm_mut().take_network_output().is_empty(),
+            "the business terminal must not republish its physical response"
+        );
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].document_url(), &document_url);
         assert_eq!(records[0].url(), &request_url);
@@ -552,12 +551,12 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                         .vm_mut()
                         .register_native_modulepreload_for_owner(old_request)
                         .map_err(anyhow::Error::msg)?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "old PageVm modulepreload fetch",
-                    )
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"old PageVm modulepreload fetch")
                     .await;
+                    let (historical_records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
                     let (_, old_envelope) = queue
                         .pop_front()
                         .expect("old PageVm modulepreload terminal should remain queued");
@@ -602,12 +601,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                         .vm_mut()
                         .register_native_modulepreload_for_owner(replacement_request)
                         .map_err(anyhow::Error::msg)?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "replacement PageVm modulepreload fetch",
-                    )
+                    let activity_before_response = page_vm.vm().subresource_activity_epoch();
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"replacement PageVm modulepreload fetch")
                     .await;
+                    assert!(page_vm.vm().subresource_activity_epoch() > activity_before_response,
+                        "the replacement physical response advances current activity");
                     let (_, replacement_envelope) = queue
                         .pop_front()
                         .expect("replacement modulepreload terminal should remain queued");
@@ -627,7 +628,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                     assert_ne!(old_owner.root_document(), replacement_owner.root_document());
 
                     page_vm.vm_mut().eval("performance.clearResourceTimings()")?;
-                    let _ = page_vm.vm_mut().take_network_output();
+                    let (current_records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
                     queue.enqueue_local_for_test(old_envelope);
                     queue.enqueue_local_for_test(replacement_envelope);
                     let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
@@ -667,8 +668,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                         modulepreload_performance_summary(&mut page_vm, &old_request_url)?,
                         ""
                     );
-                    let (historical_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "a stale module result must not republish the original request");
                     assert_eq!(historical_records.len(), 1);
                     assert_eq!(historical_records[0].document_url(), &initial_url);
                     assert_eq!(historical_records[0].url(), &old_request_url);
@@ -680,10 +680,8 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                         current.action.document_effect,
                         PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
                     );
-                    assert!(
-                        page_vm.vm().subresource_activity_epoch() > activity_epoch_before,
-                        "only the replacement terminal should count as current activity"
-                    );
+                    assert_eq!(page_vm.vm().subresource_activity_epoch(), activity_epoch_before,
+                        "module-map application must not duplicate physical response activity");
                     assert_eq!(
                         page_vm
                             .vm()
@@ -702,8 +700,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_main_modulepreload_targe
                         modulepreload_performance_summary(&mut page_vm, &old_request_url)?,
                         ""
                     );
-                    let (current_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "applying the module map must not duplicate current network records");
                     assert_eq!(current_records.len(), 1);
                     assert_eq!(current_records[0].document_url(), &replacement_document_url);
                     assert_eq!(current_records[0].url(), &replacement_request_url);
@@ -736,22 +733,12 @@ async fn main_modulepreload_source_consumes_one_terminal_per_turn_in_fifo_order(
         enqueue_modulepreload_completion(
             &mut queue,
             root_document,
-            modulepreload_completion(
-                first_target,
-                document_url.clone(),
-                first_url,
-                Ok("export const first = true;"),
-            ),
+            modulepreload_completion(first_target, first_url, Ok("export const first = true;")),
         );
         enqueue_modulepreload_completion(
             &mut queue,
             root_document,
-            modulepreload_completion(
-                second_target,
-                document_url,
-                second_url,
-                Ok("export const second = true;"),
-            ),
+            modulepreload_completion(second_target, second_url, Ok("export const second = true;")),
         );
 
         let first = page_vm

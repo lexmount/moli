@@ -17,29 +17,34 @@ mod handle;
 mod inspector_task_runner;
 mod module_mime;
 mod module_runtime;
+mod network_transfer;
+mod parent_output;
+pub(crate) use parent_output::{WorkerNetworkObserver, WorkerParentSender};
 mod script_loading;
 mod script_mime;
 mod thread;
+mod thread_owner;
 mod timer_callback;
 
 pub(crate) use data_url::decode_data_url_script_source;
 pub(crate) use global_scope::{
-    NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerWebCryptoCompletion,
-    cancel_worker_opfs_task, check_worker_websocket_csp, close_worker_websocket,
-    dispatch_worker_trusted_types_sink_violation_event,
+    NestedWorkerContext, WORKER_STATE_SLOT, WorkerOpfsCompletion, WorkerResponseSender,
+    WorkerWebCryptoCompletion, cancel_worker_opfs_task, check_worker_websocket_csp,
+    close_worker_websocket, dispatch_worker_trusted_types_sink_violation_event,
     ensure_worker_opfs_directory_iterator_registry, ensure_worker_opfs_handle_registry,
     forget_nested_worker_context, forget_worker_broadcast_channel_wrapper,
-    forget_worker_message_port_wrapper, get_worker_state,
-    register_worker_broadcast_channel_wrapper, register_worker_message_port_wrapper,
-    register_worker_opfs_iterator_task, register_worker_opfs_move_task, register_worker_opfs_task,
-    register_worker_webcrypto_task, register_worker_websocket, reserve_nested_worker_context,
-    send_worker_websocket_binary, send_worker_websocket_text, service_worker_runtime_identity,
-    try_worker_xhr_abort_callback, try_worker_xhr_reschedule_timeout_after_timeout_change,
-    try_worker_xhr_send_callback, worker_allows_trusted_type_policy_name,
-    worker_allows_trusted_types_eval, worker_broadcast_channel_registry,
-    worker_broadcast_channel_storage_key, worker_broadcast_channel_wake_sender,
-    worker_broadcast_channel_wrapper, worker_current_script_url, worker_global_is_closed,
-    worker_message_port_registry, worker_message_port_wake_sender, worker_message_port_wrapper,
+    forget_worker_message_port_wrapper, get_worker_state, install_nested_worker_handle,
+    post_nested_worker_message, register_worker_broadcast_channel_wrapper,
+    register_worker_message_port_wrapper, register_worker_opfs_iterator_task,
+    register_worker_opfs_move_task, register_worker_opfs_task, register_worker_webcrypto_task,
+    register_worker_websocket, reserve_nested_worker_context, send_worker_websocket_binary,
+    send_worker_websocket_text, service_worker_runtime_identity, try_worker_xhr_abort_callback,
+    try_worker_xhr_reschedule_timeout_after_timeout_change, try_worker_xhr_send_callback,
+    worker_allows_trusted_type_policy_name, worker_allows_trusted_types_eval,
+    worker_broadcast_channel_registry, worker_broadcast_channel_storage_key,
+    worker_broadcast_channel_wake_sender, worker_broadcast_channel_wrapper,
+    worker_current_script_url, worker_global_is_closed, worker_message_port_registry,
+    worker_message_port_wake_sender, worker_message_port_wrapper,
     worker_notification_permission_state, worker_opfs_directory_iterator_registry,
     worker_opfs_handle_registry, worker_service_worker_control_state, worker_storage_key,
     worker_storage_partition_identity, worker_termination_requested,
@@ -49,10 +54,10 @@ pub(crate) use handle::WorkerMessage;
 pub(crate) use handle::{
     WorkerBootstrapCompletion, WorkerBootstrapFailure, WorkerBootstrapSuccess,
     WorkerConsoleMessage, WorkerErrorPhase, WorkerErrorSource, WorkerFetchHandlerType,
-    WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerPendingSubresourceFetch,
-    WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerRuntimeInspectorMessageBatch,
-    WorkerScriptResource, WorkerScriptResourceKind, WorkerToParentMessage,
-    WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent, worker_secure_context_for_script_url,
+    WorkerParentErrorEventKind, WorkerPendingFetchContinue, WorkerRuntimeEvent,
+    WorkerRuntimeInspectorMessageBatch, WorkerScriptResource, WorkerScriptResourceKind,
+    WorkerToParentMessage, WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+    worker_secure_context_for_script_url,
 };
 pub(crate) use handle::{WorkerDevToolsHandle, WorkerHandle, WorkerNetworkPolicy};
 pub(crate) use module_mime::{
@@ -66,5 +71,6 @@ pub(crate) use script_mime::{
 };
 pub(crate) use thread::{
     WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions,
-    dispatch_current_worker_callback_exception, spawn_worker_with_options,
+    dispatch_current_worker_callback_exception, spawn_dedicated_worker, spawn_worker_with_options,
 };
+pub(crate) use thread_owner::{WorkerThreadOwner, WorkerThreadRegistrar};

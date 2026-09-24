@@ -21,7 +21,7 @@ fn install_child_dynamic_import_target(
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn dynamic_import_terminal_rejects_replaced_realm_and_preserves_script_network_fact() {
+async fn dynamic_import_terminal_rejects_replaced_realm_without_network_effect() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
         let retired_target =
@@ -48,7 +48,6 @@ async fn dynamic_import_terminal_rejects_replaced_realm_and_preserves_script_net
                 retired_target,
                 211,
                 "retired-dynamic-import-realm",
-                Some("retired dynamic import failed"),
             ),
         ));
         let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
@@ -71,7 +70,7 @@ async fn dynamic_import_terminal_rejects_replaced_realm_and_preserves_script_net
         );
         assert_eq!(
             outcome.action.output_effect,
-            PageResourceCompletionOutputEffect::CaptureRequired
+            PageResourceCompletionOutputEffect::None
         );
         assert_eq!(
             page_vm.vm().subresource_activity_epoch(),
@@ -86,35 +85,11 @@ async fn dynamic_import_terminal_rejects_replaced_realm_and_preserves_script_net
             "a stale terminal must not enqueue an owner action on the stable typed source"
         );
 
-        let (network_records, websocket_events, websocket_lifecycle_events) =
-            split_network_output_items(page_vm.vm_mut().take_network_output());
-        assert!(websocket_events.is_empty());
-        assert!(websocket_lifecycle_events.is_empty());
-        assert_eq!(network_records.len(), 1);
-        let network_record = &network_records[0];
-        assert_eq!(
-            network_record.frame_id(),
-            Some("retired-dynamic-import-realm-frame")
+        assert!(
+            page_vm.vm_mut().take_network_output().is_empty(),
+            "business completion must not manufacture Network output"
         );
-        assert_eq!(
-            network_record.document_url().as_str(),
-            "https://retired-dynamic-import-realm.test/document"
-        );
-        assert_eq!(
-            network_record.url().as_str(),
-            "https://retired-dynamic-import-realm.test/module.js"
-        );
-        assert_eq!(
-            network_record.request_initiator_type(),
-            SubresourceRequestInitiatorType::Script,
-            "dynamic import is script initiated, unlike parser/modulepreload fetches"
-        );
-        assert_eq!(
-            network_record.outcome(),
-            &SubresourceNetworkOutcome::Failure {
-                error_text: "retired dynamic import failed".to_owned(),
-            }
-        );
+
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -140,7 +115,6 @@ async fn dynamic_import_source_consumes_one_terminal_per_turn_in_fifo_order() {
                 stale_target,
                 223,
                 "dynamic-import-fifo-first",
-                Some("first dynamic import failed"),
             ),
         ));
         queue.enqueue_local_for_test(RendererPageResourceCompletion::child_dynamic_import_fetch(
@@ -149,7 +123,6 @@ async fn dynamic_import_source_consumes_one_terminal_per_turn_in_fifo_order() {
                 stale_target,
                 227,
                 "dynamic-import-fifo-second",
-                None,
             ),
         ));
         let activity_epoch_before = page_vm.vm().subresource_activity_epoch();
@@ -159,17 +132,10 @@ async fn dynamic_import_source_consumes_one_terminal_per_turn_in_fifo_order() {
             .expect("first dynamic-import terminal should consume one turn");
         assert_eq!(
             first.action.output_effect,
-            PageResourceCompletionOutputEffect::CaptureRequired
+            PageResourceCompletionOutputEffect::None
         );
 
         assert!(queue.has_ready_completion());
-        assert_eq!(
-            split_network_output_items(page_vm.vm_mut().take_network_output())
-                .0
-                .len(),
-            1,
-            "the second terminal must not publish output during the first turn"
-        );
 
         let second = page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?

@@ -1,36 +1,12 @@
 use super::*;
-use crate::{
-    RendererSyntheticResponseBody,
-    shared_worker_runtime::{
-        AppliedSharedWorkerClientErrorTarget, SharedWorkerClientEndpointDisposition,
-        SharedWorkerClientEndpointReceiver,
-    },
-    worker::{WorkerPendingFetchContinue, WorkerPendingXhrContinue},
+use crate::shared_worker_runtime::{
+    AppliedSharedWorkerClientErrorTarget, SharedWorkerClientEndpointDisposition,
+    SharedWorkerClientEndpointReceiver,
 };
-use moli_shared_worker::{SharedWorkerClientOwnerId, SharedWorkerInstanceId};
 
 impl JsContextHost {
     pub(crate) fn browser_context_runtime(&self) -> crate::runtime::RendererBrowserContextRuntime {
         self.browser_context_runtime.clone()
-    }
-
-    pub(crate) fn shared_worker_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.shared_worker_client_owner_id
-    }
-
-    pub(crate) fn shared_worker_client_owner_id_for_child_context(
-        &mut self,
-        handle: DomHandle,
-    ) -> SharedWorkerClientOwnerId {
-        if let Some(owner_id) = self.child_shared_worker_client_owner_ids.get(&handle) {
-            return *owner_id;
-        }
-        let owner_id = self
-            .browser_context_runtime
-            .next_shared_worker_client_owner_id();
-        self.child_shared_worker_client_owner_ids
-            .insert(handle, owner_id);
-        owner_id
     }
 
     pub(crate) fn register_shared_worker_client(
@@ -95,14 +71,12 @@ impl JsContextHost {
     pub(crate) fn close_shared_worker_clients(&mut self) {
         self.shared_worker_clients
             .disconnect_all_for_context_teardown();
-        self.child_shared_worker_client_owner_ids.clear();
     }
 
     pub(crate) fn disconnect_shared_worker_clients_for_child_context(
         &mut self,
         handle: DomHandle,
     ) -> usize {
-        self.child_shared_worker_client_owner_ids.remove(&handle);
         self.shared_worker_clients
             .disconnect_all_for_child_context(handle)
     }
@@ -121,222 +95,5 @@ impl JsContextHost {
     ) -> usize {
         self.shared_worker_clients
             .disconnect_all_for_context_token(context_token)
-    }
-
-    pub(crate) fn continue_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.browser_context_runtime
-            .continue_shared_worker_fetch(instance_id, request)
-    }
-
-    pub(crate) fn continue_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-    ) -> bool {
-        self.browser_context_runtime
-            .continue_shared_worker_xhr(instance_id, request)
-    }
-
-    pub(crate) fn continue_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.browser_context_runtime
-            .continue_shared_worker_csp_report(instance_id, request)
-    }
-
-    pub(crate) fn continue_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        self.browser_context_runtime
-            .continue_shared_worker_fetch_response(
-                instance_id,
-                request,
-                response_code,
-                response_headers,
-            )
-    }
-
-    pub(crate) fn continue_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        self.browser_context_runtime
-            .continue_shared_worker_xhr_response(
-                instance_id,
-                request,
-                response_code,
-                response_headers,
-            )
-    }
-
-    pub(crate) fn fail_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_fetch(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fail_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_xhr(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fail_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_csp_report(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fail_shared_worker_fetch_auth(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_fetch_auth(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fail_shared_worker_xhr_auth(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_xhr_auth(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fail_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_fetch_response(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fail_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.browser_context_runtime
-            .fail_shared_worker_xhr_response(instance_id, request, error_text)
-    }
-
-    pub(crate) fn fulfill_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.browser_context_runtime.fulfill_shared_worker_fetch(
-            instance_id,
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        )
-    }
-
-    pub(crate) fn fulfill_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.browser_context_runtime.fulfill_shared_worker_xhr(
-            instance_id,
-            request,
-            response_code,
-            response_headers,
-            response_body,
-        )
-    }
-
-    pub(crate) fn fulfill_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.browser_context_runtime
-            .fulfill_shared_worker_csp_report(
-                instance_id,
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            )
-    }
-
-    pub(crate) fn fulfill_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.browser_context_runtime
-            .fulfill_shared_worker_fetch_response(
-                instance_id,
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            )
-    }
-
-    pub(crate) fn fulfill_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.browser_context_runtime
-            .fulfill_shared_worker_xhr_response(
-                instance_id,
-                request,
-                response_code,
-                response_headers,
-                response_body,
-            )
     }
 }

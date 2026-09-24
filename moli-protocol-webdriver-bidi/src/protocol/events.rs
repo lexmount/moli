@@ -10,8 +10,7 @@ use crate::events::{
     bidi_remote_value_from_cdp_remote_object, bidi_stack_trace_from_cdp, bidi_timestamp_millis,
     browsing_context_history_updated_event, browsing_context_navigation_event,
     log_entry_added_event, log_entry_added_generic_event_from_protocol_message,
-    non_empty_json_string, owner_scoped_service_worker_realm_id_from_protocol_context,
-    owner_scoped_shared_worker_realm_id_from_protocol_context,
+    non_empty_json_string, runtime_realm_id_from_protocol_context,
 };
 
 use super::event_manager::BidiBufferedEventStore;
@@ -492,24 +491,9 @@ impl BidiLogEventState {
                     return;
                 };
                 let aux_data = &context["auxData"];
-                let realm = owner_scoped_shared_worker_realm_id_from_protocol_context(
-                    context,
-                    aux_data,
-                    owner_context,
-                )
-                .or_else(|| {
-                    owner_scoped_service_worker_realm_id_from_protocol_context(
-                        aux_data,
-                        owner_context,
-                    )
-                })
-                .or_else(|| {
-                    context
-                        .get("uniqueId")
-                        .and_then(Value::as_str)
-                        .map(str::to_owned)
-                })
-                .unwrap_or_else(|| execution_context_id.to_string());
+                let realm =
+                    runtime_realm_id_from_protocol_context(context, aux_data, owner_context)
+                        .unwrap_or_else(|| execution_context_id.to_string());
                 let browsing_context = owner_context
                     .map(str::to_owned)
                     .or_else(|| context["auxData"]["frameId"].as_str().map(str::to_owned));

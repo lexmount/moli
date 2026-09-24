@@ -463,7 +463,7 @@ impl ServiceWorkerRuntimeService {
                 self.dispatch_lifecycle_event(host, event);
             }
             LifecycleProgress::TerminateHost(host) => {
-                host.terminate_without_join();
+                host.terminate();
             }
             LifecycleProgress::ScheduleIdleTimeout(idle_timeout) => {
                 self.schedule_idle_timeout(idle_timeout);

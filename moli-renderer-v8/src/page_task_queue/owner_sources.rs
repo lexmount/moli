@@ -1678,7 +1678,14 @@ impl RendererPageTaskProducerRoutes {
         &self,
         root_document: RendererDocumentToken,
     ) -> RendererWorkerHostBridgeEventSender {
-        RendererWorkerHostBridgeEventSender::new(self.networking.clone(), root_document)
+        RendererWorkerHostBridgeEventSender::new(
+            self.networking.clone(),
+            root_document,
+            self.dedicated_worker_client_event
+                .sender(root_document)
+                .page_token()
+                .local_host_id(),
+        )
     }
 
     pub(crate) fn webcrypto_task_sender(
@@ -2389,10 +2396,6 @@ impl crate::page_resource_completion::RendererPageResourceCompletionTestSource
         RendererPageResourceCompletion,
     )> {
         RendererPageResourceCompletionTestSource::pop_front(self)
-    }
-
-    fn has_ready_completion(&mut self) -> bool {
-        RendererPageResourceCompletionTestSource::has_ready_completion(self)
     }
 }
 

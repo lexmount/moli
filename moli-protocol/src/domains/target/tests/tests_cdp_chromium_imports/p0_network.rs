@@ -801,6 +801,8 @@ async fn rust_cdp_p0_document_response_stage_get_body_then_continue() {
     );
 
     continue_paused_response(&mut ctx, &page, 155_008, &paused).await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 155_006, Some(&page.session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 155_006);
     assert_eq!(navigation["result"]["frameId"], page.target_id);
     assert!(
@@ -861,6 +863,8 @@ async fn rust_cdp_p0_document_response_stage_fulfill_overrides_body() {
     )
     .await;
 
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 156_006, Some(&page.session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 156_006);
     assert_eq!(navigation["result"]["frameId"], page.target_id);
     let text = page
@@ -908,6 +912,14 @@ async fn rust_cdp_p0_document_response_stage_fail_aborts_navigation() {
     .await;
     fail_paused_response(&mut ctx, &page, 157_007, &paused).await;
 
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "original navigation reply",
+        |message| {
+            message["id"] == json!(157_006) && message["sessionId"] == json!(&page.session_id)
+        },
+    )
+    .await;
     ctx.expect_error(157_006, -32000, "Aborted");
     let network_id = paused["params"]["networkId"]
         .as_str()
@@ -961,6 +973,8 @@ async fn rust_cdp_p0_document_redirect_response_stage_get_body_then_continue() {
     );
 
     continue_paused_response(&mut ctx, &page, 160_008, &paused).await;
+    crate::testing::wait_until_navigation_document_load(&mut ctx, 160_006, Some(&page.session_id))
+        .await;
     let navigation = take_response_by_id(&mut ctx, 160_006);
     assert_eq!(navigation["result"]["frameId"], page.target_id);
     assert!(
@@ -1415,7 +1429,8 @@ async fn rust_cdp_p0_fetch_response_stage_binary_stream_body() {
 }
 
 // P0 browser contract source:
-// Playwright CDPSession response-stage stream offset and IO.close behavior.
+// Chromium 145.0.7632.116: Fetch response streams reject explicit offsets,
+// including zero, without advancing their sequential cursor (2026-09-15 probe).
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_p0_fetch_response_stage_stream_offset_and_close() {
     let fixture = SmokeFixtureServer::start().await;
@@ -1456,26 +1471,18 @@ async fn rust_cdp_p0_fetch_response_stage_stream_offset_and_close() {
     let request_id = paused_request_id(&paused);
     let handle = open_paused_response_stream(&mut ctx, &page, 146_008, &request_id).await;
 
-    let offset_chunk =
-        read_response_stream(&mut ctx, &page, 146_009, &handle, Some(9), Some(5)).await;
-    assert_eq!(
-        offset_chunk["result"]["data"],
-        json!("stage"),
-        "{offset_chunk}"
-    );
-    assert_eq!(
-        offset_chunk["result"]["base64Encoded"],
-        json!(false),
-        "{offset_chunk}"
-    );
-    assert_eq!(
-        offset_chunk["result"]["eof"],
-        json!(false),
-        "{offset_chunk}"
-    );
+    for (command_id, offset) in [(146_009, 9), (146_017, 0)] {
+        let rejected =
+            read_response_stream(&mut ctx, &page, command_id, &handle, Some(offset), Some(5)).await;
+        assert_eq!(rejected["error"]["code"], json!(-32000), "{rejected}");
+        assert_eq!(
+            rejected["error"]["message"],
+            json!("OffsetNotSupportedForStream"),
+            "{rejected}"
+        );
+    }
 
-    let first_chunk =
-        read_response_stream(&mut ctx, &page, 146_010, &handle, Some(0), Some(8)).await;
+    let first_chunk = read_response_stream(&mut ctx, &page, 146_010, &handle, None, Some(8)).await;
     assert_eq!(
         first_chunk["result"]["data"],
         json!("response"),

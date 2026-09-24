@@ -1,5 +1,4 @@
 mod main_dynamic_import_graph;
-mod main_module_fetch;
 mod main_modulepreload;
 mod main_parser_module_graph;
 mod main_runtime_module_graph;
@@ -24,7 +23,6 @@ impl Error for RendererResourceCompletionRouteClosed {}
 pub(crate) use self::main_dynamic_import_graph::{
     MainDynamicImportGraphFetchCompletion, MainDynamicImportGraphFetchTarget,
 };
-pub(crate) use self::main_module_fetch::MainModuleFetchNetworkAttribution;
 pub(crate) use self::main_modulepreload::{
     MainModulepreloadFetchCompletion, MainModulepreloadFetchTarget,
 };
@@ -40,10 +38,7 @@ pub(crate) use self::owner::{
 pub(crate) use self::sender::RendererPageResourceCompletionSender;
 #[cfg(test)]
 pub(crate) use self::sender::RendererPageResourceCompletionTestSource;
-pub(crate) use self::terminal::{
-    MainParserDeferredClassicSourceNetworkAttribution, RendererPageResourceCompletion,
-    RendererPageResourceTerminal,
-};
+pub(crate) use self::terminal::{RendererPageResourceCompletion, RendererPageResourceTerminal};
 pub(crate) use self::turn::{
     PageResourceCompletionBodyActivity, PageResourceCompletionDocumentEffect,
     PageResourceCompletionOutputEffect, PageResourceCompletionPostCheckpointEffect,

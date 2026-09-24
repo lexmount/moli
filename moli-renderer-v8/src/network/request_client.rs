@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    num::NonZeroU64,
     sync::{Arc, mpsc},
     thread,
     time::Instant,
@@ -19,10 +20,12 @@ use moli_parkable_image::ParkableImageManager;
 use crate::{protocol_types::OptionalResourceFetchMask, types::SubresourceResourceType};
 
 use super::{
+    ResourceResponseFailure, ResourceResponseObserver, ResourceResponseResult,
     backend::{
         BrowserResourceRuntime, BrowserResourceRuntimeDiagnostics, BrowserResourceRuntimeOwner,
-        BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, ScriptTextCacheLookup,
-        SharedMemoryResourceCacheDiagnostics, raw_subresource_memory_cache_expiry,
+        BrowserResourceRuntimeOwnerRoot, RawSubresourceCacheKey, ScriptTextCacheKey,
+        ScriptTextCacheLookup, ScriptTextLoadScope, SharedMemoryResourceCacheDiagnostics,
+        SharedScriptTextLoad, raw_subresource_memory_cache_expiry,
         raw_subresource_memory_cache_key, script_text_cache_key,
         script_text_request_is_memory_cacheable,
     },
@@ -35,6 +38,7 @@ pub struct ResourceRequestClient {
     resource_runtime: BrowserResourceRuntime,
     page_network_policy: PageNetworkPolicy,
     browser_site_context: Option<Arc<BrowserCookieFacadeContext>>,
+    load_context_id: Option<NonZeroU64>,
 }
 
 /// Thread-affine lifetime root for a standalone resource request client.
@@ -119,7 +123,29 @@ impl ResourceRequestClient {
             resource_runtime,
             page_network_policy,
             browser_site_context: None,
+            load_context_id: None,
         }
+    }
+
+    pub(in crate::network) fn with_load_context(
+        mut self,
+        registry: &loads::ResourceLoadRegistry,
+    ) -> Self {
+        self.load_context_id = Some(
+            NonZeroU64::new(registry.id()).expect("resource load registry identity is nonzero"),
+        );
+        self
+    }
+
+    fn script_load_scope(&self) -> ScriptTextLoadScope {
+        self.load_context_id.map_or_else(
+            || {
+                ScriptTextLoadScope::UnboundRuntime(
+                    self.resource_runtime.runtime_id_for_diagnostics(),
+                )
+            },
+            |id| ScriptTextLoadScope::Context(id.get()),
+        )
     }
 
     pub(crate) fn with_browser_site_context(
@@ -151,12 +177,10 @@ impl ResourceRequestClient {
     }
 
     pub(crate) fn frozen_request_client(&self) -> Self {
-        let mut client = Self::from_browser_resource_runtime_with_page_network_policy(
-            self.resource_runtime.clone(),
-            self.page_network_policy.frozen_request_view(),
-        );
-        client.browser_site_context = self.browser_site_context.clone();
-        client
+        Self {
+            page_network_policy: self.page_network_policy.frozen_request_view(),
+            ..self.clone()
+        }
     }
 
     pub fn shares_page_network_policy_with(&self, other: &Self) -> bool {
@@ -218,10 +242,19 @@ impl ResourceRequestClient {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.fetch_raw_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel_and_network_metadata(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let request = self.apply_network_policy(request)?;
         self.resource_runtime
             .client()
-            .fetch_raw_with_network_metadata(request)
+            .fetch_raw_with_cancel_and_network_metadata(request, cancel_handle)
             .await
     }
 
@@ -259,213 +292,22 @@ impl ResourceRequestClient {
             .await
     }
 
-    pub(crate) async fn fetch_text_stream_with_network_metadata(
-        &self,
-        request: Request,
-    ) -> Result<NetworkFetchResult<Response>> {
-        self.fetch_text_stream_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
-            .await
-    }
-
-    pub(crate) async fn fetch_text_stream_with_cancel_and_network_metadata(
-        &self,
-        request: Request,
-        cancel_handle: FetchCancelHandle,
-    ) -> Result<NetworkFetchResult<Response>> {
-        let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
-            return self
-                .resource_runtime
-                .client()
-                .fetch_with_cancel_and_network_metadata(request, cancel_handle)
-                .await;
-        }
-
-        let observed = self
-            .fetch_raw_stream_with_cancel_after_policy_and_network_metadata(request, cancel_handle)
-            .await?;
-        let (response, observation_journal) = observed.into_parts_with_observation_journal();
-        let response = collect_streaming_raw_response_as_text(response).await?;
-        Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            observation_journal,
-        ))
-    }
-
-    pub(crate) async fn fetch_cacheable_script_text_stream(
-        &self,
-        request: Request,
-    ) -> Result<Response> {
-        let request = self.apply_network_policy(request)?;
-        if let Some(result) = local_text_response(&request) {
-            return result;
-        }
-        let timing_enabled = moli_trace::cdp_nav_timing_enabled();
-        let timing_url = timing_enabled.then(|| request.url.to_string());
-        if !script_text_request_is_memory_cacheable(&request) {
-            let started = timing_enabled.then(Instant::now);
-            if let Some(url) = timing_url.as_deref() {
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url,
-                    cacheable = false,
-                    cache_role = "direct",
-                    stage = "script_text_request_start",
-                );
-            }
-            let result = self
-                .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
-                .await;
-            if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-                let status = result.as_ref().ok().map(|response| response.status);
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url,
-                    cacheable = false,
-                    cache_role = "direct",
-                    status,
-                    ok = result.is_ok(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    stage = "script_text_request_done",
-                );
-            }
-            return result;
-        }
-
-        let page_cache_partition_id = self.page_network_policy.memory_cache_partition_id();
-        if let Some(url) = timing_url.as_deref() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                page_cache_partition_id,
-                credentials_mode = request.credentials_mode.as_ref(),
-                cookie_context = ?request.cookie_context,
-                stage = "script_text_cache_lookup",
-            );
-        }
-        let key = script_text_cache_key(&request).for_page_cache_partition(page_cache_partition_id);
-        let lookup = {
-            let mut cache = self.resource_runtime.memory_cache().lock();
-            if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone())
-            } else {
-                cache.replace_script_text(key.clone())
-            }
-        };
-
-        let load = match lookup {
-            ScriptTextCacheLookup::Owner(load) => load,
-            ScriptTextCacheLookup::PendingWaiter(load) => {
-                let started = timing_enabled.then(Instant::now);
-                if let Some(url) = timing_url.as_deref() {
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url,
-                        cacheable = true,
-                        cache_role = "waiter",
-                        stage = "script_text_cache_wait_start",
-                    );
-                }
-                let result = load.wait().await.map_err(anyhow::Error::msg);
-                if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-                    let status = result.as_ref().ok().map(|response| response.status);
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url,
-                        cacheable = true,
-                        cache_role = "waiter",
-                        status,
-                        ok = result.is_ok(),
-                        elapsed_ms = started.elapsed().as_millis(),
-                        stage = "script_text_cache_wait_done",
-                    );
-                }
-                return result;
-            }
-            ScriptTextCacheLookup::CompletedHit(result) => {
-                let result = result
-                    .map(response_with_memory_cache_hit)
-                    .map_err(anyhow::Error::msg);
-                if let Some(url) = timing_url.as_deref() {
-                    let status = result.as_ref().ok().map(|response| response.status);
-                    tracing::info!(
-                        target: "moli_cdp_nav_timing",
-                        url,
-                        cacheable = true,
-                        cache_role = "hit",
-                        status,
-                        ok = result.is_ok(),
-                        stage = "script_text_cache_hit",
-                    );
-                }
-                return result;
-            }
-        };
-
-        let started = timing_enabled.then(Instant::now);
-        if let Some(url) = timing_url.as_deref() {
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                cache_role = "owner",
-                stage = "script_text_request_start",
-            );
-        }
-        let cache_request = request.clone();
-        let result = self
-            .fetch_text_stream_with_cancel_after_policy(request, FetchCancelHandle::new())
-            .await
-            .map_err(|error| format!("{error:#}"));
-        if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-            let status = result.as_ref().ok().map(|response| response.status);
-            tracing::info!(
-                target: "moli_cdp_nav_timing",
-                url,
-                cacheable = true,
-                cache_role = "owner",
-                status,
-                ok = result.is_ok(),
-                elapsed_ms = started.elapsed().as_millis(),
-                stage = "script_text_request_done",
-            );
-        }
-        self.resource_runtime
-            .memory_cache()
-            .lock()
-            .complete_script_text(&key, &load, &cache_request, &result);
-        load.finish(result.clone());
-        result.map_err(anyhow::Error::msg)
-    }
-
     pub(crate) fn fetch_cacheable_script_text_callback_with_load<F>(
         &self,
         request: Request,
         resource_load: loads::ResourceLoadLease,
+        observer: Option<Arc<dyn ResourceResponseObserver>>,
         callback: F,
     ) -> Result<()>
     where
-        F: FnOnce(Result<Response>) + Send + 'static,
-    {
-        self.fetch_cacheable_script_text_callback_inner(request, resource_load, callback)
-    }
-
-    fn fetch_cacheable_script_text_callback_inner<F>(
-        &self,
-        request: Request,
-        resource_load: loads::ResourceLoadLease,
-        callback: F,
-    ) -> Result<()>
-    where
-        F: FnOnce(Result<Response>) + Send + 'static,
+        F: FnOnce(ResourceResponseResult) + Send + 'static,
     {
         let request = self.apply_network_policy(request)?;
         if let Some(result) = local_text_response(&request) {
             let task_runner = resource_load.task_runner();
             task_runner.spawn(async move {
                 resource_load.finish();
-                callback(result);
+                callback(result.map_err(Into::into));
             });
             return Ok(());
         }
@@ -482,34 +324,23 @@ impl ResourceRequestClient {
                     stage = "script_text_request_start",
                 );
             }
-            let cancel_handle = FetchCancelHandle::new();
-            resource_load.attach_cancel_handle(cancel_handle.clone());
-            let callback_resource_load = resource_load.clone();
-            let started_fetch = self.fetch_text_callback_with_cancel_after_policy(
-                request,
-                cancel_handle,
-                move |result| {
-                    callback_resource_load.finish();
-                    if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
-                        let status = result.as_ref().ok().map(|response| response.status);
-                        tracing::info!(
-                            target: "moli_cdp_nav_timing",
-                            url,
-                            cacheable = false,
-                            cache_role = "direct-callback",
-                            status,
-                            ok = result.is_ok(),
-                            elapsed_ms = started.elapsed().as_millis(),
-                            stage = "script_text_request_done",
-                        );
-                    }
-                    callback(result);
-                },
-            );
-            if started_fetch.is_err() {
-                resource_load.finish();
-            }
-            return started_fetch;
+            self.start_script_text_fetch(request, resource_load, observer, move |result| {
+                if let (Some(started), Some(url)) = (started, timing_url.as_deref()) {
+                    let status = result.as_ref().ok().map(|response| response.status);
+                    tracing::info!(
+                        target: "moli_cdp_nav_timing",
+                        url,
+                        cacheable = false,
+                        cache_role = "direct-callback",
+                        status,
+                        ok = result.is_ok(),
+                        elapsed_ms = started.elapsed().as_millis(),
+                        stage = "script_text_request_done",
+                    );
+                }
+                callback(result);
+            });
+            return Ok(());
         }
 
         let page_cache_partition_id = self.page_network_policy.memory_cache_partition_id();
@@ -528,9 +359,13 @@ impl ResourceRequestClient {
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
             if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone())
+                cache.lookup_script_text(key.clone(), self.script_load_scope(), |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
             } else {
-                cache.replace_script_text(key.clone())
+                cache.replace_script_text(key.clone(), self.script_load_scope())
             }
         };
 
@@ -538,9 +373,7 @@ impl ResourceRequestClient {
             ScriptTextCacheLookup::Owner(load) => (load, true),
             ScriptTextCacheLookup::PendingWaiter(load) => (load, false),
             ScriptTextCacheLookup::CompletedHit(result) => {
-                let result = result
-                    .map(response_with_memory_cache_hit)
-                    .map_err(anyhow::Error::msg);
+                let result = result.map(response_with_memory_cache_hit);
                 resource_load.finish();
                 if let Some(url) = timing_url.as_deref() {
                     let status = result.as_ref().ok().map(|response| response.status);
@@ -576,72 +409,153 @@ impl ResourceRequestClient {
         }
         let callback_resource_load = resource_load.clone();
         let callback_timing_url = timing_url.clone();
-        let consumer = load.wait_callback(Box::new(move |result| {
-            callback_resource_load.finish();
-            if let (Some(started), Some(url)) = (started, callback_timing_url.as_deref()) {
-                let status = result.as_ref().ok().map(|response| response.status);
-                tracing::info!(
-                    target: "moli_cdp_nav_timing",
-                    url,
-                    cacheable = true,
-                    cache_role,
-                    status,
-                    ok = result.is_ok(),
-                    elapsed_ms = started.elapsed().as_millis(),
-                    stage = "script_text_cache_wait_done",
-                );
-            }
-            callback(result.map_err(anyhow::Error::msg));
-        }));
+        let consumer = load.wait_callback(
+            observer,
+            Box::new(move |result| {
+                callback_resource_load.finish();
+                if let (Some(started), Some(url)) = (started, callback_timing_url.as_deref()) {
+                    let status = result.as_ref().ok().map(|response| response.status);
+                    tracing::info!(
+                        target: "moli_cdp_nav_timing",
+                        url,
+                        cacheable = true,
+                        cache_role,
+                        status,
+                        ok = result.is_ok(),
+                        elapsed_ms = started.elapsed().as_millis(),
+                        stage = "script_text_cache_wait_done",
+                    );
+                }
+                callback(result);
+            }),
+        );
         if let Some(consumer) = consumer {
             resource_load.attach_consumer_cancel(move || consumer.cancel());
         }
         if !owns_transport {
             return Ok(());
         }
+        self.start_script_text_cache_transport(request, key, load, resource_load.task_runner());
+        Ok(())
+    }
 
-        let request_client = self.clone();
-        let owner_load = Arc::clone(&load);
-        if let Some(url) = timing_url.as_deref() {
+    fn start_script_text_cache_transport(
+        &self,
+        request: Request,
+        key: ScriptTextCacheKey,
+        load: SharedScriptTextLoad,
+        task_runner: super::RendererResourceTaskRunner,
+    ) {
+        if moli_trace::cdp_nav_timing_enabled() {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
-                url,
+                url = request.url.as_str(),
                 cacheable = true,
-                cache_role = "owner-callback",
                 stage = "script_text_request_start",
             );
         }
-        let cache_request = request.clone();
-        let callback_cache_request = cache_request.clone();
-        let callback_key = key.clone();
+        let request_client = self.clone();
         let cancel_handle = FetchCancelHandle::new();
         load.attach_transport_cancel(cancel_handle.clone());
-        if let Err(error) = self.fetch_text_callback_with_cancel_after_policy(
-            request,
-            cancel_handle,
-            move |result| {
-                let result = result.map_err(|error| format!("{error:#}"));
-                request_client
-                    .resource_runtime
-                    .memory_cache()
-                    .lock()
-                    .complete_script_text(
-                        &callback_key,
-                        &owner_load,
-                        &callback_cache_request,
-                        &result,
-                    );
-                owner_load.finish(result.clone());
-            },
-        ) {
-            let result = Err(format!("{error:#}"));
-            self.resource_runtime
-                .memory_cache()
-                .lock()
-                .complete_script_text(&key, &load, &cache_request, &result);
-            load.finish(result);
-        }
+        task_runner.spawn(async move {
+            let result = request_client
+                .fetch_observed_script_text_after_policy(
+                    request.clone(),
+                    cancel_handle,
+                    Some(load.as_ref()),
+                )
+                .await;
+            request_client.complete_script_text_cache_transport(key, load, request, result);
+        });
+    }
+
+    fn complete_script_text_cache_transport(
+        &self,
+        key: ScriptTextCacheKey,
+        load: SharedScriptTextLoad,
+        request: Request,
+        result: ResourceResponseResult,
+    ) {
+        self.resource_runtime
+            .memory_cache()
+            .lock()
+            .complete_script_text(
+                &key,
+                &load,
+                &request,
+                &result,
+                result.as_ref().ok().and_then(|response| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers(&request, &response.headers)
+                }),
+            );
+        load.finish(result);
+    }
+
+    /// Classic importScripts keeps its existing non-script-cache behavior but
+    /// shares the same frozen load, executor and physical stream observation.
+    pub(crate) fn fetch_script_text_callback_with_load<F>(
+        &self,
+        request: Request,
+        resource_load: loads::ResourceLoadLease,
+        observer: Arc<dyn ResourceResponseObserver>,
+        callback: F,
+    ) -> Result<()>
+    where
+        F: FnOnce(ResourceResponseResult) + Send + 'static,
+    {
+        let request = self.apply_network_policy(request)?;
+        self.start_script_text_fetch(request, resource_load, Some(observer), callback);
         Ok(())
+    }
+
+    fn start_script_text_fetch<F>(
+        &self,
+        request: Request,
+        resource_load: loads::ResourceLoadLease,
+        observer: Option<Arc<dyn ResourceResponseObserver>>,
+        callback: F,
+    ) where
+        F: FnOnce(ResourceResponseResult) + Send + 'static,
+    {
+        let client = self.clone();
+        let cancel = FetchCancelHandle::new();
+        resource_load.attach_cancel_handle(cancel.clone());
+        resource_load.task_runner().spawn(async move {
+            let result = client
+                .fetch_observed_script_text_after_policy(request, cancel, observer.as_deref())
+                .await;
+            resource_load.finish();
+            callback(result);
+        });
+    }
+
+    pub(crate) async fn fetch_observed_script_text_with_cancel(
+        &self,
+        request: Request,
+        cancel: FetchCancelHandle,
+        observer: &dyn ResourceResponseObserver,
+    ) -> ResourceResponseResult {
+        let request = self.apply_network_policy(request)?;
+        self.fetch_observed_script_text_after_policy(request, cancel, Some(observer))
+            .await
+    }
+
+    async fn fetch_observed_script_text_after_policy(
+        &self,
+        request: Request,
+        cancel: FetchCancelHandle,
+        observer: Option<&dyn ResourceResponseObserver>,
+    ) -> ResourceResponseResult {
+        if let Some(result) = local_text_response(&request) {
+            return result.map_err(Into::into);
+        }
+        let observed = self
+            .fetch_raw_stream_with_cancel_after_policy_and_network_metadata(request, cancel)
+            .await
+            .map_err(ResourceResponseFailure::from)?;
+        super::resource_response::collect_observed_response(observed, observer).await
     }
 
     async fn fetch_text_stream_with_cancel_after_policy(
@@ -649,19 +563,6 @@ impl ResourceRequestClient {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
-            // Challenge-response schemes still need libcurl's buffered auth
-            // retry behavior until the streaming collector models
-            // intermediate authentication challenges explicitly. Manual
-            // redirect callers need the intermediate 3xx response before raw
-            // streaming starts.
-            return self
-                .resource_runtime
-                .client()
-                .fetch_with_cancel(request, cancel_handle)
-                .await;
-        }
-
         let response = self
             .fetch_raw_stream_with_cancel_after_policy(request, cancel_handle)
             .await?;
@@ -704,7 +605,11 @@ impl ResourceRequestClient {
                 .resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
         {
             return streaming_raw_response_from_cached_subresource(cached);
         }
@@ -742,7 +647,11 @@ impl ResourceRequestClient {
                 .resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
         {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_cached_subresource(cached)?,
@@ -754,7 +663,42 @@ impl ResourceRequestClient {
             .client()
             .fetch_raw_stream_with_cancel_and_network_metadata(request.clone(), cancel_handle)
             .await?;
-        let (response, observation_journal) = observed.into_parts_with_observation_journal();
+        let (mut response, observation_journal) = observed.into_parts_with_observation_journal();
+        let redirect_count = response.redirect_chain.len();
+        for (index, redirect) in response.redirect_chain.iter_mut().enumerate() {
+            if redirect.from_cache {
+                continue;
+            }
+            let Some(exchange) = observation_journal
+                .redirect_exchange_group(redirect_count, index)
+                .and_then(|group| group.last())
+            else {
+                continue;
+            };
+            let Some(observed) = exchange
+                .response()
+                .filter(|head| head.status() == redirect.status)
+            else {
+                continue;
+            };
+            // Preserve the physical hop before consumers keep only the final
+            // response. Cookie lookup alone cannot prove an HTTP exchange.
+            redirect.response_extra_info = Some(moli_fetch::NetworkResponseExtraInfo {
+                request_extra_info: moli_fetch::NetworkRequestExtraInfo {
+                    headers: exchange.request().headers().to_vec(),
+                    cookie_report: exchange
+                        .request()
+                        .cookie_report()
+                        .cloned()
+                        .unwrap_or_default(),
+                },
+                status: observed.status(),
+                headers: observed.headers().to_vec(),
+                cookie_set_reports: redirect.cookie_set_reports.clone(),
+            });
+            redirect.network_extra_info_available = true;
+            redirect.redirect_has_extra_info = true;
+        }
         let response = response.with_lifetime_lease(self.resource_runtime.clone());
         let response = if let Some(cache_key) = cache_key {
             self.tee_raw_subresource_response_for_memory_cache(request, cache_key, response)
@@ -836,11 +780,19 @@ impl ResourceRequestClient {
                 let materialized = RawResponse::from_head_and_body(response.head(), body);
                 if let Some(expires_at_unix_ms) =
                     raw_subresource_memory_cache_expiry(&request, &materialized)
+                    && let Some(vary_headers) = resource_runtime
+                        .client()
+                        .cache_vary_headers(&request, &materialized.headers)
                 {
                     resource_runtime
                         .memory_cache()
                         .lock()
-                        .insert_raw_subresource(cache_key, materialized, expires_at_unix_ms);
+                        .insert_raw_subresource(
+                            cache_key,
+                            materialized,
+                            expires_at_unix_ms,
+                            vary_headers,
+                        );
                 }
             }
 
@@ -871,44 +823,6 @@ impl ResourceRequestClient {
         )
     }
 
-    pub(crate) fn fetch_text_for_worker_blocking_boundary(
-        &self,
-        request: Request,
-    ) -> Result<Response> {
-        self.fetch_text_for_worker_blocking_boundary_with_cancel(request, FetchCancelHandle::new())
-    }
-
-    pub(crate) fn fetch_text_for_worker_blocking_boundary_with_cancel(
-        &self,
-        request: Request,
-        cancel_handle: FetchCancelHandle,
-    ) -> Result<Response> {
-        let request_client = self.clone();
-        let (response_tx, response_rx) = mpsc::sync_channel(1);
-        thread::Builder::new()
-            .name("lm-worker-script-fetch".to_owned())
-            .spawn(move || {
-                // importScripts() and module-worker graph loading are
-                // synchronous script boundaries. Run the async request client on a
-                // helper runtime and use the text streaming path before the
-                // final source string materialization.
-                let result = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .context("failed to build worker script fetch runtime")
-                    .and_then(|runtime| {
-                        runtime.block_on(
-                            request_client.fetch_text_stream_with_cancel(request, cancel_handle),
-                        )
-                    });
-                let _ = response_tx.send(result);
-            })
-            .context("failed to spawn worker script fetch thread")?;
-        response_rx
-            .recv()
-            .context("worker script fetch thread dropped response channel")?
-    }
-
     pub(crate) fn fetch_raw_for_blocking_boundary(&self, request: Request) -> Result<RawResponse> {
         let request_client = self.clone();
         let (response_tx, response_rx) = mpsc::sync_channel(1);
@@ -934,23 +848,6 @@ impl ResourceRequestClient {
         cancel_handle: Option<FetchCancelHandle>,
     ) -> Result<Response> {
         let request = self.apply_network_policy(request)?;
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
-            // Digest auth retries are still completed inside libcurl on the
-            // buffered path. Keep auth requests there until the streaming
-            // collector can distinguish intermediate auth challenges from
-            // final responses. Manual redirect callers also need buffered
-            // access to intermediate 3xx responses.
-            return match cancel_handle {
-                Some(cancel_handle) => {
-                    self.resource_runtime
-                        .client()
-                        .fetch_with_cancel(request, cancel_handle)
-                        .await
-                }
-                None => self.resource_runtime.client().fetch(request).await,
-            };
-        }
-
         let cancel_handle = cancel_handle.unwrap_or_default();
         let response = self
             .fetch_raw_stream_with_cancel_after_policy(request, cancel_handle)
@@ -1136,6 +1033,9 @@ fn streaming_raw_response_from_cached_subresource(
     for redirect in &mut head.redirect_chain {
         redirect.from_cache = true;
         redirect.network_extra_info_available = false;
+        redirect.request_extra_info = None;
+        redirect.response_extra_info = None;
+        redirect.redirect_has_extra_info = false;
     }
     streaming_raw_response_from_head_and_body(head, response.clone_body_bytes())
 }
@@ -1155,6 +1055,9 @@ fn response_with_memory_cache_hit(mut response: Response) -> Response {
     for redirect in &mut response.redirect_chain {
         redirect.from_cache = true;
         redirect.network_extra_info_available = false;
+        redirect.request_extra_info = None;
+        redirect.response_extra_info = None;
+        redirect.redirect_has_extra_info = false;
     }
     response
 }

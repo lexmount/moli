@@ -1,15 +1,36 @@
 use super::*;
 use crate::service_worker_runtime::{
-    ServiceWorkerDirectFetchResponse, ServiceWorkerFetchRequest, ServiceWorkerRequestDestination,
-    service_worker_fetch_request_metadata,
+    ServiceWorkerFetchRequest, ServiceWorkerFetchResultSender, ServiceWorkerRequestDestination,
+    ServiceWorkerResourceResponse, service_worker_fetch_request_metadata,
 };
-use crate::types::{
-    AsyncSubresourceFetchEvent, AsyncSubresourceFetchResponseFilter,
-    AsyncSubresourceStreamingChunk, AsyncSubresourceStreamingFinished,
-    AsyncSubresourceStreamingStarted,
-};
+#[cfg(test)]
+use crate::types::AsyncSubresourceFetchEvent;
+use crate::types::AsyncSubresourceFetchResponseFilter;
 
 const MAX_SERVICE_WORKER_SYNTHETIC_REDIRECTS: usize = 20;
+
+struct ServiceWorkerResourceFetchLease {
+    service: WeakServiceWorkerRuntimeService,
+    runner: crate::network::RendererResourceTaskRunner,
+    cancel: moli_fetch::FetchCancelHandle,
+}
+
+impl Drop for ServiceWorkerResourceFetchLease {
+    fn drop(&mut self) {
+        let service = self.service.clone();
+        let cancel = self.cancel.clone();
+        // A future or body can be dropped under the service lock. Abort only
+        // this admission, even if a synthetic redirect has replaced its event.
+        self.runner.spawn(async move {
+            if let Some(service) = service.upgrade() {
+                service.abort_fetch_matching(
+                    |_, job| job.cancel_handle.shares_scope_with(&cancel),
+                    None,
+                );
+            }
+        });
+    }
+}
 
 fn is_redirect_status(status: u16) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
@@ -77,6 +98,11 @@ pub(super) fn service_worker_network_fallback_request_for_job(
             job.network_context.resource_type,
         ))
         .with_subframe_context(job.network_context.frame_id.is_some());
+    if let Some(resource_type) =
+        crate::network::request_resource_type_for_subresource(job.network_context.resource_type)
+    {
+        request = request.with_resource_type(resource_type);
+    }
     if service_worker_fetch_is_navigation_request(job) {
         let initiator_url = request.cookie_context.initiator_url.clone();
         request = request.with_redirect_mode(moli_fetch::RequestRedirectMode::Follow);
@@ -127,17 +153,16 @@ fn service_worker_fetch_can_forward_stream(
         final_url,
         &response_head.headers,
     )?;
-    Ok(job.direct_completion_tx.is_none()
-        && !matches!(
-            job.network_context.resource_type,
-            crate::types::SubresourceResourceType::Audio
-                | crate::types::SubresourceResourceType::Font
-                | crate::types::SubresourceResourceType::Image
-                | crate::types::SubresourceResourceType::Media
-                | crate::types::SubresourceResourceType::TextTrack
-                | crate::types::SubresourceResourceType::Video
-        )
-        && !is_redirect_status(response_head.status)
+    Ok(!matches!(
+        job.network_context.resource_type,
+        crate::types::SubresourceResourceType::CspReport
+            | crate::types::SubresourceResourceType::Audio
+            | crate::types::SubresourceResourceType::Font
+            | crate::types::SubresourceResourceType::Image
+            | crate::types::SubresourceResourceType::Media
+            | crate::types::SubresourceResourceType::TextTrack
+            | crate::types::SubresourceResourceType::Video
+    ) && !is_redirect_status(response_head.status)
         && matches!(response_head.response_type.as_str(), "default" | "basic")
         && !service_worker_fetch_response_requires_body_security_policy(job))
 }
@@ -172,6 +197,51 @@ fn apply_service_worker_synthetic_redirect(
 }
 
 impl ServiceWorkerRuntimeService {
+    pub(crate) async fn fetch_resource(
+        &self,
+        request: ServiceWorkerFetchRequest,
+        network_context: crate::types::AsyncSubresourceNetworkContext,
+        request_client: &ResourceRequestClient,
+        resource_task_runner: crate::network::RendererResourceTaskRunner,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+    ) -> anyhow::Result<Option<ServiceWorkerResourceResponse>> {
+        let lease = ServiceWorkerResourceFetchLease {
+            service: self.downgrade(),
+            runner: resource_task_runner.clone(),
+            cancel: cancel_handle.clone(),
+        };
+        let (completion, response) = tokio::sync::oneshot::channel();
+        let dispatch = ServiceWorkerFetchDispatch {
+            internal_id: 0,
+            request,
+            cors_preflight_request_headers: Vec::new(),
+            request_cookie_report: None,
+            network_context,
+            result_tx: ServiceWorkerFetchResultSender::Resource(completion),
+            request_client: request_client.clone(),
+            resource_task_runner,
+            cancel_handle,
+        };
+        if !self.dispatch_controlled_fetch(dispatch) {
+            return Ok(None);
+        }
+        match response.await {
+            Ok(ServiceWorkerResourceFetchResult::Fallback) => Ok(None),
+            Ok(ServiceWorkerResourceFetchResult::Response(mut response)) => {
+                response.response = Box::new(
+                    response
+                        .response
+                        .map_response(|response| response.with_lifetime_lease(lease)),
+                );
+                Ok(Some(response))
+            }
+            Ok(ServiceWorkerResourceFetchResult::Failure(error)) => Err(error),
+            Err(_) => Err(anyhow::anyhow!(
+                "ServiceWorker resource response channel closed"
+            )),
+        }
+    }
+
     pub(crate) async fn fetch_main_resource_for_worker_client(
         &self,
         client_id: ServiceWorkerClientId,
@@ -180,7 +250,8 @@ impl ServiceWorkerRuntimeService {
         resource_task_runner: crate::network::RendererResourceTaskRunner,
         destination: ServiceWorkerRequestDestination,
         cancel_handle: moli_fetch::FetchCancelHandle,
-    ) -> Result<Option<crate::protocol_types::NavigationResponse>, String> {
+    ) -> Result<Option<moli_fetch::NetworkFetchResult<moli_fetch::StreamingRawResponse>>, String>
+    {
         if !matches!(request.url.scheme(), "http" | "https") {
             return Ok(None);
         }
@@ -191,12 +262,8 @@ impl ServiceWorkerRuntimeService {
             return Ok(None);
         }
 
-        let completion_tx =
-            crate::page_task_queue::RendererResourceCompletionSender::direct_completion_only();
-        let (direct_completion_tx, direct_completion_rx) = tokio::sync::oneshot::channel();
-        let dispatch = ServiceWorkerFetchDispatch {
-            internal_id: 0,
-            request: ServiceWorkerFetchRequest {
+        self.fetch_resource(
+            ServiceWorkerFetchRequest {
                 client_id,
                 resulting_client_id: Some(client_id),
                 url: request.url.clone(),
@@ -211,9 +278,7 @@ impl ServiceWorkerRuntimeService {
                 is_reload: false,
                 metadata: service_worker_fetch_request_metadata(request),
             },
-            cors_preflight_request_headers: Vec::new(),
-            request_cookie_report: None,
-            network_context: crate::types::AsyncSubresourceNetworkContext {
+            crate::types::AsyncSubresourceNetworkContext {
                 frame_id: None,
                 request_origin: request
                     .browser_origin()
@@ -223,183 +288,236 @@ impl ServiceWorkerRuntimeService {
                 resource_type: crate::types::SubresourceResourceType::Script,
                 policy_context: Default::default(),
             },
-            completion_tx,
-            request_client: request_client.clone(),
+            request_client,
             resource_task_runner,
             cancel_handle,
-            direct_completion_tx: Some(direct_completion_tx),
-        };
-
-        if !self.dispatch_controlled_fetch(dispatch) {
-            return Ok(None);
-        }
-
-        match direct_completion_rx.await {
-            Ok(ServiceWorkerDirectFetchResult::Fallback) => Ok(None),
-            Ok(ServiceWorkerDirectFetchResult::Response(response)) => Ok(Some(*response.response)),
-            Ok(ServiceWorkerDirectFetchResult::Failure(message)) => Err(message),
-            Err(_) => Err(
-                "service worker worker main resource fetch completion channel closed".to_owned(),
-            ),
-        }
+        )
+        .await
+        .map(|response| response.map(|response| *response.response))
+        .map_err(|error| error.to_string())
     }
 
     pub(super) fn dispatch_fetch_fallback(&self, mut job: ServiceWorkerFetchJob) {
         job.cancel_pending_navigation_preload();
-        if let Some(completion_tx) = job.direct_completion_tx.take() {
-            if job.request.redirect_count() != 0 {
-                self.dispatch_direct_fetch_network_fallback(job, completion_tx);
-                return;
-            }
-            let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Fallback);
+        if job.request.redirect_count() == 0
+            && let ServiceWorkerFetchResultSender::Resource(completion_tx) = job.result_tx
+        {
+            let _ = completion_tx.send(ServiceWorkerResourceFetchResult::Fallback);
             return;
         }
-        let request_client = job.request_client.clone();
         let request = service_worker_network_fallback_request_for_job(&job);
-        crate::network_host::spawn_async_subresource_fetch(
-            job.resource_task_runner.clone(),
-            job.completion_tx,
-            request_client,
-            request,
-            Some(job.cancel_handle),
-            job.cors_preflight_request_headers,
-            job.internal_id,
-            job.network_context,
-            job.request.url,
-            job.request.method,
-            job.request.request_headers.clone(),
-            request_body_text(&job.request.body),
-        );
-    }
-
-    fn dispatch_direct_fetch_network_fallback(
-        &self,
-        job: ServiceWorkerFetchJob,
-        completion_tx: tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>,
-    ) {
-        let request_client = job.request_client.clone();
-        let request = service_worker_network_fallback_request_for_job(&job);
-        let cancel_handle = job.cancel_handle.clone();
-        let request_origin = match request.browser_origin() {
-            Ok(origin) => origin.clone(),
-            Err(error) => {
-                let _ =
-                    completion_tx.send(ServiceWorkerDirectFetchResult::Failure(error.to_string()));
-                return;
+        match job.result_tx {
+            ServiceWorkerFetchResultSender::Body(body) => body.complete(
+                Err("ServiceWorker fallback after response headers".into()),
+                None,
+            ),
+            ServiceWorkerFetchResultSender::Stream { completion, .. } => {
+                let _ = completion.send(Err(anyhow::anyhow!(
+                    "ServiceWorker fallback after response headers"
+                )));
             }
-        };
-        let request_mode = job.request.request_mode;
-        let credentials_mode = job.request.credentials_mode;
-        job.resource_task_runner.spawn(async move {
-            let result = match request_client
-                .fetch_raw_stream_with_cancel(request, cancel_handle)
-                .await
-            {
-                Ok(response) => response.into_materialized_raw_response().await,
-                Err(error) => Err(error),
-            };
-            let result = match result {
-                Ok(response) => {
-                    let head = response.head();
-                    // This is a network response after a synthetic redirect,
-                    // not a worker-produced readable Response. Authorize CORS
-                    // before the direct consumer can trust an absent filter.
-                    if request_mode == moli_fetch::RequestMode::Cors
-                        && let Err(message) = crate::network_host::validate_cors_response_chain(
-                            &request_origin,
-                            &head,
-                            credentials_mode,
-                        )
-                    {
+            ServiceWorkerFetchResultSender::Worker { sender } => {
+                sender.fetch_network(
+                    request,
+                    job.cancel_handle,
+                    job.cors_preflight_request_headers,
+                );
+            }
+            ServiceWorkerFetchResultSender::CspReport { resource, request } => {
+                resource.fetch(job.request_client, *request, job.cancel_handle);
+            }
+            ServiceWorkerFetchResultSender::Page {
+                completion_tx,
+                network,
+            } => {
+                let Some(request_network) = network.network.request() else {
+                    return;
+                };
+                crate::network_host::spawn_async_subresource_fetch(
+                    job.resource_task_runner,
+                    completion_tx.clone(),
+                    job.request_client,
+                    request,
+                    Some(job.cancel_handle),
+                    job.cors_preflight_request_headers,
+                    job.internal_id,
+                    network.clone(),
+                    crate::network_host::CorsPreflightNetworkObserver {
+                        request: request_network,
+                        observer: completion_tx.network_observer(),
+                        frame_id: job.network_context.frame_id,
+                        resource_type: job.network_context.resource_type,
+                        keepalive: job.metadata.keepalive,
+                    },
+                    job.request.url,
+                );
+            }
+            ServiceWorkerFetchResultSender::Resource(completion_tx) => {
+                let request_client = job.request_client.clone();
+                let cancel_handle = job.cancel_handle.clone();
+                let request_origin = match request.browser_origin() {
+                    Ok(origin) => origin.clone(),
+                    Err(error) => {
                         let _ =
-                            completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
+                            completion_tx.send(ServiceWorkerResourceFetchResult::Failure(error));
                         return;
                     }
-                    let response_filter = crate::network_host::network_response_filter(
-                        &request_origin,
-                        &head,
-                        request_mode,
-                    );
-                    let body = response.clone_body_bytes();
-                    let navigation_response =
-                        crate::protocol_types::NavigationResponse::from_head_and_body(
-                            head,
-                            String::from_utf8_lossy(&body).into_owned(),
-                            body,
-                        );
-                    ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
-                        response: Box::new(navigation_response),
-                        response_filter,
-                    })
-                }
-                Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
-            };
-            let _ = completion_tx.send(result);
-        });
+                };
+                let request_mode = job.request.request_mode;
+                let credentials_mode = job.request.credentials_mode;
+                job.resource_task_runner.spawn(async move {
+                    let result = request_client
+                        .fetch_raw_stream_with_cancel_and_network_metadata(request, cancel_handle)
+                        .await;
+                    let result = match result {
+                        Ok(response) => {
+                            let head = response.response().head();
+                            // This is a network response after a synthetic redirect,
+                            // not a worker-produced readable Response. Authorize CORS
+                            // before the direct consumer can trust an absent filter.
+                            if request_mode == moli_fetch::RequestMode::Cors
+                                && let Err(message) =
+                                    crate::network_host::validate_cors_response_chain(
+                                        &request_origin,
+                                        &head,
+                                        credentials_mode,
+                                    )
+                            {
+                                let _ =
+                                    completion_tx.send(ServiceWorkerResourceFetchResult::Failure(
+                                        anyhow::Error::msg(message),
+                                    ));
+                                return;
+                            }
+                            let response_filter = crate::network_host::network_response_filter(
+                                &request_origin,
+                                &head,
+                                request_mode,
+                            );
+                            ServiceWorkerResourceFetchResult::Response(
+                                ServiceWorkerResourceResponse {
+                                    response: Box::new(response),
+                                    response_filter,
+                                },
+                            )
+                        }
+                        Err(error) => ServiceWorkerResourceFetchResult::Failure(error),
+                    };
+                    let _ = completion_tx.send(result);
+                });
+            }
+        }
     }
 
     pub(super) fn finish_fetch_stream_started(&self, started: ServiceWorkerFetchStreamStarted) {
-        let stream_rejection = {
-            let state = self.inner.state.lock();
-            state
-                .pending_fetch_jobs
-                .get(&started.event_id)
-                .and_then(|job| {
-                    if !job.is_bound_to_owner(&started.owner) {
-                        return None;
-                    }
-                    service_worker_fetch_can_forward_stream(job, &started.response_head).err()
-                })
-        };
-        if let Some(message) = stream_rejection {
-            self.reject_fetch_stream_started(started, message);
-            return;
-        }
-
-        let Some((completion_tx, streaming_started)) = ({
+        let rejection = {
             let mut state = self.inner.state.lock();
             let Some(job) = state.pending_fetch_jobs.get_mut(&started.event_id) else {
                 return;
             };
-            if !job.is_bound_to_owner(&started.owner) {
+            if !job.is_bound_to_owner(&started.owner) || job.body_stream.is_some() {
                 return;
             }
-            match service_worker_fetch_can_forward_stream(job, &started.response_head) {
-                Ok(true) => {}
-                Ok(false) => {
-                    return;
-                }
-                Err(_) => {
-                    return;
+            let forwarding = service_worker_fetch_can_forward_stream(job, &started.response_head);
+            let head = service_worker_fetch_stream_response_head(job, &started.response_head);
+            // Only a final response enters the consumer. Followed redirects
+            // remain with this job until their replacement response arrives,
+            // including opaque navigation redirects exposed as manual to the SW.
+            if !is_redirect_status(head.status)
+                || (job.request.redirect_mode == moli_fetch::RequestRedirectMode::Manual
+                    && !(started.response_head.response_type == "opaqueredirect"
+                        && service_worker_fetch_is_navigation_request(job)))
+            {
+                job.result_tx.resource_response_started(
+                    head.clone(),
+                    service_worker_fetch_response_filter(
+                        &started.response_head.response_type,
+                        started.response_head.status,
+                    ),
+                    job.cancel_handle.clone(),
+                );
+                let resource = match &job.result_tx {
+                    ServiceWorkerFetchResultSender::Page { network, .. } => Some(network.clone()),
+                    ServiceWorkerFetchResultSender::Worker { sender, .. } => {
+                        Some(sender.response.clone())
+                    }
+                    _ => None,
+                };
+                let response_head = crate::network::ResourceResponseHead {
+                    head,
+                    status_text: started.response_head.status_text.clone(),
+                    network_request_headers: None,
+                };
+                if forwarding.is_err() {
+                    job.result_tx.response_started(response_head);
+                } else if let Some(resource) = resource {
+                    let service = self.downgrade();
+                    let runner = job.resource_task_runner.clone();
+                    let event_id = started.event_id;
+                    let owner = started.owner.clone();
+                    let body = crate::network::ResourceResponseBody::controlled(
+                        resource.clone(),
+                        response_head,
+                        job.cancel_handle.clone(),
+                        move || {
+                            // Drop can run under the service lock. The original
+                            // event/run identifies only this physical response.
+                            runner.spawn(async move {
+                                if let Some(service) = service.upgrade() {
+                                    service.abort_fetch_matching(
+                                        |id, job| id == event_id && job.is_bound_to_owner(&owner),
+                                        None,
+                                    );
+                                }
+                            });
+                        },
+                    );
+                    let recipient = std::mem::replace(
+                        &mut job.result_tx,
+                        ServiceWorkerFetchResultSender::Body(body.clone()),
+                    );
+                    let stream_to_js = forwarding.as_ref().is_ok_and(|stream| *stream);
+                    match recipient {
+                        ServiceWorkerFetchResultSender::Page { completion_tx, .. } => {
+                            let mut receiver = crate::network_host::ResourceFetchReceiver::new(
+                                job.resource_task_runner.clone(),
+                                completion_tx,
+                                job.internal_id,
+                                job.request.url.clone(),
+                                resource,
+                            );
+                            receiver.response_status_text =
+                                started.response_head.status_text.clone();
+                            receiver.skip_fetch_security_validation = true;
+                            receiver.response_filter = service_worker_fetch_response_filter(
+                                &started.response_head.response_type,
+                                started.response_head.status,
+                            );
+                            receiver.receive_or_pause(body, stream_to_js);
+                        }
+                        ServiceWorkerFetchResultSender::Worker { sender, .. } => {
+                            sender.receive_or_pause(
+                                body,
+                                stream_to_js
+                                    && job.request.request_mode != moli_fetch::RequestMode::NoCors
+                                    && job.request.redirect_mode
+                                        == moli_fetch::RequestRedirectMode::Follow,
+                            );
+                        }
+                        _ => unreachable!("admitted Page or Worker response"),
+                    }
+                } else {
+                    job.result_tx.response_started(response_head);
                 }
             }
-            job.streaming_body_source_id = Some(started.body_source_id);
-            Some((
-                job.completion_tx.clone(),
-                AsyncSubresourceFetchEvent::StreamingStarted(Box::new(
-                    AsyncSubresourceStreamingStarted {
-                        skip_fetch_security_validation: true,
-                        response_filter: service_worker_response_type_filter(
-                            &started.response_head.response_type,
-                        ),
-                        internal_id: job.internal_id,
-                        request_url: job.request.url.clone(),
-                        request_method: job.request.method.clone(),
-                        request_headers: job.request.request_headers.clone(),
-                        request_body: request_body_text(&job.request.body),
-                        body_source_id: started.body_source_id,
-                        network_request_headers: None,
-                        head: service_worker_fetch_stream_response_head(
-                            job,
-                            &started.response_head,
-                        ),
-                    },
-                )),
-            ))
-        }) else {
-            return;
+            job.body_stream = Some(ServiceWorkerFetchBodyStream {
+                body_source_id: started.body_source_id,
+            });
+            forwarding.err()
         };
-        let _ = completion_tx.send_async_subresource_event(streaming_started);
+        if let Some(message) = rejection {
+            self.reject_fetch_stream_started(started, message);
+        }
     }
 
     fn reject_fetch_stream_started(
@@ -483,24 +601,17 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(super) fn finish_fetch_stream_chunk(&self, chunk: ServiceWorkerFetchStreamChunk) {
-        let Some(completion_tx) = ({
-            let state = self.inner.state.lock();
-            state
-                .pending_fetch_jobs
-                .get(&chunk.event_id)
-                .and_then(|job| {
-                    (job.streaming_body_source_id == Some(chunk.body_source_id))
-                        .then(|| job.completion_tx.clone())
-                })
-        }) else {
+        let state = self.inner.state.lock();
+        let Some(job) = state.pending_fetch_jobs.get(&chunk.event_id) else {
             return;
         };
-        let _ = completion_tx.send_async_subresource_event(
-            AsyncSubresourceFetchEvent::StreamingChunk(AsyncSubresourceStreamingChunk {
-                body_source_id: chunk.body_source_id,
-                bytes: chunk.bytes,
-            }),
-        );
+        let Some(stream) = &job.body_stream else {
+            return;
+        };
+        if stream.body_source_id != chunk.body_source_id {
+            return;
+        }
+        job.result_tx.data_received(chunk.bytes);
     }
 
     pub(super) fn complete_fetch_with_service_worker_response(
@@ -597,55 +708,80 @@ impl ServiceWorkerRuntimeService {
             self.complete_fetch_with_failure(job, message);
             return;
         }
-        let response_filter = service_worker_fetch_response_filter(&response);
+        let response_filter =
+            service_worker_fetch_response_filter(&response.response_type, response.status);
+        if let ServiceWorkerFetchResultSender::Body(body) = &job.result_tx {
+            body.complete(Ok(()), None);
+            return;
+        }
+        if let ServiceWorkerFetchResultSender::Stream { completion, .. } = job.result_tx {
+            let _ = completion.send(Ok(()));
+            return;
+        }
+        let head = moli_fetch::ResponseHead {
+            final_url,
+            status: response.status,
+            headers: response.headers,
+            request_cookie_report: job.request_cookie_report,
+            cookie_set_reports: Vec::new(),
+            redirected: response.redirected || !job.request.redirect_chain().is_empty(),
+            redirect_chain: job.request.redirect_chain().to_vec(),
+            from_cache: false,
+            negotiated_http_version: None,
+        };
+        if matches!(job.result_tx, ServiceWorkerFetchResultSender::Resource(_)) {
+            job.result_tx
+                .resource_response_started(head, response_filter, job.cancel_handle);
+            job.result_tx.data_received(response.body);
+            let ServiceWorkerFetchResultSender::Stream { completion, .. } = job.result_tx else {
+                unreachable!("resource response transferred to its stream")
+            };
+            let _ = completion.send(Ok(()));
+            return;
+        }
+        let response_status_text = response.status_text;
         let navigation_response = crate::protocol_types::NavigationResponse::from_head_and_body(
-            moli_fetch::ResponseHead {
-                final_url,
-                status: response.status,
-                headers: response.headers,
-                request_cookie_report: job.request_cookie_report,
-                cookie_set_reports: Vec::new(),
-                redirected: response.redirected || !job.request.redirect_chain().is_empty(),
-                redirect_chain: job.request.redirect_chain().to_vec(),
-                from_cache: false,
-                negotiated_http_version: None,
-            },
+            head,
             String::from_utf8_lossy(&response.body).into_owned(),
             response.body,
         );
-        if let Some(completion_tx) = job.direct_completion_tx.take() {
-            let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Response(
-                ServiceWorkerDirectFetchResponse {
-                    response: Box::new(navigation_response),
-                    response_filter,
-                },
-            ));
-            return;
-        }
-        if let Some(body_source_id) = job.streaming_body_source_id.take() {
-            let _ = job.completion_tx.send_async_subresource_event(
-                AsyncSubresourceFetchEvent::StreamingFinished(AsyncSubresourceStreamingFinished {
-                    internal_id: job.internal_id,
-                    body_source_id,
-                    result: Ok(()),
-                }),
-            );
-            return;
-        }
-        let _ = job
-            .completion_tx
-            .send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id: job.internal_id,
-                request_url: job.request.url,
-                request_method: job.request.method,
-                request_headers: job.request.request_headers.clone(),
-                request_body: request_body_text(&job.request.body),
-                response_status_text: Some(response.status_text),
-                skip_fetch_security_validation: true,
-                response_filter,
-                network_error_text: None,
-                result: Ok(navigation_response).into(),
-            });
+        let network = match job.result_tx {
+            ServiceWorkerFetchResultSender::Body(_)
+            | ServiceWorkerFetchResultSender::Resource(_)
+            | ServiceWorkerFetchResultSender::Stream { .. } => {
+                unreachable!("streaming response already completed");
+            }
+            ServiceWorkerFetchResultSender::Worker { sender, .. } => {
+                let response = sender
+                    .response
+                    .finish_response()
+                    .unwrap_or_else(|| navigation_response.into());
+                sender.complete(Ok(response), None);
+                return;
+            }
+            ServiceWorkerFetchResultSender::CspReport { resource, .. } => {
+                resource.response_completed(&navigation_response);
+                return;
+            }
+            ServiceWorkerFetchResultSender::Page {
+                completion_tx,
+                network,
+            } => (completion_tx, network),
+        };
+        let (completion_tx, network) = network;
+        let response = network
+            .finish_response()
+            .unwrap_or_else(|| navigation_response.into());
+        let completion = AsyncSubresourceFetchCompletion {
+            internal_id: job.internal_id,
+            response_status_text: Some(response_status_text),
+            skip_fetch_security_validation: true,
+            response_filter,
+            network_error_text: None,
+            network_request_headers: None,
+            result: Ok(response),
+        };
+        crate::network_host::send_resource_completion(&completion_tx, network.clone(), completion);
     }
 
     pub(super) fn complete_fetch_with_failure(&self, job: ServiceWorkerFetchJob, message: String) {
@@ -671,34 +807,47 @@ impl ServiceWorkerRuntimeService {
         if network_error_text.is_none() {
             network_error_text = service_worker_fetch_failure_network_error_text(&message);
         }
-        if let Some(completion_tx) = job.direct_completion_tx.take() {
-            let _ = completion_tx.send(ServiceWorkerDirectFetchResult::Failure(message));
-            return;
-        }
-        if let Some(body_source_id) = job.streaming_body_source_id.take() {
-            let _ = job.completion_tx.send_async_subresource_event(
-                AsyncSubresourceFetchEvent::StreamingFinished(AsyncSubresourceStreamingFinished {
-                    internal_id: job.internal_id,
-                    body_source_id,
-                    result: Err(message),
-                }),
-            );
-            return;
-        }
-        let _ = job
-            .completion_tx
-            .send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id: job.internal_id,
-                request_url: job.request.url,
-                request_method: job.request.method,
-                request_headers: job.request.request_headers.clone(),
-                request_body: request_body_text(&job.request.body),
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text,
-                result: Err(message).into(),
-            });
+        let network = match job.result_tx {
+            ServiceWorkerFetchResultSender::Body(body) => {
+                body.complete(Err(message), network_error_text);
+                return;
+            }
+            ServiceWorkerFetchResultSender::Stream { completion, .. } => {
+                let _ = completion.send(Err(anyhow::anyhow!(message)));
+                return;
+            }
+            ServiceWorkerFetchResultSender::Worker { sender, .. } => {
+                let failure = sender.response.failure(message);
+                sender.complete(Err(failure), None);
+                return;
+            }
+            ServiceWorkerFetchResultSender::CspReport { resource, .. } => {
+                resource.fail(network_error_text.unwrap_or(message));
+                return;
+            }
+            ServiceWorkerFetchResultSender::Resource(completion_tx) => {
+                let _ = completion_tx.send(ServiceWorkerResourceFetchResult::Failure(
+                    anyhow::anyhow!(message),
+                ));
+                return;
+            }
+            ServiceWorkerFetchResultSender::Page {
+                completion_tx,
+                network,
+            } => (completion_tx, network),
+        };
+        let (completion_tx, network) = network;
+        let failure = network.failure(message);
+        let completion = AsyncSubresourceFetchCompletion {
+            internal_id: job.internal_id,
+            response_status_text: None,
+            skip_fetch_security_validation: false,
+            response_filter: None,
+            network_error_text,
+            network_request_headers: None,
+            result: Err(failure),
+        };
+        crate::network_host::send_resource_completion(&completion_tx, network.clone(), completion);
     }
 }
 
@@ -875,25 +1024,17 @@ fn service_worker_fetch_response_rejection(
 }
 
 fn service_worker_fetch_response_filter(
-    response: &ServiceWorkerFetchResponse,
-) -> Option<AsyncSubresourceFetchResponseFilter> {
-    if is_redirect_status(response.status)
-        && !matches!(response.response_type.as_str(), "opaque" | "opaqueredirect")
-    {
-        Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
-    } else {
-        service_worker_response_type_filter(&response.response_type)
-    }
-}
-
-fn service_worker_response_type_filter(
     response_type: &str,
+    status: u16,
 ) -> Option<AsyncSubresourceFetchResponseFilter> {
     match response_type {
-        "basic" => Some(AsyncSubresourceFetchResponseFilter::Basic),
-        "cors" => Some(AsyncSubresourceFetchResponseFilter::Cors),
         "opaque" => Some(AsyncSubresourceFetchResponseFilter::Opaque),
         "opaqueredirect" => Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect),
+        _ if is_redirect_status(status) => {
+            Some(AsyncSubresourceFetchResponseFilter::OpaqueRedirect)
+        }
+        "basic" => Some(AsyncSubresourceFetchResponseFilter::Basic),
+        "cors" => Some(AsyncSubresourceFetchResponseFilter::Cors),
         _ => None,
     }
 }
@@ -914,11 +1055,11 @@ mod tests {
     }
 
     fn expect_direct_fetch_fallback(
-        receiver: &mut tokio::sync::oneshot::Receiver<ServiceWorkerDirectFetchResult>,
+        receiver: &mut tokio::sync::oneshot::Receiver<ServiceWorkerResourceFetchResult>,
     ) {
         assert!(matches!(
             receiver.try_recv(),
-            Ok(ServiceWorkerDirectFetchResult::Fallback)
+            Ok(ServiceWorkerResourceFetchResult::Fallback)
         ));
     }
 
@@ -1171,13 +1312,15 @@ mod tests {
                     resource_type,
                     policy_context: Default::default(),
                 },
-                completion_tx,
+                result_tx: ServiceWorkerFetchResultSender::Page {
+                    completion_tx,
+                    network: crate::network::ResourceResponseStream::unobserved_for_test(),
+                },
                 request_client: test_request_client(service),
                 resource_task_runner: test_resource_task_runner(),
                 cancel_handle: moli_fetch::FetchCancelHandle::new(),
                 navigation_preload_cancel_handle: None,
-                streaming_body_source_id: None,
-                direct_completion_tx: None,
+                body_stream: None,
             },
         );
         request_url
@@ -1187,7 +1330,9 @@ mod tests {
         queue: &mut crate::page_task_queue::RendererResourceCompletionTestHarness,
     ) -> AsyncSubresourceFetchCompletion {
         match queue.pop_next_async_subresource_event() {
-            Some(crate::types::AsyncSubresourceFetchEvent::Completion(completion)) => *completion,
+            Some(crate::types::AsyncSubresourceFetchEvent::TransportCompletion(completion)) => {
+                completion.complete_for_test()
+            }
             other => panic!("expected async subresource completion, got {other:?}"),
         }
     }
@@ -1241,7 +1386,7 @@ mod tests {
         let run = RendererServiceWorkerRunIdentity::fresh();
         let mut completion_queue =
             crate::page_task_queue::RendererResourceCompletionTestHarness::new();
-        let request_url = insert_active_fetch_job(
+        insert_active_fetch_job(
             &service,
             event_id,
             version_id,
@@ -1267,14 +1412,15 @@ mod tests {
 
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 301);
-        assert_eq!(completion.request_url, request_url);
-        assert_eq!(completion.request_method, "GET");
         assert_eq!(completion.response_status_text.as_deref(), Some("Accepted"));
         assert!(completion.skip_fetch_security_validation);
         assert_eq!(completion.response_filter, None);
         let response = completion
             .result
-            .expect("service worker response should resolve");
+            .expect("service worker response should resolve")
+            .into_navigation_response()
+            .expect("materialized response")
+            .with_network_request_headers(completion.network_request_headers);
         assert_eq!(response.final_url, final_url);
         assert_eq!(response.status, 202);
         assert!(!response.redirected);
@@ -1312,6 +1458,7 @@ mod tests {
             ),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                status_text: None,
                 final_url: Some(final_url.clone()),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1320,16 +1467,16 @@ mod tests {
             },
         });
 
-        match pop_async_subresource_event(&mut completion_queue) {
+        let delivered_body_source_id = match pop_async_subresource_event(&mut completion_queue) {
             AsyncSubresourceFetchEvent::StreamingStarted(started) => {
                 assert_eq!(started.internal_id, 301);
                 assert_eq!(started.request_url, request_url);
-                assert_eq!(started.body_source_id, body_source_id);
                 assert_eq!(started.head.final_url, final_url);
                 assert_eq!(started.head.status, 202);
+                started.body_source_id
             }
             other => panic!("expected streaming start, got {other:?}"),
-        }
+        };
 
         service.finish_fetch_stream_chunk(ServiceWorkerFetchStreamChunk {
             event_id,
@@ -1339,7 +1486,7 @@ mod tests {
 
         match pop_async_subresource_event(&mut completion_queue) {
             AsyncSubresourceFetchEvent::StreamingChunk(chunk) => {
-                assert_eq!(chunk.body_source_id, body_source_id);
+                assert_eq!(chunk.body_source_id, delivered_body_source_id);
                 assert_eq!(chunk.bytes, b"AB".to_vec());
             }
             other => panic!("expected streaming chunk, got {other:?}"),
@@ -1360,13 +1507,281 @@ mod tests {
         });
 
         match pop_async_subresource_event(&mut completion_queue) {
-            AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+            AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                body_source_id: finished_id,
+                completion,
+            } => {
+                let finished = completion.complete_for_test();
                 assert_eq!(finished.internal_id, 301);
-                assert_eq!(finished.body_source_id, body_source_id);
-                assert_eq!(finished.result, Ok(()));
+                assert_eq!(finished_id, delivered_body_source_id);
+                assert_eq!(
+                    finished.result.unwrap().body.diagnostic_bytes().as_ref(),
+                    b"AB"
+                );
             }
             other => panic!("expected streaming finish, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn csp_stream_preserves_native_phases_and_paused_partial_bodies() {
+        use crate::network::{ResourceResponseStream, ResourceTransfer};
+        use crate::runtime::{RendererNetworkOutputItem, RendererNetworkRequest};
+        use crate::types::{ScriptNetworkOutputItem, SubresourceRequestStarted};
+        use std::sync::Arc;
+
+        for intercepted in [false, true] {
+            for partial in [false, true] {
+                let service = new_service_worker_runtime_service();
+                let event_id = ServiceWorkerEventId(211);
+                let version_id = ServiceWorkerVersionId(1);
+                let run = RendererServiceWorkerRunIdentity::fresh();
+                let owner = ServiceWorkerRunOwner::new(version_id, run.clone());
+                let mut queue =
+                    crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+                let request_url = insert_active_fetch_job(
+                    &service,
+                    event_id,
+                    version_id,
+                    &run,
+                    301,
+                    queue.sender(),
+                );
+                let events = Arc::new(parking_lot::Mutex::new(Vec::new()));
+                let received = events.clone();
+                let (network, started) = ResourceTransfer::start(
+                    RendererNetworkRequest::unobserved_for_test(),
+                    move |observation| {
+                        if let RendererNetworkOutputItem::Resource(item) = observation.item() {
+                            received.lock().push(item.clone());
+                        }
+                    },
+                    |request| {
+                        SubresourceRequestStarted::new(
+                            request.handle(),
+                            None,
+                            request_url.clone(),
+                            request_url.clone(),
+                            "POST".into(),
+                            Vec::new().into(),
+                            None,
+                            crate::types::SubresourceResourceType::CspReport,
+                            moli_page_types::SubresourceRequestInitiatorType::Script,
+                            None,
+                        )
+                    },
+                );
+                network.observe(started);
+                let response = ResourceResponseStream::new(network.clone());
+                response.configure_interception(intercepted, false);
+                let cancel = {
+                    let mut state = service.inner.state.lock();
+                    let job = state.pending_fetch_jobs.get_mut(&event_id).unwrap();
+                    job.network_context.resource_type =
+                        crate::types::SubresourceResourceType::CspReport;
+                    job.destination = ServiceWorkerRequestDestination::Report;
+                    job.result_tx = ServiceWorkerFetchResultSender::Page {
+                        completion_tx: queue.sender(),
+                        network: response.clone(),
+                    };
+                    job.cancel_handle.clone()
+                };
+                service.finish_fetch_stream_started(ServiceWorkerFetchStreamStarted {
+                    event_id,
+                    owner: owner.clone(),
+                    body_source_id: 77,
+                    response_head: MaterializedServiceWorkerFetchResponseHead {
+                        final_url: Some(request_url.clone()),
+                        status: 202,
+                        status_text: None,
+                        headers: Vec::new(),
+                        response_type: "default".into(),
+                        redirected: false,
+                    },
+                });
+                assert_eq!(
+                    events.lock().len(),
+                    if intercepted { 1 } else { 2 },
+                    "only a pending response decision can hold the head"
+                );
+                let paused = if intercepted {
+                    let Some(AsyncSubresourceFetchEvent::ResponsePaused {
+                        internal_id,
+                        response,
+                    }) = queue.pop_next_async_subresource_event()
+                    else {
+                        panic!("the controlled response must pause before body input")
+                    };
+                    assert_eq!(internal_id, 301);
+                    Some(response)
+                } else {
+                    None
+                };
+                service.finish_fetch_stream_chunk(ServiceWorkerFetchStreamChunk {
+                    event_id,
+                    body_source_id: 77,
+                    bytes: b"bo".to_vec(),
+                });
+                assert_eq!(
+                    events.lock().len(),
+                    if intercepted { 1 } else { 3 },
+                    "accepted data must precede completion"
+                );
+                assert!(
+                    queue.pop_next_async_subresource_event().is_none(),
+                    "a CSP report has no JS body consumer"
+                );
+                if let Some(paused) = &paused {
+                    assert_eq!(
+                        paused.body.read(0, 2).await.unwrap(),
+                        (b"bo".to_vec(), false)
+                    );
+                }
+                let result = if partial {
+                    ServiceWorkerFetchResult::Failure("truncated".into())
+                } else {
+                    ServiceWorkerFetchResult::Response(ServiceWorkerFetchResponse {
+                        final_url: Some(request_url),
+                        status: 202,
+                        status_text: "Accepted".into(),
+                        headers: Vec::new(),
+                        response_type: "default".into(),
+                        redirected: false,
+                        body: b"bo".to_vec(),
+                    })
+                };
+                service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+                    event_id,
+                    owner,
+                    result,
+                });
+                if let Some(paused) = paused {
+                    if partial {
+                        paused.resume(None, None);
+                    } else {
+                        // A retiring Document cancels even after physical EOF,
+                        // while the response decision still owns its bytes.
+                        assert_eq!(
+                            paused
+                                .body
+                                .body_source()
+                                .materialize_bytes_limited(2)
+                                .await
+                                .unwrap(),
+                            b"bo"
+                        );
+                        cancel.cancel();
+                        drop(paused);
+                    }
+                }
+                let Some(AsyncSubresourceFetchEvent::TransportCompletion(completion)) =
+                    queue.pop_next_async_subresource_event()
+                else {
+                    panic!("one ordinary CSP completion")
+                };
+                let completion = completion
+                    .claim(&network)
+                    .expect("the original response owns completion");
+                match &completion.result {
+                    Ok(body) if !partial && !intercepted => {
+                        assert_eq!(body.body.clone_body_bytes(), b"bo")
+                    }
+                    Err(crate::network::ResourceResponseFailure::PartialBody {
+                        response,
+                        body,
+                        message,
+                    }) if partial || intercepted => {
+                        assert_eq!(response.head.status, 202);
+                        assert_eq!(body.clone_body_bytes(), b"bo");
+                        assert!(message.contains(if partial {
+                            "truncated"
+                        } else {
+                            "ERR_ABORTED"
+                        }));
+                    }
+                    result => panic!("retain the physical response: {result:?}"),
+                }
+                completion.publish_with(&network, |observation| network.observe(observation));
+                drop(response);
+                let events = events.lock();
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|item| matches!(
+                            item.as_ref(),
+                            ScriptNetworkOutputItem::SubresourceResponseStarted(_)
+                        ))
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|item| matches!(
+                            item.as_ref(),
+                            ScriptNetworkOutputItem::SubresourceBodyFinished(_)
+                        ))
+                        .count(),
+                    1
+                );
+                if intercepted && !partial {
+                    let ScriptNetworkOutputItem::SubresourceBodyFinished(terminal) =
+                        events.last().unwrap().as_ref()
+                    else {
+                        panic!("retirement must terminate the original request")
+                    };
+                    let moli_page_types::SubresourceBodyFinishedResult::FailedWithPartialBody {
+                        partial_body,
+                        ..
+                    } = terminal.result()
+                    else {
+                        panic!("retirement must preserve received bytes")
+                    };
+                    assert_eq!(partial_body.clone_body_bytes(), b"bo");
+                }
+                assert!(queue.pop_next_async_subresource_event().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn csp_network_fallback_retains_the_originating_partition_and_resource_type() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(211);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        let request_url = insert_active_fetch_job(
+            &service,
+            event_id,
+            ServiceWorkerVersionId(1),
+            &run,
+            301,
+            queue.sender(),
+        );
+        let request = moli_fetch::Request::new_bytes(
+            "POST",
+            request_url.as_str(),
+            Some(vec![0, 128, 255]),
+            Vec::new(),
+        )
+        .unwrap()
+        .with_resource_type(moli_fetch::RequestResourceType::CspReport)
+        .with_redirect_mode(moli_fetch::RequestRedirectMode::Error)
+        .with_network_partition_key(Some("originating-partition".into()));
+        let mut state = service.inner.state.lock();
+        let job = state.pending_fetch_jobs.get_mut(&event_id).unwrap();
+        job.request = request.clone();
+        job.metadata = service_worker_fetch_request_metadata(&request);
+        job.network_context.resource_type = crate::types::SubresourceResourceType::CspReport;
+        let fallback = service_worker_network_fallback_request_for_job(job);
+        assert_eq!(
+            fallback.network_partition_key(),
+            request.network_partition_key()
+        );
+        assert_eq!(fallback.resource_type, request.resource_type);
+        assert_eq!(fallback.redirect_mode, request.redirect_mode);
+        assert_eq!(fallback.body, request.body);
+        assert_eq!(fallback.method, request.method);
     }
 
     #[test]
@@ -1396,6 +1811,7 @@ mod tests {
             ),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                status_text: None,
                 final_url: Some(final_url),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -1403,13 +1819,13 @@ mod tests {
                 headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
             },
         });
-        match pop_async_subresource_event(&mut completion_queue) {
+        let delivered_body_source_id = match pop_async_subresource_event(&mut completion_queue) {
             AsyncSubresourceFetchEvent::StreamingStarted(started) => {
                 assert_eq!(started.internal_id, 302);
-                assert_eq!(started.body_source_id, body_source_id);
+                started.body_source_id
             }
             other => panic!("expected streaming start, got {other:?}"),
-        }
+        };
 
         service.finish_fetch_stream_chunk(ServiceWorkerFetchStreamChunk {
             event_id,
@@ -1418,7 +1834,7 @@ mod tests {
         });
         match pop_async_subresource_event(&mut completion_queue) {
             AsyncSubresourceFetchEvent::StreamingChunk(chunk) => {
-                assert_eq!(chunk.body_source_id, body_source_id);
+                assert_eq!(chunk.body_source_id, delivered_body_source_id);
                 assert_eq!(chunk.bytes, b"partial".to_vec());
             }
             other => panic!("expected streaming chunk, got {other:?}"),
@@ -1433,13 +1849,20 @@ mod tests {
         });
 
         match pop_async_subresource_event(&mut completion_queue) {
-            AsyncSubresourceFetchEvent::StreamingFinished(finished) => {
+            AsyncSubresourceFetchEvent::TransportStreamingFinished {
+                body_source_id: finished_id,
+                completion,
+            } => {
+                let finished = completion.complete_for_test();
                 assert_eq!(finished.internal_id, 302);
-                assert_eq!(finished.body_source_id, body_source_id);
-                assert_eq!(
-                    finished.result,
-                    Err("FetchEvent.respondWith stream aborted".to_owned())
-                );
+                assert_eq!(finished_id, delivered_body_source_id);
+                let crate::network::ResourceResponseFailure::PartialBody { message, body, .. } =
+                    finished.result.unwrap_err()
+                else {
+                    panic!("stream failure must retain the physical prefix")
+                };
+                assert_eq!(message, "FetchEvent.respondWith stream aborted");
+                assert_eq!(body.diagnostic_bytes().as_ref(), b"partial");
             }
             other => panic!("expected streaming finish error, got {other:?}"),
         }
@@ -1486,7 +1909,10 @@ mod tests {
         );
         let response = completion
             .result
-            .expect("no-cors opaque response should resolve");
+            .expect("no-cors opaque response should resolve")
+            .into_navigation_response()
+            .expect("materialized response")
+            .with_network_request_headers(completion.network_request_headers);
         assert_eq!(response.status, 0);
     }
 
@@ -1531,7 +1957,10 @@ mod tests {
         );
         let response = completion
             .result
-            .expect("manual opaqueredirect response should resolve");
+            .expect("manual opaqueredirect response should resolve")
+            .into_navigation_response()
+            .expect("materialized response")
+            .with_network_request_headers(completion.network_request_headers);
         assert_eq!(response.status, 0);
     }
 
@@ -1571,7 +2000,10 @@ mod tests {
         assert_eq!(completion.internal_id, 304);
         let response = completion
             .result
-            .expect("follow redirect mode should accept redirected response");
+            .expect("follow redirect mode should accept redirected response")
+            .into_navigation_response()
+            .expect("materialized response")
+            .with_network_request_headers(completion.network_request_headers);
         assert_eq!(response.final_url, final_url);
         assert!(response.redirected);
         assert!(response.redirect_chain.is_empty());
@@ -1615,7 +2047,11 @@ mod tests {
         assert_eq!(completion.response_status_text, None);
         assert!(!completion.skip_fetch_security_validation);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(
                 "FetchEvent.respondWith rejected a redirected Response for a request whose redirect mode is not follow"
             )
@@ -1664,7 +2100,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 310);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(
                 "FetchEvent.respondWith rejected a redirect Response for a request whose redirect mode is error: https://example.test/redirected.txt"
             )
@@ -1704,7 +2144,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 313);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some("FetchEvent.respondWith promise rejected: Error: fetch-boom")
         );
         assert_eq!(
@@ -1742,7 +2186,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 314);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some("service worker fetch dispatch failed: worker is not running")
         );
         assert_eq!(completion.network_error_text, None);
@@ -1790,7 +2238,10 @@ mod tests {
         );
         let response = completion
             .result
-            .expect("manual redirect response should be delivered");
+            .expect("manual redirect response should be delivered")
+            .into_navigation_response()
+            .expect("materialized response")
+            .with_network_request_headers(completion.network_request_headers);
         assert_eq!(response.final_url, request_url);
         assert_eq!(response.status, 302);
         assert!(!response.redirected);
@@ -1821,7 +2272,7 @@ mod tests {
             let mut state = service.inner.state.lock();
             let version = state.versions.get_mut(&version_id).unwrap();
             version.running_state = ServiceWorkerVersionRunningState::Starting {
-                host: RendererServiceWorkerHost::new_loading(&ServiceWorkerRunOwner::new(
+                host: RendererServiceWorkerHost::new_loading_for_test(&ServiceWorkerRunOwner::new(
                     version_id,
                     run.clone(),
                 )),
@@ -1922,13 +2373,15 @@ mod tests {
                 resource_type: crate::types::SubresourceResourceType::Fetch,
                 policy_context: Default::default(),
             },
-            completion_tx: completion_queue.sender(),
+            result_tx: ServiceWorkerFetchResultSender::Page {
+                completion_tx: completion_queue.sender(),
+                network: crate::network::ResourceResponseStream::unobserved_for_test(),
+            },
             request_client: test_request_client(&service),
             resource_task_runner: test_resource_task_runner(),
             cancel_handle: moli_fetch::FetchCancelHandle::new(),
             navigation_preload_cancel_handle: None,
-            streaming_body_source_id: None,
-            direct_completion_tx: None,
+            body_stream: None,
         };
         let origin = moli_url::WebOrigin::from_url(&url("https://initiator.test/"));
         job.request = job
@@ -2026,7 +2479,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 333);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(
                 "failed to resolve redirect location `relative-target.txt` for a generated response without a response URL"
             )
@@ -2142,7 +2599,11 @@ mod tests {
         assert_eq!(completion.response_status_text, None);
         assert!(!completion.skip_fetch_security_validation);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some("FetchEvent.respondWith rejected an error Response")
         );
         assert_eq!(
@@ -2187,7 +2648,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 307);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some("FetchEvent.respondWith rejected a cors Response for a same-origin request")
         );
         assert_eq!(
@@ -2233,7 +2698,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 308);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(
                 "FetchEvent.respondWith rejected an opaque Response for a request whose mode is not no-cors"
             )
@@ -2295,7 +2764,11 @@ mod tests {
             let completion = pop_async_subresource_completion(&mut completion_queue);
             assert_eq!(completion.internal_id, 320 + index as u64);
             assert_eq!(
-                completion.result.err().as_deref(),
+                completion
+                    .result
+                    .err()
+                    .map(|error| error.to_string())
+                    .as_deref(),
                 Some("FetchEvent.respondWith rejected an opaque Response for a client request")
             );
             assert_eq!(
@@ -2354,6 +2827,7 @@ mod tests {
             completion
                 .result
                 .expect_err("CORP should reject")
+                .to_string()
                 .contains("Cross-Origin-Resource-Policy")
         );
     }
@@ -2407,6 +2881,7 @@ mod tests {
             completion
                 .result
                 .expect_err("image CORP should reject")
+                .to_string()
                 .contains("Cross-Origin-Resource-Policy")
         );
     }
@@ -2464,6 +2939,7 @@ mod tests {
             completion
                 .result
                 .expect_err("COEP require-corp should reject")
+                .to_string()
                 .contains("Cross-Origin-Embedder-Policy")
         );
     }
@@ -2523,6 +2999,7 @@ mod tests {
             completion
                 .result
                 .expect_err("COEP require-corp should reject image responses")
+                .to_string()
                 .contains("Cross-Origin-Embedder-Policy")
         );
     }
@@ -2749,7 +3226,8 @@ mod tests {
         assert!(!completion.skip_fetch_security_validation);
         let error = completion
             .result
-            .expect_err("COEP credentialless should reject credentialed no-cors responses");
+            .expect_err("COEP credentialless should reject credentialed no-cors responses")
+            .to_string();
         assert!(error.contains("Cross-Origin-Embedder-Policy"));
         assert!(error.contains("credentialless"));
     }
@@ -2807,7 +3285,8 @@ mod tests {
         assert!(!completion.skip_fetch_security_validation);
         let error = completion
             .result
-            .expect_err("DIP isolate-and-require-corp should reject image responses");
+            .expect_err("DIP isolate-and-require-corp should reject image responses")
+            .to_string();
         assert!(error.contains("Document-Isolation-Policy"));
         assert!(error.contains("isolate-and-require-corp"));
     }
@@ -2915,7 +3394,8 @@ mod tests {
         assert!(!completion.skip_fetch_security_validation);
         let error = completion
             .result
-            .expect_err("DIP isolate-and-credentialless should reject credentialed responses");
+            .expect_err("DIP isolate-and-credentialless should reject credentialed responses")
+            .to_string();
         assert!(error.contains("Document-Isolation-Policy"));
         assert!(error.contains("isolate-and-credentialless"));
     }
@@ -2957,6 +3437,7 @@ mod tests {
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                status_text: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -2974,6 +3455,7 @@ mod tests {
             completion
                 .result
                 .expect_err("COEP require-corp should reject before stream chunks")
+                .to_string()
                 .contains("Cross-Origin-Embedder-Policy")
         );
 
@@ -3024,6 +3506,7 @@ mod tests {
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                status_text: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3039,7 +3522,8 @@ mod tests {
         assert!(!completion.skip_fetch_security_validation);
         let error = completion
             .result
-            .expect_err("COEP credentialless should reject before stream chunks");
+            .expect_err("COEP credentialless should reject before stream chunks")
+            .to_string();
         assert!(error.contains("Cross-Origin-Embedder-Policy"));
         assert!(error.contains("credentialless"));
 
@@ -3088,6 +3572,7 @@ mod tests {
             owner: crate::service_worker_runtime::ServiceWorkerRunOwner::new(version_id, run),
             body_source_id,
             response_head: MaterializedServiceWorkerFetchResponseHead {
+                status_text: None,
                 final_url: Some(url("https://cdn.example.test/app/pixel.png")),
                 response_type: "default".to_owned(),
                 redirected: false,
@@ -3103,7 +3588,8 @@ mod tests {
         assert!(!completion.skip_fetch_security_validation);
         let error = completion
             .result
-            .expect_err("DIP isolate-and-credentialless should reject before stream chunks");
+            .expect_err("DIP isolate-and-credentialless should reject before stream chunks")
+            .to_string();
         assert!(error.contains("Document-Isolation-Policy"));
         assert!(error.contains("isolate-and-credentialless"));
 
@@ -3157,6 +3643,7 @@ mod tests {
             completion
                 .result
                 .expect_err("ORB should reject")
+                .to_string()
                 .contains("OpaqueResponseBlocking")
         );
     }
@@ -3200,7 +3687,10 @@ mod tests {
         assert_eq!(completion.response_filter, None);
         let response = completion
             .result
-            .expect("Service Worker response should not need ACAO");
+            .expect("Service Worker response should not need ACAO")
+            .into_navigation_response()
+            .expect("materialized response")
+            .with_network_request_headers(completion.network_request_headers);
         assert_eq!(response.status, 200);
         assert_eq!(response.body_text(), r#"{"visible":true}"#);
     }
@@ -3241,7 +3731,11 @@ mod tests {
         let completion = pop_async_subresource_completion(&mut completion_queue);
         assert_eq!(completion.internal_id, 309);
         assert_eq!(
-            completion.result.err().as_deref(),
+            completion
+                .result
+                .err()
+                .map(|error| error.to_string())
+                .as_deref(),
             Some(
                 "FetchEvent.respondWith rejected an opaqueredirect Response for a request whose redirect mode is not manual"
             )
@@ -3277,7 +3771,7 @@ mod tests {
             .pending_fetch_jobs
             .get_mut(&event_id)
             .expect("active fetch job")
-            .direct_completion_tx = Some(direct_completion_tx);
+            .result_tx = ServiceWorkerFetchResultSender::Resource(direct_completion_tx);
 
         service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
             event_id,
@@ -3287,6 +3781,42 @@ mod tests {
 
         expect_direct_fetch_fallback(&mut direct_completion_rx);
         assert!(!completion_queue.has_ready_completion());
+    }
+
+    #[test]
+    fn cancelled_page_request_rejects_late_service_worker_fallback() {
+        let service = new_service_worker_runtime_service();
+        let event_id = ServiceWorkerEventId(22);
+        let version_id = ServiceWorkerVersionId(1);
+        let run = RendererServiceWorkerRunIdentity::fresh();
+        let mut queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        insert_active_fetch_job(&service, event_id, version_id, &run, 302, queue.sender());
+        let response = {
+            let state = service.inner.state.lock();
+            let ServiceWorkerFetchResultSender::Page { network, .. } =
+                &state.pending_fetch_jobs[&event_id].result_tx
+            else {
+                panic!("Page request must retain its original response")
+            };
+            network.clone()
+        };
+        // The Page commits its abort before cancelling transport/removing the
+        // service job. A queued ServiceWorker completion can win that interval.
+        response
+            .network
+            .failed(&response.failure(crate::network_host::ABORTED_ERROR_TEXT.into()));
+        service.finish_fetch_event_completed(ServiceWorkerFetchCompletion {
+            event_id,
+            owner: ServiceWorkerRunOwner::new(version_id, run),
+            result: ServiceWorkerFetchResult::Fallback,
+        });
+        let state = service.inner.state.lock();
+        assert!(!state.pending_fetch_jobs.contains_key(&event_id));
+        assert_eq!(state.versions[&version_id].in_flight_event_count, 0);
+        assert!(
+            !queue.has_ready_completion(),
+            "a terminal request cannot restart transport"
+        );
     }
 
     #[test]
@@ -3351,7 +3881,8 @@ mod tests {
             from_cache: false,
             negotiated_http_version: None,
         });
-        job.direct_completion_tx = Some(direct_completion_tx);
+        job.result_tx = ServiceWorkerFetchResultSender::Resource(direct_completion_tx);
+        let runner = job.resource_task_runner.clone();
 
         // This test intentionally calls from a plain test thread. The
         // fallback must use the runner captured by the original resource
@@ -3361,11 +3892,24 @@ mod tests {
         let result = direct_completion_rx
             .blocking_recv()
             .expect("network fallback completion");
-        let ServiceWorkerDirectFetchResult::Response(response) = result else {
+        let ServiceWorkerResourceFetchResult::Response(response) = result else {
             panic!("expected network fallback response, got {result:?}");
         };
-        assert_eq!(response.response.status, 200);
-        assert_eq!(response.response.body_text(), "fallback");
+        assert_eq!(response.response.response().status, 200);
+        let (body_tx, body_rx) = tokio::sync::oneshot::channel();
+        runner.spawn(async move {
+            let _ = body_tx.send(
+                response
+                    .response
+                    .into_response()
+                    .into_lossy_materialized_text_response()
+                    .await,
+            );
+        });
+        assert_eq!(
+            body_rx.blocking_recv().unwrap().unwrap().body_text(),
+            "fallback"
+        );
         server.join().expect("fallback server should finish");
     }
 }

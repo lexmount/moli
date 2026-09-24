@@ -24,6 +24,7 @@ async fn add_script_to_evaluate_on_new_document_injects_script_into_future_navig
                 "url": "data:text/html,<body><script>document.body.textContent = globalThis.__lm_preload || 'missing';</script></body>"
             }
         })).await;
+    wait_until_navigation_document_load(&mut ctx, 26, Some("SID-1")).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
@@ -67,6 +68,7 @@ async fn add_script_to_evaluate_on_new_document_preserves_registration_order() {
                 "url": "data:text/html,<body><script>document.body.textContent = globalThis.__lm_order.join(',');</script></body>"
             }
         })).await;
+    wait_until_navigation_document_load(&mut ctx, 29, Some("SID-1")).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
@@ -109,18 +111,11 @@ async fn add_script_to_evaluate_on_new_document_validates_params() {
 async fn add_script_to_evaluate_on_new_document_does_not_mutate_existing_page() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>stable</body>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>stable</body>",
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 35,
@@ -219,6 +214,7 @@ async fn add_script_to_evaluate_on_new_document_keeps_duplicate_registrations_di
                 "url": "data:text/html,<body><script>document.body.textContent = String(globalThis.__lm_duplicate_count || 0);</script></body>"
             }
         })).await;
+    wait_until_navigation_document_load(&mut ctx, 41, Some("SID-1")).await;
     let _ = ctx.take_all();
 
     let html = loaded_page_html_for_test(&mut ctx).await;
@@ -423,18 +419,11 @@ async fn add_script_to_evaluate_on_new_document_world_name_preserves_order_withi
 async fn add_script_to_evaluate_on_new_document_run_immediately_mutates_existing_page() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>stable</body>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>stable</body>",
+        Some("SID-1"),
+    )
+    .await;
 
     let raw = json!({
         "id": 357,
@@ -473,16 +462,12 @@ async fn add_script_to_evaluate_on_new_document_run_immediately_mutates_existing
 async fn add_script_to_evaluate_on_new_document_run_immediately_world_name_creates_context() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>stable</body>")
-        .await
-        .expect("page should load");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>stable</body>",
+        Some("SID-1"),
+    )
+    .await;
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
     bc.set_target_security_origin("https://stale-top-origin.example".into());
 
     ctx.process_async(json!({
@@ -641,18 +626,11 @@ async fn remove_script_to_evaluate_on_new_document_removes_named_world_preload()
 async fn remove_script_to_evaluate_on_new_document_does_not_rollback_run_immediately_effect() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>stable</body>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>stable</body>",
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 367,
@@ -716,18 +694,11 @@ async fn create_isolated_world_requires_matching_frame_and_uses_fresh_initial_do
     .await;
     ctx.expect_error(40, -32000, "NoFrameForGivenId");
 
-    let iframe_page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<iframe srcdoc=\"<p>child</p>\"></iframe>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(iframe_page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<iframe srcdoc=\"<p>child</p>\"></iframe>",
+        Some("SID-1"),
+    )
+    .await;
     let child_frame_id = child_frame_id_for_single_iframe(&mut ctx, 400).await;
 
     ctx.process_async(json!({
@@ -754,6 +725,11 @@ async fn create_isolated_world_requires_matching_frame_and_uses_fresh_initial_do
         .as_mut()
         .unwrap()
         .clear_loaded_page();
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .begin_active_target_initial_empty_document("about:blank".into());
     ensure_initial_document_for_session(&mut ctx, Some("SID-1")).await;
     ctx.process_async(json!({
         "id": 41,
@@ -767,13 +743,15 @@ async fn create_isolated_world_requires_matching_frame_and_uses_fresh_initial_do
     .await;
     let created = take_response_by_id(&mut ctx, 41);
     assert_eq!(created["sessionId"], "SID-1");
-    assert!(created["result"]["executionContextId"].as_i64().is_some());
+    assert!(
+        created["result"]["executionContextId"].as_i64().is_some(),
+        "{created}"
+    );
     assert!(
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .is_some(),
+            .is_some_and(|bc| bc.has_loaded_page()),
         "Page.createIsolatedWorld should observe the target-lifecycle initial page"
     );
 
@@ -821,8 +799,8 @@ async fn create_isolated_world_requires_matching_frame_and_uses_fresh_initial_do
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .is_some_and(|page| page.final_url().as_str() == "data:text/html,<main>utility</main>"),
+            .and_then(|bc| bc.loaded_document_url_for_test())
+            .is_some_and(|url| url.as_str() == "data:text/html,<main>utility</main>"),
         "createIsolatedWorld should load the target initial URL before creating the world"
     );
 }
@@ -862,18 +840,11 @@ async fn create_isolated_world_async_accepts_child_frame_from_async_dispatch() {
     .await;
     ctx.expect_error(4020, -32000, "NoFrameForGivenId");
 
-    let iframe_page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<iframe srcdoc=\"<p>child</p>\"></iframe>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(iframe_page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<iframe srcdoc=\"<p>child</p>\"></iframe>",
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 4021,
@@ -1130,18 +1101,11 @@ async fn create_isolated_world_for_child_frame_replays_world_scoped_runtime_bind
 async fn create_isolated_world_installs_matching_bindings_before_document_start_scripts() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>top-frame</body>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>top-frame</body>",
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 416,
@@ -1389,18 +1353,11 @@ async fn create_isolated_world_validates_params() {
 async fn create_isolated_world_without_runtime_frontend_enabled_only_returns_result() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 45,
@@ -1417,7 +1374,7 @@ async fn create_isolated_world_without_runtime_frontend_enabled_only_returns_res
     let result = ctx.take_one();
     let execution_context_id = result["result"]["executionContextId"]
         .as_i64()
-        .expect("executionContextId");
+        .unwrap_or_else(|| panic!("missing executionContextId: {result:?}"));
     assert!(execution_context_id > 0);
     assert_eq!(result["id"], 45);
     assert_eq!(result["sessionId"], "SID-1");
@@ -1427,16 +1384,11 @@ async fn create_isolated_world_without_runtime_frontend_enabled_only_returns_res
 async fn create_isolated_world_accepts_cdp_and_corrected_grant_universal_access_spellings() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
-    let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 47,
@@ -1499,16 +1451,12 @@ async fn create_isolated_world_accepts_cdp_and_corrected_grant_universal_access_
 async fn create_isolated_world_returns_unique_context_ids_and_emits_runtime_event() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
     let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
     bc.set_target_security_origin("https://stale-top-origin.example".into());
 
     ctx.process_async(json!({
@@ -1595,16 +1543,17 @@ async fn create_isolated_world_returns_unique_context_ids_and_emits_runtime_even
 #[tokio::test(flavor = "multi_thread")]
 async fn create_isolated_world_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-1".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -1697,16 +1646,11 @@ async fn create_isolated_world_targets_loaded_background_owner_without_activatio
 async fn create_isolated_world_does_not_persist_across_navigation() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>hello</body>")
-        .await
-        .expect("page should load");
-    let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>hello</body>",
+        Some("SID-1"),
+    )
+    .await;
     ctx.process_async(json!({
         "id": 45,
         "method": "Runtime.enable",
@@ -1735,6 +1679,7 @@ async fn create_isolated_world_does_not_persist_across_navigation() {
         "params": { "url": "data:text/html,<body>next</body>" }
     }))
     .await;
+    wait_until_navigation_document_load(&mut ctx, 47, Some("SID-1")).await;
 
     let sent = ctx.take_all();
     assert!(
@@ -1757,48 +1702,40 @@ async fn create_isolated_world_after_reactivating_browser_context_with_another_l
     let mut ctx = TestContext::new();
 
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let first_page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>first</body>")
-        .await
-        .expect("first page should load");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>first</body>",
+        Some("SID-1"),
+    )
+    .await;
     {
         let bc = ctx
             .conn
             .browser_context
             .as_mut()
             .expect("first browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(first_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
     }
 
-    let mut second = BrowserContext::new("BID-2".into());
+    let mut second = ctx.conn.new_browser_context_fixture_for_test("BID-2");
     second.set_active_target_id("TID-2");
     second.attach_active_session("SID-2");
     second.set_target_url("about:blank".into());
     ctx.conn.insert_browser_context(second);
 
     assert!(ctx.conn.activate_browser_context_by_id_async("BID-2").await);
-    let second_page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<body>second</body>")
-        .await
-        .expect("second page should load");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<body>second</body>",
+        Some("SID-2"),
+    )
+    .await;
     {
         let bc = ctx
             .conn
             .browser_context_by_id_mut("BID-2")
             .expect("second browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(second_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state

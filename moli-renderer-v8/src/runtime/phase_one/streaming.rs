@@ -80,7 +80,7 @@ impl ConcurrentParseTimeRuntime {
         local_executor: JsLocalExecutor,
         loader: &ResourceRequestClient,
         env: &PageVmEnvConfig,
-        runtime_hooks: PageVmRuntimeHooks,
+        mut runtime_hooks: PageVmRuntimeHooks,
         stage: PageVmInitStage,
         started: Instant,
         response: Box<StreamingRawResponse>,
@@ -98,6 +98,7 @@ impl ConcurrentParseTimeRuntime {
             response_final_url,
             main_document_parser_scripting_enabled(&env),
         );
+        state.prepare_main_document(page_id, &mut runtime_hooks, loader)?;
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
@@ -110,17 +111,11 @@ impl ConcurrentParseTimeRuntime {
                     .response_content_security_policies
                     .is_empty(),
             );
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
         let service_worker_preload_context =
             env.reserved_service_worker_client_id.map(|client_id| {
                 ServiceWorkerScriptPreloadContext::new(
                     runtime_hooks.browser_context_runtime.clone(),
                     client_id,
-                    state.final_url.clone(),
-                    runtime_hooks.owner_wake(),
                 )
             });
         state.service_worker_preload_context = service_worker_preload_context.clone();
@@ -136,7 +131,6 @@ impl ConcurrentParseTimeRuntime {
             &mut state,
             &mut body_source,
             &mut decoder,
-            loader,
             service_worker_preload_context.as_ref(),
         );
         let bootstrap_outcome = Self::start_creation_from_streaming_html_bootstrap_with_state(
@@ -298,7 +292,7 @@ impl ConcurrentParseTimeRuntime {
         boundary: CommittedNavigationBootstrapBoundary,
     ) -> Result<StreamingNavigationPageCreationResult> {
         debug_assert!(!response_headers_indicate_download(&response_headers));
-        let runtime_hooks = match raw_body.page_creation_progress() {
+        let mut runtime_hooks = match raw_body.page_creation_progress() {
             Some(progress) => runtime_hooks.with_page_creation_progress(progress),
             None => runtime_hooks,
         };
@@ -336,6 +330,7 @@ impl ConcurrentParseTimeRuntime {
             final_url,
             main_document_parser_scripting_enabled(&env),
         );
+        state.prepare_main_document(page_id, &mut runtime_hooks, loader)?;
         state
             .buffered_document_preloads
             .set_script_fetch_requires_owner_admission(script_preloads_require_owner_admission(
@@ -348,17 +343,11 @@ impl ConcurrentParseTimeRuntime {
                     .response_content_security_policies
                     .is_empty(),
             );
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
         let service_worker_preload_context =
             env.reserved_service_worker_client_id.map(|client_id| {
                 ServiceWorkerScriptPreloadContext::new(
                     runtime_hooks.browser_context_runtime.clone(),
                     client_id,
-                    state.final_url.clone(),
-                    runtime_hooks.owner_wake(),
                 )
             });
         state.service_worker_preload_context = service_worker_preload_context.clone();
@@ -374,7 +363,6 @@ impl ConcurrentParseTimeRuntime {
             &mut state,
             &mut body_source,
             &mut decoder,
-            loader,
             service_worker_preload_context.as_ref(),
         );
         let bootstrap_outcome = Self::start_creation_from_streaming_html_bootstrap_with_state(
@@ -438,7 +426,7 @@ impl ConcurrentParseTimeRuntime {
             );
         }
         Ok(ParseTimePageVmStreamingBootstrapOutcome::Runtime(Box::new(
-            Self::new_parser_owner(loader.clone(), stage, state, page_vm),
+            Self::new_parser_owner(stage, state, page_vm),
         )))
     }
 
@@ -456,13 +444,11 @@ impl ConcurrentParseTimeRuntime {
             .append_to_main_document_scan_with_service_worker_context(
                 &self.state.final_url,
                 &chunk,
-                &self.loader,
                 service_worker_context,
             );
         admit_pending_preloads(
             &mut self.page_vm,
             &mut self.state.buffered_document_preloads,
-            &self.loader,
             service_worker_context,
         );
         self.state.parser_session.queue_arrived_chunk(chunk);
@@ -603,7 +589,6 @@ fn enqueue_prebootstrap_html_chunk(runtime: &mut ConcurrentParseTimeRuntime, chu
 
 fn scan_prebootstrap_html_chunk_into_state(
     state: &mut ParseTimeDriverState,
-    loader: &ResourceRequestClient,
     chunk: &str,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
@@ -612,7 +597,6 @@ fn scan_prebootstrap_html_chunk_into_state(
         .append_to_main_document_prebootstrap_scan_with_service_worker_context(
             &state.final_url,
             chunk,
-            loader,
             service_worker_context,
         );
 }
@@ -636,7 +620,6 @@ pub(super) fn enqueue_streaming_raw_chunk(
 fn scan_prebootstrap_raw_chunk_into_state(
     state: &mut ParseTimeDriverState,
     decoder: &mut HtmlDocumentStreamingDecoder,
-    loader: &ResourceRequestClient,
     chunk: Vec<u8>,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) -> Vec<String> {
@@ -644,7 +627,7 @@ fn scan_prebootstrap_raw_chunk_into_state(
     let decoded_chunks = decoder.push(&chunk);
     sync_state_document_character_set_from_decoder(state, decoder);
     for text_chunk in decoded_chunks {
-        scan_prebootstrap_html_chunk_into_state(state, loader, &text_chunk, service_worker_context);
+        scan_prebootstrap_html_chunk_into_state(state, &text_chunk, service_worker_context);
         text_chunks.push(text_chunk);
     }
     text_chunks
@@ -669,7 +652,6 @@ fn prebootstrap_scan_ready_streaming_raw_chunks(
     state: &mut ParseTimeDriverState,
     response: &mut RawDocumentBodySource,
     decoder: &mut HtmlDocumentStreamingDecoder,
-    loader: &ResourceRequestClient,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) -> Vec<String> {
     // Keep decoded text chunks paired with the decoder state so prebootstrap scan
@@ -679,7 +661,6 @@ fn prebootstrap_scan_ready_streaming_raw_chunks(
         text_chunks.extend(scan_prebootstrap_raw_chunk_into_state(
             state,
             decoder,
-            loader,
             chunk,
             service_worker_context,
         ));
@@ -962,6 +943,7 @@ mod tests {
             layout_policy: moli_page_types::LayoutPolicy::default(),
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            session_history_position: None,
             reserved_service_worker_client_id: None,
         }
     }
@@ -1084,10 +1066,6 @@ mod tests {
             .take_parser_stream_dom_host();
         let local_executor = JsLocalExecutor::new();
         let runtime_hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
         let mut page_vm = PageVm::new(
             PageId::new_for_testing(1),
             local_executor,
@@ -1098,6 +1076,10 @@ mod tests {
             Instant::now(),
         )
         .expect("page vm");
+        state.buffered_document_preloads.bind_resource_runtime(
+            page_vm.runtime_hooks.owner_wake(),
+            page_vm.main_document_resource_loader(),
+        );
         let script =
             prepared_external_classic_for_streaming_test("https://example.test/blocking.js");
         let parser_document_owner = page_vm
@@ -1121,7 +1103,6 @@ mod tests {
             ));
         TestConcurrentParseTimeRuntime {
             runtime: ConcurrentParseTimeRuntime::new_parser_owner(
-                loader,
                 PageVmInitStage::Load,
                 state,
                 page_vm,
@@ -1263,7 +1244,7 @@ mod tests {
         let (script_url, server) = spawn_single_script_server(script_body).await;
         let load = crate::planning::SharedScriptSourceLoad::ready_ok("window.blocking = true;");
         let mut runtime = streaming_runtime_with_pending_parser_blocking_source_load(load);
-        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let browser_context_runtime = browser_context_owner.handle();
         let document_url = Url::parse("https://example.test/").expect("test document url");
         let completion_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
@@ -1277,16 +1258,20 @@ mod tests {
         );
         let (wake_tx, mut wake_rx) = tokio::sync::mpsc::unbounded_channel();
         let wake_page_id = PageId::new_for_testing(77);
-        let owner_wake = crate::page_task_queue::RendererOwnerWakeSender::new(
-            wake_tx,
-            crate::runtime::RendererPageToken::new_for_testing(wake_page_id),
-        );
-        let service_worker_context = ServiceWorkerScriptPreloadContext::new(
-            browser_context_runtime,
-            client_id,
-            document_url,
-            Some(owner_wake),
-        );
+        let document_loader = runtime.page_vm.main_document_resource_loader();
+        runtime
+            .state
+            .buffered_document_preloads
+            .bind_resource_runtime(
+                Some(crate::page_task_queue::RendererOwnerWakeSender::new(
+                    wake_tx,
+                    crate::runtime::RendererPageToken::new_for_testing(wake_page_id),
+                )),
+                document_loader,
+            );
+
+        let service_worker_context =
+            ServiceWorkerScriptPreloadContext::new(browser_context_runtime, client_id);
         let (completion_tx, completion_rx) = oneshot::channel();
         let (body_tx, raw_body) = ExternalRawDocumentBodyStream::channel(completion_rx);
         body_tx
@@ -1316,10 +1301,31 @@ mod tests {
             .entries
             .load_for_key(&classic_preload_key_for_streaming_test(script_url.as_str()))
             .expect("ready chunk should create script preload");
-        let outcome =
-            tokio::time::timeout(std::time::Duration::from_secs(2), preload.wait_outcome())
-                .await
-                .expect("script preload should finish");
+        let outcome = tokio::task::LocalSet::new()
+            .run_until(tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    if let Some(outcome) = preload.try_outcome() {
+                        return outcome;
+                    }
+                    assert!(
+                        runtime
+                            .page_vm
+                            .wait_for_page_resource_completion_for_test()
+                            .await
+                    );
+                    assert!(
+                        runtime
+                            .page_vm
+                            .run_exact_selected_page_task_for_test(
+                                crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
+                            )
+                            .await
+                            .unwrap()
+                    );
+                }
+            }))
+            .await
+            .expect("script preload should finish");
         assert_eq!(
             outcome
                 .source_result
@@ -1352,8 +1358,6 @@ mod tests {
         drop(body_tx);
         completion_tx.send(Ok(())).unwrap();
 
-        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
-            .expect("test loader should construct");
         let mut source = RawDocumentBodySource::External(raw_body);
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(
             Url::parse("https://example.test/").expect("test url"),
@@ -1368,7 +1372,6 @@ mod tests {
             &mut state,
             &mut source,
             &mut decoder,
-            &loader,
             None,
         );
 

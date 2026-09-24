@@ -334,7 +334,8 @@ pub(crate) fn import_cookies_into_store(
     let mut cookie_store = cookie_store.lock();
     let mut accepted = 0usize;
     for cookie in cookies {
-        let report = cookie_store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
+        let report =
+            cookie_store.upsert_with_request_url_report(cookie, None, CookieSource::Management);
         if report.is_accepted() {
             accepted += 1;
         }
@@ -374,7 +375,8 @@ fn commit_cookie_delta_to_store(
     }
 
     for cookie in final_cookies {
-        let report = cookie_store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
+        let report =
+            cookie_store.upsert_with_request_url_report(cookie, None, CookieSource::Management);
         if !report.is_accepted() {
             return Err(anyhow!("failed to commit cookie into storage partition"));
         }

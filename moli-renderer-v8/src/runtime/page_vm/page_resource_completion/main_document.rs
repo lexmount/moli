@@ -3,8 +3,8 @@ use anyhow::Result;
 use crate::{
     module_script_continuation::MainParserDeferredClassicSourceLoadCompletion,
     page_resource_completion::{
-        MainParserDeferredClassicSourceNetworkAttribution, PageResourceCompletionOutputEffect,
-        PageResourceCompletionTurnAction, RendererPageResourceCompletionOwner,
+        PageResourceCompletionOutputEffect, PageResourceCompletionTurnAction,
+        RendererPageResourceCompletionOwner,
     },
     runtime::RendererOwnerResourceActivitySource,
     types::DocumentWriteExternalScriptLoadCompletion,
@@ -37,29 +37,17 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            let output_effect = if let Some(network_result) = completion.network_result() {
-                self.vm_mut()
-                    .record_historical_script_subresource_network_result(
-                        completion.network_attribution().document_url().clone(),
-                        completion.network_attribution().request_url().clone(),
-                        network_result.as_ref(),
-                    );
-                PageResourceCompletionOutputEffect::CaptureRequired
-            } else {
-                PageResourceCompletionOutputEffect::None
-            };
             return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                output_effect,
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
         if let Some(network_result) = completion.network_result() {
-            self.vm_mut().record_script_subresource_network_result(
-                completion.network_attribution().document_url().clone(),
-                completion.network_attribution().request_url().clone(),
+            self.vm_mut().record_script_resource_timing(
+                completion.request_url().clone(),
                 network_result.as_ref(),
             );
         }
@@ -100,26 +88,14 @@ impl PageVm {
         source: RendererOwnerResourceActivitySource,
         owner: RendererPageResourceCompletionOwner,
         completion: MainParserDeferredClassicSourceLoadCompletion,
-        network_attribution: MainParserDeferredClassicSourceNetworkAttribution,
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            let output_effect = if let Some(network_result) = completion.network_result() {
-                self.vm_mut()
-                    .record_historical_script_subresource_network_result(
-                        network_attribution.document_url().clone(),
-                        network_attribution.request_url().clone(),
-                        network_result.as_ref(),
-                    );
-                PageResourceCompletionOutputEffect::CaptureRequired
-            } else {
-                PageResourceCompletionOutputEffect::None
-            };
             return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                output_effect,
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 

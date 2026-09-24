@@ -1,13 +1,12 @@
 use super::*;
 
 use crate::page_resource_completion::{
-    MainModuleFetchNetworkAttribution, MainParserModuleGraphFetchCompletion,
-    MainParserModuleGraphFetchTarget, RendererPageResourceCompletionLocalOwner,
+    MainParserModuleGraphFetchCompletion, MainParserModuleGraphFetchTarget,
+    RendererPageResourceCompletionLocalOwner,
 };
 
 fn parser_module_completion(
     target: MainParserModuleGraphFetchTarget,
-    document_url: Url,
     request_url: Url,
     source: std::result::Result<&str, &str>,
     network_result: Option<crate::types::SharedNavigationResponseResult>,
@@ -21,12 +20,7 @@ fn parser_module_completion(
             )
         })
         .map_err(str::to_owned);
-    MainParserModuleGraphFetchCompletion::new(
-        target,
-        result,
-        network_result,
-        MainModuleFetchNetworkAttribution::new(document_url, request_url),
-    )
+    MainParserModuleGraphFetchCompletion::new(target, result, network_result, request_url)
 }
 
 fn arbitrary_parser_module_target(
@@ -73,13 +67,10 @@ fn enqueue_parser_module_completion(
     );
 }
 
-async fn run_ready_native_module_owner_turns(
-    page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
-) -> anyhow::Result<()> {
+async fn run_ready_native_module_owner_turns(page_vm: &mut PageVm) -> anyhow::Result<()> {
     while page_vm.vm_mut().has_ready_native_module_owner_actions() {
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("one native module owner event should retain one typed main runtime task");
         assert_eq!(
@@ -113,10 +104,11 @@ async fn production_parser_module_fetch_uses_stable_typed_route_and_applies_regi
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
         let (target, parser_work) = install_loading_parser_module(&mut page_vm, module_url.clone());
         page_vm
-            .execute_post_parse_page_owned_task_on_named_owner_lane(&loader, parser_work)
+            .execute_post_parse_page_owned_task_on_named_owner_lane(parser_work)
             .await?;
 
         super::child_document_completion::wait_for_page_resource_completion(
+            &mut page_vm,
             &mut queue,
             &mut wake_rx,
             "main parser module fetch",
@@ -149,16 +141,14 @@ async fn production_parser_module_fetch_uses_stable_typed_route_and_applies_regi
         );
         assert!(!queue.has_ready_completion());
 
-        run_ready_native_module_owner_turns(&mut page_vm, &loader).await?;
+        run_ready_native_module_owner_turns(&mut page_vm).await?;
         run_ready_parser_deferred_body_for_test(
             &mut page_vm,
-            &loader,
             "typed main parser module completion",
         )
         .await;
         run_parser_module_completion_turns_for_test(
             &mut page_vm,
-            &loader,
             0,
             "typed main parser module completion",
         )
@@ -218,13 +208,12 @@ export const dependency = true;"#
         let (root_target, parser_work) =
             install_loading_parser_module(&mut page_vm, root_url);
         page_vm
-            .execute_post_parse_page_owned_task_on_named_owner_lane(&loader, parser_work)
+            .execute_post_parse_page_owned_task_on_named_owner_lane(parser_work)
             .await?;
-        super::child_document_completion::wait_for_page_resource_completion(
-            &mut queue,
-            &mut wake_rx,
-            "main parser module root fetch",
-        )
+        super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"main parser module root fetch")
         .await;
 
         let root_document = page_vm.document_lifecycle.identity().document;
@@ -242,13 +231,12 @@ export const dependency = true;"#
             root_outcome.action.document_effect,
             PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
         );
-        run_ready_native_module_owner_turns(&mut page_vm, &loader).await?;
+        run_ready_native_module_owner_turns(&mut page_vm).await?;
 
-        super::child_document_completion::wait_for_page_resource_completion(
-            &mut queue,
-            &mut wake_rx,
-            "main parser module dependency fetch",
-        )
+        super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"main parser module dependency fetch")
         .await;
         let dependency_owner = queue
             .next_ready_owner()
@@ -280,19 +268,13 @@ export const dependency = true;"#
             dependency_outcome.action.document_effect,
             PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
         );
-        run_ready_native_module_owner_turns(&mut page_vm, &loader).await?;
-        run_ready_parser_deferred_body_for_test(
-            &mut page_vm,
-            &loader,
-            "typed parser module dependency completion",
-        )
+        run_ready_native_module_owner_turns(&mut page_vm).await?;
+        run_ready_parser_deferred_body_for_test(&mut page_vm,
+"typed parser module dependency completion")
         .await;
-        run_parser_module_completion_turns_for_test(
-            &mut page_vm,
-            &loader,
-            0,
-            "typed parser module dependency completion",
-        )
+        run_parser_module_completion_turns_for_test(&mut page_vm,
+0,
+"typed parser module dependency completion")
         .await;
         assert_eq!(
             page_vm
@@ -357,16 +339,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_parser_module_target() {
                     let (old_target, old_work) =
                         install_loading_parser_module(&mut page_vm, old_module_url.clone());
                     page_vm
-                        .execute_post_parse_page_owned_task_on_named_owner_lane(
-                            &loader, old_work,
-                        )
+                        .execute_post_parse_page_owned_task_on_named_owner_lane(old_work)
                         .await?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "old PageVm parser module fetch",
-                    )
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"old PageVm parser module fetch")
                     .await;
+                    let (network_records, _, _) = split_network_output_items(page_vm.vm_mut().take_network_output());
                     let (_, old_envelope) = queue
                         .pop_front()
                         .expect("old PageVm parser module terminal should remain queued");
@@ -402,16 +382,12 @@ fn real_page_vm_replacement_rejects_naturally_colliding_parser_module_target() {
                         replacement_module_url,
                     );
                     page_vm
-                        .execute_post_parse_page_owned_task_on_named_owner_lane(
-                            &loader,
-                            replacement_work,
-                        )
+                        .execute_post_parse_page_owned_task_on_named_owner_lane(replacement_work)
                         .await?;
-                    super::child_document_completion::wait_for_page_resource_completion(
-                        &mut queue,
-                        &mut wake_rx,
-                        "replacement PageVm parser module fetch",
-                    )
+                    super::child_document_completion::wait_for_page_resource_completion(&mut page_vm,
+&mut queue,
+&mut wake_rx,
+"replacement PageVm parser module fetch")
                     .await;
                     let (_, replacement_envelope) = queue
                         .pop_front()
@@ -441,19 +417,18 @@ fn real_page_vm_replacement_rejects_naturally_colliding_parser_module_target() {
                     );
                     assert_eq!(
                         stale.action.output_effect,
-                        PageResourceCompletionOutputEffect::CaptureRequired
+                        PageResourceCompletionOutputEffect::None
                     );
                     assert_eq!(
                         page_vm.vm().subresource_activity_epoch(),
                         activity_epoch_before,
                         "historical old-PageVm Network output must not become replacement activity"
                     );
-                    let (network_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "a stale business callback cannot manufacture Network output");
                     assert_eq!(
                         network_records.len(),
                         1,
-                        "discarding the old producer terminal should publish exactly its historical Network fact"
+                        "the original physical response must have published exactly one Network fact"
                     );
                     assert_eq!(network_records[0].document_url(), &initial_url);
                     assert_eq!(network_records[0].url(), &old_module_url);
@@ -482,7 +457,7 @@ fn real_page_vm_replacement_rejects_naturally_colliding_parser_module_target() {
                         current.action.document_effect,
                         PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
                     );
-                    run_ready_native_module_owner_turns(&mut page_vm, &loader).await?;
+                    run_ready_native_module_owner_turns(&mut page_vm).await?;
                     let interactive = poll_post_parse_document_processing_action_for_test(
                         &mut page_vm,
                     )
@@ -500,23 +475,14 @@ fn real_page_vm_replacement_rejects_naturally_colliding_parser_module_target() {
                         "replacement parser marker must follow the exact Document's interactive action, got {interactive:?}"
                     );
                     page_vm
-                        .execute_post_parse_page_owned_task_on_named_owner_lane(
-                            &loader,
-                            *interactive,
-                        )
+                        .execute_post_parse_page_owned_task_on_named_owner_lane(*interactive)
                         .await?;
-                    run_ready_parser_deferred_body_for_test(
-                        &mut page_vm,
-                        &loader,
-                        "replacement PageVm parser module completion",
-                    )
+                    run_ready_parser_deferred_body_for_test(&mut page_vm,
+"replacement PageVm parser module completion")
                     .await;
-                    run_parser_module_completion_turns_for_test(
-                        &mut page_vm,
-                        &loader,
-                        0,
-                        "replacement PageVm parser module completion",
-                    )
+                    run_parser_module_completion_turns_for_test(&mut page_vm,
+0,
+"replacement PageVm parser module completion")
                     .await;
                     assert_eq!(
                         page_vm
@@ -555,7 +521,7 @@ async fn parser_module_terminal_failure_applies_to_its_registered_pending_script
             test_page_vm_with_loader_and_document_url(&loader, Vec::new(), document_url.clone());
         let (target, parser_work) = install_loading_parser_module(&mut page_vm, module_url.clone());
         page_vm
-            .execute_post_parse_page_owned_task_on_named_owner_lane(&loader, parser_work)
+            .execute_post_parse_page_owned_task_on_named_owner_lane(parser_work)
             .await?;
         let root_document = page_vm.document_lifecycle.identity().document;
         let mut queue = RendererPageNetworkingSource::new_for_test();
@@ -564,7 +530,6 @@ async fn parser_module_terminal_failure_applies_to_its_registered_pending_script
             root_document,
             parser_module_completion(
                 target,
-                document_url,
                 module_url.clone(),
                 Err("typed parser module fetch failed"),
                 None,
@@ -578,12 +543,7 @@ async fn parser_module_terminal_failure_applies_to_its_registered_pending_script
             outcome.action.document_effect,
             PageResourceCompletionDocumentEffect::AppliedToCurrentOwner
         );
-        run_ready_parser_deferred_body_for_test(
-            &mut page_vm,
-            &loader,
-            "typed parser module failure",
-        )
-        .await;
+        run_ready_parser_deferred_body_for_test(&mut page_vm, "typed parser module failure").await;
         let failure = page_vm
             .report
             .runs
@@ -602,7 +562,7 @@ async fn parser_module_terminal_failure_applies_to_its_registered_pending_script
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn document_open_makes_queued_parser_module_terminal_stale_but_keeps_network_fact() {
+async fn document_open_makes_queued_parser_module_terminal_stale_without_network_effect() {
     run_page_vm_async_test(async move {
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
@@ -630,7 +590,6 @@ async fn document_open_makes_queued_parser_module_terminal_stale_but_keeps_netwo
             root_document,
             parser_module_completion(
                 target,
-                document_url.clone(),
                 module_url.clone(),
                 Err("old parser module response"),
                 Some(Arc::new(Err(
@@ -648,33 +607,18 @@ async fn document_open_makes_queued_parser_module_terminal_stale_but_keeps_netwo
         ));
         assert_eq!(
             outcome.action.output_effect,
-            PageResourceCompletionOutputEffect::CaptureRequired
+            PageResourceCompletionOutputEffect::None
         );
         assert_eq!(
             page_vm.vm().subresource_activity_epoch(),
             activity_epoch_before,
             "historical parser module Network output must not become replacement activity"
         );
-        let (network_records, _, _) =
-            split_network_output_items(page_vm.vm_mut().take_network_output());
-        assert_eq!(network_records.len(), 1);
-        let network_record = &network_records[0];
-        assert_eq!(network_record.document_url(), &document_url);
-        assert_eq!(network_record.url(), &module_url);
-        assert_eq!(
-            network_record.resource_type(),
-            SubresourceResourceType::Script
+        assert!(
+            page_vm.vm_mut().take_network_output().is_empty(),
+            "business completion must not manufacture Network output"
         );
-        assert_eq!(
-            network_record.request_initiator_type(),
-            SubresourceRequestInitiatorType::Parser
-        );
-        assert_eq!(
-            network_record.outcome(),
-            &SubresourceNetworkOutcome::Failure {
-                error_text: "old parser module transport failed".to_owned(),
-            }
-        );
+
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -688,14 +632,13 @@ async fn parser_module_source_consumes_one_terminal_per_turn_in_fifo_order() {
         let root_document = page_vm.document_lifecycle.identity().document;
         let first_target = arbitrary_parser_module_target(&page_vm, 61, 701);
         let second_target = arbitrary_parser_module_target(&page_vm, 62, 702);
-        let document_url = Url::parse("https://example.test/parser-module-fifo.html").unwrap();
+
         let mut queue = RendererPageNetworkingSource::new_for_test();
         enqueue_parser_module_completion(
             &mut queue,
             root_document,
             parser_module_completion(
                 first_target,
-                document_url.clone(),
                 Url::parse("https://example.test/parser-module-first.mjs").unwrap(),
                 Err("first stale terminal"),
                 None,
@@ -706,7 +649,6 @@ async fn parser_module_source_consumes_one_terminal_per_turn_in_fifo_order() {
             root_document,
             parser_module_completion(
                 second_target,
-                document_url,
                 Url::parse("https://example.test/parser-module-second.mjs").unwrap(),
                 Err("second stale terminal"),
                 None,

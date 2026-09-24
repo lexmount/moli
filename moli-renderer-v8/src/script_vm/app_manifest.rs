@@ -1,23 +1,19 @@
 use moli_fetch::{
-    BrowserRequestMetadata, FetchCancelHandle, Request, RequestCredentialsMode, RequestMode,
-    RequestRedirectMode, RequestResourceType,
+    BrowserRequestMetadata, Request, RequestCredentialsMode, RequestMode, RequestRedirectMode,
+    RequestResourceType,
 };
 
 use super::ScriptVm;
 use crate::{
     app_manifest::{
         RendererAppManifestLinkIdentity, RendererAppManifestLoadPreparation,
-        RendererAppManifestLoadPublication, RendererAppManifestNetworkObservation,
-        RendererAppManifestQueryResult, RendererPreparedAppManifestLoad,
-        complete_default_app_manifest,
+        RendererAppManifestLoadPublication, RendererAppManifestQueryResult,
+        RendererPreparedAppManifestLoad, complete_default_app_manifest,
     },
     document_runtime::DocumentSubresourceCspKind,
     dom::native::{DomHost, DomMutationEffects},
     native_bridge::JsContextHost,
-    network::{
-        RendererPreparedNetworkResourceLoad,
-        loads::{ResourceLoadDisposition, ResourceLoadKind},
-    },
+    types::{SubresourceRequestInitiatorType, SubresourceResourceType},
 };
 
 pub(super) struct ScriptVmAppManifestCache {
@@ -62,41 +58,35 @@ impl ScriptVm {
         } else {
             RequestCredentialsMode::Omit
         };
-        let request_headers = host.extra_http_headers().clone();
-        let cancel_handle = FetchCancelHandle::new();
-        let Some(load) = resource_loader.register_load(
-            ResourceLoadKind::Manifest,
-            ResourceLoadDisposition::Ordinary,
-            Some(cancel_handle.clone()),
+        let request = Request::new(
+            "GET",
+            manifest_url.as_str(),
+            None,
+            host.extra_http_headers().clone(),
+        )
+        .expect("a resolved app manifest URL should remain valid")
+        .with_initiator_url(&document_url)
+        .with_request_origin(resource_loader.fetch_context().request_origin())
+        .with_request_mode(RequestMode::Cors)
+        .with_credentials_mode(credentials_mode)
+        .with_redirect_mode(RequestRedirectMode::Follow)
+        .with_resource_type(RequestResourceType::Manifest)
+        .with_browser_request_metadata(BrowserRequestMetadata::Manifest)
+        .with_page_network_policy();
+        let Some((load, network, started)) = resource_loader.prepare_resource_request(
+            &request,
+            SubresourceResourceType::Manifest,
+            SubresourceRequestInitiatorType::Other,
         ) else {
             return complete_default_app_manifest(&document_url, Some(&manifest_url));
         };
-        let request = Request::new("GET", manifest_url.as_str(), None, request_headers.clone())
-            .expect("a resolved app manifest URL should remain valid")
-            .with_initiator_url(&document_url)
-            .with_request_origin(resource_loader.fetch_context().request_origin())
-            .with_request_mode(RequestMode::Cors)
-            .with_credentials_mode(credentials_mode)
-            .with_redirect_mode(RequestRedirectMode::Follow)
-            .with_resource_type(RequestResourceType::Manifest)
-            .with_browser_request_metadata(BrowserRequestMetadata::Manifest)
-            .with_page_network_policy();
+        network.observe(started);
         RendererAppManifestLoadPreparation::Ready(Box::new(RendererPreparedAppManifestLoad::new(
             document_url,
-            resource_loader.fetch_context().request_origin(),
-            manifest_url,
             link_identity,
-            RendererPreparedNetworkResourceLoad::new(
-                resource_loader.frozen_request_client(),
-                request,
-            ),
-            RendererAppManifestNetworkObservation::new(
-                self.root_frame_id.clone(),
-                request_headers,
-                credentials_mode,
-                load,
-                cancel_handle,
-            ),
+            request,
+            load,
+            network,
         )))
     }
 
@@ -144,11 +134,7 @@ impl ScriptVm {
         &mut self,
         publication: RendererAppManifestLoadPublication,
     ) {
-        let (record, successful_result) = publication.into_parts();
-        self._context_host
-            .borrow_mut()
-            .record_subresource_network(record);
-        let Some((link_identity, result)) = successful_result else {
+        let Some((link_identity, result)) = publication.into_cached_result() else {
             return;
         };
         if self

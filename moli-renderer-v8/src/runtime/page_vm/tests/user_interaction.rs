@@ -61,7 +61,7 @@ dialog.close();
             "the body-only executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -107,7 +107,7 @@ dialog.close();
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "the exact user-interaction task should run through the selected dispatcher"
         );
@@ -246,10 +246,7 @@ async fn data_transfer_get_as_string_uses_one_typed_user_interaction_task_per_ca
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::UserInteraction,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "the first callback must run through the production selected-task dispatcher"
         );
@@ -263,10 +260,7 @@ async fn data_transfer_get_as_string_uses_one_typed_user_interaction_task_per_ca
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::UserInteraction,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "the revoked callable Proxy must remain an admitted callback task"
         );
@@ -279,10 +273,7 @@ async fn data_transfer_get_as_string_uses_one_typed_user_interaction_task_per_ca
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::UserInteraction,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "null, file, and disabled items must not manufacture callback tasks"
         );
@@ -360,10 +351,7 @@ crossRealmTransfer.items
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::UserInteraction,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "the cross-Realm callback task should run"
         );
@@ -405,10 +393,7 @@ Promise.resolve().then(() => { __dataTransferRetiredCheckpoint += 1; });
             )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::UserInteraction,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "the current calling target must settle a retired callback task"
         );
@@ -470,7 +455,7 @@ Promise.resolve().then(() => { __dataTransferStaleTargetCheckpoint += 1; });
 "#,
             )?;
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -558,7 +543,7 @@ getSelection().collapse(text, 1);
         for expected in expected_after_each_turn {
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction, &loader)
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                     .await?,
                 "one family task should remain queued"
             );
@@ -569,7 +554,7 @@ getSelection().collapse(text, 1);
         }
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::UserInteraction)
                 .await?,
             "five API callbacks/events must consume exactly five browser task turns"
         );

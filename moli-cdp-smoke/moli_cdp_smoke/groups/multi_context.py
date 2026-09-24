@@ -772,16 +772,20 @@ async def run_multi_context_popup_response_stage_stream_owner_state_smoke(
             "context B popup",
         )
 
-        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "offset": 0, "size": 8})
+        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "size": 8})
         assert_equal(first_a.get("base64Encoded"), False, "context A popup stream first chunk encoding")
         assert_equal(first_a.get("data"), "response", "context A popup stream first chunk")
         assert_equal(first_a.get("eof"), False, "context A popup stream first chunk eof")
 
-        offset_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 9, "size": 5})
-        assert_equal(offset_b.get("base64Encoded"), False, "context B popup stream offset encoding")
-        assert_equal(offset_b.get("data"), "stage", "context B popup stream offset chunk")
-        assert_equal(offset_b.get("eof"), False, "context B popup stream offset eof")
-        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 0, "size": 8})
+        # The same Chromium-calibrated Fetch stream contract as the network group:
+        # rejected offsets, including zero, leave the sequential cursor unchanged.
+        for offset in (9, 0):
+            await _expect_cdp_error(
+                _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": offset, "size": 5}),
+                "OffsetNotSupportedForStream",
+                "context B popup stream rejects random access",
+            )
+        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "size": 8})
         assert_equal(first_b.get("base64Encoded"), False, "context B popup stream first chunk encoding")
         assert_equal(first_b.get("data"), "response", "context B popup stream first chunk")
         tail_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b})
@@ -945,7 +949,7 @@ async def run_multi_context_popup_response_stage_stream_wrong_session_smoke(
             raise SmokeError("popup response-stage streams should be target-owner scoped")
 
         await _expect_cdp_error(
-            _send_cdp(cdp_b, "IO.read", {"handle": stream_a, "offset": 0, "size": 4}),
+            _send_cdp(cdp_b, "IO.read", {"handle": stream_a, "size": 4}),
             "StreamHandleNotFound",
             "context B should not read context A popup stream",
         )
@@ -955,7 +959,7 @@ async def run_multi_context_popup_response_stage_stream_wrong_session_smoke(
             "context B should not close context A popup stream",
         )
         await _expect_cdp_error(
-            _send_cdp(cdp_a, "IO.read", {"handle": stream_b, "offset": 0, "size": 4}),
+            _send_cdp(cdp_a, "IO.read", {"handle": stream_b, "size": 4}),
             "StreamHandleNotFound",
             "context A should not read context B popup stream",
         )
@@ -965,13 +969,13 @@ async def run_multi_context_popup_response_stage_stream_wrong_session_smoke(
             "context A should not close context B popup stream",
         )
 
-        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "offset": 0, "size": 8})
+        first_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a, "size": 8})
         assert_equal(first_a.get("data"), "response", "context A popup stream remains readable by owner")
         tail_a = await _send_cdp(cdp_a, "IO.read", {"handle": stream_a})
         assert_equal(tail_a.get("data"), "-stage body", "context A popup stream owner tail")
         assert_equal(tail_a.get("eof"), True, "context A popup stream owner tail eof")
 
-        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "offset": 0, "size": 8})
+        first_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b, "size": 8})
         assert_equal(first_b.get("data"), "response", "context B popup stream remains readable by owner")
         tail_b = await _send_cdp(cdp_b, "IO.read", {"handle": stream_b})
         assert_equal(tail_b.get("data"), "-stage body", "context B popup stream owner tail")

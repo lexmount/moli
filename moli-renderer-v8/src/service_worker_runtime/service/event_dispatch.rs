@@ -62,6 +62,7 @@ fn navigation_preload_response_head(
     head: moli_fetch::ResponseHead,
 ) -> MaterializedServiceWorkerFetchResponseHead {
     MaterializedServiceWorkerFetchResponseHead {
+        status_text: None,
         final_url: Some(head.final_url),
         response_type: "default".to_owned(),
         redirected: head.redirected,
@@ -269,13 +270,12 @@ impl ServiceWorkerRuntimeService {
             metadata: request.metadata.clone(),
             request_cookie_report: dispatch.request_cookie_report,
             network_context: dispatch.network_context,
-            completion_tx: dispatch.completion_tx,
+            result_tx: dispatch.result_tx,
             request_client: dispatch.request_client,
             resource_task_runner: dispatch.resource_task_runner,
             cancel_handle: dispatch.cancel_handle,
             navigation_preload_cancel_handle: None,
-            streaming_body_source_id: None,
-            direct_completion_tx: dispatch.direct_completion_tx,
+            body_stream: None,
         };
         self.dispatch_controlled_fetch_job(fetch_job, request)
             .is_ok()
@@ -386,7 +386,10 @@ impl ServiceWorkerRuntimeService {
                         let owner = version.replace_run_owner();
                         version.last_start_error = None;
                         fetch_job.bind_to_owner(owner.clone());
-                        let host = RendererServiceWorkerHost::new_loading(&owner);
+                        let host = RendererServiceWorkerHost::new_loading(
+                            &owner,
+                            &version.launch_config.worker_context_runtime,
+                        );
                         version.launch_config.document_url = document_url.clone();
                         let params = version.launch_config.to_launch_params(
                             registration_id,
@@ -407,6 +410,7 @@ impl ServiceWorkerRuntimeService {
                             .push_back(ServiceWorkerPendingStartEvent::Fetch(event));
                         version.running_state =
                             ServiceWorkerVersionRunningState::Starting { host: host.clone() };
+                        state.record_target_starting(version_id);
                         (
                             None,
                             Some(ServiceWorkerQueuedLaunch {

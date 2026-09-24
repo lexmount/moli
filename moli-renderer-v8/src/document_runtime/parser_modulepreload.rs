@@ -141,7 +141,6 @@ impl DocumentRuntime {
         resource_scheduler: &RendererResourceScheduler,
         request: NativeModuleSingleFetchRequest,
     ) -> std::result::Result<MainDocumentModulepreloadFetchOutcome, ModuleLoadError> {
-        let document_url = self.document_url().clone();
         let key = request.module_key().clone();
         let fetch_request = request.fetch_request();
         let mut csp_violations = Vec::new();
@@ -189,7 +188,6 @@ impl DocumentRuntime {
                 load_id,
             ),
             fetch_request,
-            document_url,
         );
         Ok(MainDocumentModulepreloadFetchOutcome {
             job_run: Some(ModulePreloadJobRun::Scheduled),

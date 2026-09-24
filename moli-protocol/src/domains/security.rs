@@ -2,18 +2,21 @@ use chromiumoxide_cdp::cdp::browser_protocol::security::SetIgnoreCertificateErro
 
 use super::actions::SecurityAction;
 use super::command_output::CommandOutputPlan;
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{
+    CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentResourceRuntimeUpdate,
+    PendingDocumentResourceRuntimeUpdate,
+};
 
 pub(crate) struct PendingSecurityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    pending: moli_core::page::PendingPageCommand,
+    pending: PendingDocumentResourceRuntimeUpdate,
 }
 
 pub(crate) struct CompletedSecurityCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    completed: Result<moli_core::page::CompletedPageCommand, String>,
+    completed: CompletedDocumentResourceRuntimeUpdate,
 }
 
 pub(crate) enum SecurityCommandTaskStep {
@@ -26,7 +29,7 @@ impl PendingSecurityCommandDispatch {
         CompletedSecurityCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed: self.pending.wait().await,
         }
     }
 }
@@ -92,12 +95,7 @@ pub(crate) fn complete_pending_security_command(
     conn: &mut CdpConnection,
     completed: CompletedSecurityCommandDispatch,
 ) -> CommandOutputPlan {
-    let completion = match completed.completed {
-        Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
-    };
-    let owner_scope = completed.owner_scope;
-    match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
+    match conn.finish_document_resource_runtime_update(completed.completed) {
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-32000, error),
     }
@@ -107,13 +105,13 @@ pub(crate) fn complete_pending_security_command(
 mod tests {
     use serde_json::json;
 
-    use crate::{conn::BrowserContext, testing::TestContext};
+    use crate::testing::TestContext;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn set_ignore_certificate_errors_toggles_tls_verification() {
         let mut ctx = TestContext::new();
         ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-9".into()));
+            .insert_browser_context(ctx.conn.new_browser_context_fixture_for_test("BID-9"));
 
         ctx.process_async(json!({
             "id": 11,
@@ -137,9 +135,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn set_ignore_certificate_errors_is_scoped_to_active_browser_context() {
         let mut ctx = TestContext::new();
-        let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut first = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         first.attach_active_session("SID-1");
-        let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
+        let mut second = ctx.conn.new_page_target_fixture_for_test("BID-2", "TID-2");
         second.attach_active_session("SID-2");
         ctx.conn.insert_browser_context(first);
         ctx.conn.insert_browser_context(second);
@@ -155,20 +153,21 @@ mod tests {
         assert_eq!(ctx.conn.browser_context.as_ref().unwrap().id, "BID-1");
         assert!(ctx.conn.tls_verify_host());
         assert_eq!(
-            ctx.conn
-                .inactive_browser_contexts
-                .iter()
-                .find(|bc| bc.id == "BID-2")
-                .expect("session browser context")
-                .active_page_target()
-                .tls_verify_host_override,
+            {
+                let context = &ctx
+                    .conn
+                    .inactive_browser_contexts
+                    .iter()
+                    .find(|bc| bc.id == "BID-2")
+                    .expect("session browser context");
+                context.tls_verify_host_override_for_target(context.active_target_id().unwrap())
+            },
             Some(false)
         );
         assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .and_then(|bc| bc.active_page_target().tls_verify_host_override),
+            ctx.conn.browser_context.as_ref().and_then(
+                |bc| bc.tls_verify_host_override_for_target(bc.active_target_id().unwrap())
+            ),
             None
         );
     }

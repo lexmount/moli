@@ -15,6 +15,8 @@ use super::super::events::{
 };
 use super::MainDocumentProgressOutputTarget;
 
+pub(super) use super::super::events::emit_request_will_be_sent_extra_info;
+
 impl CdpNetworkAutomationEventSink for MainDocumentProgressOutputTarget<'_> {
     fn push_protocol_event(&mut self, event: crate::conn::BackgroundProtocolEvent) {
         self.push_background_event(event);
@@ -161,6 +163,7 @@ pub(super) fn emit_main_document_request_will_be_sent(
     )>,
     redirect_has_extra_info: bool,
     cookie_access_report: Option<&StoredCookieQueryReport>,
+    request_pause: Option<(&str, &[crate::devtools_runtime::DevToolsNetworkInterceptId])>,
 ) {
     if redirect_response.is_some_and(|(_, _, _, _, from_cache, _)| from_cache) {
         emit_request_served_from_cache(output, session_id, request_id);
@@ -220,31 +223,17 @@ pub(super) fn emit_main_document_request_will_be_sent(
             has_extra_info: false,
             error_text: None,
             loading_failed_canceled: false,
-            blocked_intercepts: Vec::new(),
-            fetch_request_id: None,
+            blocked_intercepts: request_pause
+                .map(|(_, intercepts)| intercepts.to_vec())
+                .unwrap_or_default(),
+            fetch_request_id: request_pause.map(|(request_id, _)| {
+                crate::devtools_runtime::DevToolsFetchRequestId::from(request_id)
+            }),
             network_id: None,
 
             auth_challenge: None,
         }),
         session_id,
-    );
-}
-
-pub(super) fn emit_request_will_be_sent_extra_info(
-    output: &mut MainDocumentProgressOutputTarget<'_>,
-    session_id: Option<&str>,
-    request_id: &str,
-    request_headers: &[(String, String)],
-    cookie_access_report: &StoredCookieQueryReport,
-    request_time: f64,
-) {
-    output.push_request_will_be_sent_extra_info(
-        session_id,
-        request_id,
-        super::super::request_headers_as_json_object(request_headers, Some(cookie_access_report)),
-        super::super::cookie_query_report_to_json(cookie_access_report),
-        super::super::associated_cookies_to_json(cookie_access_report),
-        request_time,
     );
 }
 

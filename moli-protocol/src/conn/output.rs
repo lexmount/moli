@@ -21,10 +21,7 @@ use moli_page_types::{
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::{
-    CdpConnection, CommandOwnerScope, DevToolsDocumentLifecycleWaitKey,
-    state::{BrowserContext, DocumentNavigationToken},
-};
+use super::{CdpConnection, CommandOwnerScope, DevToolsDocumentLifecycleWaitKey};
 
 mod delivery_route;
 use delivery_route::ProtocolDeliveryRoute;
@@ -903,6 +900,56 @@ pub struct BackgroundTargetReceivedMessageFromTargetEvent {
 }
 
 impl ProtocolDeliveryEnvelope {
+    /// Worker requests have a target, but no Page frame. Keep the wire and
+    /// typed observer payload in agreement without fabricating a Document.
+    pub(crate) fn bind_network_to_worker_target(&mut self, target_id: &str) {
+        let BackgroundProtocolEventPayload::Protocol(event) = &mut self.payload else {
+            return;
+        };
+        let Some(automation) = event.automation_event.as_deref_mut() else {
+            return;
+        };
+        let network = match automation {
+            AutomationEvent::NetworkBeforeRequestSent(network)
+            | AutomationEvent::NetworkResponseStarted(network)
+            | AutomationEvent::NetworkResponseCompleted(network)
+            | AutomationEvent::NetworkFetchError(network) => network,
+            _ => return,
+        };
+        network.target_id = target_id.into();
+        network.frame_id = None;
+        network.loader_id = None;
+        if let Some(params) = event
+            .message
+            .get_mut("params")
+            .and_then(Value::as_object_mut)
+        {
+            params.remove("frameId");
+            if params.contains_key("loaderId") {
+                params.insert("loaderId".into(), Value::String(String::new()));
+            }
+        }
+    }
+
+    pub fn is_target_session_control(&self) -> bool {
+        matches!(
+            self.payload,
+            BackgroundProtocolEventPayload::TargetReceivedMessageFromTarget(_)
+                | BackgroundProtocolEventPayload::TargetAttached(_)
+                | BackgroundProtocolEventPayload::TargetDetached(_)
+        )
+    }
+
+    /// Notifications may be observed by multiple automation frontends. Replies
+    /// and renderer completion capabilities belong to exactly one command.
+    pub fn is_notification(&self) -> bool {
+        !matches!(
+            self.payload,
+            BackgroundProtocolEventPayload::CommandResponse(_)
+                | BackgroundProtocolEventPayload::RuntimeInspectorResponseReady(_)
+        ) && self.protocol_message_id().is_none()
+    }
+
     fn from_payload(payload: BackgroundProtocolEventPayload) -> Self {
         let route = ProtocolDeliveryRoute::for_wire_session(payload.protocol_session_id());
         Self { payload, route }
@@ -981,10 +1028,12 @@ impl ProtocolDeliveryEnvelope {
     pub(crate) fn bind_to_root_document_route(
         mut self,
         conn: &CdpConnection,
+        owner: &super::CommandOwnerScope,
         root_document: moli_core::RendererDocumentLifecycleIdentity,
     ) -> Option<Self> {
-        let binding = conn.target_root_document_protocol_attachment_identity_for_session(
-            self.protocol_session_id(),
+        let event_owner = owner.for_target_event_session(conn, self.protocol_session_id());
+        let binding = conn.target_root_document_protocol_attachment_identity_for_owner(
+            &event_owner,
             root_document,
         )?;
         self.route.bind_root_document(binding);
@@ -2132,10 +2181,6 @@ impl ProtocolDeliveryEnvelope {
         self.route.ensure_wire_session_id(session_id);
     }
 
-    pub fn should_wait_for_background_navigation_completion(&self) -> bool {
-        self.is_non_document_network_event() && !self.is_fetch_interception_control_path_event()
-    }
-
     pub fn is_non_document_network_event(&self) -> bool {
         let Some(resource_type) = self.network_resource_type() else {
             return false;
@@ -2240,44 +2285,6 @@ impl ProtocolDeliveryEnvelope {
             request_id,
             url,
         ))
-    }
-
-    fn is_fetch_interception_control_path_event(&self) -> bool {
-        match self.protocol_method() {
-            Some("Fetch.requestPaused" | "Fetch.authRequired") => true,
-            Some(method) if method.starts_with("Network.") => self.has_blocked_intercepts(),
-            _ => false,
-        }
-    }
-
-    fn has_blocked_intercepts(&self) -> bool {
-        self.automation_event_has_blocked_intercepts()
-            || self.protocol_message_has_blocked_intercepts()
-    }
-
-    fn automation_event_has_blocked_intercepts(&self) -> bool {
-        let BackgroundProtocolEventPayload::Protocol(event) = &self.payload else {
-            return false;
-        };
-        match event.automation_event.as_deref() {
-            Some(
-                AutomationEvent::NetworkBeforeRequestSent(event)
-                | AutomationEvent::NetworkResponseStarted(event)
-                | AutomationEvent::NetworkResponseCompleted(event)
-                | AutomationEvent::NetworkFetchError(event)
-                | AutomationEvent::NetworkAuthRequired(event)
-                | AutomationEvent::RequestPaused(event),
-            ) => !event.blocked_intercepts.is_empty(),
-            _ => false,
-        }
-    }
-
-    fn protocol_message_has_blocked_intercepts(&self) -> bool {
-        self.protocol_message()
-            .and_then(|message| message.get("params"))
-            .and_then(|params| params.get("__moliBlockedInterceptors"))
-            .and_then(Value::as_array)
-            .is_some_and(|blocked_intercepts| !blocked_intercepts.is_empty())
     }
 
     fn network_resource_type(&self) -> Option<DevToolsNetworkResourceType> {
@@ -2599,10 +2606,7 @@ impl ProtocolDeliveryEnvelope {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn as_runtime_inspector_response_ready(
-        &self,
-    ) -> Option<&RuntimeInspectorResponseReady> {
+    pub fn as_runtime_inspector_response_ready(&self) -> Option<&RuntimeInspectorResponseReady> {
         match &self.payload {
             BackgroundProtocolEventPayload::RuntimeInspectorResponseReady(response) => {
                 Some(response)
@@ -4313,51 +4317,6 @@ fn strip_moli_private_protocol_fields(mut message: Value) -> Value {
     message
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct NavigationBackgroundEvent {
-    token: DocumentNavigationToken,
-    event: BackgroundProtocolEvent,
-}
-
-impl NavigationBackgroundEvent {
-    #[cfg(test)]
-    pub(crate) fn protocol_message(token: DocumentNavigationToken, message: Value) -> Self {
-        Self {
-            token,
-            event: BackgroundProtocolEvent::immediate(message),
-        }
-    }
-
-    pub(crate) fn background_event(
-        token: DocumentNavigationToken,
-        event: BackgroundProtocolEvent,
-    ) -> Self {
-        Self { token, event }
-    }
-
-    pub(crate) fn into_background_protocol_event_if_current<'a>(
-        self,
-        browser_contexts: impl IntoIterator<Item = &'a BrowserContext>,
-    ) -> Option<BackgroundProtocolEvent> {
-        let is_current = browser_contexts.into_iter().any(|browser_context| {
-            browser_context.accepts_pending_document_navigation_event(&self.token)
-        });
-        if !is_current {
-            return None;
-        }
-        Some(self.event)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn into_protocol_message_if_current<'a>(
-        self,
-        browser_contexts: impl IntoIterator<Item = &'a BrowserContext>,
-    ) -> Option<Value> {
-        self.into_background_protocol_event_if_current(browser_contexts)
-            .map(BackgroundProtocolEvent::into_protocol_message)
-    }
-}
-
 pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Value {
     let mut v = json!({ "method": method, "params": params });
     if let Some(sid) = session_id {
@@ -4370,8 +4329,7 @@ pub fn build_event(method: &str, params: Value, session_id: Option<&str>) -> Val
 mod tests {
     use crate::devtools_runtime::{
         AutomationEvent, DevToolsBrowserContextId, DevToolsFrameId, DevToolsLoaderId,
-        DevToolsNetworkResourceType, DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo,
-        DevToolsTargetKind, NavigationFrameEvent, NavigationFrameEventKind,
+        DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
         NavigationLifecycleEvent, RuntimeExecutionContextEvent,
         RuntimeExecutionContextsClearedEvent, TargetAttachmentEvent, TargetDetachmentEvent,
         TargetLifecycleEvent, UserPromptClosedEvent,
@@ -4381,10 +4339,9 @@ mod tests {
     use super::{
         BackgroundCommandResponsePayload, BackgroundProtocolEvent,
         BackgroundServiceWorkerErrorMessage, BackgroundServiceWorkerRegistration,
-        BackgroundServiceWorkerVersion, NavigationBackgroundEvent, PageScreencastFrameMetadata,
-        RuntimeInspectorResponseReady, build_event,
+        BackgroundServiceWorkerVersion, PageScreencastFrameMetadata, RuntimeInspectorResponseReady,
     };
-    use crate::conn::{BrowserContext, CdpConnection, DevToolsDocumentLifecycleWaitKey};
+    use crate::conn::DevToolsDocumentLifecycleWaitKey;
     use moli_core::{
         PageId, RendererRuntimeInspectorAsyncCompletion,
         page::{
@@ -4432,7 +4389,7 @@ mod tests {
 
     #[test]
     fn page_download_envelope_rejects_disabled_and_reenabled_subscription() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_default_browser_target();
         assert!(conn.set_page_domain_enabled_for_session_owner(None, true));
         let first_generation = conn
@@ -4477,10 +4434,9 @@ mod tests {
 
     #[test]
     fn browser_download_route_guard_rejects_detached_and_reenabled_subscription() {
-        let mut conn = CdpConnection::new();
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), true);
-        let first_generation = conn.download_behavior.browser_event_observers()[0].1;
+        let mut conn = crate::test_support::connection();
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
+        let first_generation = conn.download_subscriptions.browser_event_observers()[0].1;
         let event = BackgroundProtocolEvent::browser_download_progress(
             Some("SID-browser"),
             Some(first_generation),
@@ -4492,13 +4448,11 @@ mod tests {
         );
         assert!(event.route_is_current(&conn));
 
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), false);
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), false);
         assert!(!event.route_is_current(&conn));
 
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), true);
-        let second_generation = conn.download_behavior.browser_event_observers()[0].1;
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
+        let second_generation = conn.download_subscriptions.browser_event_observers()[0].1;
         assert_ne!(second_generation, first_generation);
         assert!(
             !event.route_is_current(&conn),
@@ -4549,74 +4503,6 @@ mod tests {
 
         assert!(output.matches_document_load_wait_key(&matching));
         assert!(!output.matches_document_load_wait_key(&restarted_epoch));
-    }
-
-    #[test]
-    fn navigation_background_event_materializes_only_for_current_token() {
-        let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
-        browser_context.set_active_target_id("TID-nav");
-        browser_context.attach_active_session("SID-nav");
-        let token = browser_context
-            .start_document_navigation_for_active_target("LOADER-1".to_owned())
-            .expect("active target should produce navigation token");
-        let message = build_event(
-            "Page.frameStartedLoading",
-            json!({ "frameId": "TID-nav" }),
-            Some("SID-nav"),
-        );
-
-        let event = NavigationBackgroundEvent::protocol_message(token, message.clone());
-
-        assert_eq!(
-            event.into_protocol_message_if_current(std::iter::once(&browser_context)),
-            Some(message)
-        );
-    }
-
-    #[test]
-    fn navigation_background_event_preserves_typed_sidecar_for_current_token() {
-        let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
-        browser_context.set_active_target_id("TID-nav");
-        browser_context.attach_active_session("SID-nav");
-        let token = browser_context
-            .start_document_navigation_for_active_target("LOADER-1".to_owned())
-            .expect("active target should produce navigation token");
-        let message = build_event(
-            "Page.frameStartedNavigating",
-            json!({
-                "frameId": "TID-nav",
-                "loaderId": "LOADER-1",
-                "url": "https://example.test/",
-                "navigationType": "differentDocument"
-            }),
-            Some("SID-nav"),
-        );
-        let automation_event = AutomationEvent::NavigationFrame(NavigationFrameEvent {
-            target_id: DevToolsTargetId::from("TID-nav"),
-            frame_id: DevToolsFrameId::from("TID-nav"),
-            parent_frame_id: None,
-            loader_id: Some(DevToolsLoaderId::from("LOADER-1")),
-            url: "https://example.test/".to_owned(),
-            kind: NavigationFrameEventKind::StartedNavigating,
-            frame_name: None,
-            security_origin: None,
-            secure_context_type: None,
-        });
-
-        let event = NavigationBackgroundEvent::background_event(
-            token,
-            BackgroundProtocolEvent::immediate_automation_event(
-                message.clone(),
-                automation_event.clone(),
-            ),
-        );
-        let background_event = event
-            .into_background_protocol_event_if_current(std::iter::once(&browser_context))
-            .expect("current navigation event should materialize");
-        let (actual_message, actual_automation_event) = background_event.into_parts();
-
-        assert_eq!(actual_message, message);
-        assert_eq!(actual_automation_event, Some(automation_event));
     }
 
     #[test]
@@ -5538,151 +5424,6 @@ mod tests {
         );
         assert_eq!(parts[2].0["params"]["filePath"], json!("/tmp/download.txt"));
         assert_eq!(parts[3].0["params"]["frameId"], json!("FRAME-dialog"));
-    }
-
-    #[test]
-    fn background_event_waits_for_navigation_completion_only_for_non_document_network() {
-        use crate::devtools_runtime::{DevToolsRequestId, NetworkRequestEvent};
-
-        let network_event = |resource_type: Option<DevToolsNetworkResourceType>| {
-            AutomationEvent::NetworkResponseStarted(NetworkRequestEvent {
-                target_id: DevToolsTargetId::from("TID-nav"),
-                frame_id: Some(DevToolsFrameId::from("TID-nav")),
-                request_id: DevToolsRequestId::from("REQ-nav"),
-                loader_id: Some(DevToolsLoaderId::from("LOADER-nav")),
-                url: "https://example.test/resource".to_owned(),
-                document_url: None,
-                method: None,
-                request_headers: Vec::new(),
-                request_body: None,
-                request_initiator_type: None,
-                bidi_request_initiator_type: None,
-                redirect_response: None,
-                redirect_has_extra_info: false,
-                request_cookie_report: None,
-                resource_type,
-                timestamp: Some(1.0),
-                wall_time: None,
-                status: Some(200),
-                status_text: None,
-                response_headers: Vec::new(),
-                response_mime_type: None,
-                response_protocol: None,
-                has_extra_info: false,
-                encoded_data_length: Some(0),
-                from_cache: false,
-                fetch_request_id: None,
-                error_text: None,
-                loading_failed_canceled: false,
-                blocked_intercepts: Vec::new(),
-                network_id: None,
-                auth_challenge: None,
-            })
-        };
-
-        let document = BackgroundProtocolEvent::immediate_automation_event(
-            json!({"method": "Network.responseReceived"}),
-            network_event(Some(DevToolsNetworkResourceType::Document)),
-        );
-        let script = BackgroundProtocolEvent::immediate_automation_event(
-            json!({"method": "Network.responseReceived"}),
-            network_event(Some(DevToolsNetworkResourceType::Script)),
-        );
-        let lifecycle = BackgroundProtocolEvent::immediate_automation_event(
-            json!({"method": "Page.frameStartedLoading"}),
-            AutomationEvent::NavigationFrame(NavigationFrameEvent {
-                target_id: DevToolsTargetId::from("TID-nav"),
-                frame_id: DevToolsFrameId::from("TID-nav"),
-                parent_frame_id: None,
-                loader_id: Some(DevToolsLoaderId::from("LOADER-nav")),
-                url: "https://example.test/".to_owned(),
-                kind: NavigationFrameEventKind::StartedLoading,
-                frame_name: None,
-                security_origin: None,
-                secure_context_type: None,
-            }),
-        );
-        let protocol_document = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-document",
-                "type": "Document"
-            }
-        }));
-        let protocol_script = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-script",
-                "type": "Script"
-            }
-        }));
-        let blocked_protocol_script = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.requestWillBeSent",
-            "params": {
-                "requestId": "REQ-protocol-script-blocked",
-                "type": "Script",
-                "__moliBlockedInterceptors": ["intercept-script"]
-            }
-        }));
-        let fetch_request_paused = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.requestPaused",
-            "params": {
-                "requestId": "INT-script",
-                "resourceType": "Script"
-            }
-        }));
-        let fetch_auth_required = BackgroundProtocolEvent::immediate(json!({
-            "method": "Fetch.authRequired",
-            "params": {
-                "requestId": "INT-auth",
-                "resourceType": "Script"
-            }
-        }));
-        let protocol_without_type = BackgroundProtocolEvent::immediate(json!({
-            "method": "Network.responseReceived",
-            "params": {
-                "requestId": "REQ-protocol-unknown"
-            }
-        }));
-
-        assert!(!document.should_wait_for_background_navigation_completion());
-        assert!(script.should_wait_for_background_navigation_completion());
-        assert!(!lifecycle.should_wait_for_background_navigation_completion());
-        assert!(!protocol_document.should_wait_for_background_navigation_completion());
-        assert!(protocol_script.should_wait_for_background_navigation_completion());
-        assert!(!blocked_protocol_script.should_wait_for_background_navigation_completion());
-        assert!(!fetch_request_paused.should_wait_for_background_navigation_completion());
-        assert!(!fetch_auth_required.should_wait_for_background_navigation_completion());
-        assert!(!protocol_without_type.should_wait_for_background_navigation_completion());
-    }
-
-    #[test]
-    fn navigation_background_event_drops_stale_token() {
-        let mut browser_context = BrowserContext::new("CTX-nav".to_owned());
-        browser_context.set_active_target_id("TID-nav");
-        let stale = browser_context
-            .start_document_navigation_for_active_target("LOADER-1".to_owned())
-            .expect("active target should produce stale token");
-        let current = browser_context
-            .start_document_navigation_for_active_target("LOADER-2".to_owned())
-            .expect("active target should produce current token");
-        let message = build_event(
-            "Page.frameStoppedLoading",
-            json!({ "frameId": "TID-nav" }),
-            None,
-        );
-
-        let stale_event = NavigationBackgroundEvent::protocol_message(stale, message.clone());
-        let current_event = NavigationBackgroundEvent::protocol_message(current, message.clone());
-
-        assert_eq!(
-            stale_event.into_protocol_message_if_current(std::iter::once(&browser_context)),
-            None
-        );
-        assert_eq!(
-            current_event.into_protocol_message_if_current(std::iter::once(&browser_context)),
-            Some(message)
-        );
     }
 
     #[test]

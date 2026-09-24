@@ -9,7 +9,8 @@ use super::*;
 use crate::{
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageReply,
+    RendererDocumentTerminationReason, RendererLifecycleStartReason,
+    RendererOutputResidenceIdentity, RendererOwnerLocalHostId, RendererPageReply,
     RendererPageState, RendererRuntimeInspectorMessage,
     page_task_queue::PostParseLifecycleWork,
     runtime::document_lifecycle_turn::DocumentLifecycleNavigationTiming,
@@ -2944,6 +2945,23 @@ document.body.appendChild(oldFrame);
                         .current_main_document_task_owner()
                         .expect("initial PageVm should install its main owner");
                     let old_root_document = page_vm.document_lifecycle.identity().document;
+                    let stylesheet_observations = Arc::new(parking_lot::Mutex::new(Vec::new()));
+                    let observer = stylesheet_observations.clone();
+                    let old_host = page_vm.vm().context_host_weak_for_test().upgrade().unwrap();
+                    let (old_stylesheet, started) = crate::network::ResourceTransfer::start(
+                        old_host.borrow().document_network_reporter().unwrap().start_request().unwrap(),
+                        move |event| observer.lock().push(event),
+                        |network| crate::types::SubresourceRequestStarted::new(
+                            network.handle(), Some("retired-child-frame".into()),
+                            Url::parse("https://old-document.test/").unwrap(),
+                            Url::parse("https://old-document.test/child.css").unwrap(),
+                            "GET".into(), Vec::new().into(), None,
+                            SubresourceResourceType::Stylesheet,
+                            SubresourceRequestInitiatorType::Parser, None,
+                        ),
+                    );
+                    stylesheet_observations.lock().push(started);
+                    drop(old_host);
                     page_vm.page_task_executor_sources_for_test().dynamic_import_owner_action()
                         .enqueue_local_for_test(
                             old_root_document,
@@ -3052,9 +3070,8 @@ document.body.appendChild(replacementFrame);
                     );
                     let mut queue = RendererPageNetworkingSource::new_for_test();
                     queue.enqueue_local_for_test(
-                        RendererPageResourceCompletion::main_parser_deferred_classic_source(
-                            old_root_document,
-                            MainParserDeferredClassicSourceLoadCompletion::new(
+                        RendererPageResourceCompletion::main_parser_deferred_classic_source(old_root_document,
+MainParserDeferredClassicSourceLoadCompletion::new(
                                 pending_script_id,
                                 PreparedScriptSourceLoadOutcome {
                                     source_result: Ok(
@@ -3063,12 +3080,7 @@ document.body.appendChild(replacementFrame);
                                     source_bytes: None,
                                     network_result: None,
                                 },
-                            ),
-                            MainParserDeferredClassicSourceNetworkAttribution::new(
-                                Url::parse("https://old-document.test/").unwrap(),
-                                Url::parse("https://old-document.test/defer.js").unwrap(),
-                            ),
-                        ),
+                            )),
                     );
                     let main_outcome = page_vm
                         .apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
@@ -3110,28 +3122,14 @@ document.body.appendChild(replacementFrame);
                         RendererPageResourceCompletion::child_classic_script(
                             old_root_document,
                             ChildClassicScriptLoadCompletion {
-                                owner: old_child_owner,
-                                load_id: 31,
-                                handle: old_child_handle,
-                                script_handle: NodeId::new(32),
-                                result: Ok(
+owner: old_child_owner,
+load_id: 31,
+handle: old_child_handle,
+script_handle: NodeId::new(32),
+result: Ok(
                                     "parent.__oldNamespaceChildClassicRan = true".to_owned(),
                                 ),
-                                network_result: Some(Arc::new(Err(
-                                    "retired child classic failed".to_owned(),
-                                ))),
-                                network_attribution: ChildClassicScriptNetworkAttribution {
-                                    frame_id: Some("retired-child-classic-frame".to_owned()),
-                                    document_url: Url::parse(
-                                        "https://old-document.test/classic-child",
-                                    )
-                                    .unwrap(),
-                                    request_url: Url::parse(
-                                        "https://old-document.test/classic-child.js",
-                                    )
-                                    .unwrap(),
-                                },
-                            },
+},
                         ),
                     );
                     let classic_outcome = page_vm
@@ -3160,7 +3158,7 @@ document.body.appendChild(replacementFrame);
                                 PageResourceCompletionBodyActivity::NoPageCodeOrEventDispatch,
                             post_checkpoint_effect:
                                 PageResourceCompletionPostCheckpointEffect::None,
-                            output_effect: PageResourceCompletionOutputEffect::CaptureRequired,
+                            output_effect: PageResourceCompletionOutputEffect::None,
                         }
                     );
                     assert_eq!(
@@ -3168,56 +3166,38 @@ document.body.appendChild(replacementFrame);
                         activity_epoch_before,
                         "retired classic Network output must not advance replacement Document activity"
                     );
-                    let (network_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
-                    assert_eq!(network_records.len(), 1);
-                    assert_eq!(
-                        network_records[0].frame_id(),
-                        Some("retired-child-classic-frame")
-                    );
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "business completion must not manufacture Network output");
 
                     queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_parser_module_root_fetch(
                             old_root_document,
-                            test_child_parser_module_root_completion_for_target(
-                                old_module_target,
-                                37,
-                                "retired-child-module-root",
-                                Some("retired child module root failed"),
-                            ),
+                            test_child_parser_module_root_completion_for_target(old_module_target,
+37,
+"retired-child-module-root"),
                         ),
                     );
                     queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_module_dependency_fetch(
                             old_root_document,
-                            test_child_module_dependency_completion_for_target(
-                                old_module_target,
-                                41,
-                                "retired-child-module-dependency",
-                                Some("retired child module dependency failed"),
-                            ),
+                            test_child_module_dependency_completion_for_target(old_module_target,
+41,
+"retired-child-module-dependency"),
                         ),
                     );
                     queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_modulepreload_fetch(
                             old_root_document,
-                            test_child_modulepreload_completion_for_target(
-                                old_module_target,
-                                43,
-                                "retired-child-modulepreload",
-                                Some("retired child modulepreload failed"),
-                            ),
+                            test_child_modulepreload_completion_for_target(old_module_target,
+43,
+"retired-child-modulepreload"),
                         ),
                     );
                     queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_dynamic_import_fetch(
                             old_root_document,
-                            test_child_dynamic_import_completion_for_target(
-                                old_module_target,
-                                47,
-                                "retired-child-dynamic-import",
-                                Some("retired child dynamic import failed"),
-                            ),
+                            test_child_dynamic_import_completion_for_target(old_module_target,
+47,
+"retired-child-dynamic-import"),
                         ),
                     );
                     let old_module_owner = RendererPageResourceCompletionOwner::child_module_fetch(
@@ -3274,7 +3254,7 @@ document.body.appendChild(replacementFrame);
                     );
                     assert_eq!(
                         dynamic_import_outcome.action.output_effect,
-                        PageResourceCompletionOutputEffect::CaptureRequired
+                        PageResourceCompletionOutputEffect::None
                     );
 
                     assert_eq!(
@@ -3282,27 +3262,22 @@ document.body.appendChild(replacementFrame);
                         activity_epoch_before,
                         "retired module Network output must not advance replacement Document activity"
                     );
-                    let (network_records, _, _) =
-                        split_network_output_items(page_vm.vm_mut().take_network_output());
-                    assert_eq!(network_records.len(), 4);
-                    assert_eq!(
-                        network_records
-                            .iter()
-                            .map(|record| record.frame_id())
-                            .collect::<Vec<_>>(),
-                        vec![
-                            Some("retired-child-module-root-frame"),
-                            Some("retired-child-module-dependency-frame"),
-                            Some("retired-child-modulepreload-frame"),
-                            Some("retired-child-dynamic-import-frame"),
-                        ]
-                    );
-                    assert_eq!(
-                        network_records[3].request_initiator_type(),
-                        SubresourceRequestInitiatorType::Script,
-                        "dynamic import must retain script initiator attribution after replacement"
-                    );
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "business completion must not manufacture Network output");
 
+                    old_stylesheet.failed(&crate::network::ResourceResponseFailure::Request(
+                        "retired child stylesheet failed".into(),
+                    ));
+                    for observation in stylesheet_observations.lock().drain(..) {
+                        queue.enqueue_local_for_test(RendererPageResourceCompletion::async_subresource(
+                            old_root_document, crate::types::AsyncSubresourceFetchEvent::NativeNetwork(observation),
+                        ));
+                        let outcome = page_vm.apply_one_page_resource_terminal_owner_admission_for_test(&mut queue)?
+                            .expect("old physical stylesheet stage retains its Page turn");
+                        assert!(matches!(outcome.action.document_effect,
+                            PageResourceCompletionDocumentEffect::DiscardedStaleOwner { .. }));
+                        assert_eq!(page_vm.vm().subresource_activity_epoch(), activity_epoch_before,
+                            "old native stages cannot advance replacement Document activity");
+                    }
                     queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_blocking_stylesheet(
                             old_root_document,
@@ -3311,17 +3286,11 @@ document.body.appendChild(replacementFrame);
                                 owner: old_child_owner,
                                 signature: crate::DocumentBlockingStylesheetSignature::
                                     ParserCreatedStyleImport { urls: Vec::new() },
-                                network_results: vec![ChildBlockingStylesheetNetworkResult {
-                                    frame_id: Some("retired-child-frame".to_owned()),
-                                    document_url: Url::parse(
-                                        "https://old-document.test/child",
-                                    )
-                                    .unwrap(),
+                                network_results: vec![ChildStylesheetResponse {
                                     request_url: Url::parse(
                                         "https://old-document.test/child.css",
                                     )
                                     .unwrap(),
-                                    initiator_type: SubresourceRequestInitiatorType::Parser,
                                     terminal: crate::stylesheet_blocking::
                                         StylesheetFetchTerminal::network_error(
                                             "retired child stylesheet failed",
@@ -3407,13 +3376,18 @@ document.body.appendChild(replacementFrame);
                             replacement_root_document,
                             replacement_navigation_target,
                         );
+                    let mut admitted_network = page_vm.vm_mut().take_network_output().into_items();
+                    assert!(matches!(admitted_network.next(),
+                        Some(crate::types::ScriptNetworkOutputItem::SubresourceRequestStarted(request))
+                            if request.url().as_str() == replacement_child_url),
+                        "the real replacement request must publish its own admission before the stale business completion");
+                    assert!(admitted_network.next().is_none());
                     let mut child_navigation_queue = RendererPageNetworkingSource::new_for_test();
                     child_navigation_queue.enqueue_local_for_test(
                         RendererPageResourceCompletion::child_document_load(
                             old_root_document,
                             super::child_document_completion::stale_loaded_completion(
                                 replacement_navigation_target,
-                                "retired-root-child-frame",
                                 "https://retired-document.test/child-response.html",
                             ),
                         ),
@@ -3445,13 +3419,14 @@ document.body.appendChild(replacementFrame);
                         activity_epoch_before_navigation_terminal,
                         "old-root child Network output must not become replacement Document activity"
                     );
-                    let historical_child_networks =
-                        page_vm.take_completed_child_document_networks();
-                    assert_eq!(historical_child_networks.len(), 1);
-                    assert_eq!(
-                        historical_child_networks[0].snapshot.request_url,
-                        "https://retired-document.test/child-response.html"
-                    );
+                    assert!(page_vm.vm_mut().take_network_output().is_empty(), "a stale business completion cannot fabricate network observations");
+                    // The fixture server expects a complete response. Let the
+                    // surviving request finish before dropping its real Page.
+                    super::child_document_completion::wait_for_child_document_completion(
+                        &mut page_vm, "replacement child after stale discard",
+                    ).await;
+                    let current_completion = run_next_resource_result_as_typed_page_turn(&mut page_vm).await?;
+                    assert_eq!(current_completion.action.owner, replacement_navigation_owner);
                     Ok::<_, anyhow::Error>(())
                 })
                 .await
@@ -3476,7 +3451,7 @@ fn top_level_http_location_navigation_reserves_service_worker_client_until_commi
         .await;
         let loader =
             crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
-        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let browser_context_runtime = browser_context_owner.handle();
         browser_context_runtime.service_worker_runtime();
         let (owner_wake_tx, _owner_wake_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -3769,18 +3744,24 @@ console.info('slot snapshot console');
         )
         .expect("console log after user buffer tamper");
 
-    let messages = page_vm
-        .vm_mut()
-        .snapshot_console_messages_with_context()
-        .expect("runtime console messages with context");
+    let snapshot = page_vm
+        .page_diagnostics_snapshot()
+        .expect("runtime console diagnostics");
+    let messages = snapshot
+        .runtime_observable_source()
+        .expect("runtime console source")
+        .source_items();
     assert!(
-        messages.iter().any(|message| {
+        messages.iter().any(|item| {
+            let RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. } = item else {
+                return false;
+            };
             message.message == "info: slot snapshot console"
                 && message.args.first().and_then(|arg| arg.get("value"))
                     == Some(&json!("slot snapshot console"))
                 && message.execution_context_id > 0
         }),
-        "runtime console message snapshot should come from context slots: {messages:?}"
+        "runtime console message snapshot should come from the native source queue: {messages:?}"
     );
 }
 
@@ -3890,6 +3871,11 @@ fn page_state_capture_publishes_lightweight_document_metadata() {
         200,
         Vec::new(),
         state_capture,
+        RendererOutputResidenceIdentity::Page {
+            owner_local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
+            page_id: page_vm.page_id,
+        },
+        0,
     );
     assert_eq!(
         state.final_url().as_str(),
@@ -4007,7 +3993,6 @@ fn handle_post_parse_lifecycle_advance_runs_page_owned_task_and_returns_complete
 
         let disposition = local_executor
             .run(async move {
-                let loader = page_vm.main_document_resource_loader();
                 let lifecycle_driver = {
                     let PageVm {
                         vm,
@@ -4035,7 +4020,6 @@ fn handle_post_parse_lifecycle_advance_runs_page_owned_task_and_returns_complete
                     vm.as_mut()
                         .expect("page vm must retain a live ScriptVm until drop")
                         .advance_post_parse_lifecycle(
-                            loader.request_client(),
                             page_task_queue,
                             report,
                             lifecycle_driver,

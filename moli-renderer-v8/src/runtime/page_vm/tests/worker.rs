@@ -1,5 +1,5 @@
 use super::*;
-use crate::{RendererOutputItem, RendererOwnerAction};
+use crate::RendererOutputItem;
 
 const SHARED_WORKER_CONSOLE_MESSAGE: &str = "log: shared-console console-probe 7";
 
@@ -884,9 +884,9 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
                 .drain_service_worker_service_lane();
             admit_additional_producer_work(page_vm);
         }
-        let loader = page_vm.main_document_resource_loader();
+
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {
             page_vm
@@ -895,9 +895,7 @@ async fn drive_service_worker_page_vm_until_done_with_explicit_producer_admissio
                 .drain_service_worker_service_lane();
             admit_additional_producer_work(page_vm);
         }
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         if page_vm.vm_mut().eval(done_expression)? == "true" {
             return Ok(());
         }
@@ -1432,14 +1430,12 @@ async fn drive_shared_worker_probe(page_vm: &mut PageVm, context: &str) -> anyho
             .await?
             .is_some()
         {}
-        let loader = page_vm.main_document_resource_loader();
+
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         if page_vm
             .vm_mut()
             .eval("String(globalThis.__sharedWorkerDone === true)")?
@@ -1489,19 +1485,16 @@ async fn wait_for_shared_worker_client_count(
             .await?
             .is_some()
         {}
-        let loader = page_vm.main_document_resource_loader();
+
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
         let actual = page_vm.vm().shared_worker_client_count_for_test();
         if actual == expected {
             return Ok(());
         }
-        let loader = page_vm.main_document_resource_loader();
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         let _ = tokio::time::timeout(
             Duration::from_millis(100),
             page_vm.wait_for_page_work_arrival_without_timeout(false),
@@ -1517,9 +1510,9 @@ async fn wait_for_shared_worker_client_count(
         .await?
         .is_some()
     {}
-    let loader = page_vm.main_document_resource_loader();
+
     while page_vm
-        .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+        .run_one_oldest_ready_page_task_on_owner_lane_for_test()
         .await?
     {}
     let actual = page_vm.vm().shared_worker_client_count_for_test();
@@ -1565,9 +1558,9 @@ async fn wait_for_child_shared_worker_owner_probe(
                 return Ok(());
             }
         }
-        let loader = page_vm.main_document_resource_loader();
+
         if page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {
             continue;
@@ -1579,12 +1572,8 @@ async fn wait_for_child_shared_worker_owner_probe(
         {
             continue;
         }
-        let loader = page_vm.main_document_resource_loader();
         if page_vm
-            .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::WindowMessage,
-                loader.request_client(),
-            )
+            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
             .await?
         {
             if page_vm.vm_mut().eval(done_expression)? == "true" {
@@ -1611,9 +1600,9 @@ async fn wait_for_child_shared_worker_owner_probe(
         .await?
         .is_some()
     {}
-    let loader = page_vm.main_document_resource_loader();
+
     while page_vm
-        .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+        .run_one_oldest_ready_page_task_on_owner_lane_for_test()
         .await?
     {}
     let diagnostics = page_vm
@@ -1662,22 +1651,24 @@ fn shared_worker_console_entry(
         })
 }
 
-fn has_console_probe_created_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
+fn has_console_probe_created_event(events: &[crate::runtime::RendererProtocolObservation]) -> bool {
     events.iter().any(|event| {
         matches!(
             event,
-            RendererSharedWorkerTargetEvent::Created(info)
-                if info.name == "console-probe"
-                    && info.url.starts_with("data:text/javascript,")
+            crate::runtime::RendererProtocolObservation::WorkerLifecycle(observation)
+                if matches!(observation.lifecycle(), crate::runtime::RendererWorkerLifecycle::SharedCreated(info)
+                    if info.name == "console-probe" && info.url.starts_with("data:text/javascript,"))
         )
     })
 }
 
-fn has_console_probe_target_console_event(events: &[RendererSharedWorkerTargetEvent]) -> bool {
+fn has_console_probe_target_console_event(
+    events: &[crate::runtime::RendererProtocolObservation],
+) -> bool {
     events.iter().any(|event| {
         matches!(
             event,
-            RendererSharedWorkerTargetEvent::Console { message, .. }
+            crate::runtime::RendererProtocolObservation::SharedWorker(RendererSharedWorkerObservation::Console { message, .. })
                 if message.message == SHARED_WORKER_CONSOLE_MESSAGE
         )
     })
@@ -1688,19 +1679,15 @@ async fn drain_until_shared_worker_console_activity(
     output_rx: &mut crate::runtime::RendererOutputTransportReceiver,
 ) -> anyhow::Result<(
     crate::runtime::RendererPageDiagnosticsSnapshot,
-    Vec<RendererSharedWorkerTargetEvent>,
+    Vec<crate::runtime::RendererProtocolObservation>,
 )> {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut target_events = Vec::new();
     let mut last_snapshot = None;
 
     while Instant::now() < deadline {
-        let loader = page_vm
-            .main_document_resource_loader()
-            .request_client()
-            .clone();
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
         let snapshot = page_vm.page_diagnostics_snapshot()?;
@@ -1711,8 +1698,9 @@ async fn drain_until_shared_worker_console_activity(
             };
             target_events.extend(output.records().iter().filter_map(
                 |record| match record.item() {
-                    RendererOutputItem::OwnerAction(
-                        RendererOwnerAction::SharedWorkerTargetLifecycle(event),
+                    RendererOutputItem::Observation(
+                        event @ (crate::runtime::RendererProtocolObservation::SharedWorker(_)
+                        | crate::runtime::RendererProtocolObservation::WorkerLifecycle(_)),
                     ) => Some(event.clone()),
                     _ => None,
                 },
@@ -1727,10 +1715,7 @@ async fn drain_until_shared_worker_console_activity(
         }
         last_snapshot = Some(snapshot);
 
-        let loader = page_vm.main_document_resource_loader();
-        page_vm
-            .advance_timers_until_deadline_for_test(loader.request_client())
-            .await?;
+        page_vm.advance_timers_until_deadline_for_test().await?;
         let _ = tokio::time::timeout(
             Duration::from_millis(100),
             page_vm.wait_for_page_work_arrival_without_timeout(false),
@@ -1751,12 +1736,8 @@ async fn drain_until_websocket_trace_output(
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut items = Vec::new();
     loop {
-        let loader = page_vm
-            .main_document_resource_loader()
-            .request_client()
-            .clone();
         while page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {}
         items.extend(page_vm.vm_mut().take_network_output().into_items());
@@ -1770,10 +1751,7 @@ async fn drain_until_websocket_trace_output(
         .await
         .unwrap_or(false);
         if !arrived {
-            let loader = page_vm.main_document_resource_loader();
-            page_vm
-                .advance_timers_until_deadline_for_test(loader.request_client())
-                .await?;
+            page_vm.advance_timers_until_deadline_for_test().await?;
         }
     }
 }
@@ -1817,7 +1795,6 @@ async fn drive_until_worker_completion_observed(
     context: &str,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let loader = page_vm.main_document_resource_loader();
     let mut progress_sources = Vec::new();
 
     while Instant::now() < deadline {
@@ -1836,7 +1813,7 @@ async fn drive_until_worker_completion_observed(
                 .map(|(_, event_kind)| event_kind)
                 .expect("DedicatedWorker selector must retain its event kind");
             page_vm
-                .run_claimed_selected_page_task_for_test(claimed, loader.request_client())
+                .run_claimed_selected_page_task_for_test(claimed)
                 .await?;
             progress_sources.push(format!("typed:{event_kind:?}"));
             if event_kind == crate::page_task_queue::RendererDedicatedWorkerClientEventKind::Message
@@ -1873,7 +1850,7 @@ async fn drive_window_message_until(
     context: &str,
 ) -> anyhow::Result<()> {
     let deadline = Instant::now() + Duration::from_secs(10);
-    let loader = page_vm.main_document_resource_loader();
+
     let mut progress_sources = Vec::new();
 
     while Instant::now() < deadline {
@@ -1887,7 +1864,7 @@ async fn drive_window_message_until(
             }
         }
         if page_vm
-            .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader.request_client())
+            .run_one_oldest_ready_page_task_on_owner_lane_for_test()
             .await?
         {
             progress_sources.push("typed:PageEvent".to_owned());
@@ -1985,6 +1962,25 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
         let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document URL");
         let external_url = Url::parse(&format!("{base_url}/worker.js")).expect("worker URL");
         let mut page_vm = test_page_vm_with_document_url(document_url.clone());
+        let runtime = std::sync::Arc::new(
+            page_vm.vm_mut().context_host_weak_for_test().upgrade().unwrap()
+                .borrow().browser_context_runtime(),
+        );
+        let weak_runtime = std::sync::Arc::downgrade(&runtime);
+        let native_script_readiness = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let readiness = native_script_readiness.clone();
+        runtime.install_worker_lifecycle_handler(move |input| {
+            if let crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted { instance_id, script } = input.lifecycle.as_ref()
+                && matches!(script.outcome, crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded)
+            {
+                let ready = weak_runtime.upgrade().unwrap()
+                    .worker_inspection_endpoint(crate::runtime::RendererWorkerIdentity::Dedicated(*instance_id))
+                    .is_some();
+                readiness.lock().push((script.script_url.clone(), ready));
+            }
+        });
+        let (output_tx, mut output_rx) = crate::runtime::renderer_output_transport_channel();
+        runtime.set_renderer_output_transport_sender(output_tx);
         let output_journal = crate::runtime::RendererTurnOutputJournal::new(
             crate::runtime::RendererOutputStreamIdentity::new_page_for_protocol_test(
                 page_vm.page_id,
@@ -1995,7 +1991,7 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
             .bind_renderer_output_journal_for_test(output_journal.clone());
         let local_executor = page_vm.local_executor.clone();
 
-        let target_events = local_executor
+        let (target_events, network_events) = local_executor
             .run(async move {
                 page_vm.vm_mut().eval(&format!(
                     r#"
@@ -2009,7 +2005,7 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
   globalThis.__externalMainScriptWorker = new Worker("/worker.js#runtime-fragment");
   __externalMainScriptWorker.onmessage = onmessage;
   const blobUrl = URL.createObjectURL(new Blob(
-    [{blob_source:?}],
+    [new Uint8Array([47,47,255,10]), {blob_source:?}],
     {{ type: "text/javascript" }}
   ));
   globalThis.__blobMainScriptWorker = new Worker(blobUrl);
@@ -2033,32 +2029,47 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
                     page_vm.vm_mut().take_network_output().is_empty(),
                     "DedicatedWorker main scripts are not complete Page subresources"
                 );
-                let publication = output_journal
-                    .settle()
-                    .expect("DedicatedWorker target events should settle as Page output");
-                anyhow::Ok(
-                    publication
-                        .into_records()
-                        .into_iter()
-                        .filter_map(|record| match record.into_parts().1 {
-                            RendererOutputItem::OwnerAction(
-                                RendererOwnerAction::DedicatedWorkerTargetLifecycle(event),
-                            ) => Some(event),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>(),
-                )
+                let mut events = Vec::new();
+                let mut network_events = Vec::new();
+                while let Ok(message) = output_rx.try_recv() {
+                    let crate::runtime::RendererOutputTransportMessage::Publication(publication) = message else { continue; };
+                    let residence = publication.cursor().stream().residence();
+                    for record in publication.into_records() {
+                        match record.into_parts().1 {
+                            RendererOutputItem::Observation(crate::runtime::RendererProtocolObservation::WorkerLifecycle(event)) => {
+                                assert!(matches!(residence, crate::runtime::RendererOutputResidenceIdentity::DedicatedWorker { .. }));
+                                events.push(event);
+                            }
+                            RendererOutputItem::Observation(crate::runtime::RendererProtocolObservation::Network(event)) => {
+                                let crate::runtime::RendererOutputResidenceIdentity::DedicatedWorker { instance_id, .. } = residence else { panic!("main script belongs to its Worker source") };
+                                if let crate::runtime::RendererNetworkOutputItem::Resource(item) = event.item() {
+                                    network_events.push((instance_id, item.clone()));
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                anyhow::Ok((events, network_events))
             })
             .await
             .expect("worker main-script Network test should run on owner lane");
+
+        {
+            let readiness = native_script_readiness.lock();
+            assert_eq!(readiness.len(), 2);
+            assert!(readiness.iter().all(|(_, ready)| *ready),
+                "a native script completion must already expose its exact inspection endpoint: {readiness:?}");
+        }
+        drop(runtime);
 
         server
             .await
             .expect("worker main-script Network server should finish");
         let created = target_events
             .iter()
-            .filter_map(|event| match event {
-                crate::runtime::RendererDedicatedWorkerTargetEvent::Created(info) => Some(info),
+            .filter_map(|event| match event.lifecycle() {
+                crate::runtime::RendererWorkerLifecycle::DedicatedCreated(info) => Some(info),
                 _ => None,
             })
             .collect::<Vec<_>>();
@@ -2081,43 +2092,59 @@ async fn dedicated_worker_main_scripts_publish_split_target_lifecycle_records() 
 
         let loaded = target_events
             .iter()
-            .filter_map(|event| match event {
-                crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoaded {
+            .filter_map(|event| match event.lifecycle() {
+                crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
                     instance_id,
-                    script_url,
-                    response,
-                } => Some((*instance_id, script_url, response.as_ref())),
+                    script,
+                } => match &script.outcome {
+                    crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded => {
+                        Some((*instance_id, &script.script_url))
+                    }
+                    _ => None,
+                },
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(loaded.len(), 2, "events: {target_events:#?}");
-        let (_, external_script_url, external_response) = loaded
+        let response_for = |instance| {
+            let records = network_events.iter().filter(|(id, _)| *id == instance).map(|(_, item)| item.as_ref()).collect::<Vec<_>>();
+            let heads = records.iter().filter_map(|item| match item { moli_page_types::ScriptNetworkOutputItem::SubresourceResponseStarted(head) => Some(head), _ => None }).collect::<Vec<_>>();
+            let bodies = records.iter().filter_map(|item| match item { moli_page_types::ScriptNetworkOutputItem::SubresourceBodyFinished(body) => Some(body), _ => None }).collect::<Vec<_>>();
+            assert_eq!(heads.len(), 1);
+            assert_eq!(bodies.len(), 1);
+            let moli_page_types::SubresourceBodyFinishedResult::Ready(body) = bodies[0].result() else { panic!("main body must complete") };
+            (heads[0], body)
+        };
+        let (external_response, external_body) = response_for(external_created.instance_id);
+        let (blob_response, blob_body) = response_for(blob_created.instance_id);
+
+        let (_, external_script_url) = loaded
             .iter()
             .copied()
-            .find(|(instance_id, _, _)| *instance_id == external_created.instance_id)
+            .find(|(instance_id, _)| *instance_id == external_created.instance_id)
             .expect("external Worker main-script completion");
         assert_eq!(
             external_script_url,
             &format!("{external_url}#runtime-fragment")
         );
-        assert_eq!(external_response.status, 200);
-        assert_eq!(external_response.body_text(), external_source);
+        assert_eq!(external_response.status(), 200);
+        assert_eq!(external_body.bytes().as_ref(), external_source.as_bytes());
         assert!(external_response.network_request_headers().is_some());
         assert_eq!(
-            external_response.negotiated_http_version,
+            external_response.negotiated_http_version(),
             Some(moli_fetch::NegotiatedHttpVersion::Http11)
         );
 
-        let (_, blob_script_url, blob_response) = loaded
+        let (_, blob_script_url) = loaded
             .iter()
             .copied()
-            .find(|(instance_id, _, _)| *instance_id == blob_created.instance_id)
+            .find(|(instance_id, _)| *instance_id == blob_created.instance_id)
             .expect("blob Worker main-script completion");
         assert_eq!(blob_script_url, &blob_created.request_url);
-        assert_eq!(blob_response.status, 200);
-        assert_eq!(blob_response.body_text(), blob_source);
+        assert_eq!(blob_response.status(), 200);
+        assert_eq!(blob_body.bytes().as_ref(), [b"//\xff\n".as_slice(), blob_source.as_bytes()].concat());
         assert_eq!(blob_response.network_request_headers(), None);
-        assert_eq!(blob_response.negotiated_http_version, None);
+        assert_eq!(blob_response.negotiated_http_version(), None);
     })
     .await;
 }
@@ -2172,7 +2199,7 @@ async fn worker_message_commits_child_navigation_before_document_script_ready() 
                             .map(|(_, event_kind)| event_kind)
                             .expect("DedicatedWorker selector must retain its event kind");
                         page_vm
-                            .run_claimed_selected_page_task_for_test(claimed, &loader)
+                            .run_claimed_selected_page_task_for_test(claimed)
                             .await?;
                         completion_sources.push(RendererOwnerResourceActivitySource::Worker);
                         let events = page_vm.vm_mut().eval("__workerReadyEvents.join('|')")?;
@@ -2351,12 +2378,8 @@ async fn shared_worker_error_commits_child_navigation_before_document_script_rea
                         .runtime_hooks
                         .browser_context_runtime
                         .drain_shared_worker_service_lane();
-                    let loader = page_vm.main_document_resource_loader();
                     let shared_worker_event_ran = page_vm
-                        .run_exact_selected_page_task_for_test(
-                            PageSelectedTaskTestSelector::SharedWorkerClientEvent,
-                            loader.request_client(),
-                        )
+                        .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::SharedWorkerClientEvent)
                         .await?;
                     if !shared_worker_event_ran
                         && page_vm.has_ready_page_websocket_task_for_test()
@@ -2364,7 +2387,7 @@ async fn shared_worker_error_commits_child_navigation_before_document_script_rea
                         let _ = page_vm.run_exact_page_websocket_selected_task_for_test().await?;
                     } else if !shared_worker_event_ran {
                         page_vm
-                            .advance_timers_until_deadline_for_test(loader.request_client())
+                            .advance_timers_until_deadline_for_test()
                             .await?;
                         let _ = tokio::time::timeout(
                             Duration::from_millis(100),
@@ -3049,16 +3072,14 @@ async fn service_worker_register_starts_module_worker_global() {
                     )
                 );
                 let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-                let loader = page_vm.main_document_resource_loader();
+
                 while tokio::time::Instant::now() < deadline {
                     page_vm
                         .runtime_hooks
                         .browser_context_runtime
                         .drain_service_worker_service_lane();
                     while page_vm
-                        .run_one_oldest_ready_page_task_on_owner_lane_for_test(
-                            loader.request_client(),
-                        )
+                        .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                         .await?
                     {
                         page_vm

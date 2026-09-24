@@ -5,13 +5,13 @@ use std::collections::VecDeque;
 use super::super::publication_route::RendererPublicationOwner;
 use super::super::publication_route::RendererPublicationProjection;
 use super::super::publication_route::RendererPublicationRoute;
-use super::super::runtime_command_barrier::RuntimeCommandOutputBarriers;
+use super::super::renderer_command_response_order::RendererCommandResponseOrder;
 use super::prepared_outputs::PreparedProtocolOutputs;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
 };
 
-fn renderer_owner_action_owner(
+fn renderer_record_owner(
     conn: &CdpConnection,
     publication_owner: &CommandOwnerScope,
     renderer_cause: Option<&moli_core::RendererRuntimeCommandCausalIdentity>,
@@ -52,9 +52,12 @@ fn renderer_owner_action_owner(
 pub(crate) async fn ingest_renderer_output_transport_async(
     conn: &mut CdpConnection,
     publication: RendererOutputTransportMessage,
-    barriers: &mut RuntimeCommandOutputBarriers,
+    order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) -> Vec<BackgroundProtocolEvent> {
+    for event in conn.project_bound_worker_output().await {
+        command_context.push_protocol_event(event);
+    }
     match publication {
         RendererOutputTransportMessage::StreamControl(control) => {
             conn.apply_renderer_output_stream_control(control);
@@ -83,7 +86,7 @@ pub(crate) async fn ingest_renderer_output_transport_async(
             while let Some(output) = ready.pop_front() {
                 let (output, owner) = output.into_parts();
                 let cursor = output.cursor();
-                ingest_renderer_output_publication(conn, output, owner, barriers, command_context)
+                ingest_renderer_output_publication(conn, output, owner, order, command_context)
                     .await;
                 match conn.complete_renderer_output_projection(cursor) {
                     super::RendererOutputIngressAdmission::Ready(next) => ready.extend(next),
@@ -95,19 +98,29 @@ pub(crate) async fn ingest_renderer_output_transport_async(
             }
         }
     }
-    command_context.take_protocol_events()
+    let mut events = command_context.take_protocol_events();
+    events.extend(conn.project_unobserved_popups().await);
+    events
 }
 
 async fn ingest_renderer_output_publication(
     conn: &mut CdpConnection,
     publication: RendererOutputPublication,
     owner: RendererPublicationOwner,
-    barriers: &mut RuntimeCommandOutputBarriers,
+    order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) {
     let cursor = publication.cursor();
     let stream = publication.cursor().stream();
-    let route = owner.resolve(conn);
+    if let RendererPublicationOwner::PageTarget { page_owner, .. } = &owner {
+        // Construction can publish its first batch before the independent
+        // Browser owner installs the candidate. Keep that exact batch here
+        // until its native commit is observable; do not discard it as stale
+        // or route it through whichever Document currently occupies the Target.
+        let events = Box::pin(conn.project_native_commit_before_renderer_output(page_owner)).await;
+        command_context.protocol_events_mut().extend(events);
+    }
+    let route = owner.resolve(conn, stream);
     if conn.scheduler_activity_trace_enabled() {
         conn.record_scheduler_activity_trace(json!({
             "kind": "concrete_renderer_output_ingress",
@@ -121,7 +134,8 @@ async fn ingest_renderer_output_publication(
         // The stream was bound to exactly one owner when it opened. If that
         // owner has since retired, the cursor is still admitted so response
         // fences cannot hang, but its historical records must not be projected
-        // into a replacement target or browser context.
+        // into a replacement target or browser context. Native lifecycle
+        // progresses independently in the Browser owner.
         return;
     };
     let records = publication.into_records();
@@ -137,7 +151,7 @@ async fn ingest_renderer_output_publication(
                 records,
                 cursor,
                 projection,
-                barriers,
+                order,
                 command_context,
             )
             .await;
@@ -153,7 +167,7 @@ async fn ingest_renderer_output_publication(
                 records,
                 cursor,
                 projection,
-                barriers,
+                order,
                 command_context,
             )
             .await;
@@ -167,38 +181,119 @@ async fn project_renderer_output_records_for_owner(
     records: Vec<moli_core::RendererOutputRecord>,
     cursor: moli_core::RendererOutputCursor,
     projection: RendererPublicationProjection,
-    barriers: &mut RuntimeCommandOutputBarriers,
+    order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) {
     for record in records {
-        let (renderer_cause, item) = record.into_parts();
+        let (renderer_cause, mut item) = record.into_parts();
+        if projection == RendererPublicationProjection::InspectionOnly {
+            match &mut item {
+                RendererOutputItem::Observation(
+                    moli_core::RendererProtocolObservation::DomMutations(_)
+                    | moli_core::RendererProtocolObservation::RuntimeBinding(_)
+                    | moli_core::RendererProtocolObservation::Network(_),
+                ) => {}
+                RendererOutputItem::Observation(
+                    moli_core::RendererProtocolObservation::RuntimeInspector(batch),
+                ) => batch.messages.retain(|message| {
+                    matches!(message,
+                        moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
+                            if message.renderer_call_id().is_some()
+                                || message.value().get("method").and_then(serde_json::Value::as_str) == Some("Runtime.bindingCalled")
+                    )
+                }),
+                _ => continue,
+            }
+        }
         if projection == RendererPublicationProjection::RetiringNetworkOnly
             && !matches!(
                 &item,
-                RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::Network { .. }
-                )
+                RendererOutputItem::Observation(moli_core::RendererProtocolObservation::Network(_))
             )
         {
             continue;
         }
         match item {
+            RendererOutputItem::Observation(
+                moli_core::RendererProtocolObservation::WorkerLifecycle(observation),
+            ) => {
+                let Some(committed) = observation.committed().await else {
+                    continue;
+                };
+                if let moli_core::page::RendererWorkerLifecycle::DedicatedCreated(info) =
+                    committed.lifecycle()
+                    && let moli_core::page::RendererDedicatedWorkerOwner::Document {
+                        owner_local_host_id,
+                        page_id,
+                    } = info.owner
+                    && let Some(RendererPublicationOwner::PageTarget { page_owner, .. }) = conn
+                        .native_renderer_page_output_owner(
+                            crate::conn::RendererPageResidenceIdentity::from_parts(
+                                owner_local_host_id,
+                                page_id,
+                            ),
+                        )
+                {
+                    let events =
+                        Box::pin(conn.project_native_commit_before_renderer_output(&page_owner))
+                            .await;
+                    command_context.protocol_events_mut().extend(events);
+                }
+                let outputs =
+                    PreparedProtocolOutputs::from_browser_worker_lifecycle(conn, committed);
+                order
+                    .route_publication_outputs(
+                        conn,
+                        owner,
+                        renderer_cause.as_ref(),
+                        Some(cursor),
+                        outputs,
+                        command_context,
+                    )
+                    .await;
+            }
+            RendererOutputItem::Observation(
+                moli_core::RendererProtocolObservation::JavaScriptDialog(opening),
+            ) => {
+                let Some(renderer) = crate::conn::RendererPageResidenceIdentity::from_residence(
+                    cursor.stream().residence(),
+                ) else {
+                    continue;
+                };
+                let action_owner = renderer_record_owner(conn, owner, renderer_cause.as_ref());
+                let Some(dialog) = conn
+                    .prepare_renderer_javascript_dialog(&action_owner, renderer, opening)
+                    .await
+                else {
+                    continue;
+                };
+                let outputs = PreparedProtocolOutputs::from_browser_javascript_dialog(dialog);
+                order
+                    .route_publication_outputs(
+                        conn,
+                        &action_owner,
+                        renderer_cause.as_ref(),
+                        Some(cursor),
+                        outputs,
+                        command_context,
+                    )
+                    .await;
+            }
             RendererOutputItem::OwnerAction(action) => {
                 // A Page stream can remain bound to its implicit primary owner while a
-                // Runtime command arrives through an attached DevTools session. Owner
-                // actions caused by that command (notably modal dialogs) belong to the
-                // exact inspector attachment, not merely to the stream's base route.
+                // Runtime command arrives through an attached DevTools session. Effects
+                // caused by that command belong to its exact inspector attachment,
+                // not merely to the stream's base route.
                 // Asynchronous actions have no command cause; an unbound stream then
                 // selects the target's stable concrete Page attachment.
-                let action_owner =
-                    renderer_owner_action_owner(conn, owner, renderer_cause.as_ref());
+                let action_owner = renderer_record_owner(conn, owner, renderer_cause.as_ref());
                 let outputs = PreparedProtocolOutputs::from_renderer_owner_action(
                     conn,
                     &action_owner,
                     action,
                 )
                 .await;
-                barriers
+                order
                     .route_publication_outputs(
                         conn,
                         &action_owner,
@@ -210,33 +305,101 @@ async fn project_renderer_output_records_for_owner(
                     .await;
             }
             RendererOutputItem::Observation(observation) => {
-                let outputs = if let moli_core::RendererProtocolObservation::Network {
-                    source_document,
-                    item,
-                } = &observation
-                {
-                    let Some(outputs) = PreparedProtocolOutputs::from_renderer_network_observation(
-                        conn,
-                        owner,
-                        crate::conn::RendererPageResidenceIdentity::from_residence(
+                let outputs =
+                    if let moli_core::RendererProtocolObservation::DocumentLifecycle(event) =
+                        &observation
+                    {
+                        let Some(renderer) =
+                            crate::conn::RendererPageResidenceIdentity::from_residence(
+                                cursor.stream().residence(),
+                            )
+                        else {
+                            continue;
+                        };
+                        let Some(lifecycle) = conn
+                            .wait_for_renderer_document_lifecycle(renderer, *event)
+                            .await
+                        else {
+                            continue;
+                        };
+                        PreparedProtocolOutputs::from_browser_document_lifecycle_event(lifecycle)
+                    } else if let moli_core::RendererProtocolObservation::Network(network) =
+                        &observation
+                    {
+                        let Some(committed) = network.clone().committed().await else {
+                            continue;
+                        };
+                        if matches!(
+                            committed.occurrence().source,
+                            moli_core::page::RendererNetworkSource::Worker(_)
+                        ) {
+                            if conn.worker_network_receipt_is_covered(&committed) {
+                                continue;
+                            }
+                            conn.retire_completed_worker_fetch(committed.occurrence());
+                            if let Some(pause) =
+                                conn.committed_worker_fetch_pause(committed.occurrence())
+                            {
+                                if let Some((observer, outputs)) =
+                                    crate::domains::fetch::native_worker_fetch_prepared_outputs(
+                                        conn, pause,
+                                    )
+                                    .await
+                                {
+                                    order
+                                        .route_publication_outputs(
+                                            conn,
+                                            &observer,
+                                            None,
+                                            Some(cursor),
+                                            PreparedProtocolOutputs::from_worker_fetch(outputs),
+                                            command_context,
+                                        )
+                                        .await;
+                                }
+                                continue;
+                            }
+                            let outputs = PreparedProtocolOutputs::from_browser_worker_network(
+                                conn,
+                                owner,
+                                cursor.stream().residence(),
+                                &committed,
+                            );
+                            order
+                                .route_publication_outputs(
+                                    conn,
+                                    owner,
+                                    renderer_cause.as_ref(),
+                                    Some(cursor),
+                                    outputs,
+                                    command_context,
+                                )
+                                .await;
+                            continue;
+                        }
+                        let Some(outputs) =
+                            PreparedProtocolOutputs::from_browser_network_observation(
+                                conn,
+                                owner,
+                                crate::conn::RendererPageResidenceIdentity::from_residence(
+                                    cursor.stream().residence(),
+                                ),
+                                &committed,
+                            )
+                        else {
+                            continue;
+                        };
+                        outputs
+                    } else {
+                        PreparedProtocolOutputs::from_renderer_observation(
+                            conn,
+                            owner,
                             cursor.stream().residence(),
-                        ),
-                        *source_document,
-                        item,
-                    ) else {
-                        continue;
+                            cursor.stream().renderer_agent(),
+                            &observation,
+                        )
                     };
-                    outputs
-                } else {
-                    PreparedProtocolOutputs::from_renderer_observation(
-                        conn,
-                        owner,
-                        cursor.stream().residence(),
-                        cursor.stream().renderer_agent(),
-                        &observation,
-                    )
-                };
-                barriers
+                order
                     .route_publication_outputs(
                         conn,
                         owner,
@@ -255,14 +418,238 @@ async fn project_renderer_output_records_for_owner(
 mod tests {
     use moli_core::RendererRuntimeCommandCausalIdentity;
 
-    use crate::conn::{BrowserContext, CdpConnection, CommandOwnerScope};
+    use crate::conn::CommandOwnerScope;
 
-    use super::renderer_owner_action_owner;
+    use super::renderer_record_owner;
 
-    #[test]
-    fn unbound_owner_actions_choose_a_stable_attachment_without_overriding_exact_root_cause() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-owner-action".to_owned());
+    #[tokio::test]
+    async fn native_lifecycle_ingress_precedes_missing_routes_and_projection_filters() {
+        use super::*;
+        use moli_core::{
+            RendererOutputCursor, RendererOutputRecord, RendererProtocolObservation,
+            page::{
+                RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+                RendererDocumentLifecycleMilestone, RendererDocumentLifecycleSnapshot,
+                RendererDocumentToken, RendererFrameToken, RendererLifecycleEpoch,
+                RendererLifecycleEventStamp, RendererLifecycleStartReason,
+                RendererPageCreationArtifacts,
+            },
+        };
+        const TARGET: &str = "TID-lifecycle-ingress";
+        const CONTEXT: &str = "BID-lifecycle-ingress";
+        for projection in [
+            None,
+            Some(RendererPublicationProjection::InspectionOnly),
+            Some(RendererPublicationProjection::CurrentOwner),
+        ] {
+            let mut conn = crate::test_support::connection();
+            let mut context = conn.new_browser_context_fixture_for_test(CONTEXT);
+            context.set_active_target_id(TARGET);
+            context.set_active_document_fixture_for_test(1).await;
+            let (sender, mut outputs) = moli_core::renderer_output_transport_channel();
+            context
+                .loaded_document_renderer_inspection_endpoint_for_test()
+                .unwrap()
+                .bind_output_transport(sender)
+                .unwrap();
+            let (native, document) = context.inspection_document_handle_for_test(TARGET).unwrap();
+            native
+                .evaluate_document_expression_for_test(
+                    document,
+                    "console.log('lifecycle fixture stream')",
+                    false,
+                )
+                .await
+                .unwrap();
+            let stream = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                loop {
+                    if let moli_core::RendererOutputTransportMessage::Publication(publication) =
+                        outputs.recv().await.unwrap()
+                    {
+                        break publication.cursor().stream();
+                    }
+                }
+            })
+            .await
+            .expect("real renderer must publish the fixture console output");
+            let renderer_page =
+                crate::conn::RendererPageResidenceIdentity::from_residence(stream.residence())
+                    .unwrap();
+            let page_id = renderer_page.page_id();
+            let started = RendererDocumentLifecycleEvent {
+                frame: RendererFrameToken { page_id },
+                document: RendererDocumentToken::new_for_testing(page_id, 1),
+                epoch: RendererLifecycleEpoch(1),
+                sequence: 1,
+                timestamp_micros: 10,
+                kind: RendererDocumentLifecycleEventKind::Started {
+                    reason: RendererLifecycleStartReason::InitialDocument,
+                },
+            };
+            context.bind_renderer_document_lifecycle_for_target(
+                TARGET,
+                RendererPageCreationArtifacts {
+                    active_document: started.document,
+                    active_epoch: started.epoch,
+                    lifecycle_snapshot: RendererDocumentLifecycleSnapshot {
+                        frame: started.frame,
+                        document: started.document,
+                        epoch: started.epoch,
+                        started: RendererLifecycleEventStamp {
+                            sequence: 1,
+                            timestamp_micros: 10,
+                        },
+                        dom_content_loaded: None,
+                        load: None,
+                        terminated: None,
+                    },
+                    initial_lifecycle_events: vec![started],
+                },
+                None,
+                TARGET.into(),
+                "LOADER-ingress".into(),
+            );
+            conn.install_browser_context_fixture_for_test(context);
+            let owner = CommandOwnerScope::capture(&conn, None);
+
+            let dcl = RendererDocumentLifecycleEvent {
+                sequence: 2,
+                timestamp_micros: 20,
+                kind: RendererDocumentLifecycleEventKind::Milestone(
+                    RendererDocumentLifecycleMilestone::DomContentLoaded,
+                ),
+                ..started
+            };
+            let load = RendererDocumentLifecycleEvent {
+                sequence: 3,
+                timestamp_micros: 30,
+                kind: RendererDocumentLifecycleEventKind::Milestone(
+                    RendererDocumentLifecycleMilestone::Load,
+                ),
+                ..started
+            };
+            // Native progress is committed independently, before this
+            // frontend visibility exercise. Ingress has no lifecycle writer.
+            let context = conn.browser_context_by_id_mut(CONTEXT).unwrap();
+            assert!(
+                context
+                    .apply_renderer_document_lifecycle_for_test(renderer_page, dcl)
+                    .is_some()
+            );
+            assert!(
+                context
+                    .apply_renderer_document_lifecycle_for_test(renderer_page, load)
+                    .is_some()
+            );
+            let binding = context
+                .renderer_document_lifecycle_binding_for_target(TARGET)
+                .unwrap()
+                .clone();
+            let command_context = crate::devtools_runtime::DevToolsCommandContext {
+                protocol: crate::devtools_runtime::DevToolsProtocol::Cdp,
+                session_id: None,
+                target_id: Some(crate::devtools_runtime::DevToolsTargetId::from(TARGET)),
+                browser_context_id: Some(crate::devtools_runtime::DevToolsBrowserContextId::from(
+                    CONTEXT,
+                )),
+            };
+            let waiter = conn
+                .capture_devtools_document_lifecycle_wait_key(
+                    &command_context,
+                    &binding.loader_id,
+                    RendererDocumentLifecycleMilestone::Load,
+                )
+                .unwrap();
+            let records = [dcl, load, dcl]
+                .into_iter()
+                .map(|event| {
+                    RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
+                        RendererProtocolObservation::DocumentLifecycle(event),
+                    ))
+                })
+                .collect();
+            let cursor = RendererOutputCursor::new_for_test(stream, 1);
+            let mut order = RendererCommandResponseOrder::default();
+            let mut commands = CommandDispatchContext::default();
+            if let Some(projection) = projection {
+                project_renderer_output_records_for_owner(
+                    &mut conn,
+                    &owner,
+                    records,
+                    cursor,
+                    projection,
+                    &mut order,
+                    &mut commands,
+                )
+                .await;
+            } else {
+                let missing_route = RendererPublicationOwner::PageTarget {
+                    browser_context_id: CONTEXT.into(),
+                    target_id: Some(TARGET.into()),
+                    renderer_page,
+                    page_owner: crate::conn::TargetPageResidenceIdentity::new_for_test(
+                        CONTEXT.into(),
+                        Some(TARGET.into()),
+                        2,
+                    ),
+                };
+                assert!(missing_route.resolve(&conn, stream).is_none());
+                ingest_renderer_output_publication(
+                    &mut conn,
+                    RendererOutputPublication::new_for_test(cursor, records),
+                    missing_route,
+                    &mut order,
+                    &mut commands,
+                )
+                .await;
+            }
+            let context = conn.browser_context_by_id(CONTEXT).unwrap();
+            let native = context
+                .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
+                .unwrap();
+            assert_eq!(native.dom_content_loaded.unwrap().sequence, dcl.sequence);
+            assert_eq!(native.load.unwrap().sequence, load.sequence);
+            let expected_load = (projection == Some(RendererPublicationProjection::CurrentOwner))
+                .then_some(load.sequence);
+            let visible = conn
+                .renderer_document_lifecycle_visible_state_for_session_owner(None)
+                .unwrap()
+                .1;
+            assert_eq!(visible.load.map(|stamp| stamp.sequence), expected_load);
+            let late_waiter = conn
+                .capture_devtools_document_lifecycle_wait_key(
+                    &command_context,
+                    &binding.loader_id,
+                    RendererDocumentLifecycleMilestone::Load,
+                )
+                .unwrap();
+            // Both an admitted and a late navigation waiter observe only FIFO receipt.
+            for key in [waiter, late_waiter] {
+                assert_eq!(
+                    conn.devtools_document_lifecycle_wait_state(&command_context, &key),
+                    if expected_load.is_some() {
+                        crate::DevToolsDocumentLifecycleWaitState::Reached
+                    } else {
+                        crate::DevToolsDocumentLifecycleWaitState::Pending
+                    }
+                );
+                conn.release_devtools_document_lifecycle_wait_key(&command_context, &key);
+            }
+            assert_eq!(
+                conn.browser_context_by_id(CONTEXT)
+                    .unwrap()
+                    .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
+                Some(native)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn unbound_owner_actions_choose_a_stable_attachment_without_overriding_exact_root_cause()
+    {
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-owner-action".to_owned());
         browser_context.set_active_target_id("TID-owner-action".to_owned());
         assert!(
             browser_context.assign_attached_session_to_target(
@@ -271,19 +658,18 @@ mod tests {
             )
         );
         browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_active_document_fixture_for_test(1)
+            .await;
         conn.install_browser_context_fixture_for_test(browser_context);
         let owner = CommandOwnerScope::capture(&conn, None);
 
         assert_eq!(
-            renderer_owner_action_owner(&conn, &owner, None).session_id(),
+            renderer_record_owner(&conn, &owner, None).session_id(),
             Some("SID-owner-action"),
             "an asynchronous target action should use its concrete attachment"
         );
         assert_eq!(
-            renderer_owner_action_owner(
+            renderer_record_owner(
                 &conn,
                 &owner,
                 Some(&RendererRuntimeCommandCausalIdentity::new(
@@ -294,7 +680,7 @@ mod tests {
             .session_id(),
             Some("SID-owner-action"),
         );
-        let implicit = renderer_owner_action_owner(
+        let implicit = renderer_record_owner(
             &conn,
             &owner,
             Some(&RendererRuntimeCommandCausalIdentity::new(None, 2)),

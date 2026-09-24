@@ -2499,6 +2499,79 @@ async fn websocket_cdp_dynamic_page_survives_browser_frontend_disconnect_until_t
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn websocket_protocol_owner_restart_preserves_native_page_and_resumes_output() {
+    let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
+    let endpoint = format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}");
+    let (mut browser, _) = connect_async(&endpoint).await.unwrap();
+    let target = create_dynamic_target(&mut browser, 1).await;
+    let mut page = connect_dynamic_page(addr, &target).await;
+    let url = "data:text/html,<title>observer-recovery</title>";
+    send_cdp_command(&mut page, 1, "Page.enable", None, json!({})).await;
+    let navigation =
+        send_cdp_command(&mut page, 2, "Page.navigate", None, json!({"url":url})).await;
+    assert!(response_by_id(&navigation, 2)["result"]["frameId"].is_string());
+    let initial = send_cdp_command(
+        &mut page,
+        3,
+        "Runtime.evaluate",
+        None,
+        json!({"expression":"globalThis.observerRecovery = 73"}),
+    )
+    .await;
+    assert_eq!(response_by_id(&initial, 3)["result"]["result"]["value"], 73);
+
+    // Stop the protocol task itself, the same lifetime boundary reached by
+    // transport overload. Closing only a socket deliberately keeps it alive.
+    owner_registry.shared_owner().unwrap().shutdown();
+    wait_for_websocket_close(&mut browser, "terminated protocol owner").await;
+    wait_for_websocket_close(&mut page, "terminated Page observer").await;
+    timeout(Duration::from_secs(5), async {
+        while owner_registry.owner_count() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the protocol task must finish before a new one is admitted");
+
+    let (mut browser, _) = connect_async(&endpoint).await.unwrap();
+    let targets = send_cdp_command(&mut browser, 4, "Target.getTargets", None, json!({})).await;
+    let targets = response_by_id(&targets, 4)["result"]["targetInfos"]
+        .as_array()
+        .unwrap();
+    let survivors = targets
+        .iter()
+        .filter(|target| target["url"] == url)
+        .collect::<Vec<_>>();
+    assert_eq!(survivors.len(), 1, "the native Page survives its observer");
+    let target = survivors[0]["targetId"].as_str().unwrap();
+    let mut page = connect_dynamic_page(addr, target).await;
+    send_cdp_command(&mut page, 5, "Runtime.enable", None, json!({})).await;
+    let resumed = send_cdp_command(
+        &mut page,
+        6,
+        "Runtime.evaluate",
+        None,
+        json!({"expression":"console.log('observer-resumed'); ++globalThis.observerRecovery"}),
+    )
+    .await;
+    assert_eq!(response_by_id(&resumed, 6)["result"]["result"]["value"], 74);
+    assert_eq!(
+        resumed
+            .iter()
+            .filter(|message| {
+                message["method"] == "Runtime.consoleAPICalled"
+                    && message["params"]["args"][0]["value"] == "observer-resumed"
+            })
+            .count(),
+        1,
+        "the new observer receives each live record exactly once before the reply"
+    );
+    page.close(None).await.unwrap();
+    browser.close(None).await.unwrap();
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_owner_registry_shutdown_closes_frontends_and_joins_owner() {
     let (addr, server, owner_registry) = spawn_test_protocol_server_with_owner_registry().await;
     let (mut browser, _) =

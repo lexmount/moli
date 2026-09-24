@@ -7,17 +7,13 @@ fn enqueue_post_parse_work(page_vm: &mut PageVm, work: PostParseLifecycleWork) {
         .enqueue_main_document_runtime_lifecycle_work_for_test(work);
 }
 
-async fn run_selected_post_parse_work(
-    page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
-) -> anyhow::Result<()> {
+async fn run_selected_post_parse_work(page_vm: &mut PageVm) -> anyhow::Result<()> {
     assert!(
         page_vm
             .run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MainDocumentRuntime(
                     PageMainDocumentRuntimeActionKind::PostParseWork,
-                ),
-                loader,
+                )
             )
             .await?,
         "one exact main-Document post-parse task must be ready"
@@ -58,7 +54,6 @@ fn csp_violation_task(
 #[tokio::test(flavor = "current_thread")]
 async fn post_parse_callback_body_retains_reactions_for_selected_completion() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         page_vm.vm_mut().eval(
             r#"
@@ -83,7 +78,7 @@ queueMicrotask(() => __postParseBodyOrder.push("preexisting"));
         );
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("CSP work must produce one exact post-parse body turn");
         assert_eq!(
@@ -110,7 +105,6 @@ queueMicrotask(() => __postParseBodyOrder.push("preexisting"));
 #[tokio::test(flavor = "current_thread")]
 async fn selected_post_parse_callbacks_share_one_post_body_completion_boundary() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         page_vm.vm_mut().eval(
             r#"
@@ -156,7 +150,7 @@ window.addEventListener("error", () => {
             &mut page_vm,
             PostParseLifecycleWork::DispatchContentSecurityPolicyViolation(csp_task),
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "__postParseCallbackOrder.join('|')",
@@ -175,7 +169,7 @@ window.addEventListener("error", () => {
                 script_handle,
             )),
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "__postParseCallbackOrder.join('|')",
@@ -196,7 +190,7 @@ window.addEventListener("error", () => {
                 ),
             ),
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
                 "__postParseCallbackOrder.join('|')",
@@ -213,8 +207,6 @@ window.addEventListener("error", () => {
 #[tokio::test(flavor = "current_thread")]
 async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         page_vm
             .vm_mut()
@@ -229,7 +221,7 @@ async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() 
             &mut page_vm,
             PostParseLifecycleWork::SeedDocumentOwnedBlockingStylesheets(Vec::new()),
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
 
         page_vm
             .vm_mut()
@@ -248,7 +240,7 @@ async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() 
                 run: detached_test_run(),
             },
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(page_vm.report.runs.len(), run_count + 1);
         assert_eq!(
             page_vm.vm().document_runtime.host_document().ready_state(),
@@ -276,7 +268,7 @@ async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() 
             &mut page_vm,
             PostParseLifecycleWork::SettleMainDocumentScriptLoadDelay(lease),
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(
             page_vm
                 .vm()
@@ -297,7 +289,7 @@ async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() 
                 .enqueue_main_document_completion_recheck(owner),
             "completion recheck must publish through its deduplicated production route"
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
 
         let detached_count = page_vm.report.runs.len();
         page_vm
@@ -309,7 +301,7 @@ async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() 
             &mut page_vm,
             PostParseLifecycleWork::RecordDetachedPostParseRuns(vec![detached_test_run()]),
         );
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(page_vm.report.runs.len(), detached_count + 1);
 
         assert_eq!(
@@ -330,7 +322,6 @@ async fn selected_post_parse_state_tasks_checkpoint_then_commit_exact_effects() 
 #[tokio::test(flavor = "current_thread")]
 async fn stale_claimed_post_parse_task_does_not_checkpoint_or_report_in_replacement_document() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         let original_owner = page_vm
             .vm()
@@ -366,7 +357,7 @@ queueMicrotask(() => { __stalePostParseCheckpoint = "wrong"; });
         )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -389,7 +380,6 @@ queueMicrotask(() => { __stalePostParseCheckpoint = "wrong"; });
 #[tokio::test(flavor = "current_thread")]
 async fn applied_post_parse_callback_finishes_before_returning_its_document_open_replacement() {
     run_page_vm_async_test(async move {
-        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         let original_owner = page_vm
             .vm()
@@ -418,7 +408,7 @@ window.addEventListener("error", () => {
             ),
         );
 
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         let replacement_owner = page_vm
             .vm()
             .current_main_document_task_owner()
@@ -450,8 +440,6 @@ window.addEventListener("error", () => {
 #[tokio::test(flavor = "current_thread")]
 async fn post_parse_callback_completion_publishes_but_does_not_execute_runtime_successor() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         page_vm
             .vm_mut()
@@ -479,7 +467,7 @@ window.addEventListener("error", () => {
             .vm_mut()
             .enqueue_test_ready_runtime_script_followup();
 
-        run_selected_post_parse_work(&mut page_vm, &loader).await?;
+        run_selected_post_parse_work(&mut page_vm).await?;
         assert_eq!(
             page_vm
                 .vm_mut()

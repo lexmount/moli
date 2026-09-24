@@ -62,7 +62,6 @@ impl ConcurrentParseTimeRuntime {
                 .await?;
         }
         let ConcurrentParseTimeRuntime {
-            loader,
             state,
             page_vm,
             owner,
@@ -78,7 +77,6 @@ impl ConcurrentParseTimeRuntime {
         match *owner {
             ParseTimeOwner::Parser => {
                 let mut parser_driver = ParserDriver {
-                    loader,
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,

@@ -90,8 +90,7 @@ Promise.resolve().then(() => __selectedChildNavigationCheckpoint = 1);
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildNavigationCommit,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildNavigationCommit
                 )
                 .await?,
             "one exact child-navigation task must enter the production selected dispatcher",
@@ -166,7 +165,7 @@ Promise.resolve().then(() => __staleChildNavigationCheckpoint = 1);
             )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm

@@ -201,7 +201,6 @@ async fn prebootstrapped_child_inline_script_runs_before_deferred_realm_registra
             !page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                    &loader,
                 )
                 .await?,
             "synchronous inline execution must not leave a second script task"
@@ -798,7 +797,6 @@ fn page_vm_replacement_rejects_naturally_colliding_child_realm_target() {
                         current_owner.target(),
                         "fresh PageVm-local counters and identical DOM construction must naturally reproduce the entire local child target"
                     );
-
 
                     let current = page_vm
                         .run_child_realm_materialization_body_for_test()?

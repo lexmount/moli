@@ -84,12 +84,6 @@ use crate::script_vm::{
     PendingRuntimeEvaluateCall, RendererDocumentIsolateBootstrap, RuntimeEvaluateResultMode,
     dispatch_inspector_io_owner_wake, dispatch_inspector_main_owner_wake,
 };
-use crate::service_worker_runtime::{
-    ServiceWorkerRuntimeOwnerWake, service_worker_owner_wake_channel,
-};
-use crate::shared_worker_runtime::{
-    SharedWorkerRuntimeOwnerWake, shared_worker_owner_wake_channel,
-};
 use moli_page_types::LayoutPolicy;
 use std::collections::VecDeque;
 use tokio::sync::{mpsc, oneshot};
@@ -98,12 +92,27 @@ mod lifecycle_decision;
 
 use self::lifecycle_decision::PendingLifecycleNavigation;
 
-#[derive(Debug, Clone)]
-pub struct RendererPreparedDocumentCommitConfiguration {
+#[derive(Debug, Clone, Default)]
+pub struct RendererPreparedDocumentInspectionConfiguration {
+    pub navigator_queries: Option<moli_page_types::NavigatorQueryOverrides>,
+    /// AgentHost's root-frame wire label; never a Browser object identity.
+    pub root_frame_projection_id: Option<String>,
+    /// Frozen wire occurrence appended between session reset and default-world
+    /// creation. This projects a commit; it does not authorize a Browser commit.
+    pub main_document_commit: Option<RendererMainDocumentCommit>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
     pub runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
+}
+
+/// Effective Browser policy consumed atomically when materializing a Document.
+/// Inspector session configuration travels through its own restricted ingress.
+#[derive(Debug, Clone)]
+pub struct RendererPreparedDocumentPolicy {
+    pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+
+    /// Browser-owned initialization, installed before observer preloads.
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
     pub script_execution_disabled: bool,
@@ -179,8 +188,11 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
+    pub top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     pub requested_url: Url,
     pub final_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -228,12 +240,13 @@ pub enum RendererOwnerCommand {
         token: RendererPageReservationToken,
         request: RendererCreateStreamingRawPageRequest,
     },
-    UpdatePreparedRendererDocumentCommitConfiguration {
+    ConfigurePreparedDocumentInspection {
         token: RendererPageReservationToken,
-        configuration: RendererPreparedDocumentCommitConfiguration,
+        configuration: RendererPreparedDocumentInspectionConfiguration,
     },
-    CommitPreparedRendererDocument {
-        permit: RendererDocumentCommitPermit,
+    MaterializePreparedRendererDocument {
+        token: RendererPageReservationToken,
+        policy: Option<Box<RendererPreparedDocumentPolicy>>,
     },
     CancelPreparedRendererDocument {
         token: RendererPageReservationToken,
@@ -241,19 +254,6 @@ pub enum RendererOwnerCommand {
     RunAsyncPageCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
-    },
-    RunProtocolPageCommand {
-        token: RendererPageToken,
-        command: RendererPageCommand,
-    },
-    /// Renderer-side cleanup after the browser/protocol owner has already
-    /// disconnected a DevTools session and suspended both of its ingress lanes.
-    /// Replacement frontend work remains queued behind this lifecycle task so
-    /// it cannot reuse the V8 session before destruction completes.
-    FinalizeRuntimeInspectorSessionDetach {
-        token: RendererPageToken,
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
     },
     WaitForNetworkIdle {
         token: RendererPageToken,
@@ -292,7 +292,7 @@ pub enum RendererOwnerReply {
     PreparedRendererDocumentStored {
         renderer_devtools_agent_token: RendererDevToolsAgentToken,
     },
-    PreparedRendererDocumentCommitConfigurationUpdated,
+    PreparedDocumentInspectionConfigured,
     PreparedRendererDocumentCanceled,
     AsyncPageCommandRan(Box<RendererCommandTurnOutput>),
     RuntimeInspectorSessionResponseSettled {
@@ -300,7 +300,6 @@ pub enum RendererOwnerReply {
         response_succeeded: bool,
     },
     RuntimeInspectorSessionErrorSettled(RendererOutputFence),
-    RuntimeInspectorSessionDetachFinalized(bool),
     PageRemoved,
     TestingCurrentPageState(Arc<RendererPageState>),
     TestingRendererPageView(RendererPageView),
@@ -673,8 +672,6 @@ enum RenderRuntimeTurn {
         target_stage: PageVmInitStage,
         navigation_reply_policy: NavigationReplyPolicy,
     },
-    DrainSharedWorkerServiceLane,
-    DrainServiceWorkerServiceLane,
     RunPageTurn {
         token: RendererPageToken,
     },
@@ -790,13 +787,6 @@ enum RenderRuntimeTurn {
 }
 
 impl RenderRuntimeTurn {
-    fn page_turn_should_yield_to_ready_command(&self) -> bool {
-        !matches!(
-            self,
-            Self::DrainSharedWorkerServiceLane | Self::DrainServiceWorkerServiceLane
-        )
-    }
-
     /// Return the Page whose committed view this host-facing command needs.
     ///
     /// A same-Page cross-document navigation installs its replacement PageVm
@@ -958,8 +948,7 @@ fn runtime_command_output_scope_owned_by_dispatch(
 
 fn owner_command_timing_label(command: &RendererOwnerCommand) -> Option<&'static str> {
     match command {
-        RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-        | RendererOwnerCommand::RunProtocolPageCommand { command, .. } => {
+        RendererOwnerCommand::RunAsyncPageCommand { command, .. } => {
             renderer_page_command_timing_label(command)
         }
         _ => None,
@@ -977,7 +966,6 @@ fn renderer_command_admission_page_token(
 ) -> Option<RendererPageToken> {
     match command {
         RendererOwnerCommand::RunAsyncPageCommand { token, .. }
-        | RendererOwnerCommand::RunProtocolPageCommand { token, .. }
         | RendererOwnerCommand::WaitForNetworkIdle { token, .. }
         | RendererOwnerCommand::WaitForDomStable { token, .. } => Some(*token),
         _ => None,
@@ -1279,8 +1267,7 @@ impl RendererOwnerHandle {
                 ))
             })
             .await?;
-        let finalized =
-            commit.publish_then_finalize(|output| self.publish_renderer_output(output))?;
+        let finalized = commit.publish_then_finalize()?;
         if finalized.resume_parked_page_turn {
             self.signal_internal_page_turn_source(
                 token,
@@ -1648,8 +1635,7 @@ impl RendererOwnerHandle {
             Ok(resolution) => resolution,
             Err(error) => return self.retire_failed_page_creation(token, error).await,
         };
-        let (resolution, retire_page_after_publication) =
-            resolution.publish_then_resolve(|output| self.publish_renderer_output(output));
+        let (resolution, retire_page_after_publication) = resolution.publish_then_resolve();
         match resolution {
             PageCreationResolution::Finalized {
                 attached,
@@ -1794,10 +1780,6 @@ impl RendererOwnerHandle {
     ) -> (Self, RenderRuntimeOwner) {
         let (page_wake_tx, page_wake_rx) = mpsc::unbounded_channel();
         let (inspector_io_wake_tx, inspector_io_wake_rx) = mpsc::unbounded_channel();
-        let (shared_worker_wake_tx, shared_worker_wake_rx) = shared_worker_owner_wake_channel();
-        browser_context_runtime.add_shared_worker_owner_wake_sender(shared_worker_wake_tx);
-        let (service_worker_wake_tx, service_worker_wake_rx) = service_worker_owner_wake_channel();
-        browser_context_runtime.add_service_worker_owner_wake_sender(service_worker_wake_tx);
         let owner_local_host_id = RendererOwnerLocalHostId::new(
             NEXT_RENDERER_OWNER_LOCAL_HOST_ID.fetch_add(1, Ordering::Relaxed),
         );
@@ -1827,13 +1809,8 @@ impl RendererOwnerHandle {
             state,
             render_runtime: RenderRuntimeHandle::disconnected(),
         };
-        let render_runtime_owner = RenderRuntimeOwner::spawn(
-            provisional.clone(),
-            page_wake_rx,
-            inspector_io_wake_rx,
-            shared_worker_wake_rx,
-            service_worker_wake_rx,
-        );
+        let render_runtime_owner =
+            RenderRuntimeOwner::spawn(provisional.clone(), page_wake_rx, inspector_io_wake_rx);
         let render_runtime = render_runtime_owner.handle();
         provisional
             .state
@@ -1885,15 +1862,7 @@ impl RendererOwnerHandle {
     }
 
     pub fn refresh_page_view_for_testing(&self, view: RendererPageView) -> Result<()> {
-        self.state.page_table.refresh(
-            view.page_id,
-            view.vm_creation_id,
-            view.view_generation,
-            view.page_state.requested_url.clone(),
-            view.page_state.final_url.clone(),
-            view.page_state.document_title.clone(),
-            view.page_state.status,
-        )
+        self.state.page_table.refresh_view_for_testing(view)
     }
 
     pub fn remove_page_for_testing(&self, page_id: PageId) {
@@ -1917,16 +1886,6 @@ impl RendererOwnerHandle {
             .set_renderer_output_transport_sender(sender);
     }
 
-    fn publish_renderer_output(&self, output: RendererOutputPublication) {
-        if let Some(sender) = self
-            .state
-            .browser_context_runtime
-            .renderer_output_transport_sender()
-        {
-            let _ = output.publish_to(&sender);
-        }
-    }
-
     /// Completes the protocol-side owner reservation after renderer bootstrap
     /// has either opened its concrete stream or failed before doing so.
     ///
@@ -1934,7 +1893,10 @@ impl RendererOwnerHandle {
     /// observes `Opened` before this release on success, while an early failure
     /// produces only the release. Never move this to the navigation completion
     /// channel: that independent channel cannot order against stream opening.
-    fn release_page_output_reservation(&self, reservation: RendererPageReservationToken) {
+    pub(super) fn release_page_output_reservation(
+        &self,
+        reservation: RendererPageReservationToken,
+    ) {
         if let Some(sender) = self
             .state
             .browser_context_runtime
@@ -2175,8 +2137,10 @@ impl RendererOwnerHandle {
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateStreamingRawPageRequest {
         RendererCreateStreamingRawPageRequest {
+            session_history_position: None,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
+            top_level_storage_key: None,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -2398,7 +2362,7 @@ impl RendererOwnerHandle {
                 self.release_page_output_reservation(token);
                 outcome
             }
-            RendererOwnerCommand::UpdatePreparedRendererDocumentCommitConfiguration {
+            RendererOwnerCommand::ConfigurePreparedDocumentInspection {
                 token,
                 configuration,
             } => {
@@ -2411,25 +2375,25 @@ impl RendererOwnerHandle {
                     .into();
                 }
                 match owner_local_store
-                    .update_prepared_document_commit_configuration(token, configuration)
-                    .map(|()| {
-                        RendererOwnerReply::PreparedRendererDocumentCommitConfigurationUpdated
-                    }) {
+                    .configure_prepared_document_inspection(token, configuration)
+                    .map(|()| RendererOwnerReply::PreparedDocumentInspectionConfigured)
+                {
                     Ok(reply) => Ok(reply).into(),
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedRendererDocument { permit } => {
-                let token = permit.prepared_document();
+            RendererOwnerCommand::MaterializePreparedRendererDocument { token, policy } => {
                 if token.local_host_id() != self.state.owner_local_host_id {
                     return Err(anyhow!(
-                        "prepared document commit permit belongs to renderer owner {}, not {}",
+                        "prepared document belongs to renderer owner {}, not {}",
                         token.local_host_id().as_u64(),
                         self.state.owner_local_host_id.as_u64()
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(token) {
+                match owner_local_store
+                    .take_prepared_document_for_materialization(token, policy.map(|policy| *policy))
+                {
                     Ok(residence) => {
                         self.create_page_reply_from_prepared_document_on_owner_local_store(
                             token.page_id(),
@@ -2453,21 +2417,7 @@ impl RendererOwnerHandle {
                 owner_local_store.cancel_prepared_document(token);
                 Ok(RendererOwnerReply::PreparedRendererDocumentCanceled).into()
             }
-            command @ (RendererOwnerCommand::RunAsyncPageCommand { .. }
-            | RendererOwnerCommand::RunProtocolPageCommand { .. }) => {
-                let (token, command, capture_policy) = match command {
-                    RendererOwnerCommand::RunAsyncPageCommand { token, command } => (
-                        token,
-                        command,
-                        super::RendererPageStateCapturePolicy::FullReport,
-                    ),
-                    RendererOwnerCommand::RunProtocolPageCommand { token, command } => (
-                        token,
-                        command,
-                        super::RendererPageStateCapturePolicy::ProtocolTurn,
-                    ),
-                    _ => unreachable!("combined renderer page command pattern must match"),
-                };
+            RendererOwnerCommand::RunAsyncPageCommand { token, command } => {
                 if moli_trace::cdp_nav_timing_enabled()
                     && let Some(command_label) = renderer_page_command_timing_label(&command)
                 {
@@ -2482,45 +2432,9 @@ impl RendererOwnerHandle {
                     RenderRuntimeTurn::RunLivePageCommand {
                         token,
                         command,
-                        capture_policy,
+                        capture_policy: super::RendererPageStateCapturePolicy::FullReport,
                     },
                 ))
-            }
-            RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
-                token,
-                inspector_session_id,
-                mut pause_guard,
-            } => {
-                let mut entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(
-                    token,
-                ) {
-                    Ok(entry) => entry,
-                    Err(
-                        LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing,
-                    ) => {
-                        pause_guard.complete();
-                        return Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
-                            false,
-                        ))
-                        .into();
-                    }
-                    Err(LivePageEntryCheckoutError::Busy) => {
-                        return Err(anyhow!(
-                            "renderer page {} remained checked out while finalizing Inspector session detach",
-                            token.page_id.as_u64()
-                        ))
-                        .into();
-                    }
-                };
-                let detached = entry
-                    .page_vm_mut()
-                    .detach_runtime_inspector_session(inspector_session_id.as_deref());
-                restore_entry_after_command_on_bound_owner_local_store(token, entry);
-                pause_guard.complete();
-                Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
-                    detached,
-                ))
-                .into()
             }
             RendererOwnerCommand::WaitForNetworkIdle {
                 token,
@@ -2624,8 +2538,6 @@ impl RendererOwnerHandle {
         mut rx: mpsc::UnboundedReceiver<RenderRuntimeEnvelope>,
         mut page_wake_rx: mpsc::UnboundedReceiver<RendererOwnerWake>,
         mut inspector_io_wake_rx: mpsc::UnboundedReceiver<RendererInspectorIoOwnerWake>,
-        mut shared_worker_wake_rx: mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake>,
-        mut service_worker_wake_rx: mpsc::UnboundedReceiver<ServiceWorkerRuntimeOwnerWake>,
     ) {
         let loop_future = async {
             let mut owner_local_store = RendererOwnerLocalStore::default();
@@ -2702,9 +2614,7 @@ impl RendererOwnerHandle {
                     Err(mpsc::error::TryRecvError::Disconnected) => {}
                 }
                 if let Some(mut pending_turn) = pending_turns.pop_front() {
-                    if pending_turn.allow_command_overtake
-                        && pending_turn.turn.page_turn_should_yield_to_ready_command()
-                    {
+                    if pending_turn.allow_command_overtake {
                         // A protocol reply may observe page progress, but it does not
                         // own the page scheduler. Every bounded page turn returns the
                         // entry to its stable slot, so already-arrived commands can be
@@ -3013,27 +2923,6 @@ impl RendererOwnerHandle {
                     continue;
                 }
 
-                // SharedWorker service-lane completions can make a page-visible
-                // command result ready. Do not let sustained CDP polling starve
-                // this owner-level wake behind the command queue.
-                match shared_worker_wake_rx.try_recv() {
-                    Ok(wake) => {
-                        self.handle_shared_worker_runtime_wake(wake, &mut pending_turns);
-                        continue;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {}
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
-                }
-
-                match service_worker_wake_rx.try_recv() {
-                    Ok(wake) => {
-                        self.handle_service_worker_runtime_wake(wake, &mut pending_turns);
-                        continue;
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => {}
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
-                }
-
                 match rx.try_recv() {
                     Ok(envelope) => {
                         self.dispatch_envelope_on_owner_local_store(
@@ -3087,18 +2976,6 @@ impl RendererOwnerHandle {
                         };
                         dispatch_inspector_io_owner_wake(wake);
                     }
-                    shared_worker_wake_opt = shared_worker_wake_rx.recv() => {
-                        let Some(wake) = shared_worker_wake_opt else {
-                            break;
-                        };
-                        self.handle_shared_worker_runtime_wake(wake, &mut pending_turns);
-                    }
-                    service_worker_wake_opt = service_worker_wake_rx.recv() => {
-                        let Some(wake) = service_worker_wake_opt else {
-                            break;
-                        };
-                        self.handle_service_worker_runtime_wake(wake, &mut pending_turns);
-                    }
                     _ = sleep_until_or_forever(next_owner_deadline) => {
                         self.enqueue_due_parked_turns(&mut parked_turns, &mut pending_turns);
                         if self.enqueue_due_page_turns(&mut pending_turns) {
@@ -3139,7 +3016,6 @@ impl RendererOwnerHandle {
             && matches!(
                 &command,
                 RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-                    | RendererOwnerCommand::RunProtocolPageCommand { command, .. }
                     if command.interruptible_by_javascript_dialog()
             )
         {
@@ -3355,7 +3231,7 @@ impl RendererOwnerHandle {
         let output = entry.page_vm_mut().settle_renderer_output_publication();
         restore_entry_after_command_on_bound_owner_local_store(token, entry);
         if let Some(output) = output {
-            self.publish_renderer_output(output);
+            output.publish();
         }
     }
 
@@ -3870,54 +3746,6 @@ impl RendererOwnerHandle {
         }
     }
 
-    fn enqueue_shared_worker_service_lane_turn(
-        &self,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        pending_turns.push_back(RenderRuntimePendingTurn {
-            reply_tx: None,
-            turn: RenderRuntimeTurn::DrainSharedWorkerServiceLane,
-            allow_command_overtake: false,
-            command_admission_output_predecessor: None,
-        });
-    }
-
-    fn enqueue_service_worker_service_lane_turn(
-        &self,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        pending_turns.push_back(RenderRuntimePendingTurn {
-            reply_tx: None,
-            turn: RenderRuntimeTurn::DrainServiceWorkerServiceLane,
-            allow_command_overtake: false,
-            command_admission_output_predecessor: None,
-        });
-    }
-
-    fn handle_shared_worker_runtime_wake(
-        &self,
-        wake: SharedWorkerRuntimeOwnerWake,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        match wake {
-            SharedWorkerRuntimeOwnerWake::ServiceLane => {
-                self.enqueue_shared_worker_service_lane_turn(pending_turns);
-            }
-        }
-    }
-
-    fn handle_service_worker_runtime_wake(
-        &self,
-        wake: ServiceWorkerRuntimeOwnerWake,
-        pending_turns: &mut RenderRuntimePendingTurnQueue,
-    ) {
-        match wake {
-            ServiceWorkerRuntimeOwnerWake::ServiceLane => {
-                self.enqueue_service_worker_service_lane_turn(pending_turns);
-            }
-        }
-    }
-
     fn next_parked_turn_deadline(
         &self,
         parked_turns: &VecDeque<RenderRuntimeParkedTurn>,
@@ -4181,7 +4009,7 @@ impl RendererOwnerHandle {
                     displaced_ordinary.requires_reconsideration(),
                 );
                 if let Some(output) = output {
-                    self.publish_renderer_output(output);
+                    output.publish();
                 }
                 if displaced_ordinary.requires_reconsideration() {
                     self.signal_internal_page_turn_source(
@@ -4232,7 +4060,7 @@ impl RendererOwnerHandle {
                         .map(|output| output.with_ordering(output_ordering));
                     self.restore_live_page_entry(token, entry);
                     if let Some(output) = concrete_output {
-                        self.publish_renderer_output(output);
+                        output.publish();
                     }
                     return RenderRuntimeDispatchOutcome::BackgroundComplete(Err(error));
                 }
@@ -4250,7 +4078,7 @@ impl RendererOwnerHandle {
             should_resume_ordinary,
         );
         if let Some(output) = concrete_output {
-            self.publish_renderer_output(output);
+            output.publish();
         }
 
         match readiness {
@@ -4322,7 +4150,7 @@ impl RendererOwnerHandle {
                 .map(|output| output.with_ordering(output_ordering));
             restore_entry_after_command_on_bound_owner_local_store(token, entry);
             if let Some(output) = concrete_output {
-                self.publish_renderer_output(output);
+                output.publish();
             }
             return RenderRuntimeDispatchOutcome::PageTurnComplete {
                 result: Err(error),
@@ -4335,7 +4163,7 @@ impl RendererOwnerHandle {
             .map(|output| output.with_ordering(output_ordering));
         restore_entry_after_command_on_bound_owner_local_store(token, entry);
         if let Some(output) = concrete_output {
-            self.publish_renderer_output(output);
+            output.publish();
         }
 
         let readiness = page_turn_readiness_after_restore_on_bound_owner_local_store(token);
@@ -4409,26 +4237,19 @@ impl RendererOwnerHandle {
             }
             RendererPageScheduledTurn::Ordinary(scheduled_task) => *scheduled_task,
         };
-        // Freeze the exact Document at task selection. A timer callback may
-        // synchronously replace the Document; its protocol output still
-        // belongs after the load boundary of the Document that authorized
-        // this owner turn, never whichever Document is current at settlement.
-        let turn_source_document = entry.page_vm().document_lifecycle.identity();
+        // Timer effects yield to the pending client command before publication.
         let output_ordering = if matches!(
             &scheduled_task,
             crate::page_task_queue::RendererPageSchedulerTask::Timer { .. }
         ) {
-            RendererOutputPublicationOrdering::AfterPendingPageLoad {
-                source_document: turn_source_document,
-            }
+            RendererOutputPublicationOrdering::AfterClientTurn
         } else {
             RendererOutputPublicationOrdering::Unconstrained
         };
         let executor = entry.page_vm().local_executor.clone();
-        let loader = entry.page_vm().request_client.clone();
+
         let (mut entry, advance_result) =
-            advance_page_owner_one_turn_via_local_task(executor, entry, scheduled_task, loader)
-                .await;
+            advance_page_owner_one_turn_via_local_task(executor, entry, scheduled_task).await;
         let parser_continuation_admitted = entry
             .page_vm()
             .vm()
@@ -4444,7 +4265,7 @@ impl RendererOwnerHandle {
                 .map(|output| output.with_ordering(output_ordering));
             self.restore_live_page_entry(token, entry);
             if let Some(output) = output {
-                self.publish_renderer_output(output);
+                output.publish();
             }
             let readiness = page_turn_readiness_after_restore_on_bound_owner_local_store(token);
             let next_turn = readiness
@@ -4660,8 +4481,6 @@ impl RendererOwnerHandle {
                 remove_page_on_bound_owner_local_store(token);
             }
             RenderRuntimeTurn::FinishHtmlCreatePage { .. }
-            | RenderRuntimeTurn::DrainSharedWorkerServiceLane
-            | RenderRuntimeTurn::DrainServiceWorkerServiceLane
             | RenderRuntimeTurn::RunPageTurn { .. }
             | RenderRuntimeTurn::RunOwnerMaintenance { .. }
             | RenderRuntimeTurn::RunInspectorMainReceiver { .. }
@@ -4792,15 +4611,13 @@ impl RendererOwnerHandle {
                 );
                 Some(expected)
             }
-            None => concrete_output
-                .as_ref()
-                .map(RendererOutputPublication::cursor),
+            None => concrete_output.as_ref().map(RendererSettledOutput::cursor),
         };
         let renderer_output_predecessor = renderer_output_cursor
             .map(|cursor| entry.page_vm().declare_renderer_output_fence(cursor));
         self.restore_live_page_entry(token, entry);
         if let Some(output) = concrete_output {
-            self.publish_renderer_output(output);
+            output.publish();
         }
         let completion = match page_state_result {
             Ok(page_state) => match RendererCommandTurnOutput::new(
@@ -6576,18 +6393,6 @@ impl RendererOwnerHandle {
                 )
                 .await
             }
-            RenderRuntimeTurn::DrainSharedWorkerServiceLane => {
-                self.state
-                    .browser_context_runtime
-                    .drain_shared_worker_service_lane();
-                RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()))
-            }
-            RenderRuntimeTurn::DrainServiceWorkerServiceLane => {
-                self.state
-                    .browser_context_runtime
-                    .drain_service_worker_service_lane();
-                RenderRuntimeDispatchOutcome::BackgroundComplete(Ok(()))
-            }
             RenderRuntimeTurn::RunPageTurn { token } => self.run_one_page_turn(token).await,
             RenderRuntimeTurn::RunOwnerMaintenance { task } => {
                 self.run_one_owner_maintenance_turn(task).await
@@ -6903,6 +6708,7 @@ impl RendererOwnerHandle {
                     main_document_commit,
                     top_level_storage_key,
                     navigation_bootstrap_entry: None,
+                    session_history_position: None,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };
@@ -7029,6 +6835,7 @@ impl RendererOwnerHandle {
                 let (isolate_bootstrap, isolate_reservation) = isolate_allocator
                     .reserve_renderer_document_isolate(page_runtime_task_source)?;
                 Ok(RendererPreparedDocumentResidence {
+                    navigator_queries: None,
                     request,
                     isolate_allocator,
                     isolate_bootstrap,
@@ -7059,6 +6866,7 @@ impl RendererOwnerHandle {
         owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererPreparedDocumentResidence {
+            navigator_queries: _,
             request,
             isolate_allocator,
             isolate_bootstrap,
@@ -7086,8 +6894,10 @@ impl RendererOwnerHandle {
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererCreateStreamingRawPageRequest {
+            session_history_position,
             root_frame_id,
             main_document_commit,
+            top_level_storage_key,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -7200,8 +7010,9 @@ impl RendererOwnerHandle {
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
-                    top_level_storage_key: None,
+                    top_level_storage_key,
                     navigation_bootstrap_entry: None,
+                    session_history_position,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };
@@ -7411,27 +7222,6 @@ mod tests {
     }
 
     #[test]
-    fn shared_worker_service_lane_turn_does_not_yield_to_ready_commands() {
-        assert!(
-            !RenderRuntimeTurn::DrainSharedWorkerServiceLane
-                .page_turn_should_yield_to_ready_command(),
-            "SharedWorker load completions can make page commands ready, so the service lane must not be starved by command polling"
-        );
-    }
-
-    #[test]
-    fn page_turn_allows_one_ready_command_overtake() {
-        let turn = RenderRuntimeTurn::RunPageTurn {
-            token: RendererPageToken::new_for_testing(PageId::new_for_testing(7)),
-        };
-
-        assert!(
-            turn.page_turn_should_yield_to_ready_command(),
-            "ordinary detached page activity should still let ready commands run between turns"
-        );
-    }
-
-    #[test]
     fn selected_parser_admission_precedes_an_ordinary_same_page_turn() {
         let parser_token = RendererPageToken::new_for_testing(PageId::new_for_testing(8));
         let unrelated_token = RendererPageToken::new_for_testing(PageId::new_for_testing(9));
@@ -7525,7 +7315,7 @@ mod tests {
             .expect("maintenance lane should retain its admitted turn");
         assert!(turn.is_owner_maintenance_turn());
         assert!(
-            turn.turn.page_turn_should_yield_to_ready_command(),
+            turn.allow_command_overtake,
             "housekeeping may let one ready command overtake before it runs"
         );
         assert!(!pending.has_owner_maintenance_turn());

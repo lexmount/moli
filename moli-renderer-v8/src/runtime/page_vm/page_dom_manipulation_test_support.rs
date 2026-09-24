@@ -119,12 +119,10 @@ impl PageVm {
     pub(crate) async fn run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
         &mut self,
         task: RendererPageDomManipulationTask,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
         Box::pin(
             self.apply_selected_page_scheduler_task_on_owner_lane_for_test(
                 RendererPageSchedulerTask::DomManipulation(task),
-                loader.clone(),
             ),
         )
         .await?;

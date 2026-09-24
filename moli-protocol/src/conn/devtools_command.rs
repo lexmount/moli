@@ -166,9 +166,42 @@ impl CdpConnection {
 
     pub async fn execute_devtools_command_with_protocol_events_with_background_command_id(
         &mut self,
-        command: DevToolsCommand,
+        mut command: DevToolsCommand,
         background_command_id: Option<u64>,
     ) -> DevToolsCommandDispatchOutcome {
+        let global_setting = self.webdriver_global_setting(&command);
+        if let Err(error) = self.prepare_webdriver_command(&mut command) {
+            return DevToolsCommandDispatchOutcome::new_with_protocol_events(
+                Err(error),
+                Vec::new(),
+                Vec::new(),
+            );
+        }
+        if matches!(
+            command,
+            DevToolsCommand::Navigate(_)
+                | DevToolsCommand::Reload(_)
+                | DevToolsCommand::TraverseHistory(_)
+        ) {
+            let mut step = self
+                .start_devtools_navigation_command_dispatch(command, background_command_id)
+                .await;
+            let mut scheduler_events = Vec::new();
+            loop {
+                match step {
+                    crate::DevToolsNavigationCommandTaskStep::Complete(mut outcome) => {
+                        outcome.scheduler_events.splice(0..0, scheduler_events);
+                        return *outcome;
+                    }
+                    crate::DevToolsNavigationCommandTaskStep::Pending(mut pending) => {
+                        scheduler_events.extend(pending.take_scheduler_events());
+                        step = self
+                            .complete_devtools_navigation_command_dispatch(pending.wait().await)
+                            .await;
+                    }
+                }
+            }
+        }
         let command_context = command.context().clone();
         let mut renderer_output_predecessor = None;
         let (result, protocol_events) = match command {
@@ -213,9 +246,7 @@ impl CdpConnection {
                 )
                 .await
             }
-            command @ (DevToolsCommand::Navigate(_)
-            | DevToolsCommand::Reload(_)
-            | DevToolsCommand::CaptureScreenshot(_)
+            command @ (DevToolsCommand::CaptureScreenshot(_)
             | DevToolsCommand::PrintToPdf(_)
             | DevToolsCommand::GetJavaScriptDialog(_)
             | DevToolsCommand::SetJavaScriptDialogPromptText(_)
@@ -224,14 +255,12 @@ impl CdpConnection {
             | DevToolsCommand::GetFrameTrees(_)
             | DevToolsCommand::GetLayoutMetrics(_)
             | DevToolsCommand::GetNavigationHistory(_)
-            | DevToolsCommand::TraverseHistory(_)
             | DevToolsCommand::AddPreloadScript(_)
             | DevToolsCommand::RemovePreloadScript(_)) => {
                 let (result, protocol_events, predecessor) = Box::pin(
                     crate::domains::page::execute_devtools_page_command_async_with_protocol_events(
                         self,
                         command,
-                        background_command_id,
                     ),
                 )
                 .await;
@@ -345,22 +374,51 @@ impl CdpConnection {
                 Vec::new(),
             ),
         };
-        self.finish_devtools_command_dispatch(
-            command_context,
-            result,
-            protocol_events,
-            renderer_output_predecessor,
-        )
-        .await
+        let mut outcome = self
+            .finish_devtools_command_dispatch(
+                command_context.clone(),
+                result,
+                protocol_events,
+                renderer_output_predecessor,
+            )
+            .await;
+        if outcome.result.is_ok()
+            && let Some(setting) = global_setting
+        {
+            self.remember_webdriver_global_setting(setting);
+        }
+        if let Ok(DevToolsCommandResult::CreateBrowserContext(created)) = &outcome.result {
+            // Replay existing typed settings on the newly registered, empty
+            // Context before exposing it. No command is redirected to a peer.
+            let settings = self
+                .webdriver_context_initial_settings(&command_context, &created.browser_context_id);
+            for setting in settings {
+                let initialized =
+                    Box::pin(self.execute_devtools_command_with_protocol_events(setting)).await;
+                outcome
+                    .scheduler_events
+                    .extend(initialized.scheduler_events);
+                outcome.protocol_events.extend(initialized.protocol_events);
+                // These context-only policies run before the first target is
+                // created, so they cannot own a renderer response fence.
+                assert!(initialized.renderer_output_predecessor.is_none());
+                if let Err(error) = initialized.result {
+                    outcome.result = Err(error);
+                    break;
+                }
+            }
+        }
+        outcome
     }
 
     pub(crate) async fn finish_devtools_command_dispatch(
         &mut self,
         command_context: DevToolsCommandContext,
-        result: Result<DevToolsCommandResult, DevToolsError>,
+        mut result: Result<DevToolsCommandResult, DevToolsError>,
         mut protocol_events: Vec<BackgroundProtocolEvent>,
         renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
     ) -> DevToolsCommandDispatchOutcome {
+        self.finish_webdriver_command(&command_context, &mut result);
         let mut dispatch_context = CommandDispatchContext::default();
         Box::pin(self.project_protocol_local_outputs_for_direct_command(
             &command_context,
@@ -397,7 +455,7 @@ impl CdpConnection {
         let command_owner = CommandOwnerScope::for_route(route.clone());
         let mut initial_runtime_execution_context_ids = Vec::new();
         let mut renderer_output_predecessor = None;
-        let pending = match self.start_initial_document_page_ensure_for_owner(&command_owner) {
+        let pending = match self.start_initial_document_ensure_for_owner(&command_owner) {
             Ok(pending) => pending,
             Err(error) => {
                 tracing::debug!(
@@ -411,38 +469,22 @@ impl CdpConnection {
         if let Some(pending) = pending {
             match pending.wait().await {
                 Ok(completed) => {
-                    match self
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed,
-                        )
-                        .await
-                    {
-                        Ok(diagnostics) => {
-                            renderer_output_predecessor = diagnostics.renderer_output_predecessor;
-                            initial_runtime_execution_context_ids = diagnostics
-                                .initial_runtime_realms
-                                .into_iter()
-                                .filter(|realm| {
-                                    realm
-                                        .realm_id
-                                        .as_deref()
-                                        .is_some_and(|realm_id| !realm_id.is_empty())
-                                })
-                                .map(|realm| realm.context_id)
-                                .collect();
-                        }
-                        Err(error) => {
-                            tracing::debug!(
-                                ?error,
-                                target_id = %target_id.as_str(),
-                                "failed to complete create-target initial document page ensure"
-                            );
-                            return (Vec::new(), None);
-                        }
-                    }
+                    let diagnostics = self.project_initial_document_completion(*completed);
+                    renderer_output_predecessor = diagnostics.renderer_output_predecessor;
+                    initial_runtime_execution_context_ids = diagnostics
+                        .initial_runtime_realms
+                        .into_iter()
+                        .filter(|realm| {
+                            realm
+                                .realm_id
+                                .as_deref()
+                                .is_some_and(|realm_id| !realm_id.is_empty())
+                        })
+                        .map(|realm| realm.context_id)
+                        .collect();
                 }
                 Err(error) => {
-                    let error = self.reset_failed_initial_document_page_build_for_owner(error);
+                    let error = self.retire_failed_initial_document_projection(error);
                     tracing::debug!(
                         ?error,
                         target_id = %target_id.as_str(),

@@ -9,19 +9,108 @@ use super::*;
 pub struct PendingCdpCommandDispatch {
     inner: PendingCdpCommandDispatchKind,
     scheduler_events: Vec<CdpSchedulerEvent>,
+    owner_scope: CommandOwnerScope,
 }
 
 pub struct CompletedCdpCommandDispatch {
     inner: CompletedCdpCommandDispatchKind,
+    owner_scope: CommandOwnerScope,
 }
 
-pub enum CdpCommandTaskStep {
+/// Renderer receiver selected only after a DevTools domain handler falls
+/// through its browser/content phase.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RendererDispatchLane {
+    Main,
+    Io,
+}
+
+/// Exact Page AgentHost binding that admitted one renderer command.
+///
+/// `MainFrameSlotId` remains stable across cross-document navigation while
+/// `DocumentId` and `RendererAgentAttachmentId` identify the admitted binding
+/// generation. A completion cannot be rebound to whichever Document is current
+/// later.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RendererPageDispatchBinding {
+    main_frame_slot: moli_core::browser::MainFrameSlotId,
+    document: moli_core::browser::DocumentId,
+    attachment: moli_core::page::RendererAgentAttachmentId,
+}
+
+impl RendererPageDispatchBinding {
+    pub const fn main_frame_slot(self) -> moli_core::browser::MainFrameSlotId {
+        self.main_frame_slot
+    }
+
+    pub const fn document(self) -> moli_core::browser::DocumentId {
+        self.document
+    }
+
+    pub const fn attachment(self) -> moli_core::page::RendererAgentAttachmentId {
+        self.attachment
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RendererDispatchBinding {
+    Page(RendererPageDispatchBinding),
+    Worker { target_id: String },
+}
+
+/// One concrete renderer fallthrough plus the DevTools-owned pending reply.
+pub struct RendererDispatch {
+    lane: RendererDispatchLane,
+    binding: RendererDispatchBinding,
+    pending: Box<PendingCdpCommandDispatch>,
+}
+
+impl RendererDispatch {
+    pub const fn lane(&self) -> RendererDispatchLane {
+        self.lane
+    }
+
+    pub const fn binding(&self) -> &RendererDispatchBinding {
+        &self.binding
+    }
+
+    pub fn into_pending(self) -> Box<PendingCdpCommandDispatch> {
+        self.pending
+    }
+}
+
+/// Result of the DevToolsSession/AgentHost browser-content dispatch phase.
+///
+/// Completion ownership and renderer routing deliberately remain separate:
+/// only `FallThrough` has a renderer binding and Main/IO lane.
+pub enum AgentHostDispatchResult {
+    Complete(CdpRendererOwnerTurnOutcome),
+    PendingService(Box<PendingCdpCommandDispatch>),
+    FallThrough(RendererDispatch),
+}
+
+/// Test shorthand for completing a command without an outer scheduler.
+#[cfg(test)]
+pub(crate) enum CdpCommandTaskStep {
     Pending(Box<PendingCdpCommandDispatch>),
     Complete(CdpRendererOwnerTurnOutcome),
 }
 
+#[cfg(test)]
+impl From<AgentHostDispatchResult> for CdpCommandTaskStep {
+    fn from(result: AgentHostDispatchResult) -> Self {
+        match result {
+            AgentHostDispatchResult::Complete(outcome) => Self::Complete(outcome),
+            AgentHostDispatchResult::PendingService(pending) => Self::Pending(pending),
+            AgentHostDispatchResult::FallThrough(dispatch) => {
+                Self::Pending(dispatch.into_pending())
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 impl CdpCommandTaskStep {
-    #[cfg(test)]
     pub fn into_parts(self) -> (Vec<Value>, Vec<CdpSchedulerEvent>) {
         match self {
             Self::Complete(outcome) => outcome.into_parts(),
@@ -103,6 +192,31 @@ impl PendingCdpCommandDispatchKind {
             Self::Tracing(_) => "Tracing",
         }
     }
+
+    fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        match self {
+            Self::Runtime(pending) => pending.renderer_dispatch_lane(),
+            Self::Accessibility(pending) => pending.renderer_dispatch_lane(),
+            Self::Css(pending) => pending.renderer_dispatch_lane(),
+            Self::Dom(pending) => pending.renderer_dispatch_lane(),
+            Self::DomDebugger(pending) => pending.renderer_dispatch_lane(),
+            Self::DomSnapshot(pending) => pending.renderer_dispatch_lane(),
+            Self::Page(pending) => pending.renderer_dispatch_lane(),
+            Self::Performance(pending) => pending.renderer_dispatch_lane(),
+            Self::Emulation(pending) => pending.renderer_dispatch_lane(),
+            Self::Autofill(_)
+            | Self::Input(_)
+            | Self::DomStorage(_)
+            | Self::Storage(_)
+            | Self::Network(_)
+            | Self::Fetch(_)
+            | Self::Io(_)
+            | Self::Security(_)
+            | Self::Browser(_)
+            | Self::Target(_)
+            | Self::Tracing(_) => None,
+        }
+    }
 }
 
 impl CompletedCdpCommandDispatchKind {
@@ -133,10 +247,15 @@ impl CompletedCdpCommandDispatchKind {
 }
 
 impl PendingCdpCommandDispatch {
-    fn new(inner: PendingCdpCommandDispatchKind, scheduler_events: Vec<CdpSchedulerEvent>) -> Self {
+    fn new(
+        inner: PendingCdpCommandDispatchKind,
+        scheduler_events: Vec<CdpSchedulerEvent>,
+        owner_scope: CommandOwnerScope,
+    ) -> Self {
         Self {
             inner,
             scheduler_events,
+            owner_scope,
         }
     }
 
@@ -235,11 +354,17 @@ impl PendingCdpCommandDispatch {
         self,
         conn: &mut CdpConnection,
     ) -> CompletedCdpCommandDispatch {
-        match self.inner {
+        let Self {
+            inner,
+            owner_scope,
+            scheduler_events: _,
+        } = self;
+        match inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => CompletedCdpCommandDispatch {
                 inner: CompletedCdpCommandDispatchKind::Runtime(Box::new(
                     pending.complete_scheduler_deferred_inspector_reply(conn),
                 )),
+                owner_scope,
             },
             _ => {
                 unreachable!(
@@ -256,7 +381,12 @@ impl PendingCdpCommandDispatch {
     }
 
     pub async fn wait(self) -> CompletedCdpCommandDispatch {
-        let kind = self.inner.name();
+        let Self {
+            inner,
+            scheduler_events: _,
+            owner_scope,
+        } = self;
+        let kind = inner.name();
         let trace_started = moli_trace::cdp_runtime_trace_enabled().then(std::time::Instant::now);
         if trace_started.is_some() {
             tracing::info!(
@@ -265,7 +395,7 @@ impl PendingCdpCommandDispatch {
                 pending_kind = kind,
             );
         }
-        let inner = match self.inner {
+        let inner = match inner {
             PendingCdpCommandDispatchKind::Runtime(pending) => {
                 CompletedCdpCommandDispatchKind::Runtime(Box::new(Box::pin(pending.wait()).await))
             }
@@ -337,7 +467,7 @@ impl PendingCdpCommandDispatch {
                 elapsed_us = %started.elapsed().as_micros(),
             );
         }
-        CompletedCdpCommandDispatch { inner }
+        CompletedCdpCommandDispatch { inner, owner_scope }
     }
 }
 
@@ -371,11 +501,56 @@ fn append_command_output_plan(
 }
 
 impl CdpConnection {
+    /// Whether a command must wait for the Page AgentHost to publish its next
+    /// Document binding before its browser/content handler may run.
+    ///
+    /// This is deliberately not a renderer-lane classifier. A lane exists
+    /// only after a handler returns `FallThrough`; this admission check merely
+    /// prevents a known Main-thread fallthrough from binding to the outgoing
+    /// Document while a replacement is being projected.
+    pub fn command_waits_for_document_projection(&self, command: &ParsedCdpCommand) -> bool {
+        if !self.document_projection_is_pending_for_session_owner(command.session_id()) {
+            return false;
+        }
+        let owner = CommandOwnerScope::capture(self, command.session_id());
+        if self.native_startup_allows_document_access(&owner) {
+            return false;
+        }
+        let Some(cmd) = Cmd::from_parsed(command) else {
+            return false;
+        };
+        let Some((domain, _)) = cmd.method.split_once('.') else {
+            return false;
+        };
+        match domain {
+            "Runtime" => crate::domains::runtime::command_waits_for_document_projection(&cmd),
+            "Debugger" => crate::domains::debugger::command_waits_for_document_projection(&cmd),
+            "Console" => crate::domains::console::command_waits_for_document_projection(&cmd),
+            "Profiler" => crate::domains::profiler::command_waits_for_document_projection(&cmd),
+            "HeapProfiler" => {
+                crate::domains::heap_profiler::command_waits_for_document_projection(&cmd)
+            }
+            "Accessibility" => {
+                crate::domains::accessibility::command_waits_for_document_projection(&cmd)
+            }
+            "CSS" => crate::domains::css::command_waits_for_document_projection(&cmd),
+            "DOM" => crate::domains::dom::command_waits_for_document_projection(&cmd),
+            "DOMDebugger" => {
+                crate::domains::dom_debugger::command_waits_for_document_projection(&cmd)
+            }
+            "DOMSnapshot" => {
+                crate::domains::dom_snapshot::command_waits_for_document_projection(&cmd)
+            }
+            "Page" => crate::domains::page::command_waits_for_document_projection(&cmd),
+            _ => false,
+        }
+    }
+
     fn complete_with_protocol_events(
         &mut self,
         command_context: &mut CommandDispatchContext,
         protocol_events: Vec<BackgroundProtocolEvent>,
-    ) -> CdpCommandTaskStep {
+    ) -> AgentHostDispatchResult {
         // `CommandDispatchContext::protocol_events` contains concrete output
         // explicitly classified as preceding this command's response. Keep
         // that ordering at the one common completion boundary instead of
@@ -389,7 +564,7 @@ impl CdpConnection {
         self.record_tracing_protocol_events(&protocol_events);
         self.record_tracing_protocol_events(&post_renderer_output_events);
         self.record_tracing_protocol_events(&post_response_events);
-        CdpCommandTaskStep::Complete(
+        AgentHostDispatchResult::Complete(
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 protocol_events,
                 post_response_events,
@@ -406,7 +581,7 @@ impl CdpConnection {
         plan: CommandOutputPlan,
         command_id: Option<u64>,
         session_id: Option<&str>,
-    ) -> CdpCommandTaskStep {
+    ) -> AgentHostDispatchResult {
         let mut protocol_events = Vec::new();
         append_command_output_plan(
             &mut protocol_events,
@@ -418,12 +593,53 @@ impl CdpConnection {
         self.complete_with_protocol_events(command_context, protocol_events)
     }
 
-    fn pending_step(&mut self, inner: PendingCdpCommandDispatchKind) -> CdpCommandTaskStep {
+    fn pending_step(
+        &mut self,
+        owner_scope: CommandOwnerScope,
+        inner: PendingCdpCommandDispatchKind,
+    ) -> AgentHostDispatchResult {
+        let renderer_lane = inner.renderer_dispatch_lane();
         let scheduler_events = self.take_scheduler_events();
-        CdpCommandTaskStep::Pending(Box::new(PendingCdpCommandDispatch::new(
+        let pending = Box::new(PendingCdpCommandDispatch::new(
             inner,
             scheduler_events,
-        )))
+            owner_scope.clone(),
+        ));
+        let Some(lane) = renderer_lane else {
+            return AgentHostDispatchResult::PendingService(pending);
+        };
+        let binding = self
+            .renderer_dispatch_binding_for_owner(&owner_scope)
+            .expect("a renderer fallthrough must retain its exact AgentHost binding");
+        AgentHostDispatchResult::FallThrough(RendererDispatch {
+            lane,
+            binding,
+            pending,
+        })
+    }
+
+    fn renderer_dispatch_binding_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<RendererDispatchBinding> {
+        match owner.resolve_route(self)? {
+            CdpSessionRoute::PageTarget { .. } => {
+                let attachment = self.current_renderer_agent_attachment_for_owner(owner)?;
+                Some(RendererDispatchBinding::Page(RendererPageDispatchBinding {
+                    main_frame_slot: self.page_agent_host_main_frame_slot_for_owner(owner)?,
+                    document: attachment.document(),
+                    attachment: attachment.id(),
+                }))
+            }
+            CdpSessionRoute::SharedWorkerTarget { target_id, .. }
+            | CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
+            | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => {
+                Some(RendererDispatchBinding::Worker { target_id })
+            }
+            CdpSessionRoute::Browser
+            | CdpSessionRoute::BrowserContext { .. }
+            | CdpSessionRoute::TabTarget { .. } => None,
+        }
     }
 
     #[cfg(test)]
@@ -448,15 +664,14 @@ impl CdpConnection {
             Ok(command) => command,
             Err(error) => {
                 let mut command_context = CommandDispatchContext::default();
-                return self.complete_with_output_plan(
-                    &mut command_context,
-                    CommandOutputPlan::error_without_session(
-                        error.response_code(),
-                        error.response_message(),
-                    ),
-                    error.command_id(),
-                    None,
-                );
+                return self
+                    .complete_with_output_plan(
+                        &mut command_context,
+                        CommandOutputPlan::error(error.response_code(), error.response_message()),
+                        error.command_id(),
+                        None,
+                    )
+                    .into();
             }
         };
         self.start_parsed_command_dispatch(&command)
@@ -469,13 +684,14 @@ impl CdpConnection {
     ) -> CdpCommandTaskStep {
         let mut command_context = CommandDispatchContext::default();
         self.start_parsed_command_dispatch_with_context(command, &mut command_context)
+            .into()
     }
 
     pub fn start_parsed_command_dispatch_with_context(
         &mut self,
         command: &ParsedCdpCommand,
         command_context: &mut CommandDispatchContext,
-    ) -> CdpCommandTaskStep {
+    ) -> AgentHostDispatchResult {
         let req = command.request();
         let Some(dot) = req.method().find('.') else {
             return self.complete_with_output_plan(
@@ -520,12 +736,16 @@ impl CdpConnection {
             .with_terminal_response_delivery_override(
                 command_context.terminal_response_delivery_override(),
             );
+        let command_owner = CommandOwnerScope::capture(self, cmd.session_id);
         self.record_tracing_command(cmd.method, cmd.session_id);
         let step = match domain {
             "Browser" => Some(
                 match crate::domains::browser::try_start_browser_command_dispatch(self, &cmd) {
                     crate::domains::browser::BrowserCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Browser(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Browser(pending),
+                        )
                     }
                     crate::domains::browser::BrowserCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -535,7 +755,10 @@ impl CdpConnection {
             "Runtime" => crate::domains::runtime::try_start_runtime_command_dispatch(self, &cmd)
             .map(|step| match step {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Runtime(pending),
+                        )
                     }
                     crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -548,7 +771,10 @@ impl CdpConnection {
                 )
                     .map(|step| match step {
                         crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                            self.pending_step(
+                                command_owner.clone(),
+                                PendingCdpCommandDispatchKind::Runtime(pending),
+                            )
                         }
                         crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -558,7 +784,10 @@ impl CdpConnection {
             "Profiler" => crate::domains::profiler::try_start_profiler_command_dispatch(self, &cmd)
             .map(|step| match step {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Runtime(pending),
+                        )
                     }
                     crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -571,7 +800,10 @@ impl CdpConnection {
                 )
                 .map(|step| match step {
                         crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                            self.pending_step(
+                                command_owner.clone(),
+                                PendingCdpCommandDispatchKind::Runtime(pending),
+                            )
                         }
                         crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(
@@ -589,7 +821,10 @@ impl CdpConnection {
                         match step {
                         crate::domains::accessibility::AccessibilityCommandDispatchStep::Pending(
                             pending,
-                        ) => self.pending_step(PendingCdpCommandDispatchKind::Accessibility(pending)),
+                        ) => self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Accessibility(pending),
+                        ),
                         crate::domains::accessibility::AccessibilityCommandDispatchStep::Complete(
                             plan,
                         ) => self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id),
@@ -599,7 +834,10 @@ impl CdpConnection {
             "Input" => Some(
                 match crate::domains::input::try_start_input_command_dispatch(self, &cmd) {
                     crate::domains::input::InputCommandDispatchStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Input(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Input(pending),
+                        )
                     }
                     crate::domains::input::InputCommandDispatchStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -609,7 +847,10 @@ impl CdpConnection {
             "CSS" => crate::domains::css::try_start_css_command_dispatch(self, &cmd).map(|step| {
                 match step {
                     crate::domains::css::CssCommandDispatchStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Css(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Css(pending),
+                        )
                     }
                     crate::domains::css::CssCommandDispatchStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -619,7 +860,10 @@ impl CdpConnection {
             "DOM" => crate::domains::dom::try_start_dom_command_dispatch(self, &cmd).map(|step| {
                 match step {
                     crate::domains::dom::DomCommandDispatchStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Dom(*pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Dom(*pending),
+                        )
                     }
                     crate::domains::dom::DomCommandDispatchStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -631,7 +875,10 @@ impl CdpConnection {
                     self, &cmd,
                 ) {
                     crate::domains::dom_storage::DomStorageCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::DomStorage(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::DomStorage(pending),
+                        )
                     }
                     crate::domains::dom_storage::DomStorageCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -645,7 +892,10 @@ impl CdpConnection {
                 )
                 .map(|step| match step {
                         crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending))
+                            self.pending_step(
+                                command_owner.clone(),
+                                PendingCdpCommandDispatchKind::Runtime(pending),
+                            )
                         }
                         crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -655,7 +905,7 @@ impl CdpConnection {
             }
             "Emulation" | "Network" if let Some(step) = crate::domains::runtime::try_start_worker_emulation_command_dispatch(self, &cmd) => {
                 Some(match step {
-                    crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending)),
+                    crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => self.pending_step(command_owner.clone(), PendingCdpCommandDispatchKind::Runtime(pending)),
                     crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id),
                 })
             }
@@ -663,13 +913,19 @@ impl CdpConnection {
                 match crate::domains::network::start_network_domain_command_dispatch(self, &cmd) {
                     crate::domains::network::NetworkDomainCommandTaskStep::Network(
                         crate::domains::network::NetworkCommandTaskStep::Pending(pending),
-                    ) => self.pending_step(PendingCdpCommandDispatchKind::Network(pending)),
+                    ) => self.pending_step(
+                        command_owner.clone(),
+                        PendingCdpCommandDispatchKind::Network(pending),
+                    ),
                     crate::domains::network::NetworkDomainCommandTaskStep::Network(
                         crate::domains::network::NetworkCommandTaskStep::Complete(plan),
                     ) => self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id),
                     crate::domains::network::NetworkDomainCommandTaskStep::Storage(
                         crate::domains::storage::StorageCommandTaskStep::Pending(pending),
-                    ) => self.pending_step(PendingCdpCommandDispatchKind::Storage(pending)),
+                    ) => self.pending_step(
+                        command_owner.clone(),
+                        PendingCdpCommandDispatchKind::Storage(pending),
+                    ),
                     crate::domains::network::NetworkDomainCommandTaskStep::Storage(
                         crate::domains::storage::StorageCommandTaskStep::Complete(plan),
                     ) => self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id),
@@ -682,7 +938,10 @@ impl CdpConnection {
                 crate::domains::target::try_start_target_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Target(pending))
+                            self.pending_step(
+                                command_owner.clone(),
+                                PendingCdpCommandDispatchKind::Target(pending),
+                            )
                         }
                         crate::domains::target::TargetCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -693,7 +952,10 @@ impl CdpConnection {
             "Tracing" => Some(
                 match crate::domains::tracing::try_start_tracing_command_dispatch(self, &cmd) {
                     crate::domains::tracing::TracingCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Tracing(*pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Tracing(*pending),
+                        )
                     }
                     crate::domains::tracing::TracingCommandTaskStep::Complete(plan) => self
                         .complete_with_output_plan(
@@ -708,7 +970,10 @@ impl CdpConnection {
                 crate::domains::fetch::try_start_fetch_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::fetch::FetchCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Fetch(pending))
+                            self.pending_step(
+                                command_owner.clone(),
+                                PendingCdpCommandDispatchKind::Fetch(pending),
+                            )
                         }
                         crate::domains::fetch::FetchCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -720,7 +985,10 @@ impl CdpConnection {
                 crate::domains::page::try_start_page_command_dispatch(self, &cmd).map(|step| {
                     match step {
                         crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                            self.pending_step(PendingCdpCommandDispatchKind::Page(pending))
+                            self.pending_step(
+                                command_owner.clone(),
+                                PendingCdpCommandDispatchKind::Page(pending),
+                            )
                         }
                         crate::domains::page::PageCommandTaskStep::Complete(plan) => {
                             self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -739,7 +1007,10 @@ impl CdpConnection {
             "Storage" => Some(
                 match crate::domains::storage::try_start_storage_command_dispatch(self, &cmd) {
                     crate::domains::storage::StorageCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Storage(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Storage(pending),
+                        )
                     }
                     crate::domains::storage::StorageCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -753,7 +1024,10 @@ impl CdpConnection {
                     ) {
                         crate::domains::dom_snapshot::DomSnapshotCommandDispatchStep::Pending(
                             pending,
-                        ) => self.pending_step(PendingCdpCommandDispatchKind::DomSnapshot(pending)),
+                        ) => self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::DomSnapshot(pending),
+                        ),
                         crate::domains::dom_snapshot::DomSnapshotCommandDispatchStep::Complete(
                             plan,
                         ) => self.complete_with_output_plan(
@@ -768,7 +1042,10 @@ impl CdpConnection {
             "Security" => Some(
                 match crate::domains::security::try_start_security_command_dispatch(self, &cmd) {
                     crate::domains::security::SecurityCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Security(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Security(pending),
+                        )
                     }
                     crate::domains::security::SecurityCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -782,7 +1059,10 @@ impl CdpConnection {
             "IO" => Some(
                 match crate::domains::io::try_start_io_command_dispatch(self, &cmd) {
                     crate::domains::io::IoCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Io(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Io(pending),
+                        )
                     }
                     crate::domains::io::IoCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -792,7 +1072,10 @@ impl CdpConnection {
             "Autofill" => Some(
                 match crate::domains::autofill::try_start_autofill_command_dispatch(self, &cmd) {
                     crate::domains::autofill::AutofillCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Autofill(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Autofill(pending),
+                        )
                     }
                     crate::domains::autofill::AutofillCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(
@@ -824,10 +1107,12 @@ impl CdpConnection {
                 match crate::domains::performance::try_start_performance_command_dispatch(
                     self,
                     &cmd,
-                    command.renderer_access(),
                 ) {
                     crate::domains::performance::PerformanceCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::Performance(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::Performance(pending),
+                        )
                     }
                     crate::domains::performance::PerformanceCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -839,7 +1124,10 @@ impl CdpConnection {
                     self, &cmd,
                 ) {
                     crate::domains::dom_debugger::DomDebuggerCommandTaskStep::Pending(pending) => {
-                        self.pending_step(PendingCdpCommandDispatchKind::DomDebugger(pending))
+                        self.pending_step(
+                            command_owner.clone(),
+                            PendingCdpCommandDispatchKind::DomDebugger(pending),
+                        )
                     }
                     crate::domains::dom_debugger::DomDebuggerCommandTaskStep::Complete(plan) => {
                         self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -851,7 +1139,10 @@ impl CdpConnection {
             )
             .map(|step| match step {
                 crate::domains::emulation::EmulationCommandTaskStep::Pending(pending) => {
-                    self.pending_step(PendingCdpCommandDispatchKind::Emulation(pending))
+                    self.pending_step(
+                        command_owner.clone(),
+                        PendingCdpCommandDispatchKind::Emulation(pending),
+                    )
                 }
                 crate::domains::emulation::EmulationCommandTaskStep::Complete(plan) => {
                     self.complete_with_output_plan(command_context, plan, cmd.id, cmd.session_id)
@@ -885,15 +1176,17 @@ impl CdpConnection {
         let mut command_context = CommandDispatchContext::default();
         self.complete_pending_command_dispatch_with_context(completed, &mut command_context)
             .await
+            .into()
     }
 
     pub async fn complete_pending_command_dispatch_with_context(
         &mut self,
         completed: CompletedCdpCommandDispatch,
         command_context: &mut CommandDispatchContext,
-    ) -> CdpCommandTaskStep {
+    ) -> AgentHostDispatchResult {
+        let CompletedCdpCommandDispatch { inner, owner_scope } = completed;
         let mut out = Vec::new();
-        match completed.inner {
+        match inner {
             CompletedCdpCommandDispatchKind::Runtime(completed) => {
                 let completed = *completed;
                 let command_id = completed.command_id();
@@ -907,7 +1200,10 @@ impl CdpConnection {
                 .await
                 {
                     crate::domains::runtime::RuntimeCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Runtime(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Runtime(pending),
+                        );
                     }
                     crate::domains::runtime::RuntimeCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(
@@ -938,8 +1234,10 @@ impl CdpConnection {
                     crate::domains::accessibility::AccessibilityCommandDispatchStep::Pending(
                         pending,
                     ) => {
-                        return self
-                            .pending_step(PendingCdpCommandDispatchKind::Accessibility(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Accessibility(pending),
+                        );
                     }
                     crate::domains::accessibility::AccessibilityCommandDispatchStep::Complete(
                         plan,
@@ -981,7 +1279,10 @@ impl CdpConnection {
                 let session_id = completed.session_id().map(str::to_owned);
                 match crate::domains::css::complete_pending_css_command(self, completed) {
                     crate::domains::css::CssCommandDispatchStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Css(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Css(pending),
+                        );
                     }
                     crate::domains::css::CssCommandDispatchStep::Complete(plan) => {
                         append_command_output_plan(
@@ -1010,7 +1311,10 @@ impl CdpConnection {
                 );
                 match step {
                     crate::domains::dom::DomCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Dom(*pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Dom(*pending),
+                        );
                     }
                     crate::domains::dom::DomCommandTaskStep::Complete => {}
                 }
@@ -1030,8 +1334,10 @@ impl CdpConnection {
                     self, *completed,
                 ) {
                     crate::domains::dom_storage::DomStorageCommandTaskStep::Pending(pending) => {
-                        return self
-                            .pending_step(PendingCdpCommandDispatchKind::DomStorage(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::DomStorage(pending),
+                        );
                     }
                     crate::domains::dom_storage::DomStorageCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(
@@ -1053,8 +1359,10 @@ impl CdpConnection {
                     crate::domains::dom_snapshot::DomSnapshotCommandDispatchStep::Pending(
                         pending,
                     ) => {
-                        return self
-                            .pending_step(PendingCdpCommandDispatchKind::DomSnapshot(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::DomSnapshot(pending),
+                        );
                     }
                     crate::domains::dom_snapshot::DomSnapshotCommandDispatchStep::Complete(
                         plan,
@@ -1080,7 +1388,10 @@ impl CdpConnection {
                 .await
                 {
                     crate::domains::page::PageCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Page(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Page(pending),
+                        );
                     }
                     crate::domains::page::PageCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(
@@ -1139,7 +1450,10 @@ impl CdpConnection {
                 let session_id = completed.session_id().map(str::to_owned);
                 match crate::domains::network::complete_pending_network_command(self, completed) {
                     crate::domains::network::NetworkCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Network(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Network(pending),
+                        );
                     }
                     crate::domains::network::NetworkCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(
@@ -1217,7 +1531,10 @@ impl CdpConnection {
                 .await
                 {
                     crate::domains::target::TargetCommandTaskStep::Pending(pending) => {
-                        return self.pending_step(PendingCdpCommandDispatchKind::Target(pending));
+                        return self.pending_step(
+                            owner_scope.clone(),
+                            PendingCdpCommandDispatchKind::Target(pending),
+                        );
                     }
                     crate::domains::target::TargetCommandTaskStep::Complete(plan) => {
                         append_command_output_plan(
@@ -1243,7 +1560,7 @@ impl CdpConnection {
             command_context.take_renderer_fenced_protocol_events();
         let post_response_events = command_context.take_post_response_events();
         let scheduler_events = self.take_scheduler_events();
-        CdpCommandTaskStep::Complete(
+        AgentHostDispatchResult::Complete(
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 out,
                 post_response_events,
@@ -1341,17 +1658,14 @@ impl CdpConnection {
             }
             Err(error) => self.complete_with_output_plan(
                 &mut command_context,
-                CommandOutputPlan::error_without_session(
-                    error.response_code(),
-                    error.response_message(),
-                ),
+                CommandOutputPlan::error(error.response_code(), error.response_message()),
                 error.command_id(),
                 None,
             ),
         };
         loop {
-            match step {
-                CdpCommandTaskStep::Complete(outcome) => {
+            let pending = match step {
+                AgentHostDispatchResult::Complete(outcome) => {
                     let (
                         mut complete_protocol_events,
                         mut complete_post_renderer_output_events,
@@ -1374,15 +1688,16 @@ impl CdpConnection {
                     }
                     break;
                 }
-                CdpCommandTaskStep::Pending(pending) => {
-                    let completed = Box::pin(pending.wait()).await;
-                    step = Box::pin(self.complete_pending_command_dispatch_with_context(
-                        completed,
-                        &mut command_context,
-                    ))
-                    .await;
-                }
-            }
+                AgentHostDispatchResult::PendingService(pending) => pending,
+                AgentHostDispatchResult::FallThrough(dispatch) => dispatch.into_pending(),
+            };
+            let completed = Box::pin(pending.wait()).await;
+            step =
+                Box::pin(self.complete_pending_command_dispatch_with_context(
+                    completed,
+                    &mut command_context,
+                ))
+                .await;
         }
         Box::pin(
             crate::domains::activity::project_protocol_local_command_outputs(

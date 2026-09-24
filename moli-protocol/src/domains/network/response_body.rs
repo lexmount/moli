@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use serde_json::{Value, json};
 
 use super::{CapturedRequestBody, CapturedResponseBody, collectors::CollectedNetworkDataBody};
-use crate::conn::{CdpConnection, Cmd, TargetRuntimeSlot};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::devtools_runtime::{
     DevToolsCommandResult, DevToolsDisownNetworkDataCommand, DevToolsError, DevToolsErrorKind,
     DevToolsGetNetworkDataCommand, DevToolsNetworkDataBytesType, DevToolsNetworkDataCollectorId,
@@ -11,11 +11,11 @@ use crate::devtools_runtime::{
 use crate::domains::command_output::CommandOutputPlan;
 
 fn network_events_enabled_for_session(
-    slot: &TargetRuntimeSlot,
+    slot: &super::TargetNetworkAgentState,
     session_id: Option<&str>,
     primary_session_id: Option<&str>,
 ) -> bool {
-    slot.network_event_session_ids(session_id, primary_session_id)
+    slot.event_session_ids(session_id, primary_session_id)
         .iter()
         .any(|event_session_id| event_session_id.as_deref() == session_id)
 }
@@ -34,12 +34,13 @@ pub(super) fn get_response_body_command_output_plan(
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    if conn.browser_context.is_none() {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    if conn.network_owner_identity_for_owner(&owner).is_none() {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
     }
     let response_body_materialize_limit = conn.response_body_materialize_limit();
     let primary_session_id = conn.runtime_session_owner_primary_session_id(cmd.session_id);
-    let Ok(slot) = conn.runtime_session_owner_slot(cmd.session_id) else {
+    let Some(slot) = conn.network_agent_for_owner(&owner) else {
         return CommandOutputPlan::error(-32000, "No resource with given identifier found");
     };
     if !network_events_enabled_for_session(slot, cmd.session_id, primary_session_id.as_deref()) {
@@ -75,12 +76,13 @@ pub(super) fn get_request_post_data_command_output_plan(
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    if conn.browser_context.is_none() {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    if conn.network_owner_identity_for_owner(&owner).is_none() {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
     }
     let body_materialize_limit = conn.response_body_materialize_limit();
     let primary_session_id = conn.runtime_session_owner_primary_session_id(cmd.session_id);
-    let Ok(slot) = conn.runtime_session_owner_slot(cmd.session_id) else {
+    let Some(slot) = conn.network_agent_for_owner(&owner) else {
         return CommandOutputPlan::error(-32000, "No resource with given id was found");
     };
     if !network_events_enabled_for_session(slot, cmd.session_id, primary_session_id.as_deref()) {

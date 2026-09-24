@@ -53,12 +53,14 @@ impl ServiceWorkerRuntimeService {
     pub(in crate::service_worker_runtime) fn enqueue_main_script_update_check_completed(
         &self,
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     ) {
         self.enqueue_service_lane_completion(
             ServiceWorkerRuntimeCompletion::main_script_update_check_completed(
                 self.downgrade(),
                 registration_id,
+                owner,
                 result,
             ),
         );
@@ -525,12 +527,13 @@ impl WeakServiceWorkerRuntimeService {
     pub(in crate::service_worker_runtime) fn finish_main_script_update_check_completed(
         &self,
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     ) {
         let Some(service) = self.upgrade() else {
             return;
         };
-        service.finish_main_script_update_check_completed(registration_id, result);
+        service.finish_main_script_update_check_completed(registration_id, owner, result);
     }
 
     pub(in crate::service_worker_runtime) fn finish_lifecycle_event_completed(

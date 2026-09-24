@@ -36,10 +36,7 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 7,
-                    error_text: "canceled".to_owned(),
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: 7, document_url: "https://worker-host-bridge.test/".parse().unwrap(), url: "wss://worker-host-bridge.test/socket".parse().unwrap() })),
             })
             .expect("SharedWorker host record should enter the stable Networking source");
         let task = page_vm
@@ -73,7 +70,7 @@ Promise.resolve().then(() => {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -109,15 +106,12 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::SharedWorkerMessage {
                 instance_id: moli_shared_worker::SharedWorkerInstanceId::from_u64(1),
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 8,
-                    error_text: "canceled-again".to_owned(),
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: 8, document_url: "https://worker-host-bridge.test/".parse().unwrap(), url: "wss://worker-host-bridge.test/socket".parse().unwrap() })),
             })
             .expect("a second host record should enter the same stable source");
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WorkerHostBridge, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WorkerHostBridge)
                 .await?,
             "the exact WorkerHostBridge variant must return through the production selected dispatcher"
         );
@@ -152,15 +146,12 @@ Promise.resolve().then(() => {
             .worker_host_bridge_sender_for_test()
             .send(WorkerRuntimeEvent::Message {
                 worker_id,
-                message: Box::new(WorkerToParentMessage::PendingSubresourceFetchCanceled {
-                    fetch_id: 9,
-                    error_text: "dedicated-canceled".to_owned(),
-                }),
+                message: Box::new(WorkerToParentMessage::WebSocketLifecycle(crate::worker::WorkerWebSocketLifecycleEvent::Closing { socket_id: 9, document_url: "https://worker-host-bridge.test/".parse().unwrap(), url: "wss://worker-host-bridge.test/socket".parse().unwrap() })),
             })
             .expect("a DedicatedWorker host record should enter the stable source");
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WorkerHostBridge, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WorkerHostBridge)
                 .await?,
             "the DedicatedWorker host record must use the same production completion boundary"
         );
@@ -238,7 +229,7 @@ Promise.resolve().then(() => {
             PageTaskCompletion::CheckpointOnly
         ));
         page_vm
-            .finish_selected_page_task_completion(current_completion, &loader)
+            .finish_selected_page_task_completion(current_completion)
             .await?;
         assert_eq!(
             page_vm
@@ -291,7 +282,7 @@ Promise.resolve().then(() => {
             PageTaskCompletion::NoCompletion
         ));
         page_vm
-            .finish_selected_page_task_completion(stale_target_completion, &loader)
+            .finish_selected_page_task_completion(stale_target_completion)
             .await?;
         assert_eq!(
             page_vm
@@ -426,7 +417,7 @@ Promise.resolve().then(() => {
                         )
                         .expect("late old-root task should consume one discard turn");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -466,7 +457,7 @@ Promise.resolve().then(() => {
                         )
                         .expect("the current-root task should follow the stale source head");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(current, &loader)
+                        .run_claimed_selected_page_task_for_test(current)
                         .await?;
                     assert_eq!(
                         page_vm

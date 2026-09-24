@@ -12,7 +12,9 @@ use moli_core::page::{
 };
 
 fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
-    let mut bc = BrowserContext::new("BID-service".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service".to_owned());
     let mut target = service_worker_target();
     target.attach_session(session_id.to_owned());
     bc.insert_service_worker_target(target);
@@ -20,7 +22,9 @@ fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
 }
 
 fn load_unattached_service_worker_target(ctx: &mut TestContext) {
-    let mut bc = BrowserContext::new("BID-service".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service".to_owned());
     bc.insert_service_worker_target(service_worker_target());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 }
@@ -45,21 +49,25 @@ fn record_service_worker_console(ctx: &mut TestContext, session_id: &str, messag
 }
 
 fn record_service_worker_runtime_context(ctx: &mut TestContext, session_id: &str, context_id: i64) {
+    let target = ctx
+        .conn
+        .service_worker_target_for_session_mut(Some(session_id))
+        .expect("service worker target session should exist");
     let event = RuntimeExecutionContextEvent {
-        target_id: None,
+        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
         context_id: Some(context_id),
-        realm_id: None,
+        realm_id: Some(crate::devtools_runtime::DevToolsRealmId::from(format!(
+            "{}:native-realm-{context_id}",
+            target.target_id
+        ))),
         frame_id: None,
-        origin: None,
-        name: None,
-        is_default: None,
+        origin: Some("https://example.test".to_owned()),
+        name: Some(String::new()),
+        is_default: Some(true),
         context_type: Some("service-worker".to_owned()),
         grant_universal_access: None,
     };
-    ctx.conn
-        .service_worker_target_for_session_mut(Some(session_id))
-        .expect("service worker target session should exist")
-        .record_runtime_execution_context_created_event(&event);
+    target.record_runtime_execution_context_created_event(&event);
 }
 
 fn record_unattached_service_worker_console(ctx: &mut TestContext, message: &str) {
@@ -98,17 +106,19 @@ fn service_worker_fetch_diagnostic(internal_id: u64) -> RendererServiceWorkerFet
     }
 }
 
+fn service_worker_pause_on_start(ctx: &TestContext) -> bool {
+    ctx.conn
+        .browser_context
+        .as_ref()
+        .expect("browser context should exist")
+        .service_worker_pause_on_start()
+}
+
 #[tokio::test]
 async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_start() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
 
     ctx.process_async(json!({
         "id": 78,
@@ -120,7 +130,7 @@ async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_st
     }))
     .await;
     ctx.expect_result(78, json!({}), None);
-    assert!(runtime.service_worker_pause_on_start_for_devtools());
+    assert!(service_worker_pause_on_start(&ctx));
 
     ctx.process_async(json!({
         "id": 79,
@@ -132,20 +142,14 @@ async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_st
     }))
     .await;
     ctx.expect_result(79, json!({}), None);
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
 }
 
 #[tokio::test]
 async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
 
     ctx.process_async(json!({
         "id": 80,
@@ -163,7 +167,7 @@ async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
     ctx.expect_result(80, json!({}), None);
 
     assert!(
-        !runtime.service_worker_pause_on_start_for_devtools(),
+        !service_worker_pause_on_start(&ctx),
         "waitForDebuggerOnStart must not pause Service Workers when the target filter excludes them"
     );
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
@@ -173,17 +177,11 @@ async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
 async fn service_worker_pause_on_start_waits_for_last_owner() {
     let mut ctx = TestContext::new();
     load_unattached_service_worker_target(&mut ctx);
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
 
     crate::domains::target::set_service_worker_pause_on_start_owner(&mut ctx.conn, None, true);
-    assert!(runtime.service_worker_pause_on_start_for_devtools());
+    assert!(service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
 
     crate::domains::target::set_service_worker_pause_on_start_owner(
@@ -191,12 +189,12 @@ async fn service_worker_pause_on_start_waits_for_last_owner() {
         Some("SID-service-worker-owner"),
         true,
     );
-    assert!(runtime.service_worker_pause_on_start_for_devtools());
+    assert!(service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 2);
 
     crate::domains::target::set_service_worker_pause_on_start_owner(&mut ctx.conn, None, false);
     assert!(
-        runtime.service_worker_pause_on_start_for_devtools(),
+        service_worker_pause_on_start(&ctx),
         "one remaining DevTools owner must keep new Service Worker targets paused"
     );
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
@@ -206,7 +204,7 @@ async fn service_worker_pause_on_start_waits_for_last_owner() {
         Some("SID-service-worker-owner"),
         false,
     );
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
 }
 
@@ -380,7 +378,7 @@ async fn get_realms_on_service_worker_target_returns_real_renderer_realm() {
     assert_eq!(realm.context_id, Some(91_007));
     assert_eq!(
         realm.realm_id.as_ref().map(|realm| realm.as_str()),
-        Some("service-worker-TID-service-worker")
+        Some("TID-service-worker:native-realm-91007")
     );
     assert_eq!(realm.frame_id, None);
     assert_eq!(realm.origin.as_deref(), Some("https://example.test"));
@@ -447,7 +445,7 @@ async fn get_realms_global_enumeration_includes_service_worker_real_renderer_rea
                 && realm.context_id == Some(91_007)
                 && realm.context_type.as_deref() == Some("service-worker")
                 && realm.realm_id.as_ref().map(|realm| realm.as_str())
-                    == Some("service-worker-TID-service-worker")
+                    == Some("TID-service-worker:native-realm-91007")
         }),
         "global getRealms should include service worker target realms after renderer context creation: {:?}",
         result.realms
@@ -629,8 +627,19 @@ async fn network_enable_on_service_worker_session_toggles_target_local_cursor() 
     );
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn runtime_evaluate_on_real_service_worker_session_enters_worker_global() {
+async fn real_service_worker_session() -> (TestContext, String, String, tokio::task::JoinHandle<()>)
+{
+    real_service_worker_session_with_startup_pause(false, false).await
+}
+
+async fn real_service_worker_session_with_startup_pause(
+    pause: bool,
+    release_update_all: bool,
+) -> (TestContext, String, String, tokio::task::JoinHandle<()>) {
+    struct ScriptFixture {
+        gate: tokio::sync::Semaphore,
+        updated: std::sync::atomic::AtomicBool,
+    }
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -638,7 +647,10 @@ async fn runtime_evaluate_on_real_service_worker_session_enters_worker_global() 
         )
     }
 
-    async fn service_worker() -> impl IntoResponse {
+    async fn service_worker(
+        axum::extract::State(fixture): axum::extract::State<std::sync::Arc<ScriptFixture>>,
+    ) -> impl IntoResponse {
+        let _permit = fixture.gate.acquire().await.unwrap();
         (
             [(CONTENT_TYPE.as_str(), "text/javascript")],
             r#"
@@ -652,18 +664,31 @@ self.addEventListener("install", event => {
 self.addEventListener("activate", event => {
   event.waitUntil(clients.claim());
 });
-"#,
+"#
+            .to_owned()
+                + if fixture.updated.load(std::sync::atomic::Ordering::SeqCst) {
+                    "// changed update"
+                } else {
+                    ""
+                },
         )
     }
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let fixture = std::sync::Arc::new(ScriptFixture {
+        gate: tokio::sync::Semaphore::new(usize::from(!pause)),
+        updated: std::sync::atomic::AtomicBool::new(false),
+    });
+    let gate = &fixture.gate;
+    let server_fixture = fixture.clone();
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
             Router::new()
                 .route("/page", get(page))
-                .route("/service-worker.js", get(service_worker)),
+                .route("/service-worker.js", get(service_worker))
+                .with_state(server_fixture),
         )
         .await
         .unwrap();
@@ -677,7 +702,7 @@ self.addEventListener("activate", event => {
         "method": "Target.setAutoAttach",
         "params": {
             "autoAttach": true,
-            "waitForDebuggerOnStart": false
+            "waitForDebuggerOnStart": pause
         }
     }))
     .await;
@@ -700,12 +725,6 @@ self.addEventListener("activate", event => {
         }
     }))
     .await;
-    let register_response = wait_for_response_by_id_async(&mut ctx, "SID-page", 85).await;
-    assert_eq!(
-        register_response["result"]["result"]["value"],
-        json!(format!("http://{addr}/service-worker.js"))
-    );
-
     wait_until_message(
         &mut ctx,
         None,
@@ -720,11 +739,142 @@ self.addEventListener("activate", event => {
         message["method"] == json!("Target.attachedToTarget")
             && message["params"]["targetInfo"]["type"] == json!("service_worker")
     });
-    let service_worker_session_id = attached["params"]["sessionId"]
+    let mut service_worker_session_id = attached["params"]["sessionId"]
         .as_str()
         .expect("service worker session id")
         .to_owned();
 
+    if pause {
+        assert_eq!(attached["params"]["waitingForDebugger"], true);
+        assert!(
+            ctx.conn
+                .worker_inspection_endpoint_for_session(Some(&service_worker_session_id))
+                .is_err()
+        );
+        ctx.process_async(json!({
+            "id": 86, "method": "Runtime.runIfWaitingForDebugger",
+            "sessionId": service_worker_session_id
+        }))
+        .await;
+        ctx.expect_result(86, json!({}), Some(&service_worker_session_id));
+        assert!(
+            ctx.conn
+                .worker_inspection_endpoint_for_session(Some(&service_worker_session_id))
+                .is_err(),
+            "the response gate must keep the VM unavailable until release completes"
+        );
+        gate.add_permits(1);
+    }
+    let register_response = wait_for_response_by_id_async(&mut ctx, "SID-page", 85).await;
+    assert_eq!(
+        register_response["result"]["result"]["value"],
+        json!(format!("http://{addr}/service-worker.js"))
+    );
+
+    if pause {
+        ctx.process_async(
+            json!({"id": 88, "method": "ServiceWorker.enable", "sessionId": "SID-page"}),
+        )
+        .await;
+        ctx.expect_result(88, json!({}), Some("SID-page"));
+        let held_response = gate.acquire().await.unwrap();
+        fixture
+            .updated
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        ctx.process_async(json!({
+            "id": 89, "method": "ServiceWorker.updateRegistration", "sessionId": "SID-page",
+            "params": {"scopeURL": format!("http://{addr}/")}
+        }))
+        .await;
+        ctx.expect_result(89, json!({}), Some("SID-page"));
+        let is_update = |message: &serde_json::Value| {
+            message["method"] == "Target.attachedToTarget"
+                && message["params"]["targetInfo"]["type"] == "service_worker"
+                && message["params"]["targetInfo"]["targetId"]
+                    != attached["params"]["targetInfo"]["targetId"]
+        };
+        wait_until_message(&mut ctx, None, "paused updated Service Worker", is_update).await;
+        let updated = ctx.take_first_matching("updated Service Worker", is_update);
+        assert_eq!(updated["params"]["waitingForDebugger"], true);
+        let updated_target = updated["params"]["targetInfo"]["targetId"]
+            .as_str()
+            .unwrap();
+        let updated_session = updated["params"]["sessionId"].as_str().unwrap();
+        assert!(
+            ctx.conn
+                .worker_inspection_endpoint_for_session(Some(updated_session))
+                .is_err()
+        );
+        if release_update_all {
+            ctx.process_async(
+                json!({"id": 90, "method": "Target.setAutoAttach", "params": {
+                    "autoAttach": false, "waitForDebuggerOnStart": false
+                }}),
+            )
+            .await;
+            ctx.expect_result(90, json!({}), None);
+        } else {
+            ctx.process_async(json!({"id": 90, "method": "Runtime.runIfWaitingForDebugger", "sessionId": updated_session})).await;
+            ctx.expect_result(90, json!({}), Some(updated_session));
+            assert!(
+                ctx.conn
+                    .worker_inspection_endpoint_for_session(Some(updated_session))
+                    .is_err()
+            );
+        }
+        drop(held_response);
+        wait_until_message(
+            &mut ctx,
+            Some("SID-page"),
+            "released update activates without another debugger command",
+            |message| {
+                message["method"] == "ServiceWorker.workerVersionUpdated"
+                    && message["params"]["versions"]
+                        .as_array()
+                        .is_some_and(|versions| {
+                            versions.iter().any(|version| {
+                                version["targetId"] == updated_target
+                                    && version["runningStatus"] == "running"
+                                    && version["status"] == "activated"
+                            })
+                        })
+            },
+        )
+        .await;
+        ctx.process_async(json!({"id": 91, "method": "Target.attachToTarget", "params": {"targetId": updated_target, "flatten": true}})).await;
+        service_worker_session_id = take_response_by_id(&mut ctx, 91)["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+    }
+
+    (
+        ctx,
+        service_worker_session_id,
+        format!("http://{addr}/"),
+        server,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn service_worker_debugger_resume_completes_before_main_response_and_vm_creation() {
+    for release_update_all in [false, true] {
+        let (mut ctx, session_id, _, server) =
+            real_service_worker_session_with_startup_pause(true, release_update_all).await;
+        ctx.process_async(json!({
+        "id": 87, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "self instanceof ServiceWorkerGlobalScope", "returnByValue": true}
+    }))
+        .await;
+        let response = wait_for_response_by_id_async(&mut ctx, session_id.as_str(), 87).await;
+        assert_eq!(response["result"]["result"]["value"], true);
+        server.abort();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_evaluate_on_real_service_worker_session_enters_worker_global() {
+    let (mut ctx, service_worker_session_id, scope, server) = real_service_worker_session().await;
     ctx.process_async(json!({
         "id": 86,
         "method": "Runtime.evaluate",
@@ -738,10 +888,153 @@ self.addEventListener("activate", event => {
     let probe_response = take_response_by_id(&mut ctx, 86);
     assert_eq!(
         probe_response["result"]["result"]["value"],
-        json!(format!("service:true:http://{addr}/"))
+        json!(format!("service:true:{scope}"))
     );
 
     server.abort();
+}
+
+async fn restart_service_worker_session(ctx: &mut TestContext, session_id: &str, scope: &str) {
+    let version_id = ctx
+        .conn
+        .service_worker_target_for_session(Some(session_id))
+        .expect("attached worker")
+        .renderer_version_id
+        .to_string();
+    ctx.process_async(json!({"id": 90, "method": "ServiceWorker.enable", "sessionId": "SID-page"}))
+        .await;
+    ctx.expect_result(90, json!({}), Some("SID-page"));
+    ctx.process_async(
+        json!({"id": 91, "method": "ServiceWorker.stopWorker", "sessionId": "SID-page",
+        "params": {"versionId": version_id}}),
+    )
+    .await;
+    ctx.expect_result(91, json!({}), Some("SID-page"));
+    wait_until_message(ctx, Some("SID-page"), "the exact worker stops", |message| {
+        message["method"] == "ServiceWorker.workerVersionUpdated"
+            && message["params"]["versions"]
+                .as_array()
+                .is_some_and(|versions| {
+                    versions.iter().any(|version| {
+                        version["versionId"] == version_id && version["runningStatus"] == "stopped"
+                    })
+                })
+    })
+    .await;
+    ctx.sent.clear();
+    ctx.process_async(
+        json!({"id": 92, "method": "ServiceWorker.startWorker", "sessionId": "SID-page",
+        "params": {"scopeURL": scope}}),
+    )
+    .await;
+    ctx.expect_result(92, json!({}), Some("SID-page"));
+    wait_until_message(
+        ctx,
+        Some("SID-page"),
+        "the same version starts a new run",
+        |message| {
+            message["method"] == "ServiceWorker.workerVersionUpdated"
+                && message["params"]["versions"]
+                    .as_array()
+                    .is_some_and(|versions| {
+                        versions.iter().any(|version| {
+                            version["versionId"] == version_id
+                                && version["runningStatus"] == "running"
+                        })
+                    })
+        },
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_service_worker_inspection_never_dispatches_to_a_restarted_run() {
+    let (mut ctx, session_id, scope, server) = real_service_worker_session().await;
+    let old_target = ctx
+        .conn
+        .service_worker_target_for_session(Some(&session_id))
+        .expect("worker")
+        .inspection_target()
+        .expect("live run");
+    let old_endpoint = ctx
+        .conn
+        .worker_inspection_endpoint_for_session(Some(&session_id))
+        .expect("live inspection endpoint");
+    let disposal = ctx
+        .conn
+        .session_disposal_plan(&session_id)
+        .expect("disposal plan");
+    let disposal_endpoint =
+        crate::domains::runtime::worker_inspection_endpoint_for_disposal(&ctx.conn, &disposal)
+            .expect("capture the worker before async session cleanup");
+    let pending = ctx
+        .conn
+        .start_worker_runtime_protocol_message_for_session(
+            Some(&session_id),
+            json!({"id": 9001, "method": "Runtime.evaluate", "params": {
+                "expression": "globalThis.__staleWorkerDispatch = true", "returnByValue": true
+            }})
+            .to_string(),
+        )
+        .expect("capture the original worker before polling dispatch");
+
+    restart_service_worker_session(&mut ctx, &session_id, &scope).await;
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .expect("fixture context")
+            .worker_inspection_endpoint(old_target)
+            .is_none(),
+        "the old run identity must not bind the restarted version"
+    );
+    assert!(!old_endpoint.attach_session(Some(session_id.clone())));
+    assert!(!old_endpoint.detach_session(Some(session_id.clone())));
+    assert!(!disposal_endpoint.detach_session(Some(session_id.clone())));
+
+    let stale_dispatch = pending.wait().await;
+    ctx.process_async(json!({"id": 93, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "globalThis.__staleWorkerDispatch === undefined", "returnByValue": true}})).await;
+    let probe = take_response_by_id(&mut ctx, 93);
+    server.abort();
+    assert_eq!(
+        probe["result"]["result"]["value"], true,
+        "a captured inspection command must not mutate the replacement run: {probe}"
+    );
+    assert!(
+        stale_dispatch.is_err(),
+        "the retired endpoint must reject the captured command"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_service_worker_frontend_inspection_never_dispatches_to_a_restarted_run() {
+    let (mut ctx, session_id, scope, server) = real_service_worker_session().await;
+    let raw = json!({"id": 9002, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "globalThis.__staleWorkerDispatch = true", "returnByValue": true}
+    })
+    .to_string();
+    let pending = ctx
+        .conn
+        .try_start_pending_command_dispatch(&raw)
+        .expect("capture a real frontend Worker command before polling");
+    restart_service_worker_session(&mut ctx, &session_id, &scope).await;
+    let completed = pending.wait().await;
+    assert!(
+        matches!(
+            ctx.conn.complete_pending_command_dispatch(completed).await,
+            CdpCommandTaskStep::Complete(_)
+        ),
+        "retired frontend inspection must complete without replay"
+    );
+    ctx.process_async(json!({"id": 94, "method": "Runtime.evaluate", "sessionId": session_id,
+        "params": {"expression": "globalThis.__staleWorkerDispatch === undefined", "returnByValue": true}})).await;
+    let probe = take_response_by_id(&mut ctx, 94);
+    server.abort();
+    assert_eq!(
+        probe["result"]["result"]["value"], true,
+        "the old frontend command must not mutate the replacement run: {probe}"
+    );
 }
 
 #[tokio::test]

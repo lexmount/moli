@@ -62,8 +62,8 @@ mod tests {
     use crate::{
         message_port_runtime::new_message_port_registry,
         runtime::{
-            RendererOutputItem, RendererOutputStreamControl, RendererOwnerAction,
-            RendererSharedWorkerTargetEvent,
+            RendererOutputItem, RendererOutputStreamControl, RendererProtocolObservation,
+            RendererWorkerLifecycle,
         },
         shared_worker_runtime::{
             SharedWorkerClientEndpointDisposition, SharedWorkerClientEvent,
@@ -98,9 +98,8 @@ mod tests {
         };
         assert!(matches!(
             created.records()[0].item(),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::SharedWorkerTargetLifecycle(
-                RendererSharedWorkerTargetEvent::Created(_)
-            ))
+            RendererOutputItem::Observation(RendererProtocolObservation::WorkerLifecycle(observation))
+                if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedCreated(_))
         ));
         let crate::runtime::RendererOutputTransportMessage::Publication(destroyed) =
             rx.try_recv().expect("destroyed fact must be published")
@@ -109,13 +108,8 @@ mod tests {
         };
         assert!(matches!(
             destroyed.records()[0].item(),
-            RendererOutputItem::OwnerAction(
-                RendererOwnerAction::SharedWorkerTargetLifecycle(
-                    RendererSharedWorkerTargetEvent::Destroyed {
-                        instance_id: destroyed_instance_id
-                    }
-                )
-            ) if *destroyed_instance_id == instance_id
+            RendererOutputItem::Observation(RendererProtocolObservation::WorkerLifecycle(observation))
+                if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedDestroyed(destroyed_instance_id) if *destroyed_instance_id == instance_id)
         ));
         assert!(matches!(
             rx.try_recv().expect(
@@ -185,8 +179,7 @@ mod tests {
         assert_eq!(service.drain_service_lane(), 1);
 
         assert!(
-            host.target_output_retired()
-                .load(std::sync::atomic::Ordering::Acquire),
+            host.target_output_retired(),
             "startup close must retire the exact worker output stream"
         );
         assert!(test_support::matching_is_empty(&service));

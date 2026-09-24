@@ -148,6 +148,44 @@ impl NetworkObservationJournal {
         &self.exchanges
     }
 
+    /// Physical exchanges for one redirect hop, including authentication retries.
+    pub fn redirect_exchange_group(
+        &self,
+        redirect_count: usize,
+        hop_index: usize,
+    ) -> Option<&[NetworkExchangeObservation]> {
+        // A truncated journal still proves that a transport exchange happened, but
+        // no longer provides a trustworthy tail for redirect-hop correlation.
+        if self.truncated() {
+            return None;
+        }
+        if hop_index > redirect_count {
+            return None;
+        }
+
+        let exchanges = self.exchanges();
+        let mut group_start = 0;
+        let mut current_hop = 0;
+        for (index, exchange) in exchanges.iter().enumerate() {
+            let ends_redirect_hop = exchange.response().is_some_and(|response| {
+                matches!(response.status(), 301 | 302 | 303 | 307 | 308)
+                    || response.headers().iter().any(|(name, value)| {
+                        name.eq_ignore_ascii_case("critical-ch") && !value.trim_ascii().is_empty()
+                    })
+            });
+            if !ends_redirect_hop || current_hop >= redirect_count {
+                continue;
+            }
+            if current_hop == hop_index {
+                return Some(&exchanges[group_start..=index]);
+            }
+            current_hop += 1;
+            group_start = index.saturating_add(1);
+        }
+        (current_hop == hop_index && group_start < exchanges.len())
+            .then_some(&exchanges[group_start..])
+    }
+
     pub fn final_request_observation(&self) -> Option<&NetworkRequestObservation> {
         self.exchanges
             .last()
@@ -368,6 +406,7 @@ fn parse_status_line(line: &str) -> Option<u16> {
 /// The underlying cause remains owned by [`anyhow::Error`]. This context only
 /// carries the transport and request state needed by browser-facing protocol
 /// consumers when a transfer fails before response metadata is available.
+#[derive(Eq, PartialEq)]
 pub struct NetworkFetchFailureContext {
     observation_journal: NetworkObservationJournal,
     network_error_text: &'static str,
@@ -390,7 +429,7 @@ pub struct NetworkFetchFailureRequestContext {
 }
 
 impl NetworkFetchFailureRequestContext {
-    pub(crate) fn new(
+    pub fn new(
         current_url: Url,
         request_method: String,
         request_body: Option<Vec<u8>>,
@@ -428,6 +467,35 @@ impl NetworkFetchFailureRequestContext {
 }
 
 impl NetworkFetchFailureContext {
+    /// Joins transport history when the caller, rather than the fetch runtime,
+    /// follows redirects (for example, to preflight each origin).
+    pub fn with_request_history(
+        error: anyhow::Error,
+        request: &crate::Request,
+        mut observations: NetworkObservationJournal,
+    ) -> Self {
+        let network_error_text = crate::error::browser_network_error_text(&error);
+        let reason = format!("{error:#}");
+        let mut failure = error.downcast::<Self>().unwrap_or(Self {
+            observation_journal: NetworkObservationJournal::default(),
+            network_error_text,
+            reason,
+            request_context: None,
+        });
+        failure.request_context.get_or_insert_with(|| {
+            NetworkFetchFailureRequestContext::new(
+                request.url.clone(),
+                request.method.clone(),
+                request.body.clone(),
+                request.request_headers.clone(),
+                request.redirect_chain().to_vec(),
+            )
+        });
+        observations.append(failure.observation_journal);
+        failure.observation_journal = observations;
+        failure
+    }
+
     pub(crate) fn attach(
         source: anyhow::Error,
         observation_journal: NetworkObservationJournal,

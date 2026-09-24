@@ -49,7 +49,6 @@ async fn worker_xhr_send_body_converts_union_before_state_and_method() {
     .expect("start Worker body conversion probe");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "bodyConversionResult !== null",
         "true",
         "Worker body conversion probe",
@@ -127,7 +126,6 @@ async fn xhr_send_body_reentrant_conversion_controls_request() {
         vm.eval(&source).expect("start reentrant send probe");
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "sendReentryResult !== 'pending'",
             "true",
             "reentrant send probe",

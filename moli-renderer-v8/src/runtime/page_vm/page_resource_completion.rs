@@ -41,18 +41,36 @@ impl PageVm {
         let owner = completion.owner();
         let source = completion.activity_source();
         let action = match completion.into_terminal() {
+            RendererPageResourceTerminal::SharedScriptSource {
+                completion,
+                outcome,
+                ..
+            } => {
+                let current_owner = self.current_page_resource_completion_owner(owner);
+                if current_owner == Some(owner) {
+                    // Network receipts precede this terminal in the same FIFO.
+                    // Only now may parser/preload consumers observe ready source.
+                    completion.finish(*outcome);
+                    PageResourceCompletionTurnAction::applied(
+                        source,
+                        owner,
+                        crate::page_resource_completion::PageResourceCompletionOutputEffect::None,
+                    )
+                } else {
+                    PageResourceCompletionTurnAction::discarded_stale(
+                        source,
+                        owner,
+                        current_owner,
+                        crate::page_resource_completion::PageResourceCompletionOutputEffect::None,
+                    )
+                }
+            }
             RendererPageResourceTerminal::DocumentWriteExternalScript { completion } => {
                 self.apply_document_write_external_script_terminal(source, owner, completion)?
             }
-            RendererPageResourceTerminal::MainParserDeferredClassicSource {
-                completion,
-                network_attribution,
-            } => self.apply_main_parser_deferred_classic_source_terminal(
-                source,
-                owner,
-                completion,
-                network_attribution,
-            )?,
+            RendererPageResourceTerminal::MainParserDeferredClassicSource { completion } => {
+                self.apply_main_parser_deferred_classic_source_terminal(source, owner, completion)?
+            }
             RendererPageResourceTerminal::MainParserModuleGraphFetch { completion } => {
                 self.apply_main_parser_module_graph_fetch_terminal(source, owner, *completion)?
             }

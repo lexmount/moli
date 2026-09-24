@@ -58,6 +58,7 @@ pub(crate) async fn fetch_complete_stylesheet_import_graph(
     document_url: Url,
     urls: Vec<Url>,
 ) -> crate::stylesheet_blocking::StylesheetImportGraphFetchResult {
+    let stylesheet_fetcher = stylesheet_fetcher.for_css_imports();
     let (mut successful, urls) = match connected_style_import_readiness(urls) {
         ConnectedStyleImportReadiness::Ready(successful) => {
             return crate::stylesheet_blocking::StylesheetImportGraphFetchResult::new(

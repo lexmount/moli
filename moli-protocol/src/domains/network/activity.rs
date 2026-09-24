@@ -43,6 +43,45 @@ pub(crate) struct NetworkPreparedOutputSlot {
 }
 
 impl NetworkPreparedOutputs {
+    pub(crate) fn from_worker_subresource_continue(
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+        pause: moli_core::browser::WorkerFetchPause,
+        event: moli_core::page::PendingSubresourceContinueEvent,
+    ) -> Self {
+        Self {
+            pending_subresource_continue_actions:
+                PreparedSubresourceContinueAction::capture_worker(conn, owner, pause, event)
+                    .into_iter()
+                    .collect(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) async fn emit_fetch_snapshot(
+        mut self,
+        conn: &mut CdpConnection,
+        owner: &CommandOwnerScope,
+    ) -> Vec<crate::conn::BackgroundProtocolEvent> {
+        let mut events = Vec::new();
+        flush_prepared_subresource_continue_actions_background_events_async(
+            conn,
+            &mut events,
+            owner,
+            std::mem::take(&mut self.pending_subresource_continue_actions),
+        )
+        .await;
+        let sessions = conn.network_event_session_ids_for_owner(owner);
+        fetch::emit_subresource_fetch_pause_outputs(
+            conn,
+            &mut events,
+            owner,
+            &sessions,
+            self.subresource_fetch_pauses,
+        );
+        events
+    }
+
     pub(crate) fn from_renderer_live_delivery(
         renderer_live: TargetNetworkBacklogPreparedDelivery,
     ) -> Self {
@@ -245,6 +284,7 @@ impl NetworkPreparedOutputs {
         });
         Self::from_subresource_fetch_pauses(vec![TargetSubresourceFetchPauseOutput::new(
             network_output,
+            None,
             Some("FETCH-SID".to_owned()),
             "FETCH-1".to_owned(),
             pending,
@@ -507,7 +547,7 @@ mod tests {
 
     use super::NetworkPreparedOutputs;
     use crate::{
-        conn::{BrowserContext, CdpConnection, PageTargetHost, PendingSubresourceFetchRequest},
+        conn::PendingSubresourceFetchRequest,
         domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
         testing::{TestContext, wait_until_message, wait_until_messages},
     };
@@ -581,13 +621,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pending_subresource_continue_drain_consumes_prepared_events_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
@@ -627,7 +665,7 @@ mod tests {
                 network_request_headers: None,
                 response_status: 200,
                 response_headers: vec![("content-type".to_owned(), b"text/plain".to_vec())],
-                response_body: SubresourceResponseBody::from_bytes(b"prepared".to_vec()),
+                response_body: SubresourceResponseBody::from_bytes(b"prepared".to_vec()).into(),
                 from_cache: false,
             });
         let action = crate::domains::activity::PreparedSubresourceContinueAction::capture_for_test(
@@ -652,10 +690,10 @@ mod tests {
 
         assert!(
             conn.runtime_session_owner_slot(Some("SID-1"))
-                .expect("runtime owner slot should exist")
-                .loaded_page()
+                .unwrap()
+                .current_renderer_inspection_binding()
                 .is_none(),
-            "prepared pending subresource continue emission must not require a loaded page"
+            "prepared pending subresource continue emission must not require renderer inspection"
         );
         let out = context
             .command
@@ -674,13 +712,11 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_subresource_continue_rejects_replacement_id_and_handle_collision() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-collision".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-collision");
         bc.set_active_target_id("TID-collision");
         bc.attach_active_session("SID-collision");
-        bc.active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
 
         let old_owner = conn
@@ -705,7 +741,7 @@ mod tests {
                 network_request_headers: None,
                 response_status: 200,
                 response_headers: Vec::new(),
-                response_body: SubresourceResponseBody::from_bytes(b"old".to_vec()),
+                response_body: SubresourceResponseBody::from_bytes(b"old".to_vec()).into(),
                 from_cache: false,
             });
         let old_action =
@@ -716,9 +752,11 @@ mod tests {
             )
             .expect("old continuation should capture its exact request state");
 
-        conn.runtime_session_owner_slot_mut(Some("SID-collision"))
-            .expect("runtime owner should remain addressable")
-            .replace_page_attachment_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-collision"),
+        ))
+        .await;
         let replacement_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("replacement Page residence should exist");
@@ -755,14 +793,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn subresource_fetch_interception_drain_consumes_prepared_pause_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
-        bc.active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("FETCH-SID")));
         let page_owner = conn
@@ -782,10 +818,10 @@ mod tests {
 
         assert!(
             conn.runtime_session_owner_slot(Some("SID-1"))
-                .expect("runtime owner slot should exist")
-                .loaded_page()
+                .unwrap()
+                .current_renderer_inspection_binding()
                 .is_none(),
-            "prepared subresource fetch interception emission must not require a loaded page"
+            "prepared subresource fetch interception emission must not require renderer inspection"
         );
         let out = context
             .command
@@ -814,14 +850,12 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn subresource_fetch_interception_omits_network_events_without_listener() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
-        bc.active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
+        bc.set_active_document_fixture_for_test(1).await;
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
@@ -851,7 +885,7 @@ mod tests {
 
     #[test]
     fn network_backlog_prepared_outputs_are_absent_without_loaded_observed_page() {
-        let mut conn = crate::conn::CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         let owner = CommandOwnerScope::capture(&conn, None);
         assert_eq!(
             super::network_backlog_prepared_outputs_for_owner(&mut conn, &owner, None,).outputs(),
@@ -902,14 +936,14 @@ mod tests {
 
         let page_url = format!("http://{addr}/page");
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-active");
-        bc.insert_page_target_host(PageTargetHost::with_url(
+        bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             page_url.clone(),
-        ));
+        );
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         for (id, session_id) in [(1, "SID-active"), (2, "SID-background")] {
@@ -995,7 +1029,7 @@ mod tests {
         let socket_url = format!("ws://{addr}/socket");
         let socket_literal = serde_json::to_string(&socket_url).unwrap();
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         ctx.conn.install_browser_context_fixture_for_test(bc);

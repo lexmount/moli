@@ -10,11 +10,14 @@ use crate::{
         throw_range_error, throw_type_error,
     },
     worker::{
-        WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerSpawnOptions,
-        spawn_worker_with_options, worker_secure_context_for_script_url,
+        WorkerGlobalKind, WorkerNetworkPolicy, WorkerSpawnOptions,
+        worker_secure_context_for_script_url,
     },
 };
 
+#[cfg(test)]
+use crate::worker::{WorkerHandle, spawn_worker_with_options};
+#[cfg(test)]
 const WORKER_HANDLE_SLOT: &str = "__moliWorkerHandle";
 const WORKER_ID_SLOT: &str = "__moliWorkerId";
 const WORKER_LISTENERS_SLOT: &str = "__moliWorkerListeners";
@@ -28,9 +31,9 @@ mod methods;
 
 pub(in crate::context_bootstrap) use constructor::{
     document_query_encoding_override, is_cross_origin_http_worker_script,
-    materialize_worker_script_source, resolve_worker_script_url, throw_worker_dom_exception,
+    resolve_worker_script_url, throw_worker_dom_exception,
     trusted_worker_script_url_string_or_throw, worker_constructor_base_url,
-    worker_script_resource_url, worker_script_scheme_can_load,
+    worker_script_scheme_can_load,
 };
 
 pub(super) use constructor::worker_constructor_callback;

@@ -1,11 +1,9 @@
 use super::*;
 #[tokio::test]
 async fn browser_context_document_cookie_facade_overrides_apply_to_new_loaded_page() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-cookie-facade",
-        "TID-cookie-facade",
-    ));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade"));
     conn.browser_context
         .as_mut()
         .unwrap()
@@ -14,22 +12,16 @@ async fn browser_context_document_cookie_facade_overrides_apply_to_new_loaded_pa
         )
         .await;
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .set_loaded_page_async(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let payload = conn
         .evaluate_runtime_expression_with_await_async("navigator.cookieEnabled", false)
@@ -61,27 +53,19 @@ async fn browser_context_document_cookie_facade_overrides_apply_to_new_loaded_pa
 }
 #[tokio::test]
 async fn browser_context_document_cookie_facade_overrides_update_live_page() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-cookie-facade",
-        "TID-cookie-facade",
-    ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .set_loaded_page_async(navigation.page)
-        .await;
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade"));
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("navigator.cookieEnabled", false)
@@ -130,27 +114,21 @@ async fn browser_context_document_cookie_facade_overrides_update_live_page() {
 
 #[tokio::test]
 async fn browser_context_document_cookie_browser_context_overrides_update_live_page() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-context-overrides",
         "TID-cookie-context-overrides",
     ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .set_loaded_page_async(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("navigator.cookieEnabled", false)
@@ -312,27 +290,21 @@ async fn browser_context_cookie_manager_surface_tracks_policy_without_a_live_pag
 #[tokio::test]
 async fn browser_context_document_cookie_capability_and_freshness_snapshots_project_owner_surfaces()
 {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-capability-surface",
         "TID-cookie-capability-surface",
     ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .set_loaded_page_async(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     conn.browser_context
         .as_mut()
@@ -731,27 +703,21 @@ async fn browser_context_document_cookie_capability_and_freshness_snapshots_proj
 
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_projects_document_capability_and_activity() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-manager-projection",
         "TID-cookie-manager-projection",
     ));
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            Url::parse("https://example.com/app").unwrap(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .set_loaded_page_async(navigation.page)
-        .await;
+    conn.install_buffered_navigation_fixture_for_test(
+        Url::parse("https://example.com/app").unwrap(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
     conn.browser_context
         .as_mut()
         .unwrap()

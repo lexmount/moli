@@ -32,9 +32,8 @@ use crate::context_bootstrap::{
 use crate::ensure_v8_for_test as ensure_v8;
 use crate::network::ResourceRequestClient;
 use crate::protocol_types::{
-    PendingSubresourceContinueEvent, SubresourceAuthCredentials, SubresourceAuthScheme,
-    SubresourceAuthTarget, SubresourceNetworkOutcome, SubresourceNetworkRecord,
-    SubresourceNetworkRequestHandle, SubresourceResourceType,
+    SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceAuthTarget,
+    SubresourceNetworkOutcome, SubresourceNetworkRecord, SubresourceResourceType,
 };
 use crate::runtime::{
     MaterializedServiceWorkerFetchResponseHead, ServiceWorkerEventId, ServiceWorkerFetchCompletion,
@@ -56,7 +55,7 @@ use crate::service_worker_runtime::{
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::worker::handle::{
     WorkerErrorPhase, WorkerFetchHandlerType, WorkerHandle, WorkerNetworkPolicy,
-    WorkerPendingFetchContinue, WorkerPendingXhrContinue, WorkerToParentMessage,
+    WorkerToParentMessage,
 };
 
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -74,9 +73,7 @@ async fn worker_loader_shares_backend_without_sharing_page_policy() {
     let worker = resource_loader_for_worker_context(
         creator.clone(),
         &policy,
-        &super::WorkerGlobalKind::Dedicated {
-            name: "test-worker".to_owned(),
-        },
+        &super::WorkerGlobalKind::unobserved_dedicated("test-worker".to_owned()),
         crate::network::RendererResourceTaskRunner::from_current_tokio()
             .expect("worker authority test must own a Tokio runtime"),
     );
@@ -260,6 +257,18 @@ fn inspect_payload_with_image_data(payload: &V8StructuredClonePayload, expressio
     result.to_rust_string_lossy(scope)
 }
 
+// Script receipts now share the parent FIFO with behavior messages. Keep the
+// caller's original timeout and payload/error assertions; native stage, owner
+// and retirement ordering are checked separately by Browser's gated tests.
+async fn recv_behavior_message(handle: &mut WorkerHandle) -> Option<WorkerToParentMessage> {
+    loop {
+        let message = handle.recv().await?;
+        if !matches!(message, WorkerToParentMessage::Network(_)) {
+            return Some(message);
+        }
+    }
+}
+
 fn expect_post_json(message: WorkerToParentMessage) -> String {
     match message {
         WorkerToParentMessage::Post(payload) => stringify_payload(&payload),
@@ -275,10 +284,8 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
             .expect("channel closed");
         match message {
             WorkerToParentMessage::Post(payload) => return stringify_payload(&payload),
-            WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_) => continue,
@@ -287,11 +294,71 @@ async fn recv_post_json(handle: &mut WorkerHandle) -> String {
     }
 }
 
-fn expect_subresource_network_record(message: WorkerToParentMessage) -> SubresourceNetworkRecord {
-    match message {
-        WorkerToParentMessage::SubresourceNetwork(record)
-        | WorkerToParentMessage::WebSocketSubresource(record) => record,
-        other => panic!("expected worker subresource network record, got {other:?}"),
+/// Explicitly reconstruct the terminal view used by metadata/body assertions.
+/// Raw transport-stage timing is tested separately at the native Browser gates.
+#[derive(Default)]
+struct WorkerNetworkRecords(moli_page_types::ScriptExecutionReport);
+
+impl WorkerNetworkRecords {
+    fn observe(
+        &mut self,
+        observation: crate::runtime::RendererNetworkObservation,
+    ) -> Option<SubresourceNetworkRecord> {
+        let crate::runtime::RendererNetworkOutputItem::Resource(item) = observation.item() else {
+            panic!("expected Worker resource output")
+        };
+        let before = self.0.subresource_network_records().len();
+        self.0
+            .extend_network_output(moli_page_types::ScriptNetworkOutput::from_items([item
+                .as_ref()
+                .clone()]));
+        self.0.subresource_network_records().get(before).cloned()
+    }
+
+    async fn recv_pause(
+        &mut self,
+        handle: &mut WorkerHandle,
+    ) -> crate::runtime::RendererWorkerFetchPause {
+        timeout(TIMEOUT, async {
+            loop {
+                match handle
+                    .recv()
+                    .await
+                    .expect("Worker channel closed before its pause")
+                {
+                    WorkerToParentMessage::FetchInterception(pause) => return pause,
+                    WorkerToParentMessage::Network(observation) => assert!(
+                        self.observe(observation).is_none(),
+                        "request must not finish before its decision"
+                    ),
+                    other => panic!("expected Worker pause, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("Worker must publish its pause after request admission")
+    }
+
+    async fn recv_record(&mut self, handle: &mut WorkerHandle) -> SubresourceNetworkRecord {
+        timeout(TIMEOUT, async {
+            loop {
+                match handle
+                    .recv()
+                    .await
+                    .expect("Worker channel closed before its terminal network output")
+                {
+                    WorkerToParentMessage::Network(observation) => {
+                        if let Some(record) = self.observe(observation) {
+                            return record;
+                        }
+                    }
+                    WorkerToParentMessage::WebSocketSubresource(record) => return record,
+                    other => panic!("expected Worker network output, got {other:?}"),
+                }
+            }
+        })
+        .await
+        .expect("Worker must complete its admitted request")
     }
 }
 
@@ -302,6 +369,7 @@ fn spawn_service_worker_for_test(script_source: &str) -> WorkerTestHandle {
             "https://example.test/app/sw.js".to_owned(),
         )
         .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://example.test/app/").unwrap(),
@@ -337,10 +405,8 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -374,6 +440,7 @@ async fn dispatch_service_worker_lifecycle_event_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -433,10 +500,8 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -470,6 +535,7 @@ async fn dispatch_service_worker_fetch_event_with_request_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -519,10 +585,8 @@ async fn dispatch_service_worker_message_event_object_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -556,6 +620,7 @@ async fn dispatch_service_worker_message_event_object_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -582,10 +647,8 @@ async fn dispatch_service_worker_notification_event_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -619,6 +682,7 @@ async fn dispatch_service_worker_notification_event_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -651,10 +715,8 @@ async fn dispatch_service_worker_push_event_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -688,6 +750,7 @@ async fn dispatch_service_worker_push_event_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -722,10 +785,8 @@ async fn dispatch_service_worker_sync_event_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -759,6 +820,7 @@ async fn dispatch_service_worker_sync_event_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
@@ -794,10 +856,8 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
                 );
             }
             WorkerToParentMessage::Post(_)
-            | WorkerToParentMessage::SubresourceNetwork(_)
-            | WorkerToParentMessage::PendingSubresourceFetch(_)
-            | WorkerToParentMessage::PendingSubresourceFetchCanceled { .. }
-            | WorkerToParentMessage::SubresourceContinue(_)
+            | WorkerToParentMessage::Network(_)
+            | WorkerToParentMessage::FetchInterception(_)
             | WorkerToParentMessage::WebSocketSubresource(_)
             | WorkerToParentMessage::WebSocketLifecycle(_)
             | WorkerToParentMessage::WebSocketFrame(_)
@@ -831,55 +891,10 @@ async fn dispatch_service_worker_periodic_sync_event_for_test(
             | WorkerToParentMessage::ServiceWorkerSkipWaiting { .. }
             | WorkerToParentMessage::ServiceWorkerClientsClaim { .. }
             | WorkerToParentMessage::ServiceWorkerImportedScriptLoaded { .. }
+            | WorkerToParentMessage::ServiceWorkerBootstrapCompleted(_)
             | WorkerToParentMessage::RuntimeInspectorResponse(_)
             | WorkerToParentMessage::SharedWorkerClosed => {}
         }
-    }
-}
-
-fn owner_assigned_request_handle(internal_id: u64) -> SubresourceNetworkRequestHandle {
-    SubresourceNetworkRequestHandle::new(10_000 + internal_id)
-}
-
-fn pending_worker_fetch_continue(
-    fetch_id: u32,
-    internal_id: u64,
-    info: &crate::protocol_types::PendingSubresourceFetchInfo,
-    intercept_response: bool,
-) -> WorkerPendingFetchContinue {
-    WorkerPendingFetchContinue {
-        redirect_headers: None,
-        fetch_id,
-        internal_id,
-        network_request_handle: Some(owner_assigned_request_handle(internal_id)),
-        url: info.url.clone(),
-        method: info.method.clone(),
-        body: info.request_body.clone(),
-        headers: info.request_headers.clone(),
-        intercept_response,
-        handle_auth_requests: false,
-        auth: None,
-    }
-}
-
-fn pending_worker_xhr_continue(
-    xhr_id: u32,
-    internal_id: u64,
-    info: &crate::protocol_types::PendingSubresourceFetchInfo,
-    intercept_response: bool,
-) -> WorkerPendingXhrContinue {
-    WorkerPendingXhrContinue {
-        redirect_headers: None,
-        xhr_id,
-        internal_id,
-        network_request_handle: Some(owner_assigned_request_handle(internal_id)),
-        url: info.url.clone(),
-        method: info.method.clone(),
-        body: info.request_body.clone(),
-        headers: info.request_headers.clone(),
-        intercept_response,
-        handle_auth_requests: false,
-        auth: None,
     }
 }
 
@@ -1320,17 +1335,13 @@ fn worker_broadcast_channel_unknown_script_url_is_not_marked_third_party() {
         Some("https://app.example".to_owned()),
         None,
         &registry,
-        &super::WorkerGlobalKind::Dedicated {
-            name: String::new(),
-        },
+        &super::WorkerGlobalKind::unobserved_dedicated(String::new()),
     );
 
     let key = super::worker_broadcast_channel_storage_key(
         None,
         &worker_storage_key,
-        &super::WorkerGlobalKind::Dedicated {
-            name: String::new(),
-        },
+        &super::WorkerGlobalKind::unobserved_dedicated(String::new()),
     );
 
     assert_eq!(key, worker_storage_key);
@@ -1358,6 +1369,7 @@ fn shared_worker_broadcast_channel_uses_injected_storage_key() {
     );
     let script_url = url::Url::parse("https://app.example/shared-worker.js").unwrap();
     let global_kind = super::WorkerGlobalKind::Shared {
+        network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
         name: "shared".to_owned(),
         storage_key: storage_key.clone(),
     };
@@ -1395,6 +1407,7 @@ fn shared_worker_data_url_broadcast_channel_uses_script_opaque_origin() {
     );
     let script_url = url::Url::parse("data:text/javascript,onconnect=function(){}").unwrap();
     let global_kind = super::WorkerGlobalKind::Shared {
+        network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
         name: "shared".to_owned(),
         storage_key: constructor_storage_key.clone(),
     };
@@ -1432,9 +1445,7 @@ fn dedicated_worker_broadcast_channel_can_inherit_creator_storage_key() {
         moli_storage_key::StoragePartitionRelation::Unknown,
     );
     let script_url = url::Url::parse("blob:null/worker-script").unwrap();
-    let global_kind = super::WorkerGlobalKind::Dedicated {
-        name: "dedicated".to_owned(),
-    };
+    let global_kind = super::WorkerGlobalKind::unobserved_dedicated("dedicated".to_owned());
     let storage_key = super::worker_global_storage_key(
         Some(&script_url),
         None,
@@ -1461,9 +1472,7 @@ fn data_url_dedicated_worker_broadcast_channel_uses_script_opaque_storage_key() 
         moli_storage_key::StoragePartitionRelation::ThirdParty,
     );
     let script_url = url::Url::parse("data:text/javascript,postMessage('ready')").unwrap();
-    let global_kind = super::WorkerGlobalKind::Dedicated {
-        name: "dedicated".to_owned(),
-    };
+    let global_kind = super::WorkerGlobalKind::unobserved_dedicated("dedicated".to_owned());
     let worker_storage_key = super::worker_global_storage_key(
         Some(&script_url),
         None,
@@ -1496,6 +1505,7 @@ fn service_worker_storage_apis_use_explicit_registration_storage_key() {
     );
     let script_url = url::Url::parse("https://cdn.example/sw.js").unwrap();
     let global_kind = super::WorkerGlobalKind::Service {
+        network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
         registration_id: crate::runtime::ServiceWorkerRegistrationId::from_u64_for_test(1),
         version_id: crate::runtime::ServiceWorkerVersionId::from_u64_for_test(1),
         scope_url: url::Url::parse("https://cdn.example/").unwrap(),

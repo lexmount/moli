@@ -1,6 +1,6 @@
 use super::super::tests_cdp_smoke_fixture::SmokeFixtureServer;
 use super::super::*;
-use crate::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
+use crate::{AgentHostDispatchResult, CommandDispatchContext, ParsedCdpCommand};
 use serde_json::{Value, json};
 
 fn event<'a>(messages: &'a [Value], method: &str) -> &'a Value {
@@ -280,7 +280,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     }))
     .expect("createIsolatedWorld command should parse");
     let mut command_context = CommandDispatchContext::default();
-    let CdpCommandTaskStep::Pending(first_pending) = ctx
+    let AgentHostDispatchResult::PendingService(first_pending) = ctx
         .conn
         .start_parsed_command_dispatch_with_context(&command, &mut command_context)
     else {
@@ -298,7 +298,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     assert_eq!(navigation["result"]["frameId"], json!(target_id));
 
     let first_completed = first_pending.wait().await;
-    let CdpCommandTaskStep::Pending(restarted) = ctx
+    let AgentHostDispatchResult::PendingService(restarted) = ctx
         .conn
         .complete_pending_command_dispatch_with_context(first_completed, &mut command_context)
         .await
@@ -311,7 +311,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     );
 
     let replacement_completed = restarted.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) = ctx
+    let AgentHostDispatchResult::Complete(outcome) = ctx
         .conn
         .complete_pending_command_dispatch_with_context(replacement_completed, &mut command_context)
         .await
@@ -549,7 +549,11 @@ async fn rust_cdp_chromium_target_second_create_target_activates_new_target_by_d
     assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
     assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
-        browser_context.background_target_at(0).unwrap().target_id(),
+        browser_context
+            .background_targets()
+            .next()
+            .unwrap()
+            .target_id(),
         "TID-000000000A"
     );
 
@@ -679,7 +683,7 @@ async fn rust_cdp_chromium_target_window_open_blank_creates_popup_target() {
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_initial_document() {
     let mut ctx = TestContext::new_with_target_discovery(false);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -710,20 +714,18 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
             ctx.wait_until_scheduler_state("auto-attached popup navigation commit", |conn| {
                 conn.browser_context_by_id("BID-popup-auto-load")
                     .and_then(|browser_context| {
-                        loaded_page_for_target(browser_context, popup_target_id)
+                        browser_context.target_document_url(popup_target_id)
                     })
-                    .is_some_and(|page| page.final_url().as_str() == popup_url)
+                    .is_some_and(|page| page.as_str() == popup_url)
             })
             .await;
             let popup_page = ctx
                 .conn
                 .browser_context
                 .as_ref()
-                .and_then(|browser_context| {
-                    loaded_page_for_target(browser_context, popup_target_id)
-                })
+                .and_then(|browser_context| browser_context.target_document_url(popup_target_id))
                 .expect("window.open lifecycle should have loaded the popup document");
-            assert_eq!(popup_page.final_url().as_str(), popup_url);
+            assert_eq!(popup_page.as_str(), popup_url);
 
             ctx.process_async(json!({
                 "id": 260_212,
@@ -789,7 +791,7 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
 async fn rust_cdp_chromium_target_window_open_waiting_popup_routes_initial_document_after_resume() {
     let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new_with_target_discovery(false);
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(run_waiting_popup_initial_document_after_resume(
             &mut ctx, &fixture,
@@ -838,10 +840,8 @@ async fn run_waiting_popup_initial_document_after_resume(
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|browser_context| {
-                loaded_page_for_target(browser_context, popup_target_id)
-            })
-            .is_some_and(|page| page.final_url().as_str() == "about:blank"),
+            .and_then(|browser_context| { browser_context.target_document_url(popup_target_id) })
+            .is_some_and(|page| page.as_str() == "about:blank"),
         "popup target lifecycle should already expose the initial about:blank document"
     );
     assert!(
@@ -874,6 +874,20 @@ async fn run_waiting_popup_initial_document_after_resume(
     // Runtime.runIfWaitingForDebugger.  It must operate on the materialized
     // initial document without independently starting the target URL: only
     // the debugger-resume response owns that transition.
+    ctx.wait_until_scheduler_state("native request ready behind debugger barrier", |conn| {
+        conn.native_navigation_decision_for_target(popup_target_id)
+            .is_some_and(|(_, paused)| {
+                matches!(
+                    paused.stage,
+                    moli_core::browser::NavigationDecisionStage::Request { .. }
+                )
+            })
+    })
+    .await;
+    let (paused_contents, paused_navigation) = ctx
+        .conn
+        .native_navigation_decision_for_target(popup_target_id)
+        .expect("native popup request must remain debugger gated");
     ctx.process_async(json!({
         "id": 260_219,
         "method": "Page.createIsolatedWorld",
@@ -892,11 +906,16 @@ async fn run_waiting_popup_initial_document_after_resume(
             .is_some(),
         "createIsolatedWorld should resolve against the paused initial document: {initial_world:?}"
     );
-    assert!(
-        !ctx.conn
-            .has_pending_document_navigation_for_session_owner(Some(popup_session_id)),
-        "createIsolatedWorld must not claim the debugger-gated initial navigation"
-    );
+    let (still_paused_contents, still_paused) = ctx
+        .conn
+        .native_navigation_decision_for_target(popup_target_id)
+        .expect("createIsolatedWorld must not claim the debugger-gated request");
+    assert_eq!(still_paused_contents, paused_contents);
+    assert_eq!(still_paused.permit, paused_navigation.permit);
+    assert!(matches!(
+        still_paused.stage,
+        moli_core::browser::NavigationDecisionStage::Request { .. }
+    ));
     assert!(
         !ctx.sent.iter().any(|message| {
             message["method"] == json!("Fetch.requestPaused")
@@ -1173,7 +1192,7 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
     let first = open_popup_from_runtime(
         &mut ctx,
         260_026,
-        "window.open('https://example.com/one', 'named') !== null",
+        "window.open('about:blank', 'named') !== null",
     )
     .await;
     let target_id = event(&first, "Target.targetCreated")["params"]["targetInfo"]["targetId"]
@@ -1181,12 +1200,19 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
         .expect("named target id")
         .to_owned();
 
-    let second = open_popup_from_runtime(
+    let mut second = open_popup_from_runtime(
         &mut ctx,
         260_027,
-        "window.open('https://example.com/two', 'named') !== null",
+        "window.open('data:text/html,two', 'named') !== null",
     )
     .await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "named popup URL commit", |message| {
+        message["method"] == "Target.targetInfoChanged"
+            && message["params"]["targetInfo"]["targetId"] == target_id
+            && message["params"]["targetInfo"]["url"] == "data:text/html,two"
+    })
+    .await;
+    second.extend(ctx.take_all());
 
     assert!(
         !second
@@ -1196,10 +1222,7 @@ async fn rust_cdp_chromium_target_window_open_named_target_reuses_existing_targe
     );
     let changed = event(&second, "Target.targetInfoChanged");
     assert_eq!(changed["params"]["targetInfo"]["targetId"], target_id);
-    assert_eq!(
-        changed["params"]["targetInfo"]["url"],
-        "https://example.com/two"
-    );
+    assert_eq!(changed["params"]["targetInfo"]["url"], "data:text/html,two");
 }
 
 // Chromium source:
@@ -1218,19 +1241,25 @@ async fn rust_cdp_chromium_target_info_changed_is_emitted_for_named_popup_reuse(
     let _first = open_popup_from_runtime(
         &mut ctx,
         260_028,
-        "window.open('https://example.com/first', 'reuse') !== null",
+        "window.open('about:blank', 'reuse') !== null",
     )
     .await;
-    let second = open_popup_from_runtime(
+    let mut second = open_popup_from_runtime(
         &mut ctx,
         260_029,
-        "window.open('https://example.com/second', 'reuse') !== null",
+        "window.open('data:text/html,second', 'reuse') !== null",
     )
     .await;
+    crate::testing::wait_until_scheduler_message(&mut ctx, "named popup URL commit", |message| {
+        message["method"] == "Target.targetInfoChanged"
+            && message["params"]["targetInfo"]["url"] == "data:text/html,second"
+    })
+    .await;
+    second.extend(ctx.take_all());
 
     assert_eq!(
         event(&second, "Target.targetInfoChanged")["params"]["targetInfo"]["url"],
-        "https://example.com/second"
+        "data:text/html,second"
     );
 }
 
@@ -1258,29 +1287,27 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .expect("popup target id")
         .to_owned();
 
-    ctx.conn
+    let opener = ctx
+        .conn
         .browser_context
-        .as_mut()
+        .as_ref()
         .unwrap()
-        .remove_active_page_target_async()
+        .web_contents_handle_for_target("TID-reset-opener")
+        .unwrap();
+    ctx.conn
+        .close_browser_web_contents_async(opener, crate::conn::PageCloseNotifications::All)
         .await;
 
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_ids
-            .contains_key(&target_id)
-    );
+    let popup = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .devtools_target_info(&target_id)
+        .unwrap();
+    assert!(popup.opener_id.is_none());
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_frame_ids
-            .get(&target_id)
-            .map(String::as_str),
+        popup.opener_frame_id.as_ref().map(|id| id.as_str()),
         Some("TID-reset-opener")
     );
 }

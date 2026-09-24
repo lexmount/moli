@@ -42,6 +42,32 @@ pub(crate) enum RendererPageStateCapturePolicy {
 
 mod access;
 mod browser_context_runtime;
+mod network_observation;
+pub use network_observation::{
+    RendererCommittedNetworkObservation, RendererNetworkInput, RendererNetworkObservation,
+    RendererNetworkOccurrence, RendererNetworkOutputItem, RendererNetworkSource,
+    RendererNetworkSourceIdentity, RendererWorkerIdentity,
+};
+pub(crate) use network_observation::{
+    RendererDocumentNetworkReporter, RendererNetworkReporter, RendererNetworkRequest,
+    RendererWorkerNetworkReporter,
+};
+mod worker_fetch;
+pub use worker_fetch::{
+    PendingWorkerFetchDecision, RendererWorkerFetchPause, RendererWorkerFetchStage,
+    WorkerFetchDecision,
+};
+pub(crate) use worker_fetch::{WorkerFetchDecisionDispatch, WorkerFetchPhase, WorkerFetchTarget};
+mod worker_inspection;
+mod worker_output_streams;
+pub use worker_inspection::RendererWorkerInspectionEndpoint;
+pub(crate) use worker_output_streams::RendererWorkerOutputStreams;
+mod worker_lifecycle;
+pub(crate) use worker_lifecycle::RendererWorkerLifecycleReporter;
+pub use worker_lifecycle::{
+    RendererCommittedWorkerLifecycle, RendererWorkerLifecycle, RendererWorkerLifecycleInput,
+    RendererWorkerLifecycleObservation,
+};
 mod document_lifecycle;
 mod document_lifecycle_turn;
 mod javascript_dialog;
@@ -71,15 +97,16 @@ mod page_state;
 mod page_surface;
 mod page_turn_scheduler;
 mod page_vm;
+mod popup;
 pub(crate) use page_vm::dom_agent_state::RendererDomAgentState;
 mod phase_one;
 mod protocol_output;
+pub(crate) use protocol_output::console_payload_bytes;
 mod script_preloads;
 mod service_worker_run;
 
 pub(crate) use self::script_preloads::{
-    BufferedScriptPreloadKey, BufferedScriptPreloadRequest, DocumentScriptPreloadStore,
-    IncrementalBufferedScriptPreloadScanner,
+    DocumentScriptPreloadStore, IncrementalBufferedScriptPreloadScanner,
 };
 
 pub use self::page_creation_progress::{RendererPageCreationPhase, RendererPageCreationProgress};
@@ -254,7 +281,8 @@ use self::access::{
 };
 pub(crate) use self::browser_context_runtime::ServiceWorkerControlState;
 pub(crate) use self::browser_context_runtime::{
-    ClipboardPresentationStyle, ClipboardSnapshot, RendererStoragePartitionIdentity,
+    ClipboardPresentationStyle, ClipboardSnapshot, RendererDedicatedWorkerHost,
+    RendererDedicatedWorkerNetworkObserver, RendererStoragePartitionIdentity,
     RendererWorkerContextRuntime,
 };
 pub use self::browser_context_runtime::{
@@ -269,16 +297,18 @@ pub(crate) use self::document_lifecycle::{
 pub use self::document_lifecycle::{
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
     RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
-    RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentLifecycleWaiter, RendererDocumentTerminationReason, RendererDocumentToken,
-    RendererFrameToken, RendererLifecycleEpoch, RendererLifecycleEventStamp,
-    RendererLifecycleStartReason, RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleSnapshot,
+    RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
+    RendererDocumentTerminationReason, RendererDocumentToken, RendererFrameToken,
+    RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
+    RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
 };
 pub(crate) use self::javascript_dialog::{
     RendererJavaScriptDialogBroker, RendererJavaScriptDialogRuntime, RendererJavaScriptDialogWatch,
 };
 pub use self::javascript_dialog::{
-    RendererJavaScriptDialogCompletion, RendererJavaScriptDialogResult,
+    RendererJavaScriptDialogCompletion, RendererJavaScriptDialogObservation,
+    RendererJavaScriptDialogResult,
 };
 pub use self::lifecycle_decision::{
     RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
@@ -286,15 +316,19 @@ pub use self::lifecycle_decision::{
 use self::owner::RendererOwnerState;
 pub use self::owner::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply,
-    RendererPreparedDocumentCommitConfiguration,
+    RendererPreparedDocumentInspectionConfiguration, RendererPreparedDocumentPolicy,
 };
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
+    RendererAccessibilityInspection, RendererCssInspection, RendererDomDebuggerInspection,
+    RendererDomInspection, RendererInspectionEndpoint, RendererPageCommandPending,
+    RendererPageHandle, RendererPageInspection, RendererRuntimeInspection,
+    RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
-    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument, RendererDocumentOptions,
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PendingPreparedRendererDocument,
+    PreparedRendererDocument, RendererDocumentOptions, RendererPreparedDocumentInspectionEndpoint,
 };
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{
@@ -319,15 +353,17 @@ pub use self::page_surface::{
     RendererAutofillCreditCard, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
     RendererCaptureScreencastFrameReply, RendererCaptureScreenshotReply,
     RendererCapturedScreencastFrame, RendererCapturedScreenshot, RendererCommandTurnCompletion,
-    RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerTargetEvent,
-    RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken, RendererDocumentBoxModel,
-    RendererDocumentChildNodeSnapshotEvent, RendererDocumentChildNodeSnapshotEvents,
-    RendererDocumentChildNodeSnapshots, RendererDocumentFrontendNodeIdsResolution,
-    RendererDocumentHitTestResult, RendererDocumentIsolateAccountingDiagnostics,
-    RendererDocumentNodeAttributesResolution, RendererDocumentNodeClientRect,
-    RendererDocumentNodeGeometry, RendererDocumentNodePropertyResolution,
-    RendererDocumentNodeReference, RendererDocumentNodeTextResolution,
-    RendererDocumentQuerySelectorNode, RendererDocumentQuerySelectorResolution,
+    RendererCommandTurnOutput, RendererCountEntry, RendererDedicatedWorkerMainScript,
+    RendererDedicatedWorkerMainScriptOutcome, RendererDedicatedWorkerObservation,
+    RendererDedicatedWorkerOwner, RendererDedicatedWorkerTargetInfo, RendererDevToolsAgentToken,
+    RendererDocumentBoxModel, RendererDocumentChildNodeSnapshotEvent,
+    RendererDocumentChildNodeSnapshotEvents, RendererDocumentChildNodeSnapshots,
+    RendererDocumentFrontendNodeIdsResolution, RendererDocumentHitTestResult,
+    RendererDocumentIsolateAccountingDiagnostics, RendererDocumentNodeAttributesResolution,
+    RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
+    RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
+    RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorNode,
+    RendererDocumentQuerySelectorResolution,
     RendererDocumentQuerySelectorWithChildNodeSnapshotEvents,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomAttributeMutation,
@@ -343,9 +379,10 @@ pub use self::page_surface::{
     RendererDragDataItem, RendererDraggedDirectory, RendererDraggedFile, RendererGeometryQuad,
     RendererInputDispatchOutcome, RendererInspectorProtocolConfiguration,
     RendererInspectorProtocolConfigurationCommand, RendererInspectorSessionRestoreSnapshot,
-    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererLayoutMetrics,
-    RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics, RendererMoliMemoryDiagnostics,
-    RendererMoliMemoryScopeDiagnostics, RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
+    RendererJavaScriptDialogId, RendererJavaScriptDialogOpening, RendererJavaScriptDialogSource,
+    RendererLayoutMetrics, RendererMainDocumentCommit, RendererMoliDomMemoryDiagnostics,
+    RendererMoliMemoryDiagnostics, RendererMoliMemoryScopeDiagnostics,
+    RendererMoliRuntimeMemoryDiagnostics, RendererPageCommand,
     RendererPageCommandPostResponseContinuation, RendererPageCookieFacadeSnapshotReply,
     RendererPageCreationDiagnostics, RendererPageDiagnosticsSnapshot, RendererPageDumpFormat,
     RendererPageDumpOptions, RendererPageDumpStripOptions, RendererPageReply, RendererPageView,
@@ -354,21 +391,22 @@ pub use self::page_surface::{
     RendererPendingPopupActivation, RendererPendingSameDocumentNavigation,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererPerformanceMetricSnapshot, RendererPointerEventProperties,
-    RendererPopupActivationSource, RendererPopupDisposition, RendererResourceTextSearchOutcome,
-    RendererRuntimeCommandOutput, RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage,
-    RendererRuntimeHeapUsage, RendererRuntimeInspectorAsyncCompletion,
-    RendererRuntimeInspectorMessage, RendererRuntimeInspectorMessageBatch,
-    RendererRuntimeInspectorProtocolMessage, RendererRuntimeInspectorProtocolMessageValueMut,
-    RendererRuntimeInspectorResponseChannel, RendererRuntimeInspectorResponseSender,
-    RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
-    RendererRuntimeRealmInfo, RendererRuntimeRemoteObject, RendererRuntimeRemoteObjectResolution,
-    RendererScriptExecutionMemoryDiagnostics, RendererScriptSourceMemoryDiagnostics,
-    RendererScrollIntoViewResult, RendererServiceWorkerConsoleMessage,
-    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
-    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerTargetEvent,
+    RendererPopupActivationSource, RendererPopupDisposition, RendererPopupOpening,
+    RendererPopupOpeningId, RendererResourceTextSearchOutcome, RendererRuntimeCommandOutput,
+    RendererRuntimeEvaluationResult, RendererRuntimeHeapSpaceUsage, RendererRuntimeHeapUsage,
+    RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMessageBatch, RendererRuntimeInspectorProtocolMessage,
+    RendererRuntimeInspectorProtocolMessageValueMut, RendererRuntimeInspectorResponseChannel,
+    RendererRuntimeInspectorResponseSender, RendererRuntimeObservableSourceItem,
+    RendererRuntimeObservableSourceSummary, RendererRuntimeRealmInfo, RendererRuntimeRemoteObject,
+    RendererRuntimeRemoteObjectResolution, RendererScriptExecutionMemoryDiagnostics,
+    RendererScriptSourceMemoryDiagnostics, RendererScrollIntoViewResult,
+    RendererServiceWorkerConsoleMessage, RendererServiceWorkerExceptionMessage,
+    RendererServiceWorkerFetchDiagnostic, RendererServiceWorkerFetchDiagnosticResult,
+    RendererServiceWorkerLifecycle, RendererServiceWorkerObservation,
     RendererServiceWorkerTargetInfo, RendererServiceWorkerVersionStatus,
     RendererSetDocumentContentResult, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
+    RendererSharedWorkerObservation, RendererSharedWorkerTargetInfo, RendererStyleSheetHeader,
     RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload, RendererSyntheticResponseBody,
     RendererTextSearchMatch, RendererTouchPoint, RendererWindowDocumentSource,
     RuntimeConsoleMessageSnapshot,
@@ -407,7 +445,11 @@ use self::phase_one::PendingPhaseOneResidence;
 pub(in crate::runtime) use self::phase_one::{
     PhaseOneResidenceAdmission, PhaseOneRestoreRequirement,
 };
-pub(crate) use self::protocol_output::{PendingRendererOutputRecord, RendererTurnOutputJournal};
+pub(crate) use self::popup::RendererPopupBroker;
+pub use self::popup::RendererPopupInputReceiver;
+pub(crate) use self::protocol_output::{
+    PendingRendererOutputRecord, RendererSettledOutput, RendererTurnOutputJournal,
+};
 pub use self::protocol_output::{
     RendererDocumentTitleChanged, RendererOutputCursor, RendererOutputFence,
     RendererOutputFenceLeaseId, RendererOutputItem, RendererOutputPublication,
@@ -420,9 +462,8 @@ pub use self::protocol_output::{
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub use crate::devtools::command::{
-    RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket,
+    RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+    RendererInspectorCommandRoute, RendererInspectorIngressTicket, RendererMainCommandEnvelope,
 };
 pub(crate) use crate::devtools::command::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
@@ -468,7 +509,9 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerVersionId, ServiceWorkerWorkerMessage,
     service_worker_exposed_client_id,
 };
-pub(crate) use nested_main::dispatch_nested_main_page_command;
+pub(crate) use nested_main::{
+    active_nested_main_page_id, detach_session_from_page, dispatch_nested_main_page_command,
+};
 
 static NEXT_RENDERER_OWNER_LOCAL_HOST_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -564,23 +607,6 @@ impl RendererPageReservationToken {
     }
 }
 
-/// Typed authority to consume one matching prepared document and enter its
-/// renderer bootstrap.
-#[derive(Debug)]
-pub struct RendererDocumentCommitPermit {
-    prepared_document: RendererPageReservationToken,
-}
-
-impl RendererDocumentCommitPermit {
-    fn new(prepared_document: RendererPageReservationToken) -> Self {
-        Self { prepared_document }
-    }
-
-    fn prepared_document(&self) -> RendererPageReservationToken {
-        self.prepared_document
-    }
-}
-
 #[cfg(test)]
 pub(in crate::runtime) enum PageVmNavigationTurnOutcome {
     Completed(Box<PageVm>),
@@ -644,10 +670,6 @@ impl PageVmPendingPhaseOneNavigation {
 
     pub(super) const fn phase_one_restore_requirement(&self) -> PhaseOneRestoreRequirement {
         self.residence.restore_requirement()
-    }
-
-    pub(super) fn has_ready_streaming_input(&mut self) -> bool {
-        self.residence.has_ready_streaming_input()
     }
 
     pub(super) fn attach_committed_response(&mut self) {

@@ -74,11 +74,6 @@ impl ModuleGraphFetchedSource {
     pub(crate) fn source(&self) -> &ModuleSource {
         &self.source
     }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        self.source.len()
-    }
 }
 
 impl ModuleSource {
@@ -101,14 +96,6 @@ impl ModuleSource {
         match self {
             Self::Text(_) => None,
             Self::Binary(bytes) => Some(bytes),
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        match self {
-            Self::Text(source) => source.len(),
-            Self::Binary(bytes) => bytes.len(),
         }
     }
 }

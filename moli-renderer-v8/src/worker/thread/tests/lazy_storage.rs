@@ -7,14 +7,14 @@ async fn worker_indexed_db_first_use_ignores_public_constructor_overrides() {
     let script_url = url::Url::parse("https://indexeddb-first-use.test/worker.js").unwrap();
     let fixture = include_str!("../../../../tests/fixtures/indexeddb-first-use.js");
     for kind in [
-        WorkerGlobalKind::Dedicated {
-            name: String::new(),
-        },
+        WorkerGlobalKind::unobserved_dedicated(String::new()),
         WorkerGlobalKind::Shared {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             name: String::new(),
             storage_key: moli_storage_key::MoliStorageKey::first_party_from_url(&script_url, None),
         },
         WorkerGlobalKind::Service {
+            network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
             registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
             version_id: ServiceWorkerVersionId::from_u64_for_test(1),
             scope_url: url::Url::parse("https://indexeddb-first-use.test/").unwrap(),

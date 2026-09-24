@@ -339,11 +339,6 @@ impl PageVm {
                         .child_default_execution_context_id_for_frame_id(&frame_id),
                 ),
             ),
-            RendererPageCommand::RuntimeConsoleMessagesWithContext => {
-                Ok(RendererPageReply::RuntimeConsoleMessageSnapshots(
-                    self.vm_mut().snapshot_console_messages_with_context()?,
-                ))
-            }
             RendererPageCommand::RuntimeHeapUsage => {
                 Ok(RendererPageReply::RuntimeHeapUsage(Box::new(
                     self.vm_mut()
@@ -351,11 +346,6 @@ impl PageVm {
                         .renderer_document_isolate_heap_usage()?,
                 )))
             }
-            RendererPageCommand::PerformanceMetricSnapshot => Ok(
-                RendererPageReply::PerformanceMetricSnapshot(Box::new(
-                    self.vm_mut().performance_metric_snapshot()?,
-                )),
-            ),
             RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
                 inspector_session_id,
                 breakpoint,
@@ -1229,11 +1219,6 @@ impl PageVm {
                 )?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession {
-                pause_guard: _pause_guard,
-            } => Ok(RendererPageReply::Bool(
-                self.detach_runtime_inspector_session(inspector_session_id),
-            )),
             RendererInspectorPageCommand::AddRuntimeBinding {
                 name,
                 execution_context_name,

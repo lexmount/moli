@@ -131,7 +131,6 @@ mod tests {
 
     struct PhaseOnePageVmHarness {
         page_vm: PageVm,
-        loader: &'static ResourceRequestClient,
         state: &'static mut ParseTimeDriverState,
     }
 
@@ -148,12 +147,18 @@ mod tests {
             .expect("large-stack phase-one test thread should finish");
     }
 
-    fn bind_preload_state_to_current_test_runtime(cache: &mut BufferedDocumentPreloadState) {
+    fn bind_preload_state_to_current_test_runtime(
+        cache: &mut BufferedDocumentPreloadState,
+        loader: &ResourceRequestClient,
+        document_url: &Url,
+    ) {
         cache.bind_resource_runtime(
             None,
-            Some(
+            crate::network::context::DocumentResourceLoader::for_test(
+                loader.clone(),
                 crate::network::RendererResourceTaskRunner::from_current_tokio()
                     .expect("phase-one resource test requires its Tokio runtime"),
+                document_url.clone(),
             ),
         );
     }
@@ -245,10 +250,6 @@ mod tests {
             .take_parser_stream_dom_host();
         let local_executor = JsLocalExecutor::new();
         let runtime_hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-        state.buffered_document_preloads.bind_resource_runtime(
-            runtime_hooks.owner_wake(),
-            runtime_hooks.resource_task_runner(),
-        );
         let page_vm = PageVm::new(
             PageId::new_for_testing(1),
             local_executor,
@@ -259,11 +260,11 @@ mod tests {
             Instant::now(),
         )
         .expect("page vm");
-        PhaseOnePageVmHarness {
-            page_vm,
-            loader,
-            state,
-        }
+        state.buffered_document_preloads.bind_resource_runtime(
+            page_vm.runtime_hooks.owner_wake(),
+            page_vm.main_document_resource_loader(),
+        );
+        PhaseOnePageVmHarness { page_vm, state }
     }
 
     fn new_phase_one_page_vm_for_test() -> PageVm {
@@ -301,7 +302,6 @@ mod tests {
 
     async fn run_element_toggle_tasks_for_test(
         page_vm: &mut PageVm,
-        loader: &ResourceRequestClient,
         expected_count: usize,
         context: &str,
     ) {
@@ -311,8 +311,7 @@ mod tests {
                     .run_exact_selected_page_task_for_test(
                         crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
                             crate::runtime::page_vm::PageDomManipulationTestFamily::ElementToggle,
-                        ),
-                        loader,
+                        )
                     )
                     .await
                     .unwrap_or_else(|error| panic!("{context}: {error}")),
@@ -324,8 +323,7 @@ mod tests {
                 .run_exact_selected_page_task_for_test(
                     crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
                         crate::runtime::page_vm::PageDomManipulationTestFamily::ElementToggle,
-                    ),
-                    loader,
+                    )
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{context}: {error}")),
@@ -443,12 +441,9 @@ mod tests {
         env: PageVmEnvConfig,
     ) -> PageVm {
         let PhaseOnePageVmHarness {
-            mut page_vm,
-            loader,
-            state,
+            mut page_vm, state, ..
         } = new_phase_one_page_vm_harness_for_test_with_env(env);
         let mut driver = ParserDriver {
-            loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -460,7 +455,7 @@ mod tests {
 
         let local_executor = page_vm.local_executor.clone();
         let page_vm_ptr: *mut PageVm = &mut page_vm;
-        let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+        let driver_ptr: *mut ParserDriver<'_> = &mut driver;
         let outcome = super::access::run_named_owner_local_task(
             local_executor,
             "phase-one parser local task channel closed",
@@ -2280,7 +2275,6 @@ document.body.setAttribute('data-error-state', [
             .run_until(async {
                 let PhaseOnePageVmHarness {
                     page_vm,
-                    loader,
                     state,
                 } = new_phase_one_page_vm_harness_for_test();
                 let replacement_state = ParseTimeDriverState::new_with_scripting_enabled_for_test(
@@ -2289,7 +2283,6 @@ document.body.setAttribute('data-error-state', [
                 );
                 let state = std::mem::replace(state, replacement_state);
                 let mut runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                    (*loader).clone(),
                     PageVmInitStage::Load,
                     state,
                     page_vm,
@@ -2300,11 +2293,6 @@ document.body.setAttribute('data-error-state', [
                     .document_runtime
                     .main_parser_continuation_producer()
                     .expect("active phase one should expose its parser continuation producer");
-                let request_client = runtime
-                    .page_vm
-                    .main_document_resource_loader()
-                    .request_client()
-                    .clone();
 
                 assert_eq!(
                     producer
@@ -2314,10 +2302,7 @@ document.body.setAttribute('data-error-state', [
                 );
                 let selected_task_ran = runtime
                     .page_vm
-                    .run_exact_selected_page_task_for_test(
-                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
-                        &request_client,
-                    )
+                    .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation)
                     .await
                     .expect("selected parser continuation should run");
                 assert!(selected_task_ran);
@@ -2359,10 +2344,7 @@ document.body.setAttribute('data-error-state', [
                     crate::page_task_queue::MainParserContinuationRequest::Enqueued
                 );
                 let late_task_ran = page_vm
-                    .run_exact_selected_page_task_for_test(
-                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
-                        &request_client,
-                    )
+                    .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation)
                     .await
                     .expect("late parser continuation should stale-reject normally");
                 assert!(late_task_ran);
@@ -2559,6 +2541,7 @@ document.body.setAttribute('data-error-state', [
             layout_policy: moli_page_types::LayoutPolicy::default(),
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            session_history_position: None,
             reserved_service_worker_client_id: None,
         }
     }
@@ -2669,14 +2652,11 @@ document.body.setAttribute('data-error-state', [
 
         runtime.block_on(async move {
             let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-            let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
             let mut cache = BufferedDocumentPreloadState::default();
 
-            cache.append_to_main_document_scan(
-                &final_url,
-                r#"<link rel="modulepreload" href="/entry.mjs">"#,
-                &loader,
-            );
+            cache.append_to_main_document_scan(&final_url,
+r#"<link rel="modulepreload" href="/entry.mjs">"#);
 
             let consumer = prepared_external_module("https://example.test/entry.mjs");
             assert!(
@@ -2689,13 +2669,12 @@ document.body.setAttribute('data-error-state', [
     #[test]
     fn buffered_module_script_scan_waits_for_native_module_map_admission() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
         let mut cache = BufferedDocumentPreloadState::default();
 
         cache.append_to_main_document_scan(
             &final_url,
             r#"<script type="module" src="/entry.mjs"></script>"#,
-            &loader,
         );
 
         assert!(
@@ -3336,15 +3315,11 @@ document.body.setAttribute('data-error-state', [
     #[test]
     fn response_csp_defers_script_preloads_to_parser_admission() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
         let mut cache = BufferedDocumentPreloadState::default();
         cache.set_response_csp_requires_parser_admission(true);
 
-        cache.append_to_main_document_scan(
-            &final_url,
-            r#"<script src="/blocked.js"></script>"#,
-            &loader,
-        );
+        cache.append_to_main_document_scan(&final_url, r#"<script src="/blocked.js"></script>"#);
 
         assert!(
             cache.entries.is_empty(),
@@ -3356,7 +3331,7 @@ document.body.setAttribute('data-error-state', [
     #[test]
     fn script_disabled_preload_scan_defers_every_script_to_the_page_owner() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
         let env = default_test_page_vm_env_config_with(|env| {
             env.script_execution_disabled = true;
         });
@@ -3373,7 +3348,6 @@ document.body.setAttribute('data-error-state', [
                 "<script async src='/async.js'></script>",
                 "<script type='module' src='/module.js'></script>",
             ),
-            &loader,
         );
 
         assert!(
@@ -3391,7 +3365,7 @@ document.body.setAttribute('data-error-state', [
     #[test]
     fn meta_csp_gate_waits_for_every_scanner_seen_policy() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
         let mut cache = BufferedDocumentPreloadState::default();
         cache.append_to_main_document_scan(
             &final_url,
@@ -3401,7 +3375,6 @@ document.body.setAttribute('data-error-state', [
                 <meta http-equiv="content-security-policy" content="script-src 'self'">
                 <script src="/second.js"></script>
             "#,
-            &loader,
         );
 
         assert_eq!(cache.meta_csp_counts_for_test(), (2, 0));
@@ -3417,7 +3390,7 @@ document.body.setAttribute('data-error-state', [
     #[test]
     fn parser_clients_claim_pre_meta_pending_descriptors_before_gate_drain() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
         let mut cache = BufferedDocumentPreloadState::default();
         cache.append_to_main_document_scan(
             &final_url,
@@ -3428,7 +3401,6 @@ document.body.setAttribute('data-error-state', [
                 <script src="/after.js"></script>
                 <link rel="stylesheet" href="/after.css">
             "#,
-            &loader,
         );
         assert_eq!(cache.pending_preload_counts_for_test(), (2, 2));
 
@@ -3464,14 +3436,14 @@ document.body.setAttribute('data-error-state', [
     #[test]
     fn meta_csp_pending_descriptor_budget_falls_back_to_parser() {
         let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
+
         let mut html =
             r#"<meta http-equiv="content-security-policy" content="script-src 'self'">"#.to_owned();
         for index in 0..(MAX_PENDING_CSP_PRELOAD_CANDIDATES + 4) {
             html.push_str(&format!(r#"<script src="/{index}.js"></script>"#));
         }
         let mut cache = BufferedDocumentPreloadState::default();
-        cache.append_to_main_document_scan(&final_url, &html, &loader);
+        cache.append_to_main_document_scan(&final_url, &html);
 
         assert_eq!(
             cache.pending_preload_counts_for_test(),
@@ -3498,14 +3470,15 @@ document.body.setAttribute('data-error-state', [
                 "#;
                 let PhaseOnePageVmHarness {
                     mut page_vm,
-                    loader,
                     state,
+            ..
                 } = new_phase_one_page_vm_harness_for_test();
                 activate_standalone_main_parser_continuation_for_test(&mut page_vm);
                 let final_url = state.final_url.clone();
                 state
                     .buffered_document_preloads
-                    .append_to_main_document_scan(&final_url, html, loader);
+                    .append_to_main_document_scan(&final_url,
+html);
                 assert_eq!(
                     state
                         .buffered_document_preloads
@@ -3514,7 +3487,6 @@ document.body.setAttribute('data-error-state', [
                 );
 
                 let mut driver = ParserDriver {
-                    loader,
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
@@ -3611,10 +3583,6 @@ document.body.setAttribute('data-error-state', [
                 let local_executor = JsLocalExecutor::new();
                 let runtime_hooks =
                     PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-                state.buffered_document_preloads.bind_resource_runtime(
-                    runtime_hooks.owner_wake(),
-                    runtime_hooks.resource_task_runner(),
-                );
                 let mut page_vm = PageVm::new(
                     PageId::new_for_testing(91),
                     local_executor,
@@ -3625,13 +3593,16 @@ document.body.setAttribute('data-error-state', [
                     Instant::now(),
                 )
                 .expect("page vm");
+                state.buffered_document_preloads.bind_resource_runtime(
+                    page_vm.runtime_hooks.owner_wake(), page_vm.main_document_resource_loader(),
+                );
                 activate_standalone_main_parser_continuation_for_test(&mut page_vm);
                 state
                     .buffered_document_preloads
-                    .append_to_main_document_scan(&final_url, html, &loader);
+                    .append_to_main_document_scan(&final_url,
+html);
 
                 let mut driver = ParserDriver {
-                    loader: &loader,
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
@@ -3667,18 +3638,15 @@ document.body.setAttribute('data-error-state', [
                     <script src="/blocked.js"></script>
                 "#;
                 let PhaseOnePageVmHarness {
-                    mut page_vm,
-                    loader,
-                    state,
+                    mut page_vm, state, ..
                 } = new_phase_one_page_vm_harness_for_test();
                 activate_standalone_main_parser_continuation_for_test(&mut page_vm);
                 let final_url = state.final_url.clone();
                 state
                     .buffered_document_preloads
-                    .append_to_main_document_scan(&final_url, html, loader);
+                    .append_to_main_document_scan(&final_url, html);
 
                 let mut driver = ParserDriver {
-                    loader,
                     final_url: &state.final_url,
                     parser_session: &mut state.parser_session,
                     scheduler: &mut state.scheduler,
@@ -3717,11 +3685,8 @@ document.body.setAttribute('data-error-state', [
                 .build()
                 .expect("current-thread runtime should build");
             runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
-                let PhaseOnePageVmHarness {
-                    mut page_vm,
-                    loader,
-                    state,
-                } = new_phase_one_page_vm_harness_for_test();
+                let PhaseOnePageVmHarness { mut page_vm, state } =
+                    new_phase_one_page_vm_harness_for_test();
                 state
                     .buffered_document_preloads
                     .set_response_csp_requires_parser_admission(true);
@@ -3731,17 +3696,11 @@ document.body.setAttribute('data-error-state', [
                     .append_to_main_document_scan(
                         &final_url,
                         r#"<script src="/allowed.js"></script>"#,
-                        loader,
                     );
                 page_vm
                     .vm_mut()
                     .set_response_content_security_policies(&["script-src 'self'".to_owned()]);
-                admit_pending_preloads(
-                    &mut page_vm,
-                    &mut state.buffered_document_preloads,
-                    loader,
-                    None,
-                );
+                admit_pending_preloads(&mut page_vm, &mut state.buffered_document_preloads, None);
                 assert!(
                     state
                         .buffered_document_preloads
@@ -3755,17 +3714,11 @@ document.body.setAttribute('data-error-state', [
                     .append_to_main_document_scan(
                         &final_url,
                         r#"<script src="/blocked.js"></script>"#,
-                        loader,
                     );
                 page_vm
                     .vm_mut()
                     .set_response_content_security_policies(&["script-src 'none'".to_owned()]);
-                admit_pending_preloads(
-                    &mut page_vm,
-                    &mut state.buffered_document_preloads,
-                    loader,
-                    None,
-                );
+                admit_pending_preloads(&mut page_vm, &mut state.buffered_document_preloads, None);
                 assert!(
                     !state
                         .buffered_document_preloads
@@ -3997,7 +3950,7 @@ document.body.setAttribute('data-error-state', [
             let loader =
                 ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut cache = BufferedDocumentPreloadState::default();
-            bind_preload_state_to_current_test_runtime(&mut cache);
+            bind_preload_state_to_current_test_runtime(&mut cache, &loader, &final_url);
 
             cache.append_to_main_document_scan(
                 &final_url,
@@ -4005,7 +3958,6 @@ document.body.setAttribute('data-error-state', [
                     <script src="/first.js"></script>
                     <script src="/second.js"></script>
                 "#,
-                &loader,
             );
 
             let first = prepared_external_classic("https://example.test/first.js");
@@ -4453,7 +4405,6 @@ document.body.setAttribute('data-error-state', [
             );
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -4561,8 +4512,10 @@ document.body.setAttribute('data-error-state', [
                 Instant::now(),
             )
             .expect("page vm");
+        state.buffered_document_preloads.bind_resource_runtime(
+            page_vm.runtime_hooks.owner_wake(), page_vm.main_document_resource_loader(),
+        );
             let phase_runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader,
                 PageVmInitStage::Load,
                 state,
                 page_vm,
@@ -4600,18 +4553,10 @@ document.body.setAttribute('data-error-state', [
                 "deferred finish must cross a selected Page task boundary"
             );
 
-            let request_client = phase_runtime
-                .page_vm
-                .main_document_resource_loader()
-                .request_client()
-                .clone();
             assert!(
                 phase_runtime
                     .page_vm
-                    .run_exact_selected_page_task_for_test(
-                        crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
-                        &request_client,
-                    )
+                    .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation)
                     .await
                     .expect("main parser continuation should execute"),
                 "the exact deferred-finish continuation should remain selectable"
@@ -4690,12 +4635,12 @@ document.body.setAttribute('data-error-state', [
                 Instant::now(),
             )
             .expect("page vm");
-            let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
-                PageVmInitStage::Load,
-                state,
-                page_vm,
+            state.buffered_document_preloads.bind_resource_runtime(
+                page_vm.runtime_hooks.owner_wake(),
+                page_vm.main_document_resource_loader(),
             );
+            let runtime =
+                ConcurrentParseTimeRuntime::new_parser_owner(PageVmInitStage::Load, state, page_vm);
 
             let creation = Box::pin(async move {
                 super::scaffold::finish_phase_one_creation_on_execution_context(
@@ -4782,11 +4727,16 @@ document.body.setAttribute('data-error-state', [
                 Instant::now(),
             )
             .expect("page vm");
+        state.buffered_document_preloads.bind_resource_runtime(
+            page_vm.runtime_hooks.owner_wake(), page_vm.main_document_resource_loader(),
+        );
             page_vm
                 .vm()
                 .resource_completion_sender_for_test()
                 .send_async_subresource_event(
-                    crate::types::AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(
+                    crate::types::AsyncSubresourceFetchEvent::NativeNetwork(
+                        crate::runtime::RendererNetworkRequest::unobserved_for_test().report(
+                        crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(
                         crate::types::SubresourceNetworkRecord::failure(
                             None,
                             Url::parse("https://example.test/").unwrap(),
@@ -4797,11 +4747,10 @@ document.body.setAttribute('data-error-state', [
                             crate::types::SubresourceResourceType::Fetch,
                             "phase-one typed terminal".to_owned(),
                         ),
-                    )),
+                    )))),
                 )
                 .expect("async-subresource terminal should enqueue on Networking");
             let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
                 PageVmInitStage::Load,
                 state,
                 page_vm,
@@ -4907,8 +4856,8 @@ document.body.setAttribute('data-error-state', [
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let PhaseOnePageVmHarness {
                 mut page_vm,
-                loader,
                 state,
+            ..
             } = new_phase_one_page_vm_harness_for_test();
 
             let blocking_script = prepared_external_classic("https://example.test/blocking.js");
@@ -4921,7 +4870,6 @@ document.body.setAttribute('data-error-state', [
             );
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -4931,7 +4879,7 @@ document.body.setAttribute('data-error-state', [
             };
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = tokio::time::timeout(
                 std::time::Duration::from_millis(50),
                 super::access::run_named_owner_local_task(
@@ -4982,8 +4930,8 @@ document.body.setAttribute('data-error-state', [
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let PhaseOnePageVmHarness {
                 mut page_vm,
-                loader,
                 state,
+            ..
             } = new_phase_one_page_vm_harness_for_test();
 
             let blocking_script = prepared_external_classic("https://example.test/blocking.js");
@@ -4996,7 +4944,6 @@ document.body.setAttribute('data-error-state', [
             );
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5006,7 +4953,7 @@ document.body.setAttribute('data-error-state', [
             };
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "main parser classic completion ordering test channel closed",
@@ -5053,8 +5000,8 @@ document.body.setAttribute('data-error-state', [
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let PhaseOnePageVmHarness {
                 mut page_vm,
-                loader,
                 state,
+            ..
             } = new_phase_one_page_vm_harness_for_test();
 
             let blocking_script = prepared_external_classic("https://example.test/blocking.js");
@@ -5070,7 +5017,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             );
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5080,7 +5026,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             };
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "main parser classic checkpoint ordering test channel closed",
@@ -5127,8 +5073,8 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let PhaseOnePageVmHarness {
                 mut page_vm,
-                loader,
                 state,
+            ..
             } = new_phase_one_page_vm_harness_for_test();
             let initial_owner = page_vm
                 .vm()
@@ -5144,7 +5090,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             );
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5154,7 +5099,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             };
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "main parser classic completion replacement test channel closed",
@@ -5206,7 +5151,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let PhaseOnePageVmHarness {
                 mut page_vm,
-                loader: _,
                 state,
             } = new_phase_one_page_vm_harness_for_test();
             let body = create_connected_html_body_for_test(&mut page_vm);
@@ -5327,7 +5271,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             activate_standalone_main_parser_continuation_for_test(&mut page_vm);
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5380,9 +5323,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
 
         runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
             let PhaseOnePageVmHarness {
-                mut page_vm,
-                loader,
-                state,
+                mut page_vm, state, ..
             } = new_phase_one_page_vm_harness_for_test();
             activate_standalone_main_parser_continuation_for_test(&mut page_vm);
             let mut script = prepared_external_classic("https://example.test/late.js");
@@ -5399,7 +5340,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
 
             let decision = prepare_main_parser_blocking_source_load(
                 &mut page_vm,
-                loader,
                 &mut state.buffered_document_preloads,
                 &mut script,
             );
@@ -5445,7 +5385,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             activate_standalone_main_parser_continuation_for_test(&mut page_vm);
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5510,7 +5449,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             activate_standalone_main_parser_continuation_for_test(&mut page_vm);
 
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5568,16 +5506,13 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             let stylesheet_url = script_url.join("app.css").expect("stylesheet url");
             let PhaseOnePageVmHarness {
                 mut page_vm,
-                loader,
                 state,
+            ..
             } = new_phase_one_page_vm_harness_for_test();
 
             let final_url = state.final_url.clone();
-            state.buffered_document_preloads.append_to_main_document_scan(
-                &final_url,
-                &format!(r#"<script src="{script_url}"></script>"#),
-                loader,
-            );
+            state.buffered_document_preloads.append_to_main_document_scan(&final_url,
+&format!(r#"<script src="{script_url}"></script>"#));
             let preload = state
                 .buffered_document_preloads
                 .entries
@@ -5585,7 +5520,17 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 .expect("preload scanner should start the parser-blocking script");
             let preload_outcome = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                preload.wait_outcome(),
+                async {
+                    loop {
+                        if let Some(outcome) = preload.try_outcome() {
+                            return outcome;
+                        }
+                        assert!(page_vm.wait_for_page_resource_completion_for_test().await);
+                        assert!(page_vm.run_exact_selected_page_task_for_test(
+                            crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion,
+                        ).await.unwrap());
+                    }
+                },
             )
             .await
             .expect("script preload should complete before the stylesheet gate is released");
@@ -5598,7 +5543,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             assert_eq!(script_requests.load(Ordering::SeqCst), 1);
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5636,7 +5580,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 .expect("parser document owner should be current");
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let owner_ptr: *mut ParseTimeOwner = &mut owner;
             let parser_step_ready_ptr: *mut bool = &mut parser_step_ready;
             let pending_parsing_blocking_wait_ptr: *mut PendingParsingBlockingWait =
@@ -5719,7 +5663,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             .expect("page vm");
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5728,7 +5671,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 input_closed: &state.input_closed,
             };
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one script-disabled parser-blocking test channel closed",
@@ -5796,7 +5739,6 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
             .expect("page vm");
 
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -5805,7 +5747,7 @@ queueMicrotask(() => window.__mainParserClassicCheckpointEvents.push('script-mic
                 input_closed: &state.input_closed,
             };
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one csp-blocked parser-blocking test channel closed",
@@ -6040,13 +5982,16 @@ globalThis.__outerContinued = true;
             let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            bind_preload_state_to_current_test_runtime(&mut state.buffered_document_preloads);
+            bind_preload_state_to_current_test_runtime(
+                &mut state.buffered_document_preloads,
+                &loader,
+                &state.final_url,
+            );
             let session = state.parser_session.stream_handle().borrow().script_input_session();
             session.enqueue_script_input_preload_html("<script sr".to_owned());
             session.enqueue_script_input_preload_html("c=\"/write.js\"></script>".to_owned());
 
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -6089,15 +6034,16 @@ globalThis.__outerContinued = true;
         );
         cache.bind_resource_runtime(
             Some(owner_wake),
-            Some(
+            crate::network::context::DocumentResourceLoader::for_test(
+                loader.handle(),
                 crate::network::RendererResourceTaskRunner::from_current_tokio()
                     .expect("Tokio test should expose its resource task runner"),
+                final_url.clone(),
             ),
         );
         cache.append_to_main_document_scan(
             &final_url,
             &format!(r#"<script defer src="{script_url}"></script>"#),
-            &loader,
         );
 
         let preload = cache
@@ -6138,7 +6084,7 @@ globalThis.__outerContinued = true;
         let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state =
             ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
-        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let browser_context_runtime = browser_context_owner.handle();
         let completion_queue = crate::page_task_queue::RendererPageServiceWorkerTestHarness::new();
         let client_id = browser_context_runtime.register_service_worker_client(
@@ -6157,16 +6103,16 @@ globalThis.__outerContinued = true;
         );
         state.buffered_document_preloads.bind_resource_runtime(
             Some(owner_wake.clone()),
-            Some(
+            crate::network::context::DocumentResourceLoader::for_test(
+                loader.handle(),
                 crate::network::RendererResourceTaskRunner::from_current_tokio()
                     .expect("service-worker preload test requires its Tokio runtime"),
+                final_url.clone(),
             ),
         );
         state.service_worker_preload_context = Some(ServiceWorkerScriptPreloadContext::new(
             browser_context_runtime,
             client_id,
-            final_url.clone(),
-            Some(owner_wake),
         ));
         let session = state
             .parser_session
@@ -6177,7 +6123,6 @@ globalThis.__outerContinued = true;
             .enqueue_script_input_preload_html(format!(r#"<script src="{script_url}"></script>"#));
 
         let mut driver = ParserDriver {
-            loader: &loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -6230,11 +6175,14 @@ globalThis.__outerContinued = true;
             let final_url = Url::parse("https://example.test/docs/page.html").expect("test url");
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
-            bind_preload_state_to_current_test_runtime(&mut state.buffered_document_preloads);
+            bind_preload_state_to_current_test_runtime(
+                &mut state.buffered_document_preloads,
+                &loader,
+                &state.final_url,
+            );
             let session = state.parser_session.stream_handle().borrow().script_input_session();
 
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -6301,7 +6249,6 @@ globalThis.__outerContinued = true;
         state.input_closed = true;
 
         let mut driver = ParserDriver {
-            loader: &loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -6349,6 +6296,7 @@ globalThis.__outerContinued = true;
                 layout_policy: moli_page_types::LayoutPolicy::default(),
                 wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
                 reserved_service_worker_client_id: None,
             },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -6503,10 +6451,8 @@ globalThis.__outerContinued = true;
     #[test]
     fn parser_step_without_script_handoff_consumes_live_backend_dom() {
         let final_url = Url::parse("https://example.test/").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
         let driver = ParserDriver {
-            loader: &loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -6558,10 +6504,8 @@ globalThis.__outerContinued = true;
     #[test]
     fn parser_step_with_inline_script_surfaces_handoff_on_live_backend() {
         let final_url = Url::parse("https://example.test/").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
         let driver = ParserDriver {
-            loader: &loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -6621,10 +6565,8 @@ globalThis.__outerContinued = true;
     #[test]
     fn parser_step_with_inline_svg_script_surfaces_shared_script_handoff() {
         let final_url = Url::parse("https://example.test/").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
         let driver = ParserDriver {
-            loader: &loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -11475,13 +11417,9 @@ JSON.stringify([
                 "both JS and parser popover removal targets should start open"
             );
 
-            let loader = page_vm.main_document_resource_loader();
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                2,
-                "initial JS/parser popover show tasks should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+2,
+"initial JS/parser popover show tasks should run")
             .await;
             page_vm
                 .evaluate_expression("window.parserPopoverRemoveEvents = []")
@@ -11498,12 +11436,9 @@ JSON.stringify([
 })()"#,
                 )
                 .expect("JS popover removal baseline should evaluate");
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                1,
-                "JS popover removal toggle task should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+1,
+"JS popover removal toggle task should run")
             .await;
             let js_after_task = page_vm
                 .evaluate_expression("JSON.stringify(window.parserPopoverRemoveEvents.splice(0))")
@@ -11536,12 +11471,9 @@ JSON.stringify([
 ])"#,
                 )
                 .expect("parser popover removal sync events should evaluate");
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                1,
-                "parser popover removal toggle task should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+1,
+"parser popover removal toggle task should run")
             .await;
             let parser_after_task = page_vm
                 .evaluate_expression("JSON.stringify(window.parserPopoverRemoveEvents.splice(0))")
@@ -11630,13 +11562,9 @@ JSON.stringify([
                 "both JS and parser popover reparent targets should start open"
             );
 
-            let loader = page_vm.main_document_resource_loader();
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                2,
-                "initial JS/parser popover reparent show tasks should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+2,
+"initial JS/parser popover reparent show tasks should run")
             .await;
             page_vm
                 .evaluate_expression("window.parserPopoverReparentEvents = []")
@@ -11654,12 +11582,9 @@ JSON.stringify([
 })()"#,
                 )
                 .expect("JS popover reparent baseline should evaluate");
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                1,
-                "JS popover reparent toggle task should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+1,
+"JS popover reparent toggle task should run")
             .await;
             let js_after_task = page_vm
                 .evaluate_expression("JSON.stringify(window.parserPopoverReparentEvents.splice(0))")
@@ -11711,12 +11636,9 @@ JSON.stringify([
                 Some(parser_detached_parent),
                 "parser reparent should move the popover under the native detached parent"
             );
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                1,
-                "parser popover reparent toggle task should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+1,
+"parser popover reparent toggle task should run")
             .await;
             let parser_after_task = page_vm
                 .evaluate_expression("JSON.stringify(window.parserPopoverReparentEvents.splice(0))")
@@ -11807,13 +11729,9 @@ JSON.stringify([
                 "both JS and parser popover insertBefore targets should start open"
             );
 
-            let loader = page_vm.main_document_resource_loader();
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                2,
-                "initial JS/parser insertBefore popover show tasks should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+2,
+"initial JS/parser insertBefore popover show tasks should run")
             .await;
             page_vm
                 .evaluate_expression("window.parserPopoverBeforeEvents = []")
@@ -11835,12 +11753,9 @@ JSON.stringify([
 })()"#,
                 )
                 .expect("JS popover insertBefore baseline should evaluate");
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                1,
-                "JS popover insertBefore toggle task should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+1,
+"JS popover insertBefore toggle task should run")
             .await;
             let js_after_task = page_vm
                 .evaluate_expression("JSON.stringify(window.parserPopoverBeforeEvents.splice(0))")
@@ -11894,12 +11809,9 @@ JSON.stringify([
                 vec![parser_popover, parser_reference],
                 "parser insertBefore should move the popover before the native reference child"
             );
-            run_element_toggle_tasks_for_test(
-                &mut page_vm,
-                loader.request_client(),
-                1,
-                "parser popover insertBefore toggle task should run",
-            )
+            run_element_toggle_tasks_for_test(&mut page_vm,
+1,
+"parser popover insertBefore toggle task should run")
             .await;
             let parser_after_task = page_vm
                 .evaluate_expression("JSON.stringify(window.parserPopoverBeforeEvents.splice(0))")
@@ -14147,15 +14059,11 @@ document.body.append(window.jsRemovedLazyMedia, window.parserRemovedLazyMedia);
                     .expect("parser image removal reactions should dispatch");
             }
 
-            let loader = page_vm.main_document_resource_loader();
             assert!(
                 page_vm
-                    .run_exact_selected_page_task_for_test(
-                        crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
+                    .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::DomManipulation(
                             crate::runtime::page_vm::PageDomManipulationTestFamily::ImageLoadEvent,
-                        ),
-                        loader.request_client(),
-                    )
+                        ))
                     .await
                     .expect("parser image DOM-manipulation task should run")
             );
@@ -14182,7 +14090,6 @@ document.body.append(window.jsRemovedLazyMedia, window.parserRemovedLazyMedia);
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let _js_runtime = crate::JsRuntime::initialize();
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -14223,7 +14130,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
             )
             .expect("page vm");
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser-created style sync script handoff channel closed",
@@ -14262,7 +14169,6 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let _js_runtime = crate::JsRuntime::initialize();
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -14296,7 +14202,7 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
             )
             .expect("page vm");
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser custom element definition handoff channel closed",
@@ -14359,7 +14265,6 @@ document.body.setAttribute('data-result', `${before}|${style.color}`);
                 Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -14421,7 +14326,7 @@ document.body.setAttribute('data-result', [
             )
             .expect("page vm");
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor.clone(),
                 "phase-one parser custom element sync setup handoff channel closed",
@@ -14439,7 +14344,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser custom element continuation channel closed",
@@ -14477,7 +14382,6 @@ document.body.setAttribute('data-result', [
                 Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -14560,7 +14464,7 @@ document.body.setAttribute('data-result', [
             )
             .expect("page vm");
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor.clone(),
                 "phase-one parser custom element return setup handoff channel closed",
@@ -14578,7 +14482,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser custom element return continuation channel closed",
@@ -14640,8 +14544,8 @@ document.body.setAttribute('data-result', [
                 Instant::now(),
             )
             .expect("page vm");
+
             let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
                 crate::renderer::PageVmInitStage::Load,
                 state,
                 page_vm,
@@ -14690,7 +14594,6 @@ document.body.setAttribute('data-result', [
                 Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -14748,6 +14651,7 @@ document.body.setAttribute('data-result', [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -14758,7 +14662,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let handoff = handoff.clone();
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
@@ -14780,7 +14684,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one inline script continuation local task channel closed",
@@ -14857,7 +14761,6 @@ document.body.setAttribute('data-result', [
             ));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -14928,6 +14831,7 @@ document.body.setAttribute('data-result', [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -14938,7 +14842,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let handoff = handoff.clone();
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
@@ -15004,7 +14908,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one external script continuation local task channel closed",
@@ -15099,7 +15003,6 @@ document.body.setAttribute('data-result', [
             ));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone())));
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -15157,6 +15060,7 @@ document.body.setAttribute('data-result', [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -15167,7 +15071,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let handoff = handoff.clone();
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
@@ -15189,7 +15093,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one document.write continuation local task channel closed",
@@ -15310,7 +15214,6 @@ document.body.setAttribute('data-result', [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -15347,7 +15250,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one empty script parser step local task channel closed",
@@ -15476,7 +15379,6 @@ for (const [id, flag] of [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -15498,7 +15400,7 @@ document.body.setAttribute('data-result', 'done');
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one template script parser step local task channel closed",
@@ -15552,7 +15454,6 @@ document.body.setAttribute('data-result', 'done');
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -15582,7 +15483,7 @@ document.body.setAttribute('data-result', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one disabled shadow parser step local task channel closed",
@@ -15636,7 +15537,6 @@ document.body.setAttribute('data-result', [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -15691,7 +15591,7 @@ document.body.setAttribute('data-bad-write', String(!!document.getElementById('b
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser custom element direct regression local task channel closed",
@@ -15810,7 +15710,6 @@ document.body.setAttribute('data-parser-returned', [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -15870,7 +15769,7 @@ document.body.setAttribute(
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser custom element token attrs reaction channel closed",
@@ -15979,7 +15878,6 @@ document.body.setAttribute('data-idl-nonce', element.nonce);
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16037,7 +15935,7 @@ document.body.setAttribute('data-bad-write', String(!!document.getElementById('b
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser customized built-in direct channel closed",
@@ -16217,7 +16115,6 @@ document.body.setAttribute('data-input', [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16271,7 +16168,7 @@ document.body.setAttribute('data-shadow-ready', [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser custom element DSD timing local task channel closed",
@@ -16395,7 +16292,6 @@ document.body.setAttribute('data-face-disabled', String(face.matches(':disabled'
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16445,7 +16341,7 @@ document.body.setAttribute('data-after-visible', String(!!document.getElementByI
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser table custom element direct regression local task channel closed",
@@ -16509,7 +16405,6 @@ document.body.setAttribute('data-after-visible', String(!!document.getElementByI
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16561,7 +16456,7 @@ document.body.setAttribute('data-after-body-visible', String(!!document.getEleme
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser head reprocess custom element direct regression local task channel closed",
@@ -16631,7 +16526,6 @@ document.body.setAttribute('data-after-body-visible', String(!!document.getEleme
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16664,7 +16558,7 @@ document.body.setAttribute('data-token', instance.getAttribute('data-token') || 
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one parser template custom element direct regression local task channel closed",
@@ -16721,7 +16615,6 @@ document.body.setAttribute('data-token', instance.getAttribute('data-token') || 
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16797,7 +16690,7 @@ document.body.setAttribute('data-bad-write', String(!!document.getElementById('b
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one document.write custom element direct regression local task channel closed",
@@ -16865,7 +16758,6 @@ document.body.setAttribute('data-bad-write', String(!!document.getElementById('b
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -16892,7 +16784,7 @@ document.body.setAttribute("data-range", [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one document.write fostered text live range local task channel closed",
@@ -16923,11 +16815,9 @@ document.body.setAttribute("data-range", [
     #[test]
     fn inline_script_handoff_is_classified_as_blocking_classic_on_live_backend() {
         let final_url = Url::parse("https://example.test/").expect("test url");
-        let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
         let mut state =
             ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url.clone());
         let driver = ParserDriver {
-            loader: &loader,
             final_url: &state.final_url,
             parser_session: &mut state.parser_session,
             scheduler: &mut state.scheduler,
@@ -16983,7 +16873,6 @@ document.body.setAttribute("data-range", [
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17083,7 +16972,6 @@ document.body.setAttribute("data-range", [
             let mut state =
                 ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17153,6 +17041,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -17215,7 +17104,6 @@ document.body.setAttribute("data-range", [
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17280,6 +17168,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -17336,7 +17225,6 @@ document.body.setAttribute("data-range", [
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17417,6 +17305,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -17523,7 +17412,6 @@ document.body.setAttribute("data-range", [
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17589,6 +17477,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -17645,7 +17534,6 @@ document.body.setAttribute("data-range", [
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17740,7 +17628,6 @@ document.body.setAttribute("data-range", [
             let loader = ResourceRequestClient::new(&FetchConfig::default()).expect("default loader");
             let mut state = ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17847,7 +17734,6 @@ document.body.setAttribute("data-range", [
                 Box::leak(Box::new(ResourceRequestClient::new(&FetchConfig::default()).expect("default loader")));
             let state = Box::leak(Box::new(ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url)));
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -17909,6 +17795,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -17919,7 +17806,7 @@ document.body.setAttribute("data-range", [
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let handoff = handoff.clone();
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
@@ -17975,7 +17862,6 @@ document.body.setAttribute("data-range", [
             let mut state =
                 ParseTimeDriverState::new_with_scripting_enabled_for_test(final_url);
             let driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -18078,6 +17964,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                 navigation_bootstrap_entry: None,
+                session_history_position: None,
             reserved_service_worker_client_id: None,
                 },
             PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -18086,7 +17973,6 @@ document.body.setAttribute("data-range", [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -18165,6 +18051,7 @@ document.body.setAttribute("data-range", [
                     layout_policy: moli_page_types::LayoutPolicy::default(),
                     wpt_extensions_enabled: false,
                     navigation_bootstrap_entry: None,
+                    session_history_position: None,
                     reserved_service_worker_client_id: None,
                 },
                 PageVmRuntimeHooks::standalone_without_owner_reservation_for_test(),
@@ -18173,7 +18060,6 @@ document.body.setAttribute("data-range", [
             )
             .expect("page vm");
             let mut driver = ParserDriver {
-                loader: &loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,

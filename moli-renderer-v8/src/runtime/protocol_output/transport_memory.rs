@@ -57,21 +57,165 @@ fn json_charge(value: &serde_json::Value) -> usize {
     }
 }
 
+pub(crate) fn console_payload_bytes(
+    message: &str,
+    args: &[serde_json::Value],
+    stack: Option<&str>,
+) -> usize {
+    args.iter().fold(
+        string_charge(message).saturating_add(stack.map(string_charge).unwrap_or(0)),
+        |total, value| total.saturating_add(json_charge(value)),
+    )
+}
+
+impl crate::runtime::RuntimeConsoleMessageSnapshot {
+    /// Conservative heap-payload charge shared by transport and replay history.
+    pub fn retained_payload_bytes(&self) -> usize {
+        console_payload_bytes(&self.message, &self.args, self.stack.as_deref())
+    }
+}
+
+impl crate::runtime::RendererServiceWorkerExceptionMessage {
+    /// Conservative heap-payload charge shared by transport and replay history.
+    pub fn retained_payload_bytes(&self) -> usize {
+        [
+            self.message.as_str(),
+            self.filename.as_str(),
+            self.event_kind.as_str(),
+            self.phase.as_str(),
+            self.source.as_str(),
+        ]
+        .into_iter()
+        .map(string_charge)
+        .sum()
+    }
+}
+
+impl crate::runtime::RendererServiceWorkerFetchDiagnostic {
+    /// Conservative heap-payload charge shared by transport and replay history.
+    pub fn retained_payload_bytes(&self) -> usize {
+        let mut total = [
+            self.document_url.as_str(),
+            self.request_url.as_str(),
+            self.method.as_str(),
+            self.destination.as_str(),
+        ]
+        .into_iter()
+        .map(string_charge)
+        .sum::<usize>();
+        total = self
+            .request_headers
+            .iter()
+            .fold(total, |total, (name, value)| {
+                total
+                    .saturating_add(string_charge(name))
+                    .saturating_add(string_charge(value))
+            });
+        total = total.saturating_add(self.request_body.as_deref().map(string_charge).unwrap_or(0));
+        match &self.result {
+            crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Fallback => total,
+            crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Response {
+                final_url,
+                status_text,
+                response_headers,
+                ..
+            } => response_headers.iter().fold(
+                total
+                    .saturating_add(string_charge(final_url))
+                    .saturating_add(string_charge(status_text)),
+                |total, (name, value)| {
+                    total
+                        .saturating_add(string_charge(name))
+                        .saturating_add(value.len().saturating_mul(2))
+                },
+            ),
+            crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Failure { message } => {
+                total.saturating_add(string_charge(message))
+            }
+        }
+    }
+}
+
 fn observation_transport_charge_bytes(observation: &RendererProtocolObservation) -> usize {
     match observation {
-        RendererProtocolObservation::MainDocumentCommit(commit) => [
-            commit.frame_id.as_str(),
-            commit.loader_id.as_str(),
-            commit.url.as_str(),
-            commit.security_origin.as_str(),
-            commit.secure_context_type.as_str(),
+        RendererProtocolObservation::Popup(event) => {
+            string_charge(event.url()).saturating_add(string_charge(event.target_name()))
+        }
+        RendererProtocolObservation::JavaScriptDialog(event) => [
+            event.source_url.as_str(),
+            event.dialog_type.as_str(),
+            event.message.as_str(),
+            event.default_prompt.as_str(),
+        ]
+        .into_iter()
+        .map(string_charge)
+        .sum(),
+        RendererProtocolObservation::MainDocumentCommit(
+            crate::runtime::RendererMainDocumentCommit::Browser,
+        ) => 0,
+        RendererProtocolObservation::MainDocumentCommit(
+            crate::runtime::RendererMainDocumentCommit::Frame {
+                frame_id,
+                loader_id,
+                url,
+                unreachable_url,
+                security_origin,
+                secure_context_type,
+                ..
+            },
+        ) => [
+            frame_id.as_str(),
+            loader_id.as_str(),
+            url.as_str(),
+            unreachable_url.as_deref().unwrap_or_default(),
+            security_origin.as_str(),
+            secure_context_type.as_str(),
         ]
         .into_iter()
         .map(string_charge)
         .sum(),
         RendererProtocolObservation::DocumentTitleChanged(change) => string_charge(&change.title),
         RendererProtocolObservation::DocumentLifecycle(_) => 0,
-        RendererProtocolObservation::Network { item, .. } => item.renderer_transport_charge_bytes(),
+        RendererProtocolObservation::WorkerLifecycle(observation) => {
+            match observation.lifecycle() {
+                crate::runtime::RendererWorkerLifecycle::Service(event) => {
+                    service_worker_lifecycle_payload_bytes(event)
+                }
+                crate::runtime::RendererWorkerLifecycle::SharedCreated(info)
+                | crate::runtime::RendererWorkerLifecycle::SharedStarted(info) => {
+                    string_charge(&info.url).saturating_add(string_charge(&info.name))
+                }
+                crate::runtime::RendererWorkerLifecycle::SharedDestroyed(_)
+                | crate::runtime::RendererWorkerLifecycle::DedicatedDestroyed(_) => 0,
+                crate::runtime::RendererWorkerLifecycle::DedicatedCreated(info) => {
+                    [&info.request_url, &info.document_url, &info.name]
+                        .into_iter()
+                        .map(|value| string_charge(value))
+                        .sum()
+                }
+                crate::runtime::RendererWorkerLifecycle::DedicatedScriptCompleted {
+                    script,
+                    ..
+                } => string_charge(&script.script_url).saturating_add(match &script.outcome {
+                    crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded => 0,
+                    crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
+                        error_message,
+                    } => string_charge(error_message),
+                }),
+            }
+        }
+        RendererProtocolObservation::DedicatedWorker(event) => {
+            dedicated_worker_event_transport_charge_bytes(event)
+        }
+        RendererProtocolObservation::ServiceWorker(event) => {
+            service_worker_event_transport_charge_bytes(event)
+        }
+        RendererProtocolObservation::SharedWorker(event) => {
+            shared_worker_event_transport_charge_bytes(event)
+        }
+        RendererProtocolObservation::Network(observation) => {
+            observation.item().renderer_transport_charge_bytes()
+        }
         RendererProtocolObservation::RuntimeBinding(call) => {
             string_charge(&call.name).saturating_add(string_charge(&call.payload))
         }
@@ -125,18 +269,6 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
             }
             total
         }
-        RendererOwnerAction::JavaScriptDialog(event) => [
-            event.source_url(),
-            event.dialog_type(),
-            event.message(),
-            event.default_prompt(),
-        ]
-        .into_iter()
-        .map(string_charge)
-        .sum(),
-        RendererOwnerAction::Popup(event) => {
-            string_charge(event.url()).saturating_add(string_charge(event.target_name()))
-        }
         RendererOwnerAction::ChildFrameTree { event, .. } => match event {
             crate::protocol_types::ChildFrameTreeEventSnapshot::Attached(event) => {
                 string_charge(&event.frame_id).saturating_add(
@@ -162,18 +294,14 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .flatten()
         .map(string_charge)
         .sum(),
-        RendererOwnerAction::ChildFrameDocumentNetwork { event, .. } => {
-            string_charge(&event.frame_id)
-                .saturating_add(
-                    event
-                        .parent_frame_id
-                        .as_deref()
-                        .map(string_charge)
-                        .unwrap_or(0),
-                )
-                .saturating_add(string_charge(&event.loader_id))
-                .saturating_add(child_frame_document_network_charge(&event.snapshot))
-        }
+        RendererOwnerAction::ChildFrameNavigationStarted {
+            frame_id,
+            loader_id,
+            url,
+            ..
+        } => string_charge(frame_id)
+            .saturating_add(string_charge(loader_id))
+            .saturating_add(string_charge(url)),
         RendererOwnerAction::ChildFrameLoad { event, .. } => [
             Some(event.frame_id.as_str()),
             event.parent_frame_id.as_deref(),
@@ -184,14 +312,7 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         .into_iter()
         .flatten()
         .map(string_charge)
-        .sum::<usize>()
-        .saturating_add(
-            event
-                .document_network
-                .as_ref()
-                .map(child_frame_document_network_charge)
-                .unwrap_or(0),
-        ),
+        .sum(),
         RendererOwnerAction::SameDocumentNavigation(event) => {
             let navigation = event.navigation();
             string_charge(&navigation.url)
@@ -223,15 +344,6 @@ fn owner_action_transport_charge_bytes(action: &RendererOwnerAction) -> usize {
         RendererOwnerAction::DetachedParserScriptFetchPause { info, .. } => {
             info.renderer_transport_charge_bytes()
         }
-        RendererOwnerAction::SharedWorkerTargetLifecycle(event) => {
-            shared_worker_event_transport_charge_bytes(event)
-        }
-        RendererOwnerAction::ServiceWorkerTargetLifecycle(event) => {
-            service_worker_event_transport_charge_bytes(event)
-        }
-        RendererOwnerAction::DedicatedWorkerTargetLifecycle(event) => {
-            dedicated_worker_event_transport_charge_bytes(event)
-        }
     }
 }
 
@@ -245,28 +357,6 @@ fn headers_charge<V: AsRef<[u8]>>(headers: &[(String, V)]) -> usize {
                 .saturating_add(string_charge(name))
                 .saturating_add(value.as_ref().len().saturating_mul(2))
         },
-    )
-}
-
-fn child_frame_document_network_charge(
-    snapshot: &crate::protocol_types::ChildFrameDocumentNetworkSnapshot,
-) -> usize {
-    [
-        snapshot.request_url.as_str(),
-        snapshot.request_method.as_str(),
-        snapshot.final_url.as_str(),
-    ]
-    .into_iter()
-    .map(string_charge)
-    .sum::<usize>()
-    .saturating_add(headers_charge(&snapshot.request_headers))
-    .saturating_add(headers_charge(&snapshot.response_headers))
-    .saturating_add(
-        snapshot
-            .response_body
-            .as_ref()
-            .map(|body| body.renderer_transport_retained_memory_bytes())
-            .unwrap_or_default(),
     )
 }
 
@@ -301,20 +391,13 @@ fn dom_mutation_transport_charge_bytes(event: &crate::runtime::RendererDomMutati
 }
 
 fn shared_worker_event_transport_charge_bytes(
-    event: &crate::runtime::RendererSharedWorkerTargetEvent,
+    event: &crate::runtime::RendererSharedWorkerObservation,
 ) -> usize {
     match event {
-        crate::runtime::RendererSharedWorkerTargetEvent::Created(info) => {
-            string_charge(&info.url).saturating_add(string_charge(&info.name))
+        crate::runtime::RendererSharedWorkerObservation::Console { message, .. } => {
+            console_payload_bytes(&message.message, &message.args, message.stack.as_deref())
         }
-        crate::runtime::RendererSharedWorkerTargetEvent::Console { message, .. } => {
-            message.args.iter().fold(
-                string_charge(&message.message)
-                    .saturating_add(message.stack.as_deref().map(string_charge).unwrap_or(0)),
-                |total, value| total.saturating_add(json_charge(value)),
-            )
-        }
-        crate::runtime::RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+        crate::runtime::RendererSharedWorkerObservation::RuntimeInspectorMessages {
             inspector_session_id,
             messages,
             ..
@@ -327,87 +410,23 @@ fn shared_worker_event_transport_charge_bytes(
                 total.saturating_add(runtime_inspector_message_transport_charge_bytes(message))
             },
         ),
-        crate::runtime::RendererSharedWorkerTargetEvent::Destroyed { .. } => 0,
     }
 }
 
 fn service_worker_event_transport_charge_bytes(
-    event: &crate::runtime::RendererServiceWorkerTargetEvent,
+    event: &crate::runtime::RendererServiceWorkerObservation,
 ) -> usize {
     match event {
-        crate::runtime::RendererServiceWorkerTargetEvent::Created { info, .. } => {
-            string_charge(&info.script_url).saturating_add(string_charge(&info.scope_url))
+        crate::runtime::RendererServiceWorkerObservation::Console { message, .. } => {
+            console_payload_bytes(&message.message, &message.args, message.stack.as_deref())
         }
-        crate::runtime::RendererServiceWorkerTargetEvent::Stopped { reason, .. } => {
-            string_charge(reason)
+        crate::runtime::RendererServiceWorkerObservation::Exception { message, .. } => {
+            message.retained_payload_bytes()
         }
-        crate::runtime::RendererServiceWorkerTargetEvent::Console { message, .. } => {
-            message.args.iter().fold(
-                string_charge(&message.message)
-                    .saturating_add(message.stack.as_deref().map(string_charge).unwrap_or(0)),
-                |total, value| total.saturating_add(json_charge(value)),
-            )
-        }
-        crate::runtime::RendererServiceWorkerTargetEvent::Exception { message, .. } => [
-            message.message.as_str(),
-            message.filename.as_str(),
-            message.event_kind.as_str(),
-            message.phase.as_str(),
-            message.source.as_str(),
-        ]
-        .into_iter()
-        .map(string_charge)
-        .sum(),
-        crate::runtime::RendererServiceWorkerTargetEvent::FetchDiagnostic {
+        crate::runtime::RendererServiceWorkerObservation::FetchDiagnostic {
             diagnostic, ..
-        } => {
-            let mut total = [
-                diagnostic.document_url.as_str(),
-                diagnostic.request_url.as_str(),
-                diagnostic.method.as_str(),
-                diagnostic.destination.as_str(),
-            ]
-            .into_iter()
-            .map(string_charge)
-            .sum::<usize>();
-            total = diagnostic
-                .request_headers
-                .iter()
-                .fold(total, |total, (name, value)| {
-                    total
-                        .saturating_add(string_charge(name))
-                        .saturating_add(string_charge(value))
-                });
-            total = total.saturating_add(
-                diagnostic
-                    .request_body
-                    .as_deref()
-                    .map(string_charge)
-                    .unwrap_or(0),
-            );
-            match &diagnostic.result {
-                crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Fallback => total,
-                crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Response {
-                    final_url,
-                    status_text,
-                    response_headers,
-                    ..
-                } => response_headers.iter().fold(
-                    total
-                        .saturating_add(string_charge(final_url))
-                        .saturating_add(string_charge(status_text)),
-                    |total, (name, value)| {
-                        total
-                            .saturating_add(string_charge(name))
-                            .saturating_add(value.len().saturating_mul(2))
-                    },
-                ),
-                crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Failure { message } => {
-                    total.saturating_add(string_charge(message))
-                }
-            }
-        }
-        crate::runtime::RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+        } => diagnostic.retained_payload_bytes(),
+        crate::runtime::RendererServiceWorkerObservation::RuntimeInspectorMessages {
             inspector_session_id,
             messages,
             ..
@@ -420,51 +439,17 @@ fn service_worker_event_transport_charge_bytes(
                 total.saturating_add(runtime_inspector_message_transport_charge_bytes(message))
             },
         ),
-        crate::runtime::RendererServiceWorkerTargetEvent::Started { .. }
-        | crate::runtime::RendererServiceWorkerTargetEvent::Destroyed { .. }
-        | crate::runtime::RendererServiceWorkerTargetEvent::VersionUpdated { .. } => 0,
     }
 }
 
 fn dedicated_worker_event_transport_charge_bytes(
-    event: &crate::runtime::RendererDedicatedWorkerTargetEvent,
+    event: &crate::runtime::RendererDedicatedWorkerObservation,
 ) -> usize {
     match event {
-        crate::runtime::RendererDedicatedWorkerTargetEvent::Created(info) => [
-            info.request_url.as_str(),
-            info.document_url.as_str(),
-            info.name.as_str(),
-        ]
-        .into_iter()
-        .map(string_charge)
-        .sum(),
-        crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoaded {
-            script_url,
-            response,
-            ..
-        } => string_charge(script_url)
-            .saturating_add(navigation_response_transport_charge_bytes(response)),
-        crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
-            script_url,
-            error_message,
-            response,
-            ..
-        } => string_charge(script_url)
-            .saturating_add(string_charge(error_message))
-            .saturating_add(
-                response
-                    .as_deref()
-                    .map(navigation_response_transport_charge_bytes)
-                    .unwrap_or(0),
-            ),
-        crate::runtime::RendererDedicatedWorkerTargetEvent::Console { message, .. } => {
-            message.args.iter().fold(
-                string_charge(&message.message)
-                    .saturating_add(message.stack.as_deref().map(string_charge).unwrap_or(0)),
-                |total, value| total.saturating_add(json_charge(value)),
-            )
+        crate::runtime::RendererDedicatedWorkerObservation::Console { message, .. } => {
+            console_payload_bytes(&message.message, &message.args, message.stack.as_deref())
         }
-        crate::runtime::RendererDedicatedWorkerTargetEvent::RuntimeInspectorMessages {
+        crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
             inspector_session_id,
             messages,
             ..
@@ -477,20 +462,23 @@ fn dedicated_worker_event_transport_charge_bytes(
                 total.saturating_add(runtime_inspector_message_transport_charge_bytes(message))
             },
         ),
-        crate::runtime::RendererDedicatedWorkerTargetEvent::Destroyed { .. } => 0,
     }
 }
 
-fn navigation_response_transport_charge_bytes(
-    response: &crate::protocol_types::NavigationResponse,
+fn service_worker_lifecycle_payload_bytes(
+    event: &crate::runtime::RendererServiceWorkerLifecycle,
 ) -> usize {
-    string_charge(response.final_url.as_str())
-        .saturating_add(headers_charge(&response.headers))
-        .saturating_add(response.body_bytes().len())
-        .saturating_add(
-            response
-                .network_request_headers()
-                .map(headers_charge)
-                .unwrap_or(0),
-        )
+    match event {
+        crate::runtime::RendererServiceWorkerLifecycle::Created { info, .. } => {
+            string_charge(&info.script_url).saturating_add(string_charge(&info.scope_url))
+        }
+        crate::runtime::RendererServiceWorkerLifecycle::Stopped { reason, .. } => {
+            string_charge(reason)
+        }
+        crate::runtime::RendererServiceWorkerLifecycle::Starting { .. }
+        | crate::runtime::RendererServiceWorkerLifecycle::ExecutionReady { .. }
+        | crate::runtime::RendererServiceWorkerLifecycle::Started { .. }
+        | crate::runtime::RendererServiceWorkerLifecycle::Destroyed { .. }
+        | crate::runtime::RendererServiceWorkerLifecycle::VersionUpdated { .. } => 0,
+    }
 }

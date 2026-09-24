@@ -28,10 +28,16 @@ impl RendererSharedWorkerHost {
             .response_policy_context
             .unwrap_or(execution_policy.policy_context);
         let reserved_service_worker_client_id = params.reserved_service_worker_client_id;
-        let options = WorkerSpawnOptions::new_with_request_client(
-            script_source,
+        let options = WorkerSpawnOptions::for_worker_source(
+            crate::worker::WorkerScriptSource::text(script_source),
             script_url.clone(),
             launch_context.request_client,
+            WorkerGlobalKind::Shared {
+                network: self.network.clone(),
+                name: name.clone(),
+                storage_key: params.key.storage_key().clone(),
+            },
+            execution_policy.worker_context_runtime.clone(),
         )
         .with_script_kind(execution_policy.script_kind)
         .with_module_static_import_initiator_url(
@@ -51,11 +57,6 @@ impl RendererSharedWorkerHost {
         .with_module_credentials_mode(execution_policy.module_credentials_mode)
         .with_network_policy(execution_policy.network_policy)
         .with_policy_context(policy_context)
-        .with_worker_context_runtime(execution_policy.worker_context_runtime.clone())
-        .with_global_kind(WorkerGlobalKind::Shared {
-            name: name.clone(),
-            storage_key: params.key.storage_key().clone(),
-        })
         .with_storage_key_top_level_site(execution_policy.storage_key_top_level_site)
         .with_creator_storage_key(params.key.storage_key().clone())
         .with_indexed_db_manager(execution_policy.indexed_db_manager)
@@ -76,7 +77,7 @@ impl RendererSharedWorkerHost {
         let mut state = self.state.lock();
         if !matches!(*state, RendererSharedWorkerHostState::Loading { .. }) {
             drop(state);
-            handle.terminate_and_join();
+            handle.terminate();
             return false;
         }
         self.set_current_script_url(script_url);
@@ -134,32 +135,7 @@ impl RendererSharedWorkerHost {
         tx.send(message).is_ok()
     }
 
-    pub(super) fn terminate_and_join(&self) {
-        let (task, handle) = {
-            let mut state = self.state.lock();
-            match &mut *state {
-                RendererSharedWorkerHostState::Loading { task } => {
-                    let task = task.take();
-                    *state = RendererSharedWorkerHostState::Closed;
-                    (task, None)
-                }
-                RendererSharedWorkerHostState::Running { handle, .. } => {
-                    let handle = handle.take();
-                    *state = RendererSharedWorkerHostState::Closed;
-                    (None, handle)
-                }
-                RendererSharedWorkerHostState::Closed => (None, None),
-            }
-        };
-        if let Some(task) = task {
-            task.cancel();
-        }
-        if let Some(handle) = handle {
-            handle.terminate_and_join();
-        }
-    }
-
-    pub(super) fn terminate_without_join(&self) {
+    pub(super) fn terminate(&self) {
         let (task, handle) = {
             let mut state = self.state.lock();
             match &mut *state {

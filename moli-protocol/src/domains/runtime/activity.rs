@@ -30,7 +30,7 @@ pub(crate) struct RuntimePreparedOutputs {
 }
 
 /// A binding invocation is a historical protocol observation, but its route is
-/// the exact Page attachment that existed when the calls were taken.
+/// the exact renderer binding that existed when the calls were taken.
 ///
 /// Realm retirement does not erase a call that already happened. Page
 /// replacement or session detach does invalidate the route, so the attachment
@@ -38,7 +38,8 @@ pub(crate) struct RuntimePreparedOutputs {
 /// into a `sessionId` string early.
 #[derive(Clone, Debug, PartialEq)]
 struct RuntimeBindingCallBatch {
-    attachment: crate::conn::TargetPageProtocolAttachmentIdentity,
+    owner: CommandOwnerScope,
+    renderer_attachment: moli_core::page::RendererAgentAttachmentId,
     calls: Vec<crate::conn::RuntimeBindingCallEvent>,
 }
 
@@ -65,7 +66,10 @@ struct RuntimeInspectorMessageBatch {
 /// document.
 #[derive(Clone, Debug, PartialEq)]
 enum RuntimeInspectorMessageAuthority {
-    CurrentPage(crate::conn::TargetPageProtocolAttachmentIdentity),
+    CurrentRenderer {
+        owner: CommandOwnerScope,
+        attachment: moli_core::page::RendererAgentAttachmentId,
+    },
     CurrentWorker(crate::conn::TargetWorkerProtocolAttachmentIdentity),
     SessionResponse {
         owner: CommandOwnerScope,
@@ -76,7 +80,7 @@ enum RuntimeInspectorMessageAuthority {
 impl RuntimeInspectorMessageAuthority {
     fn session_id(&self) -> Option<&str> {
         match self {
-            Self::CurrentPage(attachment) => attachment.session_id(),
+            Self::CurrentRenderer { owner, .. } => owner.session_id(),
             Self::CurrentWorker(attachment) => Some(attachment.session_id()),
             Self::SessionResponse { owner, .. } => owner.session_id(),
         }
@@ -84,9 +88,11 @@ impl RuntimeInspectorMessageAuthority {
 
     fn permits_projection(&self, conn: &CdpConnection) -> bool {
         match self {
-            Self::CurrentPage(attachment) => {
-                conn.target_page_protocol_attachment_identity_is_current(attachment)
-            }
+            Self::CurrentRenderer { owner, attachment } => conn
+                .runtime_session_owner_slot_for_owner(owner)
+                .ok()
+                .and_then(|slot| slot.current_renderer_inspection_binding())
+                .is_some_and(|binding| binding.attachment().id() == *attachment),
             Self::CurrentWorker(attachment) => attachment.is_current(),
             Self::SessionResponse {
                 owner,
@@ -97,9 +103,7 @@ impl RuntimeInspectorMessageAuthority {
 
     fn command_owner(&self) -> crate::conn::CommandOwnerScope {
         match self {
-            Self::CurrentPage(attachment) => {
-                crate::conn::CommandOwnerScope::for_page_attachment(attachment)
-            }
+            Self::CurrentRenderer { owner, .. } => owner.clone(),
             Self::CurrentWorker(attachment) => {
                 CommandOwnerScope::for_session(attachment.session_id())
             }
@@ -165,12 +169,16 @@ impl RuntimeOutputProjectionStep {
                     .and_then(RuntimePreparedOutputSlot::take_binding_call_batches)
                 {
                     for batch in batches {
-                        if !conn
-                            .target_page_protocol_attachment_identity_is_current(&batch.attachment)
+                        if conn
+                            .runtime_session_owner_slot_for_owner(&batch.owner)
+                            .ok()
+                            .and_then(|slot| slot.current_renderer_inspection_binding())
+                            .map(|binding| binding.attachment().id())
+                            != Some(batch.renderer_attachment)
                         {
                             continue;
                         }
-                        let session_id = batch.attachment.session_id().map(str::to_owned);
+                        let session_id = batch.owner.session_id().map(str::to_owned);
                         context
                             .command
                             .protocol_events_mut()
@@ -294,15 +302,22 @@ impl RuntimePreparedOutputs {
     pub(crate) fn from_renderer_runtime_binding_call(
         conn: &CdpConnection,
         owner: &CommandOwnerScope,
+        source_renderer_agent: moli_core::page::RendererDevToolsAgentToken,
         call: moli_core::page::PendingRuntimeBindingCall,
     ) -> Self {
-        let Some(attachment) = conn.target_page_protocol_attachment_identity_for_owner(owner)
+        let Some(attachment) = conn
+            .runtime_session_owner_slot_for_owner(owner)
+            .ok()
+            .and_then(|slot| slot.current_renderer_inspection_binding())
+            .map(|binding| binding.attachment())
+            .filter(|attachment| attachment.agent_token() == source_renderer_agent)
         else {
             return Self::default();
         };
         Self {
             binding_call_batches: vec![RuntimeBindingCallBatch {
-                attachment,
+                owner: owner.clone(),
+                renderer_attachment: attachment.id(),
                 calls: vec![crate::conn::RuntimeBindingCallEvent::from_renderer_call(
                     call,
                 )],
@@ -332,15 +347,15 @@ impl RuntimePreparedOutputs {
             .into_iter()
             .filter(|batch| !batch.messages.is_empty())
         {
-            let Some(attachment) = conn
-                .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
-                    source_owner,
-                    batch.session.wire_session_id(),
-                )
-            else {
+            let Some(response_owner) = conn.target_protocol_owner_for_renderer_inspector_owner(
+                source_owner,
+                batch.session.wire_session_id(),
+            ) else {
                 continue;
             };
-            let response_owner = CommandOwnerScope::for_page_attachment(&attachment);
+            let response_target_id = conn
+                .target_owner_identity_for_owner(&response_owner)
+                .and_then(|(_, target_id)| target_id);
             let response_route = response_owner.resolve_route(conn);
             let renderer_agent_attachment_id = batch.renderer_agent_attachment_id();
             let order = batch.command_response_order();
@@ -372,18 +387,21 @@ impl RuntimePreparedOutputs {
                         },
                         RuntimeInspectorMessage::from_renderer_message(
                             response,
-                            attachment.page_owner().target_id(),
+                            response_target_id.as_deref(),
                         ),
                     );
                     continue;
                 }
-                if observations_are_current {
+                if observations_are_current && let Some(attachment) = renderer_agent_attachment_id {
                     outputs.append_inspector_message(
                         order,
-                        RuntimeInspectorMessageAuthority::CurrentPage(attachment.clone()),
+                        RuntimeInspectorMessageAuthority::CurrentRenderer {
+                            owner: response_owner.clone(),
+                            attachment,
+                        },
                         RuntimeInspectorMessage::from_renderer_message(
                             message,
-                            attachment.page_owner().target_id(),
+                            response_target_id.as_deref(),
                         ),
                     );
                 }
@@ -482,11 +500,16 @@ impl RuntimePreparedOutputs {
 
     #[cfg(test)]
     pub(crate) fn from_runtime_binding_calls_for_test(
-        attachment: crate::conn::TargetPageProtocolAttachmentIdentity,
+        owner: CommandOwnerScope,
+        renderer_attachment: moli_core::page::RendererAgentAttachmentId,
         calls: Vec<crate::conn::RuntimeBindingCallEvent>,
     ) -> Self {
         Self {
-            binding_call_batches: vec![RuntimeBindingCallBatch { attachment, calls }],
+            binding_call_batches: vec![RuntimeBindingCallBatch {
+                owner,
+                renderer_attachment,
+                calls,
+            }],
             inspector_message_batches: Vec::new(),
             post_response_inspector_message_batches: Vec::new(),
         }
@@ -587,7 +610,7 @@ mod tests {
     use serde_json::Value;
     use serde_json::json;
 
-    use crate::conn::{BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope};
+    use crate::conn::{CdpConnection, CommandDispatchContext, CommandOwnerScope};
     use crate::devtools_runtime::AutomationEvent;
     use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
     use crate::testing::TestContext;
@@ -621,46 +644,40 @@ mod tests {
     }
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,runtime-backlog-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-            .await
-            .expect("test page should load");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.install_navigation_fixture_for_session_owner(
+            &format!("data:text/html,{html}"),
+            Some("SID-1"),
+        )
+        .await;
     }
 
-    fn runtime_binding_attachment_fixture() -> (
-        CdpConnection,
-        crate::conn::TargetPageProtocolAttachmentIdentity,
-    ) {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
-        browser_context.set_active_target_id("TID-1");
-        browser_context.attach_active_session("SID-1");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_page_attachment_id_for_test(1);
-        conn.install_browser_context_fixture_for_test(browser_context);
-        let attachment = conn
-            .target_page_protocol_attachment_identity_for_session(Some("SID-1"))
-            .expect("exact Runtime binding attachment");
-        (conn, attachment)
+    async fn runtime_binding_attachment_fixture()
+    -> (TestContext, (CommandOwnerScope, RendererAgentAttachmentId)) {
+        let mut ctx = TestContext::new();
+        load_document(&mut ctx, "<body>binding</body>").await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+        let attachment = ctx
+            .conn
+            .runtime_session_owner_slot_for_owner(&owner)
+            .unwrap()
+            .current_renderer_inspection_binding()
+            .expect("live Runtime binding")
+            .attachment()
+            .id();
+        (ctx, (owner, attachment))
     }
 
     fn runtime_binding_outputs(
-        attachment: crate::conn::TargetPageProtocolAttachmentIdentity,
+        (owner, attachment): (CommandOwnerScope, RendererAgentAttachmentId),
         payload: &str,
     ) -> RuntimePreparedOutputs {
         RuntimePreparedOutputs::from_runtime_binding_calls_for_test(
+            owner,
             attachment,
             vec![crate::conn::RuntimeBindingCallEvent::new_for_test(
                 17,
@@ -673,7 +690,7 @@ mod tests {
     }
 
     fn prepared_runtime_binding_calls(
-        attachment: crate::conn::TargetPageProtocolAttachmentIdentity,
+        attachment: (CommandOwnerScope, RendererAgentAttachmentId),
     ) -> ProtocolOutputPayloads {
         ProtocolOutputPayloads::from_slot(RuntimePreparedOutputSlot::from_outputs(
             runtime_binding_outputs(attachment, "prepared-payload"),
@@ -916,14 +933,18 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_binding_drain_consumes_prepared_events_without_page_readback() {
-        let (mut conn, attachment) = runtime_binding_attachment_fixture();
+        let (mut ctx, attachment) = runtime_binding_attachment_fixture().await;
         let owner = crate::conn::CommandOwnerScope::for_session("SID-drain-current");
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
         let mut prepared = prepared_runtime_binding_calls(attachment);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(
+            &mut ctx.conn,
+            &mut context,
+            Some(&mut prepared),
+        )
+        .await;
         let out = context
             .command
             .take_protocol_events()
@@ -943,17 +964,23 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_binding_drain_discards_a_replaced_page_attachment() {
-        let (mut conn, attachment) = runtime_binding_attachment_fixture();
+        let (mut ctx, attachment) = runtime_binding_attachment_fixture().await;
         let mut prepared = prepared_runtime_binding_calls(attachment);
-        conn.runtime_session_owner_slot_mut(Some("SID-1"))
-            .expect("Runtime binding target")
-            .replace_page_attachment_id_for_test();
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<body>replacement</body>",
+            Some("SID-1"),
+        )
+        .await;
         let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(
+            &mut ctx.conn,
+            &mut context,
+            Some(&mut prepared),
+        )
+        .await;
 
         assert!(
             context.command.take_protocol_events().is_empty(),
@@ -963,14 +990,24 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_binding_drain_authorizes_each_prepared_attachment_independently() {
-        let (mut conn, retired_attachment) = runtime_binding_attachment_fixture();
+        let (mut ctx, retired_attachment) = runtime_binding_attachment_fixture().await;
         let mut outputs = runtime_binding_outputs(retired_attachment, "retired-page");
-        conn.runtime_session_owner_slot_mut(Some("SID-1"))
-            .expect("Runtime binding target")
-            .replace_page_attachment_id_for_test();
-        let current_attachment = conn
-            .target_page_protocol_attachment_identity_for_session(Some("SID-1"))
-            .expect("replacement Runtime binding attachment");
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<body>replacement</body>",
+            Some("SID-1"),
+        )
+        .await;
+        let replacement_owner = CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+        let current_attachment = (
+            replacement_owner.clone(),
+            ctx.conn
+                .runtime_session_owner_slot_for_owner(&replacement_owner)
+                .unwrap()
+                .current_renderer_inspection_binding()
+                .expect("replacement Runtime binding")
+                .attachment()
+                .id(),
+        );
         outputs.extend(runtime_binding_outputs(
             current_attachment,
             "replacement-page",
@@ -981,8 +1018,12 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(
+            &mut ctx.conn,
+            &mut context,
+            Some(&mut prepared),
+        )
+        .await;
         let events = context
             .command
             .take_protocol_events()
@@ -997,23 +1038,28 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_binding_drain_discards_a_detached_protocol_session() {
-        let (mut conn, attachment) = runtime_binding_attachment_fixture();
+        let (mut ctx, attachment) = runtime_binding_attachment_fixture().await;
         let mut prepared = prepared_runtime_binding_calls(attachment);
         assert_eq!(
-            conn.browser_context
+            ctx.conn
+                .browser_context
                 .as_mut()
                 .expect("browser context")
                 .detach_active_session()
                 .as_deref(),
             Some("SID-1"),
         );
-        conn.rollback_attached_session_without_event("SID-1");
-        let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
+        ctx.conn.rollback_attached_session_without_event("SID-1");
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
 
-        super::project_runtime_binding_calls_async(&mut conn, &mut context, Some(&mut prepared))
-            .await;
+        super::project_runtime_binding_calls_async(
+            &mut ctx.conn,
+            &mut context,
+            Some(&mut prepared),
+        )
+        .await;
 
         assert!(
             context.command.take_protocol_events().is_empty(),
@@ -1072,10 +1118,11 @@ mod tests {
                 "params": { "scriptId": "old-page" }
             })],
         );
-        ctx.conn
-            .runtime_session_owner_slot_mut(Some("SID-1"))
-            .expect("Runtime inspector target")
-            .replace_page_attachment_id_for_test();
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<main>replacement</main>",
+            Some("SID-1"),
+        )
+        .await;
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-1")).await;
 
         assert!(
@@ -1164,10 +1211,11 @@ mod tests {
                 "params": { "scriptId": "old-page" }
             })],
         );
-        ctx.conn
-            .runtime_session_owner_slot_mut(Some("SID-1"))
-            .expect("Runtime inspector target")
-            .replace_page_attachment_id_for_test();
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<main>replacement</main>",
+            Some("SID-1"),
+        )
+        .await;
         outputs.extend(renderer_inspector_outputs(
             &mut ctx.conn,
             Some("SID-1"),

@@ -51,8 +51,7 @@ async fn selected_continuation_admits_only_the_current_active_parser() {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainParserContinuation,
-                    &loader,
+                    PageSelectedTaskTestSelector::MainParserContinuation
                 )
                 .await?,
             "one exact parser-continuation task must enter the production selected dispatcher"
@@ -133,8 +132,7 @@ Promise.resolve().then(() => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainParserContinuation,
-                    &loader,
+                    PageSelectedTaskTestSelector::MainParserContinuation
                 )
                 .await?,
             "the retired parser continuation must remain a concrete selected task"

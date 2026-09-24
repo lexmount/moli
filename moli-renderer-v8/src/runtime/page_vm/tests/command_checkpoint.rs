@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::page_vm::ScriptExecutionReportSnapshotSignature;
 use crate::{
     PendingSubresourceContinueOutcome, RendererPageCommand, RendererPageReply,
     RendererSetDocumentContentResult, types::PendingSubresourceContinueEvent,
@@ -19,9 +20,8 @@ Promise.resolve().then(() => __passiveSnapshotCheckpoint += 1);
         .expect("passive snapshot checkpoint witness should queue a reaction");
 
     let _ = page_vm
-        .vm_mut()
-        .snapshot_console_messages_with_context()
-        .expect("console snapshot should read the current realm slots");
+        .page_diagnostics_snapshot()
+        .expect("console diagnostics should read the runtime source queue");
 
     assert_eq!(
         page_vm
@@ -399,4 +399,23 @@ Promise.resolve().then(() => __rejectedFetchCommandCheckpoint += 1);
     })
     .await
     .expect("rejected Fetch-interception command witness should run");
+}
+
+#[test]
+fn report_snapshot_signature_advances_when_output_history_is_full() {
+    let mut report = crate::types::ScriptExecutionReport::default();
+    for _ in 0..1000 {
+        report.extend_observable_output(crate::types::ScriptObservableOutput::from_items([
+            crate::types::ScriptObservableOutputItem::ConsoleMessage("old".into()),
+        ]));
+    }
+    let old = ScriptExecutionReportSnapshotSignature::from_report(&report);
+    report.extend_observable_output(crate::types::ScriptObservableOutput::from_items([
+        crate::types::ScriptObservableOutputItem::ConsoleMessage("new".into()),
+    ]));
+    assert_eq!(report.observable_output_items().len(), 1000);
+    assert_ne!(
+        old,
+        ScriptExecutionReportSnapshotSignature::from_report(&report)
+    );
 }

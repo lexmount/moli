@@ -358,7 +358,7 @@ async fn run_async_handler_probe(url: &str, probe: &str) -> serde_json::Value {
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         while vm.eval("globalThis.__handlerValue !== undefined").unwrap() != "true" {
             runtime.drain_shared_worker_service_lane();
-            drain_service_worker_test_turn(&mut vm, &runtime, &loader).await;
+            drain_service_worker_test_turn(&mut vm, &runtime).await;
         }
     })
     .await

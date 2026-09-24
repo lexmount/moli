@@ -1,8 +1,6 @@
 use serde::Deserialize;
 
-use crate::conn::{
-    CdpSessionRoute, PreparedTargetAttach, TargetActivationTransition, TargetAttachSessionCommit,
-};
+use crate::conn::{CdpSessionRoute, PreparedTargetAttach, TargetAttachSessionCommit};
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCreateTargetResult, DevToolsTargetId,
 };
@@ -17,19 +15,88 @@ pub(super) struct DevToolsCreateTargetExecution {
 pub(super) struct TargetCreationCommit {
     page_target_id: String,
     tab_target_id: String,
-    activation: Option<TargetActivationTransition>,
+    activation: Option<moli_core::browser::PendingWebContentsActivation>,
     attached_tab_sessions: Vec<TargetAttachSessionCommit>,
     attached_sessions: Vec<TargetAttachSessionCommit>,
+    initial_navigation: Option<(moli_core::browser::WebContentsHandle, String)>,
 }
 
 impl TargetCreationCommit {
-    pub(super) fn page_target_id(&self) -> &str {
-        &self.page_target_id
+    pub(super) fn take_activation(
+        &mut self,
+    ) -> Option<moli_core::browser::PendingWebContentsActivation> {
+        self.activation.take()
     }
+}
 
-    pub(super) fn activation(&self) -> Option<&TargetActivationTransition> {
-        self.activation.as_ref()
+pub(crate) async fn project_browser_created_target(
+    conn: &mut CdpConnection,
+    page_target_id: &str,
+    already_running: bool,
+) -> Vec<crate::conn::BackgroundProtocolEvent> {
+    let browser_context_id = conn
+        .browser_context_id_for_target(page_target_id)
+        .expect("adopted Page must retain its DevTools Context")
+        .to_owned();
+    let tab_target_id = conn.register_top_level_page_target(page_target_id);
+    let mut attached_tab_sessions = Vec::new();
+    let mut attached_sessions = Vec::new();
+    for (target, owners, attached) in [
+        (
+            tab_target_id.as_str(),
+            top_level_tab_auto_attach_owner_sessions(conn),
+            &mut attached_tab_sessions,
+        ),
+        (
+            page_target_id,
+            top_level_page_auto_attach_owner_sessions(conn),
+            &mut attached_sessions,
+        ),
+    ] {
+        for owner in owners {
+            let session_id = conn.gen_session_id();
+            let route = if target == page_target_id {
+                conn.prepare_auto_attached_page_session_binding_in_browser_context(
+                    &browser_context_id,
+                    target,
+                    session_id.clone(),
+                )
+            } else {
+                conn.prepare_auto_attached_tab_session_binding(
+                    target,
+                    session_id.clone(),
+                    owner.as_deref(),
+                )
+            };
+            if let Some(route) = route {
+                let waiting = !already_running
+                    && conn.auto_attach_owner_waits_for_debugger_on_start(owner.as_deref());
+                attached.push(TargetAttachSessionCommit::auto_attached(
+                    session_id, owner, route, waiting,
+                ));
+            }
+        }
     }
+    super::auto_attach::ensure_initial_document_for_attached_page_targets_async(
+        conn,
+        attached_sessions
+            .iter()
+            .map(|session| (page_target_id, session.route())),
+    )
+    .await;
+    let mut output = Vec::new();
+    let commit = TargetCreationCommit {
+        page_target_id: page_target_id.to_owned(),
+        tab_target_id,
+        activation: None,
+        attached_tab_sessions,
+        attached_sessions,
+        initial_navigation: None,
+    };
+    if let Err(error) = complete_target_creation(conn, commit, &mut output) {
+        tracing::warn!(?error, "native Page target projection failed");
+    }
+    output
 }
 
 #[derive(Clone, Copy)]
@@ -38,18 +105,28 @@ enum CreateTargetResultHost {
     Tab,
 }
 
-pub(super) fn emit_target_creation_protocol_events(
+pub(super) fn complete_target_creation(
+    conn: &mut CdpConnection,
+    mut commit: TargetCreationCommit,
+    out: &mut impl events::CdpTargetAutomationEventSink,
+) -> Result<(), DevToolsError> {
+    let navigation = commit.initial_navigation.take();
+    emit_target_creation_protocol_events(conn, commit, out)?;
+    // Attachment barriers are now installed. Admit the original request once;
+    // debugger release only decides its permit, never starts another load.
+    if let Some((contents, url)) = navigation
+        && let Err(error) = conn.start_created_web_contents_navigation(contents, url)
+    {
+        tracing::debug!(%error, "created WebContents initial URL was not admitted");
+    }
+    Ok(())
+}
+
+fn emit_target_creation_protocol_events(
     conn: &mut CdpConnection,
     events: TargetCreationCommit,
     out: &mut impl events::CdpTargetAutomationEventSink,
 ) -> Result<(), DevToolsError> {
-    let has_discovery = conn.has_any_target_discovery();
-    if !has_discovery
-        && events.attached_tab_sessions.is_empty()
-        && events.attached_sessions.is_empty()
-    {
-        return Ok(());
-    }
     let bc = conn
         .browser_contexts()
         .find(|browser_context| {
@@ -64,11 +141,7 @@ pub(super) fn emit_target_creation_protocol_events(
     if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
         return Err(DevToolsError::new(DevToolsErrorKind::Internal, message));
     }
-    if has_discovery {
-        for event in conn.target_created_event_plan(&events.page_target_id) {
-            out.push_target_background_event(event);
-        }
-    }
+    push_target_created_events(conn, out, &events.page_target_id);
     if let Some(tab_target_info) = conn.tab_target_info_for_page_target_info(&target_info) {
         let tab_target_id = tab_target_info
             .target_id
@@ -235,7 +308,7 @@ fn start_devtools_create_target_command_with_result_host(
         conn.target_session_route_for_target_id(created_target_id.as_str());
     let pending_initial_document = if let Some(route) = initial_document_route {
         let owner = crate::conn::CommandOwnerScope::for_route(route);
-        conn.start_initial_document_page_ensure_for_owner(&owner)
+        conn.start_initial_document_ensure_for_owner(&owner)
     } else {
         Ok(None)
     };
@@ -255,7 +328,7 @@ fn start_devtools_create_target_command_with_result_host(
             let mut output_plan = CommandOutputPlan::default();
             let mut protocol_events = Vec::new();
             if let Err(error) =
-                emit_target_creation_protocol_events(conn, creation_commit, &mut protocol_events)
+                complete_target_creation(conn, creation_commit, &mut protocol_events)
             {
                 return TargetCommandTaskStep::Complete(CommandOutputPlan::from_devtools_error(
                     error,
@@ -323,9 +396,10 @@ pub(super) fn execute_devtools_create_target_command(
         None
     };
     let activating_created_target = has_active_target && command.activate;
-    let activation = activating_created_target
-        .then(|| TargetActivationTransition::new(target_id.clone(), previous_active_target_id));
+    let mut activation = None;
     let initial_empty_document_url = create_target_initial_empty_document_url(&command.url);
+    let browser_cache_disabled =
+        conn.cache_disabled_for_browser_context(&conn.browser_context.as_ref().unwrap().id);
     {
         let bc = conn.browser_context.as_mut().unwrap();
         if creating_background_target {
@@ -337,12 +411,12 @@ pub(super) fn execute_devtools_create_target_command(
                 None,
             );
         } else if activating_created_target {
-            bc.stage_foreground_target(
+            activation = Some(bc.stage_foreground_target(
                 target_id.clone(),
                 None,
                 command.url.clone(),
                 Some(initial_empty_document_url.clone()),
-            );
+            ));
         } else {
             let claimed_default_placeholder =
                 claims_default_placeholder && bc.rekey_active_target(target_id.clone());
@@ -351,22 +425,21 @@ pub(super) fn execute_devtools_create_target_command(
             }
             bc.set_target_url(command.url.clone());
             bc.begin_active_target_initial_empty_document(initial_empty_document_url.clone());
-            bc.page_target_mut(&target_id)
-                .expect("newly selected target must exist")
-                .owner_state
-                .target_crash_state
-                .clear();
+            bc.set_target_crash_state(&target_id, false);
         }
-        if command.url != initial_empty_document_url {
-            // Chromium gives Target.createTarget(url) one initial
-            // auto_toplevel history entry for url. The implementation still
-            // materializes an internal about:blank document for target setup,
-            // so replace that bookkeeping entry when the requested URL commits.
-            bc.mark_target_initial_url_replaces_empty_document(&target_id);
-        }
+        bc.set_base_cache_disabled_for_target(&target_id, browser_cache_disabled);
     }
+    let initial_navigation = (command.url != initial_empty_document_url).then(|| {
+        let contents = conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .web_contents_handle_for_target(&target_id)
+            .expect("new target owns its physical WebContents");
+        (contents, command.url)
+    });
     let tab_target_id = conn.register_top_level_page_target(&target_id);
-    if !creating_background_target {
+    if !creating_background_target && !activating_created_target {
         conn.notify_target_host_activated(&target_id);
     }
     let created_target_id = target_id.clone();
@@ -432,6 +505,7 @@ pub(super) fn execute_devtools_create_target_command(
             activation,
             attached_tab_sessions,
             attached_sessions,
+            initial_navigation,
         },
     })
 }

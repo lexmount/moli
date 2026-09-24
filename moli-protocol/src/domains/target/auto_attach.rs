@@ -48,11 +48,11 @@ pub(super) fn auto_attach_related(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Co
     let params: AutoAttachRelatedParams = match cmd.get_params() {
         Ok(Some(p)) => p,
         _ => {
-            return CommandOutputPlan::error_without_session(-32602, "InvalidParams");
+            return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
     if cmd.session_id.is_some() && !conn.is_browser_session_id(cmd.session_id) {
-        return CommandOutputPlan::error_without_session(
+        return CommandOutputPlan::error(
             -32000,
             "Target.autoAttachRelated is only supported on the Browser target",
         );
@@ -114,16 +114,13 @@ fn service_worker_auto_attach_related_target(
     target_id: &str,
 ) -> Result<ServiceWorkerAutoAttachRelatedTarget, CommandOutputPlan> {
     if let Err(message) = select_browser_context_for_target(conn, target_id) {
-        return Err(CommandOutputPlan::error_without_session(-31998, message));
+        return Err(CommandOutputPlan::error(-31998, message));
     }
     let Some(browser_context) = conn.browser_context.as_ref() else {
-        return Err(CommandOutputPlan::error_without_session(
-            -31998,
-            "BrowserContextNotLoaded",
-        ));
+        return Err(CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"));
     };
     let Some(target) = browser_context.service_worker_target(target_id) else {
-        return Err(CommandOutputPlan::error_without_session(
+        return Err(CommandOutputPlan::error(
             -32000,
             "Target does not support auto-attaching",
         ));
@@ -502,11 +499,12 @@ async fn set_auto_attach_inner_async(
                     bc.shared_worker_targets
                         .values()
                         .filter(|target| {
-                            !owner_already_auto_attached_to_exact_target(
-                                conn,
-                                owner_session_id,
-                                &target.target_id,
-                            )
+                            target.execution_ready
+                                && !owner_already_auto_attached_to_exact_target(
+                                    conn,
+                                    owner_session_id,
+                                    &target.target_id,
+                                )
                         })
                         .map(|target| target.target_id.clone())
                         .collect::<Vec<_>>()
@@ -547,7 +545,8 @@ async fn set_auto_attach_inner_async(
                             super::worker_target::dedicated_worker_auto_attach_owner_session_allowed(
                                 conn,
                                 owner_session_id,
-                                &target.owner_page,
+                                &bc.id,
+                                &target.owner,
                             ) && !owner_already_auto_attached_to_exact_target(
                                 conn,
                                 owner_session_id,
@@ -589,7 +588,9 @@ async fn set_auto_attach_inner_async(
                 } else {
                     bc.background_targets()
                         .rev()
-                        .find(|target| !target.has_session() && target.has_loaded_page())
+                        .find(|target| {
+                            !target.has_session() && bc.target_has_loaded_page(target.target_id())
+                        })
                         .map(|target| target.target_id().to_owned())
                         .or_else(|| {
                             bc.background_targets()
@@ -680,7 +681,13 @@ async fn set_auto_attach_inner_async(
                     }
                 }
             }
-            ensure_initial_document_for_attached_page_targets_async(conn, &attached_targets).await;
+            ensure_initial_document_for_attached_page_targets_async(
+                conn,
+                attached_targets
+                    .iter()
+                    .map(|(target, _, route)| (target.as_str(), route)),
+            )
+            .await;
             for (target_id, session_id, route) in &attached_targets {
                 if let Err(message) = conn
                     .apply_runtime_binding_state_for_owner_async(&CommandOwnerScope::for_route(
@@ -938,7 +945,7 @@ async fn auto_attach_child_page_for_tab_session_async(
     };
     ensure_initial_document_for_attached_page_targets_async(
         conn,
-        &[(page_target_id.clone(), session_id.clone(), route.clone())],
+        [(page_target_id.as_str(), &route)],
     )
     .await;
     if let Err(message) = conn
@@ -1112,18 +1119,18 @@ async fn detach_attached_session_for_owner_async(
     }
 }
 
-async fn ensure_initial_document_for_attached_page_targets_async(
+pub(super) async fn ensure_initial_document_for_attached_page_targets_async<'a>(
     conn: &mut CdpConnection,
-    attached_targets: &[(String, String, CdpSessionRoute)],
+    attached_targets: impl IntoIterator<Item = (&'a str, &'a CdpSessionRoute)>,
 ) {
-    for (target_id, _session_id, route) in attached_targets {
+    for (target_id, route) in attached_targets {
         if !conn.browser_contexts().any(|browser_context| {
             browser_context.target_has_pending_initial_document_page_build(target_id)
         }) {
             continue;
         }
         let owner = CommandOwnerScope::for_route(route.clone());
-        let pending = match conn.start_initial_document_page_ensure_for_owner(&owner) {
+        let pending = match conn.start_initial_document_ensure_for_owner(&owner) {
             Ok(pending) => pending,
             Err(message) => {
                 warn_target_protocol_side_effect_failure(
@@ -1139,19 +1146,10 @@ async fn ensure_initial_document_for_attached_page_targets_async(
         };
         match pending.wait().await {
             Ok(completed) => {
-                if let Err(message) = conn
-                    .complete_initial_document_page_build_for_owner(completed)
-                    .await
-                {
-                    warn_target_protocol_side_effect_failure(
-                        target_id,
-                        "complete_initial_document_page_build",
-                        &message,
-                    );
-                }
+                conn.project_initial_document_completion(*completed);
             }
             Err(failed) => {
-                let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
+                let message = conn.retire_failed_initial_document_projection(failed);
                 warn_target_protocol_side_effect_failure(
                     target_id,
                     "reset_failed_initial_document_page_build",

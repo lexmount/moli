@@ -1,4 +1,4 @@
-use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent};
 use crate::domains::page::LOADER_ID;
 use crate::testing::{
     TestContext, wait_until_renderer_document_load, wait_until_scheduler_message,
@@ -33,7 +33,7 @@ async fn complete_command_task_for_test(
 }
 
 async fn load_page_async(ctx: &mut TestContext, html: &str) {
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     let data_url = format!("data:text/html,{html}");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -54,14 +54,12 @@ async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
         .conn
         .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
-    let completed = pending
-        .wait()
-        .await
-        .expect("child-frame lifecycle work should complete");
+    let completed = pending.wait().await;
     assert!(
         ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
-            .expect("child-frame lifecycle completion should apply"),
+            .finish_document_child_frame_lifecycle_work(completed)
+            .expect("child-frame lifecycle completion should apply")
+            .0,
         "child-frame lifecycle should settle before inspecting the nested frame tree"
     );
 }
@@ -182,15 +180,7 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
     .await;
 
     let mutation_completion = {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page");
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
         let mutation = json!({
             "id": 910,
             "method": "Runtime.evaluate",
@@ -199,8 +189,9 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
                 "returnByValue": true
             }
         });
-        let pending = page
-            .start_runtime_protocol_message(mutation.to_string())
+        let pending = ctx
+            .conn
+            .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
             .expect("runtime mutation should start");
         pending
             .wait()
@@ -226,18 +217,12 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
             .any(|node| node["name"]["value"] == json!("old"))
     );
 
-    let page = ctx
+    let _ = ctx
         .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page");
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 async fn enable_runtime_async(ctx: &mut TestContext) {
@@ -412,16 +397,17 @@ fn renderer_backed_ax_node_id(node: &Value) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn accessibility_loaded_page_methods_target_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-A".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-A".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><p>Intro</p><button>Owner</button></body></html>",
@@ -435,7 +421,7 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
         "method": "Accessibility.getFullAXTree"
     }))
     .await;
-    let full_tree = ctx.take_one();
+    let full_tree = ctx.take_response_by_id(201);
     assert_eq!(full_tree["sessionId"], "SID-background");
     let nodes = full_tree["result"]["nodes"]
         .as_array()
@@ -531,12 +517,16 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
 #[tokio::test(flavor = "multi_thread")]
 async fn accessibility_loaded_page_methods_target_inactive_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut active = BrowserContext::new("BID-active".to_owned());
+    let mut active = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(active);
 
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
@@ -554,7 +544,7 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
         "method": "Accessibility.getFullAXTree"
     }))
     .await;
-    let full_tree = ctx.take_one();
+    let full_tree = ctx.take_response_by_id(211);
     assert_eq!(full_tree["sessionId"], "SID-inactive");
     let nodes = full_tree["result"]["nodes"]
         .as_array()
@@ -570,7 +560,7 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
         "method": "Accessibility.getRootAXNode"
     }))
     .await;
-    let root = ctx.take_one();
+    let root = ctx.take_response_by_id(212);
     assert_eq!(root["sessionId"], "SID-inactive");
     assert_eq!(root["result"]["node"]["role"]["value"], "RootWebArea");
     assert_eq!(
@@ -590,7 +580,7 @@ async fn get_full_ax_tree_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_full_ax_tree_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({"id": 2, "method": "Accessibility.getFullAXTree"}))
         .await;
     ctx.expect_error(2, -32000, "NoDocumentLoaded");
@@ -624,13 +614,10 @@ async fn get_full_ax_tree_uses_fresh_initial_document_without_adapter() {
     assert!(!nodes.is_empty());
     assert_eq!(nodes[0]["role"]["value"], "RootWebArea");
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Target.createTarget should install the initial about:blank page before Accessibility"
     );
 }
@@ -907,7 +894,7 @@ async fn get_root_ax_node_rejects_foreign_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_root_ax_node_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 350,
@@ -1098,7 +1085,7 @@ async fn get_child_ax_nodes_validates_ax_id_and_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_child_ax_nodes_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 390,
@@ -2048,7 +2035,7 @@ async fn get_ax_node_and_ancestors_requires_context_loaded_page_and_bound_node()
     .await;
     ctx.expect_error(530, -31998, "BrowserContextNotLoaded");
 
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({
         "id": 531,
         "method": "Accessibility.getAXNodeAndAncestors",
@@ -2535,7 +2522,7 @@ async fn query_ax_tree_requires_context_loaded_page_and_bound_node() {
     .await;
     ctx.expect_error(580, -31998, "BrowserContextNotLoaded");
 
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({
         "id": 581,
         "method": "Accessibility.queryAXTree",

@@ -10,7 +10,6 @@ use crate::page_task_queue::{
 async fn child_inline_script_registers_webcrypto_to_child_window_and_retires_on_detach() {
     run_page_vm_async_test(async move {
         let mut page_vm = test_page_vm();
-        let loader = page_vm.request_client.clone();
         page_vm.vm_mut().eval(
             r#"
 (() => {
@@ -53,8 +52,7 @@ async fn child_inline_script_registers_webcrypto_to_child_window_and_retires_on_
         assert!(
             !page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildDocumentScriptReady
                 )
                 .await?,
             "child WebCrypto registration must already have run synchronously"
@@ -194,7 +192,7 @@ fn webcrypto_task_rejects_a_real_page_vm_replacement_identity_collision() {
                     .await;
                     assert!(
                         page_vm
-                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebCryptoTask, &loader)
+                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebCryptoTask)
                             .await?,
                         "retired WebCrypto task should remain runnable beside independent internal-loading and backpressured WebSocket work"
                     );
@@ -209,7 +207,7 @@ fn webcrypto_task_rejects_a_real_page_vm_replacement_identity_collision() {
 
                     assert!(
                         page_vm
-                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebCryptoTask, &loader)
+                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WebCryptoTask)
                             .await?,
                         "replacement WebCrypto task should consume the following turn"
                     );
@@ -296,8 +294,7 @@ fn webcrypto_task_survives_document_open_within_the_same_window_realm() {
             assert!(
                 page_vm
                     .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::WebCryptoTask,
-                        &loader
+                        PageSelectedTaskTestSelector::WebCryptoTask
                     )
                     .await?,
                 "preserved WebCrypto task should consume one selected Page turn"

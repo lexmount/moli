@@ -22,7 +22,6 @@ struct PreparedServiceWorkerLifecycleTarget {
 
 async fn prepare_service_worker_lifecycle_target(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<PreparedServiceWorkerLifecycleTarget> {
     page_vm.vm_mut().eval(
         r#"
@@ -54,8 +53,7 @@ navigator.serviceWorker.ready.then(registration => {
     anyhow::ensure!(
         page_vm
             .run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ServiceWorkerInternal,
-                loader
+                PageSelectedTaskTestSelector::ServiceWorkerInternal
             )
             .await?,
         "ready completion should return through the production selected dispatcher"
@@ -162,7 +160,7 @@ navigator.serviceWorker.ready.then(registration => {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -187,7 +185,7 @@ async fn service_worker_lifecycle_callback_uses_selected_completion_and_runtime_
             Url::parse("https://service-worker-internal.test/lifecycle-callback").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let target = prepare_service_worker_lifecycle_target(&mut page_vm, &loader).await?;
+        let target = prepare_service_worker_lifecycle_target(&mut page_vm).await?;
 
         page_vm.vm_mut().eval(
             r#"
@@ -243,7 +241,7 @@ __serviceWorkerInternalRegistration.addEventListener("updatefound", () => {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CallbackCompletion));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -276,7 +274,7 @@ async fn service_worker_lifecycle_without_callback_is_checkpoint_only() {
             Url::parse("https://service-worker-internal.test/lifecycle-no-callback").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let target = prepare_service_worker_lifecycle_target(&mut page_vm, &loader).await?;
+        let target = prepare_service_worker_lifecycle_target(&mut page_vm).await?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
         send_updatefound(&page_vm, &target);
 
@@ -293,7 +291,7 @@ async fn service_worker_lifecycle_without_callback_is_checkpoint_only() {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -353,7 +351,7 @@ async fn service_worker_internal_action_is_checkpoint_only() {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -372,6 +370,109 @@ async fn service_worker_internal_action_is_checkpoint_only() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn service_worker_window_client_owner_requests_reject_on_stale_document_owner() {
+    run_page_vm_async_test(async move {
+        use crate::types::{
+            ServiceWorkerClientNavigateRequestCompletion,
+            ServiceWorkerClientsOpenWindowRequestCompletion,
+        };
+
+        let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(
+                &loader,
+                Url::parse("https://stale-worker-client.test/page.html")?,
+            );
+        let target = page_vm
+            .vm()
+            .service_worker_internal_window_client_target_for_test(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("initial Window client target");
+        let root = page_vm.document_lifecycle.identity().document;
+        page_vm.vm_mut().eval("document.open(); 'replaced'")?;
+        let current = page_vm
+            .vm()
+            .service_worker_internal_window_client_target_for_test(
+                crate::native_bridge::OwnerDispatchScope::Top,
+            )
+            .expect("replacement Window client target");
+        assert_ne!(target.document_owner, current.document_owner);
+        assert_eq!(root, page_vm.document_lifecycle.identity().document);
+        let focused = page_vm.vm_mut().eval("document.hasFocus()")?;
+        let sender = page_vm.service_worker_task_sender_for_root_for_test(root);
+        for kind in [
+            RendererServiceWorkerInternalTaskKind::ClientNavigateRequest,
+            RendererServiceWorkerInternalTaskKind::ClientFocusRequest,
+            RendererServiceWorkerInternalTaskKind::ClientsOpenWindowRequest,
+        ] {
+            let source_version_id = ServiceWorkerVersionId::from_u64_for_test(1);
+            let source_run = crate::runtime::RendererServiceWorkerRunIdentity::fresh();
+            match kind {
+                RendererServiceWorkerInternalTaskKind::ClientNavigateRequest => sender
+                    .send_service_worker_client_navigate_request(
+                        ServiceWorkerClientNavigateRequestCompletion {
+                            target,
+                            request_id: 101,
+                            source_version_id,
+                            source_run,
+                            url: Url::parse("https://stale-worker-client.test/navigate.html")?,
+                        },
+                    ),
+                RendererServiceWorkerInternalTaskKind::ClientFocusRequest => sender
+                    .send_service_worker_client_focus_request(
+                        ServiceWorkerClientFocusRequestCompletion {
+                            target,
+                            request_id: 102,
+                            source_version_id,
+                            source_run,
+                        },
+                    ),
+                RendererServiceWorkerInternalTaskKind::ClientsOpenWindowRequest => sender
+                    .send_service_worker_clients_open_window_request(
+                        ServiceWorkerClientsOpenWindowRequestCompletion {
+                            host: target,
+                            request_id: 103,
+                            source_version_id,
+                            source_run,
+                            url: Url::parse("https://stale-worker-client.test/popup.html")?,
+                        },
+                    ),
+                _ => unreachable!(),
+            }
+            .expect("stale Window request enters the current root's typed source");
+            let task = page_vm
+                .take_service_worker_internal_body_task_for_test()
+                .expect("the admitted request must be selected");
+            let outcome = page_vm.apply_selected_page_service_worker_internal_turn(task)?;
+            assert_eq!(outcome.action.task_kind, kind);
+            assert_eq!(
+                outcome.action.target_effect,
+                PageServiceWorkerInternalTargetEffect::CurrentRootTaskHadNoExactTarget,
+                "each stale Window request must return its rejection result",
+            );
+            let completion = outcome.action.into_page_task_completion();
+            assert!(matches!(completion, PageTaskCompletion::NoCompletion));
+            page_vm
+                .finish_selected_page_task_completion(completion)
+                .await?;
+            assert!(
+                page_vm
+                    .vm_mut()
+                    .take_pending_location_navigation_with_seed()
+                    .is_none()
+            );
+            assert!(page_vm.vm_mut().take_pending_popup_activations().is_empty());
+            assert!(!page_vm.vm().has_pending_lightweight_popup_document_loads());
+            assert_eq!(page_vm.vm_mut().eval("document.hasFocus()")?, focused);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("stale Window client requests must retain exact Document authorization");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn service_worker_lifecycle_completion_reconciles_listener_document_open() {
     run_page_vm_async_test(async move {
         let loader =
@@ -380,7 +481,7 @@ async fn service_worker_lifecycle_completion_reconciles_listener_document_open()
             Url::parse("https://service-worker-internal.test/document-open").unwrap();
         let (mut page_vm, _resource_source, _owner_wake_rx) =
             page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
-        let target = prepare_service_worker_lifecycle_target(&mut page_vm, &loader).await?;
+        let target = prepare_service_worker_lifecycle_target(&mut page_vm).await?;
         let root_document = page_vm.document_lifecycle.identity().document;
         let retired_document_owner = page_vm
             .vm()
@@ -406,8 +507,7 @@ __serviceWorkerInternalRegistration.addEventListener("updatefound", () => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ServiceWorkerInternal,
-                    &loader
+                    PageSelectedTaskTestSelector::ServiceWorkerInternal
                 )
                 .await?,
             "lifecycle callback must return through the production selected dispatcher"
@@ -508,7 +608,7 @@ Promise.resolve().then(() => {
                         )
                         .expect("retired-root internal task should remain a bounded stale turn");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm

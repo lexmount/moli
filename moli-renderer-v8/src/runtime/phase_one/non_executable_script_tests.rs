@@ -32,7 +32,6 @@ fn data_block_completes_in_parser_turn_without_page_task() {
             )
             .expect("phase-one PageVm");
             let mut driver = ParserDriver {
-                loader,
                 final_url: &state.final_url,
                 parser_session: &mut state.parser_session,
                 scheduler: &mut state.scheduler,
@@ -59,7 +58,7 @@ document.body.setAttribute(
 
             let local_executor = page_vm.local_executor.clone();
             let page_vm_ptr: *mut PageVm = &mut page_vm;
-            let driver_ptr: *mut ParserDriver<'_, '_> = &mut driver;
+            let driver_ptr: *mut ParserDriver<'_> = &mut driver;
             let outcome = super::access::run_named_owner_local_task(
                 local_executor,
                 "phase-one data-block parser test channel closed",

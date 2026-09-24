@@ -1,29 +1,20 @@
 use crate::{
-    RendererSyntheticResponseBody,
     shared_worker_runtime::{
         SharedWorkerLaunchParams, SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
     },
-    worker::{WorkerPendingFetchContinue, WorkerPendingXhrContinue},
     worker_owner_wake::WorkerOwnerWakeRoutes,
 };
-use moli_shared_worker::{
-    SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerDescriptor, SharedWorkerInstanceId,
-};
+use moli_shared_worker::{SharedWorkerClientId, SharedWorkerDescriptor, SharedWorkerInstanceId};
 use parking_lot::Mutex;
 
 use super::RendererBrowserContextRuntime;
-use crate::runtime::{
-    RendererOwnerLocalHostId, RendererRuntimeInspectorMessage,
-    RendererRuntimeInspectorResponseSender,
-};
+use crate::runtime::RendererOwnerLocalHostId;
 
 /// Defers the browser-context SharedWorker registry until the first actual
-/// `connect_shared_worker` call. ID allocation and owner routing do not require
-/// the registry.
+/// `connect_shared_worker` call. Owner wake routing does not require the registry.
 pub(super) struct LazySharedWorkerRuntime {
     state: Mutex<LazySharedWorkerRuntimeState>,
-    client_owner_id_allocator: crate::shared_worker_runtime::SharedWorkerClientOwnerIdAllocator,
-    browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+    worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     output_transport: crate::runtime::RendererOutputTransportSenderSlot,
 }
 
@@ -45,7 +36,7 @@ impl std::fmt::Debug for LazySharedWorkerRuntime {
 
 impl LazySharedWorkerRuntime {
     pub(super) fn new(
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
         Self {
@@ -53,23 +44,20 @@ impl LazySharedWorkerRuntime {
                 owner_wake_senders: WorkerOwnerWakeRoutes::default(),
                 owner_local_host_id: None,
             }),
-            client_owner_id_allocator: Default::default(),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
 
     pub(super) fn from_service(
         service: crate::shared_worker_runtime::SharedWorkerRuntimeService,
-        browser_context_runtime_id: crate::runtime::RendererBrowserContextRuntimeId,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
         output_transport: crate::runtime::RendererOutputTransportSenderSlot,
     ) -> Self {
-        service
-            .configure_target_output_streams(browser_context_runtime_id, output_transport.clone());
+        service.configure_target_output_streams(worker_lifecycle.clone(), output_transport.clone());
         Self {
-            client_owner_id_allocator: service.client_owner_id_allocator(),
             state: Mutex::new(LazySharedWorkerRuntimeState::Live(service)),
-            browser_context_runtime_id,
+            worker_lifecycle,
             output_transport,
         }
     }
@@ -88,12 +76,9 @@ impl LazySharedWorkerRuntime {
         };
         let owner_wake_senders = std::mem::take(owner_wake_senders);
         let owner_local_host_id = *owner_local_host_id;
-        let service = crate::shared_worker_runtime::
-            new_shared_worker_runtime_service_with_client_owner_id_allocator(
-                self.client_owner_id_allocator.clone(),
-            );
+        let service = crate::shared_worker_runtime::SharedWorkerRuntimeService::default();
         service.configure_target_output_streams(
-            self.browser_context_runtime_id,
+            self.worker_lifecycle.clone(),
             self.output_transport.clone(),
         );
         for sender in owner_wake_senders.into_senders() {
@@ -116,10 +101,6 @@ impl LazySharedWorkerRuntime {
 
     pub(super) fn is_initialized(&self) -> bool {
         matches!(*self.state.lock(), LazySharedWorkerRuntimeState::Live(_))
-    }
-
-    pub(super) fn allocate_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.client_owner_id_allocator.allocate()
     }
 
     pub(super) fn add_owner_wake_sender(&self, sender: SharedWorkerRuntimeOwnerWakeSender) {
@@ -147,7 +128,7 @@ impl LazySharedWorkerRuntime {
 }
 
 impl RendererBrowserContextRuntime {
-    fn shared_worker_runtime_if_initialized(
+    pub(super) fn shared_worker_runtime_if_initialized(
         &self,
     ) -> Option<crate::shared_worker_runtime::SharedWorkerRuntimeService> {
         self.inner.shared_worker_runtime.get()
@@ -182,10 +163,6 @@ impl RendererBrowserContextRuntime {
             .connect(descriptor, params)
     }
 
-    pub(crate) fn next_shared_worker_client_owner_id(&self) -> SharedWorkerClientOwnerId {
-        self.inner.shared_worker_runtime.allocate_client_owner_id()
-    }
-
     pub(crate) fn drain_shared_worker_service_lane(&self) -> usize {
         self.inner
             .shared_worker_runtime
@@ -193,324 +170,26 @@ impl RendererBrowserContextRuntime {
             .map_or(0, |runtime| runtime.drain_service_lane())
     }
 
-    pub fn close_shared_worker_for_target_close(
+    pub fn close_shared_worker(&self, instance_id: SharedWorkerInstanceId) -> bool {
+        self.shared_worker_runtime_if_initialized()
+            .is_some_and(|runtime| runtime.close_instance(instance_id))
+    }
+
+    pub fn shared_worker_client_document(
         &self,
         instance_id: SharedWorkerInstanceId,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.close_instance_for_devtools_target_close(instance_id))
+    ) -> Option<(
+        RendererOwnerLocalHostId,
+        crate::runtime::RendererDocumentToken,
+    )> {
+        self.shared_worker_runtime_if_initialized()?
+            .client_document(instance_id)
     }
 
     pub(crate) fn remove_shared_worker_client(&self, client_id: SharedWorkerClientId) {
         if let Some(runtime) = self.shared_worker_runtime_if_initialized() {
             runtime.remove_client(client_id);
         }
-    }
-
-    pub(crate) fn continue_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.continue_pending_fetch(instance_id, request))
-    }
-
-    pub(crate) fn continue_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.continue_pending_xhr(instance_id, request))
-    }
-
-    pub(crate) fn continue_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.continue_pending_csp_report(instance_id, request))
-    }
-
-    pub(crate) fn continue_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.continue_pending_fetch_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                )
-            })
-    }
-
-    pub(crate) fn continue_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.continue_pending_xhr_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                )
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.fail_pending_fetch(instance_id, request, error_text))
-    }
-
-    pub(crate) fn fail_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.fail_pending_xhr(instance_id, request, error_text))
-    }
-
-    pub(crate) fn fail_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_csp_report(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_fetch_auth(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_fetch_auth(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_xhr_auth(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| runtime.fail_pending_xhr_auth(instance_id, request, error_text))
-    }
-
-    pub(crate) fn fail_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_fetch_response(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fail_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fail_pending_xhr_response(instance_id, request, error_text)
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_fetch(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_fetch(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_xhr(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_xhr(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_csp_report(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_csp_report(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_fetch_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_fetch_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub(crate) fn fulfill_shared_worker_xhr_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.fulfill_pending_xhr_response(
-                    instance_id,
-                    request,
-                    response_code,
-                    response_headers,
-                    response_body,
-                )
-            })
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message(instance_id, inspector_session_id, raw_json)
-            .await
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message_with_deferred_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_deferred_response(
-                instance_id,
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-            )
-            .await
-    }
-
-    pub async fn dispatch_shared_worker_runtime_protocol_message_with_devtools_session_response(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: String,
-        raw_json: String,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<crate::runtime::CompletedWorkerRuntimeInspectorCommandDispatch, String> {
-        let Some(runtime) = self.shared_worker_runtime_if_initialized() else {
-            return Err("SharedWorkerRuntimeUnavailable".to_owned());
-        };
-        runtime
-            .dispatch_runtime_protocol_message_with_devtools_session_response(
-                instance_id,
-                inspector_session_id,
-                raw_json,
-                response,
-            )
-            .await
-    }
-
-    pub fn detach_shared_worker_runtime_inspector_session(
-        &self,
-        instance_id: SharedWorkerInstanceId,
-        inspector_session_id: Option<String>,
-    ) -> bool {
-        self.shared_worker_runtime_if_initialized()
-            .is_some_and(|runtime| {
-                runtime.detach_runtime_inspector_session(instance_id, inspector_session_id)
-            })
     }
 }
 
@@ -520,7 +199,7 @@ mod owner_wake_retirement_tests {
 
     #[test]
     fn deferred_worker_routes_are_bounded_without_service_initialization() {
-        let context = RendererBrowserContextRuntime::new();
+        let context = RendererBrowserContextRuntime::new_for_test();
         let (peer_tx, _peer_rx) = crate::shared_worker_runtime::shared_worker_owner_wake_channel();
         context.add_shared_worker_owner_wake_sender(peer_tx);
         for _ in 0..64 {
@@ -537,8 +216,8 @@ mod owner_wake_retirement_tests {
                 };
                 assert_eq!(
                     owner_wake_senders.len_for_test(),
-                    2,
-                    "only the peer and current renderer remain"
+                    3,
+                    "only the Context task, peer and current test receiver remain"
                 );
             }
             drop(receiver);
@@ -555,7 +234,7 @@ mod owner_wake_retirement_tests {
         };
         assert_eq!(
             owner_wake_senders.len_for_test(),
-            1,
+            2,
             "closed admission must not reintroduce stale routes"
         );
     }

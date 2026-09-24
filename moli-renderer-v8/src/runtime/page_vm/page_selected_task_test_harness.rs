@@ -617,18 +617,14 @@ impl PageVm {
     pub(crate) fn run_claimed_selected_page_task_for_test<'a>(
         &'a mut self,
         claimed: ClaimedPageSelectedTaskForTest,
-        loader: &'a crate::network::ResourceRequestClient,
     ) -> SelectedPageTaskTestFuture<'a, ()> {
         Box::pin(async move {
             assert!(
                 claimed.selector.matches_task(&claimed.task),
                 "opaque selected-task claim changed variant before execution"
             );
-            self.apply_selected_page_scheduler_task_on_owner_lane_for_test(
-                claimed.task,
-                loader.clone(),
-            )
-            .await?;
+            self.apply_selected_page_scheduler_task_on_owner_lane_for_test(claimed.task)
+                .await?;
             Ok(())
         })
     }
@@ -636,13 +632,12 @@ impl PageVm {
     pub(crate) fn run_exact_selected_page_task_for_test<'a>(
         &'a mut self,
         selector: PageSelectedTaskTestSelector,
-        loader: &'a crate::network::ResourceRequestClient,
     ) -> SelectedPageTaskTestFuture<'a, bool> {
         Box::pin(async move {
             let Some(claimed) = self.claim_exact_selected_page_task_for_test(selector) else {
                 return Ok(false);
             };
-            self.run_claimed_selected_page_task_for_test(claimed, loader)
+            self.run_claimed_selected_page_task_for_test(claimed)
                 .await?;
             Ok(true)
         })

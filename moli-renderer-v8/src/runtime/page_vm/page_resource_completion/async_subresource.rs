@@ -20,12 +20,12 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            // Observed records are producer-captured historical Network facts;
+            // Native receipts are producer-captured historical Network facts;
             // they remain observable after Document replacement but never
             // acquire authority over the replacement Document's request state.
             let output_effect = if matches!(
                 event.target(),
-                AsyncSubresourceFetchEventTarget::ObservedNetworkRecord
+                AsyncSubresourceFetchEventTarget::NativeNetwork
             ) {
                 let _ = self
                     .vm_mut()

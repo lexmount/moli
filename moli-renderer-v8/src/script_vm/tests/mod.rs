@@ -45,6 +45,85 @@ use url::Url;
 
 use self::http_fixture::{StaticHttpServer, static_http_loader};
 
+struct NativeResourceOutput(
+    std::sync::Arc<parking_lot::Mutex<Vec<crate::types::ScriptNetworkOutputItem>>>,
+);
+
+impl NativeResourceOutput {
+    fn observe(vm: &ScriptVm) -> Self {
+        let items = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let observed = items.clone();
+        vm._context_host
+            .borrow()
+            .browser_context_runtime()
+            .install_network_handler(move |input| {
+                if let crate::runtime::RendererNetworkInput::Observation(input) = input
+                    && matches!(
+                        input.occurrence.source,
+                        crate::runtime::RendererNetworkSource::Document { .. }
+                    )
+                    && let crate::runtime::RendererNetworkOutputItem::Resource(item) =
+                        &input.occurrence.item
+                {
+                    observed.lock().push(item.as_ref().clone());
+                }
+            });
+        Self(items)
+    }
+
+    fn take(&self) -> Vec<crate::types::ScriptNetworkOutputItem> {
+        std::mem::take(&mut self.0.lock())
+    }
+}
+
+fn native_resource_terminal(
+    items: &[crate::types::ScriptNetworkOutputItem],
+    handle: crate::types::SubresourceNetworkRequestHandle,
+) -> &crate::types::SubresourceBodyFinished {
+    let mut terminals = items.iter().filter_map(|item| match item {
+        crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(terminal)
+            if terminal.handle() == handle =>
+        {
+            Some(terminal.as_ref())
+        }
+        _ => None,
+    });
+    let terminal = terminals
+        .next()
+        .expect("the original request must terminate");
+    assert!(
+        terminals.next().is_none(),
+        "each request has exactly one terminal"
+    );
+    terminal
+}
+
+async fn apply_next_async_subresource_callback_for_test(
+    vm: &mut ScriptVm,
+    completions: &mut RendererResourceCompletionTestHarness,
+) {
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            assert!(completions.wait_for_arrival_without_timeout().await);
+            let event = completions
+                .pop_next_async_subresource_event()
+                .expect("resource event");
+            let receipt = matches!(
+                event,
+                crate::types::AsyncSubresourceFetchEvent::NativeNetwork(_)
+            );
+            let _ = vm
+                .complete_async_subresource_fetch_event_body(event)
+                .expect("resource owner admission");
+            if !receipt {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("resource callback must follow its physical progress receipts");
+}
+
 const ZHIHU_CAPABILITY_PROBE_HTML: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/src/script_vm/fixtures/zhihu-capability-probe.html"
@@ -88,7 +167,6 @@ async fn run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test
 /// realm materialization may precede the requested child action.
 async fn run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     expected: impl Into<ChildFrameSemanticTurnKind>,
     message: &str,
 ) {
@@ -97,7 +175,6 @@ async fn run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         && page
             .run_one_child_frame_task_executor_turn(
                 ChildFrameSemanticTurnKind::RealmMaterialization,
-                loader,
             )
             .await
             .expect("child realm prerequisite should use the selected-task dispatcher")
@@ -106,7 +183,7 @@ async fn run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         // before the exact family requested by the test.
     }
     assert!(
-        page.run_one_child_frame_task_executor_turn(expected, loader)
+        page.run_one_child_frame_task_executor_turn(expected)
             .await
             .expect("child semantic task should use the selected-task dispatcher"),
         "{message}"
@@ -115,11 +192,10 @@ async fn run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
 
 async fn run_page_service_worker_internal_task_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     message: &str,
 ) {
     assert!(
-        page.run_one_service_worker_internal_task_executor_turn(loader)
+        page.run_one_service_worker_internal_task_executor_turn()
             .await
             .unwrap_or_else(|error| panic!("{message}: {error}")),
         "{message}: expected one ServiceWorker internal task"
@@ -159,7 +235,6 @@ impl PendingServiceWorkerInternalRequestForTest {
 /// later request by raw id or directly invoking its body.
 async fn run_page_service_worker_internal_tasks_until_request_consumed_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     request: PendingServiceWorkerInternalRequestForTest,
     message: &str,
 ) {
@@ -167,14 +242,28 @@ async fn run_page_service_worker_internal_tasks_until_request_consumed_for_test(
         if !request.remains_pending(page) {
             return;
         }
-        run_page_service_worker_internal_task_for_test(page, loader, message).await;
+        run_page_service_worker_internal_task_for_test(page, message).await;
     }
     panic!("{message}: exact ServiceWorker request exceeded the bounded 32-turn FIFO budget");
 }
 
+async fn drain_page_service_worker_internal_tasks_for_test(
+    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
+) {
+    for _ in 0..32 {
+        if !page
+            .run_one_service_worker_internal_task_executor_turn()
+            .await
+            .expect("ServiceWorker internal FIFO task should complete")
+        {
+            return;
+        }
+    }
+    panic!("ServiceWorker internal FIFO exceeded the bounded 32-turn budget");
+}
+
 async fn assert_initial_about_blank_child_completed_through_page_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     message: &str,
 ) {
     for family in [
@@ -184,7 +273,7 @@ async fn assert_initial_about_blank_child_completed_through_page_for_test(
     ] {
         assert!(
             !page
-                .run_one_child_frame_task_executor_turn(family, loader)
+                .run_one_child_frame_task_executor_turn(family)
                 .await
                 .unwrap_or_else(|error| panic!("{message}: {error}")),
             "{message}: synchronous initial about:blank must not leave {family:?} work"
@@ -194,11 +283,10 @@ async fn assert_initial_about_blank_child_completed_through_page_for_test(
 
 async fn run_next_page_media_element_event_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     context: &str,
 ) {
     assert!(
-        page.run_one_media_element_event_executor_turn(loader)
+        page.run_one_media_element_event_executor_turn()
             .await
             .unwrap_or_else(|error| panic!("{context}: {error}")),
         "{context}: media-element event source was not ready"
@@ -269,7 +357,6 @@ enum PendingWindowFetchTestStage {
     Streaming,
     Auth,
     Response,
-    ServiceWorkerInFlight,
 }
 
 fn register_pending_window_fetch_for_test(
@@ -302,7 +389,13 @@ fn register_pending_window_fetch_for_test(
     let internal_id = host.record_async_subresource_fetch(
         fetch_context,
         v8::Global::new(scope, resolver),
-        keepalive,
+        crate::network_host::WindowFetchOptions {
+            metadata: crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata {
+                keepalive,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         connect_policy,
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -325,7 +418,6 @@ fn register_pending_window_fetch_for_test(
             resource_type: crate::types::SubresourceResourceType::Fetch,
             request_cookie_report: None,
         },
-        false,
     );
 
     if !matches!(stage, PendingWindowFetchTestStage::Pending) {
@@ -342,20 +434,13 @@ fn register_pending_window_fetch_for_test(
                     request_method: "GET".to_owned(),
                     request_headers: Vec::new().into(),
                     request_body: None,
-                    intercept_response: false,
-                    handle_auth_requests: false,
-                    initial_auth_network_request_headers: None,
                 });
             }
             PendingWindowFetchTestStage::Streaming => {
-                host.record_streaming_subresource_fetch(
-                    crate::types::StreamingSubresourceFetchState {
+                host.record_streaming_subresource_fetch({
+                    let state = crate::types::StreamingSubresourceFetchState {
                         response_filter: None,
                         pending,
-                        request_url: url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
                         body_source_id: 10_000 + internal_id,
                         head: moli_fetch::ResponseHead {
                             final_url: url.clone(),
@@ -368,57 +453,68 @@ fn register_pending_window_fetch_for_test(
                             from_cache: false,
                             negotiated_http_version: None,
                         },
-                        network_request_headers: None,
-                        body_writer: Default::default(),
                         event_source_parser: None,
                         xhr_response: None,
-                    },
-                );
-            }
-            PendingWindowFetchTestStage::Auth => {
-                host.record_pending_subresource_auth(crate::types::PendingSubresourceAuthState {
-                    pending,
-                    request_url: url.clone(),
-                    request_method: "GET".to_owned(),
-                    request_headers: Vec::new().into(),
-                    request_body: None,
-                    intercept_response: false,
-                    initial_network_request_headers: None,
-                    response: crate::types::NavigationResponse::from_text_body(
-                        url.clone(),
-                        401,
-                        Vec::new(),
-                        "auth required".to_owned(),
-                    ),
+                    };
+                    state.pending.response_stream().response_started(
+                        crate::network::ResourceResponseHead {
+                            status_text: None,
+                            head: state.head.clone(),
+                            network_request_headers: None,
+                        },
+                    );
+                    let body_writer: crate::types::SubresourceResponseBodyWriter =
+                        Default::default();
+                    state
+                        .pending
+                        .response_stream()
+                        .set_body_writer_for_test(body_writer);
+                    state
                 });
             }
-            PendingWindowFetchTestStage::Response => {
-                host.record_pending_subresource_response(
-                    crate::types::PendingSubresourceResponseState {
-                        pending,
-                        request_url: url.clone(),
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
-                        response: crate::types::NavigationResponse::from_text_body(
-                            url.clone(),
-                            200,
-                            Vec::new(),
-                            "pending response".to_owned(),
-                        ),
-                    },
+            PendingWindowFetchTestStage::Auth | PendingWindowFetchTestStage::Response => {
+                let auth = matches!(stage, PendingWindowFetchTestStage::Auth);
+                let resource = pending.response_stream().clone();
+                let receiver = crate::network_host::ResourceFetchReceiver::new(
+                    pending.load.task_runner(),
+                    host.resource_completion_sender(),
+                    internal_id,
+                    url.clone(),
+                    resource.clone(),
                 );
-            }
-            PendingWindowFetchTestStage::ServiceWorkerInFlight => {
-                host.record_in_flight_worker_subresource_fetch(
-                    crate::types::InFlightWorkerSubresourceFetchState {
-                        pending,
-                        request_url: url,
-                        request_method: "GET".to_owned(),
-                        request_headers: Vec::new().into(),
-                        request_body: None,
-                    },
+                let body = crate::network::ResourceResponseBody::completed(
+                    resource,
+                    crate::types::NavigationResponse::from_text_body(
+                        url.clone(),
+                        if auth { 401 } else { 200 },
+                        Vec::new(),
+                        if auth {
+                            "auth required"
+                        } else {
+                            "pending response"
+                        }
+                        .to_owned(),
+                    )
+                    .into(),
+                    None,
                 );
+                let response = receiver.pause(body, false);
+                if auth {
+                    host.record_pending_subresource_auth(
+                        crate::types::PendingSubresourceAuthState {
+                            pending,
+                            request_url: url.clone(),
+                            request_method: "GET".to_owned(),
+                            request_headers: Vec::new().into(),
+                            request_body: None,
+                            response,
+                        },
+                    );
+                } else {
+                    host.record_pending_subresource_response(
+                        crate::types::PendingSubresourceResponseState { pending, response },
+                    );
+                }
             }
         }
     }
@@ -464,7 +560,13 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
     let internal_id = host.record_async_subresource_fetch(
         fetch_context,
         v8::Global::new(scope, resolver),
-        keepalive,
+        crate::network_host::WindowFetchOptions {
+            metadata: crate::service_worker_runtime::ServiceWorkerFetchRequestMetadata {
+                keepalive,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
         Some(cancel_handle.clone()),
@@ -487,7 +589,6 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
             resource_type: crate::types::SubresourceResourceType::Fetch,
             request_cookie_report: None,
         },
-        false,
     );
     (
         internal_id,
@@ -2046,7 +2147,11 @@ fn isolated_realm_destruction_retires_dedicated_worker_without_retiring_local_wi
                 v8::Object::new(scope),
                 top_level_site,
                 creator_storage_key,
-                String::new(),
+                host.prepare_dedicated_worker_host(
+                    "data:text/html,fixture".parse().unwrap(),
+                    "data:text/javascript,fixture".parse().unwrap(),
+                    String::new(),
+                ),
                 moli_fetch::RequestCredentialsMode::SameOrigin,
                 None,
                 outside_settings_load,
@@ -2129,7 +2234,11 @@ async fn popup_replacement_retires_local_window_owned_dedicated_worker() {
             v8::Object::new(scope),
             top_level_site,
             creator_storage_key,
-            String::new(),
+            host.prepare_dedicated_worker_host(
+                "data:text/html,fixture".parse().unwrap(),
+                "data:text/javascript,fixture".parse().unwrap(),
+                String::new(),
+            ),
             moli_fetch::RequestCredentialsMode::SameOrigin,
             None,
             outside_settings_load,
@@ -2356,16 +2465,13 @@ async fn child_navigation_retires_local_window_owned_xhr() {
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id,
-        request_url: Url::parse("https://xhr-execution-context.test/pending").unwrap(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale retired XHR completion".to_owned()).into(),
+        result: Err("stale retired XHR completion".to_owned().into()),
     })
     .expect("late completion for retired XHR should be harmless");
     let stale_open = vm
@@ -2520,7 +2626,6 @@ fn window_fetch_retirement_covers_every_host_stage() {
         PendingWindowFetchTestStage::Streaming,
         PendingWindowFetchTestStage::Auth,
         PendingWindowFetchTestStage::Response,
-        PendingWindowFetchTestStage::ServiceWorkerInFlight,
     ];
     let mut ordinary = Vec::new();
     let mut keepalive = Vec::new();
@@ -2624,8 +2729,8 @@ fn window_fetch_request_start_records_keepalive_disposition() {
     );
 }
 
-#[test]
-fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
+#[tokio::test]
+async fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
     let mut vm = new_storage_test_vm("https://fetch-auth-cancel.test/");
     let internal_id = vm
         .with_default_context_scope_and_checkpoint_for_test(|scope, host_ptr| {
@@ -2640,10 +2745,13 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
         .expect("pending Window Fetch auth should register");
     {
         let mut host = vm._context_host.borrow_mut();
-        let mut pending = host
+        let pending = host
             .take_pending_subresource_auth(internal_id)
             .expect("pending auth state");
-        pending.intercept_response = true;
+        pending
+            .pending
+            .response_stream()
+            .configure_interception(true, true);
         host.record_pending_subresource_auth(pending);
     }
 
@@ -2659,7 +2767,11 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
     assert_eq!(info.internal_id, internal_id);
     assert_eq!(info.response_status, 401);
     assert_eq!(
-        info.response_body.try_bytes().unwrap().as_ref(),
+        info.response_body
+            .materialize_bytes_limited(64 * 1024 * 1024)
+            .await
+            .unwrap()
+            .as_slice(),
         b"auth required"
     );
 
@@ -2668,8 +2780,17 @@ fn cancel_pending_window_fetch_auth_preserves_401_for_response_stage() {
         .borrow_mut()
         .take_pending_subresource_response(internal_id)
         .expect("challenged response should remain pending for Fetch.continueResponse");
-    assert_eq!(pending.response.status, 401);
-    assert_eq!(pending.response.body_text(), "auth required");
+    assert_eq!(pending.response.body.head().status, 401);
+    assert_eq!(
+        pending
+            .response
+            .body
+            .body_source()
+            .materialize_bytes_limited(64 * 1024 * 1024)
+            .await
+            .unwrap(),
+        b"auth required"
+    );
 }
 
 #[test]
@@ -2749,6 +2870,7 @@ fn main_document_open_preserves_ordinary_and_keepalive_fetches() {
 #[test]
 fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     let mut vm = new_storage_test_vm("https://main-fetch-csp-owner.test/source-document");
+    let network = NativeResourceOutput::observe(&vm);
     vm.set_fetch_subresource_interception(
         true,
         Some(crate::types::SubresourceResourceType::CspReport),
@@ -2773,6 +2895,11 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
             ))
         })
         .expect("main Fetch should capture its source Document CSP context");
+    let registered_handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(registered.0)
+        .handle();
     let source_document_owner = registered.4.owner();
 
     vm.eval(
@@ -2806,16 +2933,13 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: registered.0,
-        request_url: request_url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: Some("OK".to_owned()),
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
-        result: Ok(redirected_fetch_response(&request_url, final_url)).into(),
+        result: Ok(redirected_fetch_response(&request_url, final_url).into()),
     })
     .expect("source-owned Fetch redirect should complete in the preserved LocalWindow");
 
@@ -2832,17 +2956,17 @@ fn main_document_open_fetch_redirect_uses_source_document_csp_report_context() {
     assert_eq!(reports.len(), 1);
     assert_eq!(reports[0].1, registered.4);
     assert!(!reports[0].2, "CSP report transport must not retain V8");
-    assert!(vm.take_network_output().into_items().any(|item| matches!(
-        item,
-        crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-            if record.resource_type() == crate::types::SubresourceResourceType::Fetch
-                && matches!(record.outcome(), crate::types::SubresourceNetworkOutcome::Success { .. })
-    )));
+    let items = network.take();
+    assert!(matches!(
+        native_resource_terminal(&items, registered_handle).result(),
+        crate::types::SubresourceBodyFinishedResult::Ready(_)
+    ));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
     let mut vm = new_storage_test_vm("https://child-owner-fetch.test/");
+    let network = NativeResourceOutput::observe(&vm);
     vm.eval(
         r#"
         (() => {
@@ -2915,6 +3039,11 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
         })
         .expect("child Fetches should register");
 
+    let keepalive_handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(keepalive.0)
+        .handle();
     vm.eval("__ownerBoundFetchFrame.srcdoc = '<p>replacement</p>'; 'queued'")
         .expect("child replacement should queue");
     assert_eq!(
@@ -2973,26 +3102,20 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: ordinary.0,
-        request_url: Url::parse("https://fetch-execution-context.test/pending").unwrap(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale retired Fetch completion".to_owned()).into(),
+        result: Err("stale retired Fetch completion".to_owned().into()),
     })
     .expect("late ordinary Fetch completion should be harmless");
-    let _ = vm.take_network_output();
+    let _ = network.take();
     let final_url = Url::parse("https://fetch-execution-context.test/pending").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: keepalive.0,
-        request_url: final_url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: Some("OK".to_owned()),
         skip_fetch_security_validation: false,
         response_filter: None,
@@ -3002,8 +3125,8 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
             200,
             vec![("content-type".to_owned(), b"text/plain".to_vec())],
             "keepalive completed".to_owned(),
-        ))
-        .into(),
+        )
+        .into()),
     })
     .expect("detached keepalive completion should remain observable without V8");
     assert!(
@@ -3012,27 +3135,19 @@ async fn child_navigation_aborts_fetch_and_detaches_keepalive() {
             .pending_window_fetch_execution_contexts_for_test()
             .is_empty()
     );
-    let records = vm
-        .take_network_output()
-        .into_items()
-        .filter(|item| {
-            matches!(
-                item,
-                crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                    if record.url().as_str()
-                        == "https://fetch-execution-context.test/pending"
-            )
-        })
-        .count();
-    assert_eq!(
-        records, 1,
-        "detached keepalive must preserve network observation without settling the old Promise"
+    let items = network.take();
+    assert!(
+        matches!(native_resource_terminal(&items, keepalive_handle).result(),
+        crate::types::SubresourceBodyFinishedResult::Ready(body)
+            if body.diagnostic_bytes().as_ref() == b"keepalive completed"),
+        "detached keepalive must preserve the original response without settling the old Promise"
     );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
     let mut vm = new_storage_test_vm("https://detached-fetch-csp-owner.test/");
+    let network = NativeResourceOutput::observe(&vm);
     vm.set_fetch_subresource_interception(
         true,
         Some(crate::types::SubresourceResourceType::CspReport),
@@ -3103,6 +3218,16 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
             ))
         })
         .expect("child keepalive Fetches should capture their source Document policy");
+    let report_only_fetch_handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(report_only_fetch.0)
+        .handle();
+    let enforce_fetch_handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(enforce_fetch.0)
+        .handle();
     assert_eq!(report_only_fetch.4, enforce_fetch.4);
 
     vm.eval("__detachedFetchCspFrame.srcdoc = '<p>replacement</p>'; 'queued'")
@@ -3133,34 +3258,24 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
 
     let report_only_final = Url::parse("https://report-only-redirect-target.test/final").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: report_only_fetch.0,
-        request_url: report_only_request.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: Some("OK".to_owned()),
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
-        result: Ok(redirected_fetch_response(
-            &report_only_request,
-            report_only_final,
-        ))
-        .into(),
+        result: Ok(redirected_fetch_response(&report_only_request, report_only_final).into()),
     })
     .expect("detached report-only keepalive should complete without V8");
     let enforce_final = Url::parse("https://enforce-redirect-target.test/final").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: enforce_fetch.0,
-        request_url: enforce_request.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: Some("OK".to_owned()),
         skip_fetch_security_validation: true,
         response_filter: None,
         network_error_text: None,
-        result: Ok(redirected_fetch_response(&enforce_request, enforce_final)).into(),
+        result: Ok(redirected_fetch_response(&enforce_request, enforce_final).into()),
     })
     .expect("detached enforcing keepalive should fail without entering V8");
 
@@ -3186,39 +3301,25 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
                     && *credentials == moli_fetch::RequestCredentialsMode::SameOrigin
             })
     );
-    let fetch_records = vm
-        .take_network_output()
-        .into_items()
-        .filter_map(|item| match item {
-            crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                if record.resource_type() == crate::types::SubresourceResourceType::Fetch =>
-            {
-                Some(record)
-            }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(fetch_records.len(), 2);
-    assert!(fetch_records.iter().any(|record| {
-        record.url() == &report_only_request
-            && matches!(
-                record.outcome(),
-                crate::types::SubresourceNetworkOutcome::Success { .. }
-            )
-    }));
-    assert!(fetch_records.iter().any(|record| {
-        record.url() == &enforce_request
-            && matches!(
-                record.outcome(),
-                crate::types::SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text.contains("Content Security Policy")
-            )
-    }));
+    let items = network.take();
+    assert!(matches!(
+        native_resource_terminal(&items, report_only_fetch_handle).result(),
+        crate::types::SubresourceBodyFinishedResult::Ready(_)
+    ));
+    assert!(
+        matches!(native_resource_terminal(&items, enforce_fetch_handle).result(),
+        crate::types::SubresourceBodyFinishedResult::FailedWithPartialBody { error_text, .. }
+            if error_text.contains("Content Security Policy"))
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_sender() {
-    let mut vm = new_storage_test_vm("https://child-owner-beacon.test/");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, mut completions) = new_storage_test_vm_with_loader_and_resource_completion_queue(
+        "https://child-owner-beacon.test/",
+        &loader,
+    );
     vm.set_fetch_subresource_interception(true, Some(crate::types::SubresourceResourceType::Ping));
     vm.eval(
         r#"
@@ -3341,37 +3442,26 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
         "old child realm must not bind a new Beacon to the replacement LocalWindow"
     );
 
-    let request_url = Url::parse("https://beacon-execution-context.test/accepted").unwrap();
-    let body_source_id = 60_000 + internal_id;
-    vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
-        skip_fetch_security_validation: false,
-        response_filter: None,
+    let handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(internal_id)
+        .handle();
+    vm.fulfill_pending_subresource_fetch(
         internal_id,
-        request_url: request_url.clone(),
-        request_method: "POST".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: Some("payload".to_owned()),
-        body_source_id,
-        network_request_headers: None,
-        head: moli_fetch::ResponseHead {
-            final_url: request_url,
-            status: 204,
-            headers: Vec::new(),
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            redirected: false,
-            redirect_chain: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        },
-    })
-    .expect("accepted Beacon should start streaming without its retired V8 context");
-    vm.append_streaming_async_subresource_fetch_chunk(
-        body_source_id,
-        b"unobservable response body".to_vec(),
+        204,
+        Vec::new(),
+        crate::runtime::RendererSyntheticResponseBody::from_bytes(
+            b"unobservable response body".to_vec(),
+        ),
+    )
+    .expect(
+        "accepted request must complete after its original Document retires without entering V8",
     );
-    vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
-        .expect("accepted Beacon should finish streaming without its retired V8 context");
+    assert!(
+        completions.pop_next_async_subresource_event().is_none(),
+        "synchronous completion must record its receipts before returning"
+    );
     assert!(
         vm._context_host
             .borrow()
@@ -3384,9 +3474,8 @@ async fn child_navigation_keeps_accepted_beacon_network_only_and_rejects_stale_s
             .into_items()
             .filter(|item| matches!(
                 item,
-                crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                    if record.url().as_str()
-                        == "https://beacon-execution-context.test/accepted"
+                crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(body)
+                    if body.handle() == handle && matches!(body.result(), crate::types::SubresourceBodyFinishedResult::Ready(body) if body.clone_body_bytes() == b"unobservable response body")
             ))
             .count(),
         1,
@@ -3410,6 +3499,12 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
         )
         .expect("main Beacon should be accepted"),
         "true"
+    );
+    assert!(
+        !vm._context_host
+            .borrow()
+            .has_pending_load_event_delaying_subresource_requests(),
+        "an admitted Beacon must not delay the Document load event"
     );
     let accepted = vm
         ._context_host
@@ -3442,11 +3537,8 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
 
     let request_url = Url::parse("https://beacon-execution-context.test/main").unwrap();
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: accepted[0].0,
-        request_url: request_url.clone(),
-        request_method: "POST".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: Some("payload".to_owned()),
         response_status_text: Some("No Content".to_owned()),
         skip_fetch_security_validation: false,
         response_filter: None,
@@ -3456,8 +3548,8 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
             204,
             Vec::new(),
             String::new(),
-        ))
-        .into(),
+        )
+        .into()),
     })
     .expect("accepted main Beacon should complete without entering V8");
     assert!(
@@ -3470,7 +3562,11 @@ fn main_document_open_preserves_accepted_beacon_without_rebind() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn child_csp_report_keeps_exact_violation_document_without_v8_after_navigation() {
-    let mut vm = new_storage_test_vm("https://child-owner-csp-report.test/");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let (mut vm, mut completions) = new_storage_test_vm_with_loader_and_resource_completion_queue(
+        "https://child-owner-csp-report.test/",
+        &loader,
+    );
     vm.set_fetch_subresource_interception(
         true,
         Some(crate::types::SubresourceResourceType::CspReport),
@@ -3583,40 +3679,26 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
         "retired Document owner must not bind a new report to the replacement child"
     );
 
-    let body_source_id = 70_000 + internal_id;
-    vm.start_streaming_async_subresource_fetch(crate::types::AsyncSubresourceStreamingStarted {
-        skip_fetch_security_validation: false,
-        response_filter: None,
+    let handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(internal_id)
+        .handle();
+    vm.fulfill_pending_subresource_fetch(
         internal_id,
-        request_url: report_url.clone(),
-        request_method: "POST".to_owned(),
-        request_headers: vec![(
-            "Content-Type".to_owned(),
-            "application/csp-report".to_owned(),
-        )]
-        .into(),
-        request_body: Some("report".to_owned()),
-        body_source_id,
-        network_request_headers: None,
-        head: moli_fetch::ResponseHead {
-            final_url: report_url.clone(),
-            status: 204,
-            headers: Vec::new(),
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            redirected: false,
-            redirect_chain: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        },
-    })
-    .expect("accepted CSP report should stream without its retired V8 context");
-    vm.append_streaming_async_subresource_fetch_chunk(
-        body_source_id,
-        b"unobservable report response".to_vec(),
+        204,
+        Vec::new(),
+        crate::runtime::RendererSyntheticResponseBody::from_bytes(
+            b"unobservable report response".to_vec(),
+        ),
+    )
+    .expect(
+        "accepted request must complete after its original Document retires without entering V8",
     );
-    vm.finish_streaming_async_subresource_fetch(internal_id, body_source_id, Ok(()))
-        .expect("accepted CSP report should finish without its retired V8 context");
+    assert!(
+        completions.pop_next_async_subresource_event().is_none(),
+        "synchronous completion must record its receipts before returning"
+    );
     assert!(
         vm._context_host
             .borrow()
@@ -3628,8 +3710,8 @@ async fn child_csp_report_keeps_exact_violation_document_without_v8_after_naviga
             .into_items()
             .filter(|item| matches!(
                 item,
-                crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                    if record.url() == &report_url
+                crate::types::ScriptNetworkOutputItem::SubresourceBodyFinished(body)
+                    if body.handle() == handle && matches!(body.result(), crate::types::SubresourceBodyFinishedResult::Ready(body) if body.clone_body_bytes() == b"unobservable report response")
             ))
             .count(),
         1,
@@ -3707,11 +3789,8 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: accepted[0].0,
-        request_url: report_url.clone(),
-        request_method: "POST".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: Some("report".to_owned()),
         response_status_text: Some("No Content".to_owned()),
         skip_fetch_security_validation: false,
         response_filter: None,
@@ -3721,8 +3800,8 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
             204,
             Vec::new(),
             String::new(),
-        ))
-        .into(),
+        )
+        .into()),
     })
     .expect("accepted main CSP report should complete without entering V8");
     assert!(
@@ -3736,6 +3815,7 @@ fn main_document_open_preserves_accepted_csp_report_but_rejects_stale_owner_reus
 #[test]
 fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
     let mut vm = new_storage_test_vm("https://isolated-fetch-owner.test/");
+    let network = NativeResourceOutput::observe(&vm);
     let main_owner = vm
         .current_main_document_task_owner()
         .expect("main document owner");
@@ -3772,6 +3852,11 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         )
         .expect("isolated Fetches should register");
 
+    let keepalive_handle = vm
+        ._context_host
+        .borrow()
+        .pending_subresource_network_request(keepalive.0)
+        .handle();
     vm.destroy_isolated_world_context(isolated_context_id);
 
     assert!(ordinary.3.is_cancelled());
@@ -3795,11 +3880,7 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         response_filter: None,
         internal_id: keepalive.0,
         request_url: request_url.clone(),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         body_source_id,
-        network_request_headers: None,
         head: moli_fetch::ResponseHead {
             final_url: request_url,
             status: 200,
@@ -3827,18 +3908,12 @@ fn isolated_realm_destruction_aborts_fetch_and_detaches_keepalive() {
         "detached streaming terminal must release its host state"
     );
     assert!(!keepalive.3.is_cancelled());
-    assert_eq!(
-        vm.take_network_output()
-            .into_items()
-            .filter(|item| matches!(
-                item,
-                crate::types::ScriptNetworkOutputItem::SubresourceNetworkRecord(record)
-                    if record.url().as_str()
-                        == "https://fetch-execution-context.test/pending"
-            ))
-            .count(),
-        1,
-        "detached streaming keepalive must preserve terminal network observation"
+    let items = network.take();
+    assert!(
+        matches!(native_resource_terminal(&items, keepalive_handle).result(),
+        crate::types::SubresourceBodyFinishedResult::Ready(body)
+            if body.diagnostic_bytes().as_ref() == b"detached streaming body"),
+        "detached streaming keepalive must preserve the original response"
     );
 }
 
@@ -3910,6 +3985,13 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
         "https://service-worker-owner.test/page.html",
         &loader,
     );
+    // This fixture supplies registration completions itself. Hold real install
+    // jobs before launch so they cannot publish competing lifecycle callbacks.
+    vm._context_host
+        .borrow()
+        .browser_context_runtime()
+        .service_worker_runtime()
+        .set_pause_new_workers_on_start_for_devtools(true);
     let main_owner = vm
         .current_main_document_task_owner()
         .expect("initial main document owner");
@@ -3944,7 +4026,6 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     .expect("service worker owner frame should schedule");
     assert_initial_about_blank_child_completed_through_page_for_test(
         &mut vm,
-        &loader,
         "service worker container setup",
     )
     .await;
@@ -4010,7 +4091,6 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
         .expect("owner-bound child ready completion should enter the typed Page source");
     run_page_service_worker_internal_tasks_until_request_consumed_for_test(
         &mut vm,
-        &loader,
         PendingServiceWorkerInternalRequestForTest::Ready(child_ready_request_id),
         "owner-bound child ready completion",
     )
@@ -4073,7 +4153,6 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
         .expect("owner-bound child register failure should enter the typed Page source");
     run_page_service_worker_internal_tasks_until_request_consumed_for_test(
         &mut vm,
-        &loader,
         PendingServiceWorkerInternalRequestForTest::Register(request_id),
         "owner-bound child register failure",
     )
@@ -4134,7 +4213,6 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
         .expect("owner-bound child registration should enter the typed Page source");
     run_page_service_worker_internal_tasks_until_request_consumed_for_test(
         &mut vm,
-        &loader,
         PendingServiceWorkerInternalRequestForTest::Register(binding_request_id),
         "owner-bound child registration",
     )
@@ -4174,12 +4252,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
         })
         .expect("wrong-partition lifecycle completion should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "wrong-partition lifecycle completion",
-    )
-    .await;
+    drain_page_service_worker_internal_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval(
             "globalThis.__serviceWorkerOwnerFrame.contentWindow.__serviceWorkerOwnerLifecycle",
@@ -4196,12 +4269,7 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
         })
         .expect("owner-bound lifecycle completion should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "owner-bound lifecycle completion",
-    )
-    .await;
+    drain_page_service_worker_internal_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval(
             "globalThis.__serviceWorkerOwnerFrame.contentWindow.__serviceWorkerOwnerLifecycle",
@@ -4234,7 +4302,6 @@ async fn service_worker_window_requests_bind_and_retire_exact_document_owners() 
     );
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child replacement must commit before stale wrapper reuse is tested",
     )
@@ -4363,7 +4430,6 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
         .expect("main service worker registration should enter the typed Page source");
     run_page_service_worker_internal_tasks_until_request_consumed_for_test(
         &mut vm,
-        &loader,
         PendingServiceWorkerInternalRequestForTest::Register(request_id),
         "main service worker registration",
     )
@@ -4402,12 +4468,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
         })
         .expect("retired-generation lifecycle completion should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "retired-generation lifecycle completion",
-    )
-    .await;
+    drain_page_service_worker_internal_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval("globalThis.__mainServiceWorkerLifecycle")
             .expect("main lifecycle state should evaluate"),
@@ -4423,12 +4484,7 @@ async fn main_document_replacement_rebinds_service_worker_lifecycle_watcher() {
             events: vec![crate::types::ServiceWorkerLifecycleClientEvent::UpdateFound],
         })
         .expect("rebound lifecycle completion should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "rebound lifecycle completion",
-    )
-    .await;
+    drain_page_service_worker_internal_tasks_for_test(&mut vm).await;
     assert_eq!(
         vm.eval("globalThis.__mainServiceWorkerLifecycle")
             .expect("main rebound lifecycle state should evaluate"),
@@ -4456,7 +4512,6 @@ async fn service_worker_controller_change_targets_exact_child_document() {
     .expect("service worker client owner frame should schedule");
     assert_initial_about_blank_child_completed_through_page_for_test(
         &mut vm,
-        &loader,
         "service worker client owner setup",
     )
     .await;
@@ -4514,8 +4569,7 @@ async fn service_worker_controller_change_targets_exact_child_document() {
             },
         )
         .expect("child controllerchange should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(&mut vm, &loader, "child controllerchange")
-        .await;
+    run_page_service_worker_internal_task_for_test(&mut vm, "child controllerchange").await;
     assert_eq!(
         vm.eval(
             "String(globalThis.__serviceWorkerClientOwnerFrame.contentWindow.__serviceWorkerChildControllerChangeCount)",
@@ -4538,7 +4592,6 @@ async fn service_worker_controller_change_targets_exact_child_document() {
     .expect("child replacement should schedule");
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child replacement must commit before stale client completion",
     )
@@ -4583,12 +4636,7 @@ async fn service_worker_controller_change_targets_exact_child_document() {
             },
         )
         .expect("stale child controllerchange should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "stale child controllerchange",
-    )
-    .await;
+    run_page_service_worker_internal_task_for_test(&mut vm, "stale child controllerchange").await;
     assert_eq!(
         vm.eval(
             "String(globalThis.__serviceWorkerClientOwnerFrame.contentWindow.__serviceWorkerReplacementControllerChangeCount)",
@@ -4609,12 +4657,7 @@ async fn service_worker_controller_change_targets_exact_child_document() {
             },
         )
         .expect("current child controllerchange should enter the typed Page source");
-    run_page_service_worker_internal_task_for_test(
-        &mut vm,
-        &loader,
-        "current child controllerchange",
-    )
-    .await;
+    run_page_service_worker_internal_task_for_test(&mut vm, "current child controllerchange").await;
     assert_eq!(
         vm.eval(
             "String(globalThis.__serviceWorkerClientOwnerFrame.contentWindow.__serviceWorkerReplacementControllerChangeCount)",
@@ -4647,7 +4690,7 @@ fn new_service_worker_page_test_vm_with_loader_and_browser_context_runtime(
     crate::runtime::PageVmTaskExecutorTestHarness,
     crate::runtime::RendererBrowserContextRuntimeOwner,
 ) {
-    let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new();
+    let browser_context_owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
     let browser_context_runtime = browser_context_owner.handle();
     let storage_manager = shared_indexed_db_test_manager();
     let mut page = crate::runtime::PageVmTaskExecutorTestHarness::new_with_browser_context_runtime(
@@ -4909,18 +4952,13 @@ impl StoragePageTaskExecutorTestWaitExt for crate::runtime::PageVmTaskExecutorTe
             tokio::runtime::Handle::try_current().is_err(),
             "synchronous storage Page fixture cannot run inside an existing Tokio runtime"
         );
-        let loader =
-            ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("storage Page task-executor runtime should build");
         runtime.block_on(async {
             for step in 0..4096 {
-                if self
-                    .run_one_oldest_ready_page_task_executor_turn(&loader)
-                    .await?
-                {
+                if self.run_one_oldest_ready_page_task_executor_turn().await? {
                     continue;
                 }
                 if self.has_pending_opfs_tasks() {
@@ -5007,13 +5045,12 @@ async fn wait_for_image_load_event_executor_test_task(
 /// checkpoint and follow-up reconciliation.
 async fn wait_for_one_page_resource_completion_selected_task_executor_test_turn(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     context: &str,
 ) {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
         if page
-            .run_one_page_resource_completion_selected_task_executor_turn(loader)
+            .run_one_page_resource_completion_selected_task_executor_turn()
             .await
             .unwrap_or_else(|error| {
                 panic!("{context}: selected resource completion task failed: {error:#}")
@@ -5040,14 +5077,10 @@ async fn wait_for_one_page_resource_completion_selected_task_executor_test_turn(
 /// sources; it is never treated as progress by itself.
 async fn wait_for_one_selected_page_task_executor_test_turn(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
 ) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     loop {
-        if page
-            .run_one_oldest_ready_page_task_executor_turn(loader)
-            .await?
-        {
+        if page.run_one_oldest_ready_page_task_executor_turn().await? {
             return Ok(());
         }
 
@@ -5077,7 +5110,6 @@ async fn wait_for_one_selected_page_task_executor_test_turn(
 
 async fn advance_page_task_executor_until_eval_equals(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     expression: &str,
     expected: &str,
     context: &str,
@@ -5096,7 +5128,7 @@ async fn advance_page_task_executor_until_eval_equals(
         let last = value;
         tokio::time::timeout_at(
             deadline,
-            wait_for_one_selected_page_task_executor_test_turn(page, loader),
+            wait_for_one_selected_page_task_executor_test_turn(page),
         )
         .await
         .unwrap_or_else(|_| {
@@ -5312,7 +5344,7 @@ async fn script_vm_drop_unregisters_child_service_worker_window_clients() {
         .expect("child frame setup should evaluate");
     assert_eq!(created, "created");
     while vm
-        .run_one_oldest_ready_page_task_executor_turn(&loader)
+        .run_one_oldest_ready_page_task_executor_turn()
         .await
         .expect("child frame Page task should apply")
     {}
@@ -5896,8 +5928,7 @@ async fn child_document_open_nested_frame_uses_inherited_frame_src_policy() {
     ] {
         assert!(
             vm.run_one_child_frame_task_executor_turn(
-                ChildFrameSemanticTurnKind::RealmMaterialization,
-                &loader,
+                ChildFrameSemanticTurnKind::RealmMaterialization
             )
             .await
             .expect("child realm materialization should use the selected-task dispatcher"),
@@ -5905,16 +5936,13 @@ async fn child_document_open_nested_frame_uses_inherited_frame_src_policy() {
         );
     }
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::NavigationCommit,
-            &loader,
-        )
-        .await
-        .expect("nested child navigation commit should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await
+            .expect("nested child navigation commit should use the selected-task dispatcher"),
         "the nested frame navigation should reach the CSP gate after both outer realm turns"
     );
     assert!(
-        vm.run_one_window_message_executor_turn(&loader)
+        vm.run_one_window_message_executor_turn()
             .await
             .expect("the child CSP report should dispatch to the top Window")
     );
@@ -5962,30 +5990,23 @@ async fn child_javascript_url_nested_frame_uses_inherited_frame_src_policy() {
         "queued"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::NavigationCommit,
-            &loader,
-        )
-        .await
-        .expect("javascript URL navigation commit should use the selected-task dispatcher")
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await
+            .expect("javascript URL navigation commit should use the selected-task dispatcher")
     );
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "javascript URL should execute after its initial child realm materializes",
     )
     .await;
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::NavigationCommit,
-            &loader,
-        )
-        .await
-        .expect("nested frame navigation should reach the inherited CSP gate")
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::NavigationCommit)
+            .await
+            .expect("nested frame navigation should reach the inherited CSP gate")
     );
     assert!(
-        vm.run_one_window_message_executor_turn(&loader)
+        vm.run_one_window_message_executor_turn()
             .await
             .expect("child CSP report should dispatch to the top Window")
     );
@@ -7202,7 +7223,7 @@ async fn child_lifecycle_queues_only_the_ready_sibling_for_host_load() {
 
 #[tokio::test]
 async fn child_external_classic_script_load_executes_as_frame_script_job() {
-    let (script_url, request_path_rx, server) =
+    let (script_url, request_path_rx, release_response, server) =
         spawn_child_external_classic_frame_script_job_server().await;
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm_with_loader(
@@ -7237,15 +7258,13 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
     .expect("child external classic frame job setup should evaluate");
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child external classic srcdoc should commit before source loading",
     )
     .await;
     assert!(
         vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::ClassicScriptSourceLoad,
-            &loader,
+            ChildFrameSemanticTurnKind::ClassicScriptSourceLoad
         )
         .await
         .expect("child classic source-load task should use the selected-task dispatcher"),
@@ -7259,9 +7278,24 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
         "pending external classic script must block later inline script and child load"
     );
 
+    assert_eq!(
+        tokio::time::timeout(std::time::Duration::from_secs(2), request_path_rx)
+            .await
+            .expect("child script request should reach the server before its response is released")
+            .expect("child external classic server should report request path"),
+        "/child-classic.js"
+    );
+    assert!(
+        !vm.run_one_page_resource_completion_selected_task_executor_turn()
+            .await
+            .expect("native request progress should use the selected-task dispatcher"),
+        "the request-start receipt must not be mistaken for the script completion"
+    );
+    release_response
+        .send(())
+        .expect("release child script response");
     wait_for_one_page_resource_completion_selected_task_executor_test_turn(
         &mut vm,
-        &loader,
         "child external classic completion",
     )
     .await;
@@ -7270,12 +7304,9 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
         "the accepted external script must retain one exact-realm prerequisite"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::RealmMaterialization,
-            &loader,
-        )
-        .await
-        .expect("child realm materialization should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::RealmMaterialization)
+            .await
+            .expect("child realm materialization should use the selected-task dispatcher"),
         "the typed realm turn must materialize the committed Document realm"
     );
     assert!(
@@ -7284,7 +7315,6 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
     );
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "realm completion must promote the external script into typed DocumentScriptReady",
     )
@@ -7298,7 +7328,6 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
     );
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "child parser continuation should run from the next DocumentScriptReady turn",
     )
@@ -7312,7 +7341,6 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
     for transition in ["interactive", "DOMContentLoaded", "complete"] {
         run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
             &mut vm,
-            &loader,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             &format!("child external classic should run its {transition} lifecycle turn"),
         )
@@ -7320,18 +7348,11 @@ async fn child_external_classic_script_load_executes_as_frame_script_job() {
     }
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::HostLoad,
         "iframe load should dispatch from the later HostLoad source turn",
     )
     .await;
 
-    assert_eq!(
-        request_path_rx
-            .await
-            .expect("child external classic server should report request path"),
-        "/child-classic.js"
-    );
     server
         .await
         .expect("child external classic test server should finish");
@@ -7473,26 +7494,14 @@ async fn child_module_producer_boundaries_require_exact_task_owner() {
     let request_url =
         Url::parse("https://child-module-attribution.test/root.js").expect("module URL");
 
-    let (exact_target, exact_network_attribution) = vm
+    let exact_target = vm
         ._context_host
         .borrow()
-        .capture_child_module_fetch_producer_for_child(
-            child_handle,
-            owner,
-            realm_id,
-            request_url.clone(),
-        )
+        .capture_child_module_fetch_producer_for_child(child_handle, owner, realm_id)
         .expect("exact child module owner should capture producer attribution");
     assert_eq!(exact_target.child_handle(), child_handle);
     assert_eq!(exact_target.task_owner(), owner);
     assert_eq!(exact_target.realm_id(), realm_id);
-    assert_eq!(exact_network_attribution.request_url(), &request_url);
-    assert_eq!(
-        exact_network_attribution.document_url().as_str(),
-        "about:blank"
-    );
-    assert!(exact_network_attribution.frame_id().is_some());
-
     let stale_lane_owner = crate::frame_owner_model::FrameDocumentTaskOwner::new(
         crate::frame_owner_model::FrameSchedulerLaneId(owner.scheduler_lane_id.0 + 1),
         owner.local_window_id,
@@ -7501,12 +7510,7 @@ async fn child_module_producer_boundaries_require_exact_task_owner() {
     assert!(
         vm._context_host
             .borrow()
-            .capture_child_module_fetch_producer_for_child(
-                child_handle,
-                stale_lane_owner,
-                realm_id,
-                request_url.clone(),
-            )
+            .capture_child_module_fetch_producer_for_child(child_handle, stale_lane_owner, realm_id)
             .is_none(),
         "producer attribution must not collapse task owner to local-window/document IDs"
     );
@@ -7523,8 +7527,7 @@ async fn child_module_producer_boundaries_require_exact_task_owner() {
             .capture_child_module_fetch_producer_for_child(
                 child_handle,
                 owner,
-                crate::frame_owner_model::FrameRealmId(realm_id.0 + 1),
-                request_url.clone(),
+                crate::frame_owner_model::FrameRealmId(realm_id.0 + 1)
             )
             .is_none(),
         "producer lookup must reject an exact task owner paired with the wrong realm"
@@ -8709,14 +8712,12 @@ async fn child_external_parser_module_executes_from_document_ready_lane() {
     .expect("child external parser module setup should evaluate");
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child external parser module srcdoc should commit before parser work",
     )
     .await;
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "child inline parser script should run from DocumentScriptReady",
     )
@@ -8752,27 +8753,22 @@ async fn child_external_parser_module_executes_from_document_ready_lane() {
     );
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::ParserModuleRootStart,
         "ParserModuleRootStart should begin fetch before the parser continues past the element",
     )
     .await;
-    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
-        &mut vm,
-        &loader,
-        ChildFrameSemanticTurnKind::DocumentScriptReady,
-        "parser should continue past module-defer script from DocumentScriptReady after fetch start",
-    )
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(&mut vm,
+ChildFrameSemanticTurnKind::DocumentScriptReady,
+"parser should continue past module-defer script from DocumentScriptReady after fetch start")
     .await;
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentLifecycle,
         "child parser module should enter interactive before module-defer execution",
     )
     .await;
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("pre-terminal child HostLoad probe should use the selected-task dispatcher"),
         "registered PendingScript should block HostLoad before root-fetch starts"
@@ -8786,23 +8782,19 @@ async fn child_external_parser_module_executes_from_document_ready_lane() {
 
     wait_for_one_page_resource_completion_selected_task_executor_test_turn(
         &mut vm,
-        &loader,
         "child external parser module completion",
     )
     .await;
     assert!(
-        vm.run_one_child_module_script_terminal_executor_turn(&loader)
+        vm.run_one_child_module_script_terminal_executor_turn()
             .await
             .expect("child module terminal should use the selected-task dispatcher"),
         "child parser module root completion should fan out from the typed terminal source"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentScriptReady,
-            &loader,
-        )
-        .await
-        .expect("child module execution should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::DocumentScriptReady)
+            .await
+            .expect("child module execution should use the selected-task dispatcher"),
         "child parser module script should execute from DocumentScriptReady"
     );
 
@@ -8825,14 +8817,13 @@ async fn child_external_parser_module_executes_from_document_ready_lane() {
     for transition in ["DOMContentLoaded", "complete"] {
         run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
             &mut vm,
-            &loader,
             ChildFrameSemanticTurnKind::DocumentLifecycle,
             &format!("child parser module should run its {transition} lifecycle turn"),
         )
         .await;
     }
     assert!(
-        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("child HostLoad should use the selected-task dispatcher"),
         "iframe load should dispatch from the later HostLoad source turn"
@@ -9090,29 +9081,26 @@ async fn child_external_classic_source_error_dispatches_before_later_inline() {
     .expect("child external classic source error setup should evaluate");
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::NavigationCommit,
         "child external classic source-error srcdoc should commit before parser work",
     )
     .await;
     run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
         &mut vm,
-        &loader,
         ChildFrameSemanticTurnKind::DocumentScriptReady,
         "initial inline parser script should run before the external source load starts",
     )
     .await;
     assert!(
         vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::ClassicScriptSourceLoad,
-            &loader,
+            ChildFrameSemanticTurnKind::ClassicScriptSourceLoad
         )
         .await
         .expect("child classic source-load task should use the selected-task dispatcher"),
         "child external classic source-error load should start from the classic source-load turn"
     );
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("pre-terminal child HostLoad probe should use the selected-task dispatcher"),
         "HostLoad should report no progress while parser-blocking classic source is pending"
@@ -9127,17 +9115,13 @@ async fn child_external_classic_source_error_dispatches_before_later_inline() {
 
     wait_for_one_page_resource_completion_selected_task_executor_test_turn(
         &mut vm,
-        &loader,
         "child external classic source-error completion",
     )
     .await;
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentScriptReady,
-            &loader,
-        )
-        .await
-        .expect("child script-error task should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::DocumentScriptReady)
+            .await
+            .expect("child script-error task should use the selected-task dispatcher"),
         "child external classic source failure should dispatch script error from DocumentScriptReady"
     );
     assert_eq!(
@@ -9147,18 +9131,15 @@ async fn child_external_classic_source_error_dispatches_before_later_inline() {
         "first DocumentScriptReady should dispatch the source error without firing iframe load"
     );
     assert!(
-        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        !vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("blocked child HostLoad probe should use the selected-task dispatcher"),
         "HostLoad should not dispatch while source-failure parser continuation is still queued"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentScriptReady,
-            &loader,
-        )
-        .await
-        .expect("child parser continuation should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::DocumentScriptReady)
+            .await
+            .expect("child parser continuation should use the selected-task dispatcher"),
         "source-failure parser continuation should run from the next DocumentScriptReady turn"
     );
     assert_eq!(
@@ -9168,34 +9149,25 @@ async fn child_external_classic_source_error_dispatches_before_later_inline() {
         "parser continuation should execute the following inline script without firing iframe load"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
-            &loader,
-        )
-        .await
-        .expect("child interactive task should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::DocumentLifecycle)
+            .await
+            .expect("child interactive task should use the selected-task dispatcher"),
         "parser EOF should dispatch interactive before HostLoad"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
-            &loader,
-        )
-        .await
-        .expect("child DCL task should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::DocumentLifecycle)
+            .await
+            .expect("child DCL task should use the selected-task dispatcher"),
         "DOMContentLoaded should dispatch from its own lifecycle turn"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(
-            ChildFrameSemanticTurnKind::DocumentLifecycle,
-            &loader,
-        )
-        .await
-        .expect("child complete task should use the selected-task dispatcher"),
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::DocumentLifecycle)
+            .await
+            .expect("child complete task should use the selected-task dispatcher"),
         "document complete should dispatch from its own lifecycle turn"
     );
     assert!(
-        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad, &loader)
+        vm.run_one_child_frame_task_executor_turn(ChildFrameSemanticTurnKind::HostLoad)
             .await
             .expect("child HostLoad task should use the selected-task dispatcher"),
         "iframe load should dispatch from the later HostLoad source turn"
@@ -9343,6 +9315,7 @@ async fn child_inline_classic_throw_reports_to_child_window_and_continues() {
 async fn spawn_child_external_classic_frame_script_job_server() -> (
     String,
     tokio::sync::oneshot::Receiver<String>,
+    tokio::sync::oneshot::Sender<()>,
     tokio::task::JoinHandle<()>,
 ) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -9352,6 +9325,7 @@ async fn spawn_child_external_classic_frame_script_job_server() -> (
         .local_addr()
         .expect("child external classic frame job server addr");
     let (path_tx, path_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let server = tokio::spawn(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -9372,6 +9346,9 @@ async fn spawn_child_external_classic_frame_script_job_server() -> (
             .unwrap_or("")
             .to_owned();
         let _ = path_tx.send(request_path);
+        release_rx
+            .await
+            .expect("child script response must be released");
         let body = r#"parent.__childExternalClassicJobEvents.push("external:" + (globalThis === self));
 parent.__childExternalClassicJobEvents.push("external-current:" + document.currentScript.id);
 document.write("<span id='external-write'>written</span>");
@@ -9393,7 +9370,12 @@ globalThis.__childExternalClassicValue = 73;"#;
             .await
             .expect("write child external classic frame job response");
     });
-    (format!("http://{addr}/child-classic.js"), path_rx, server)
+    (
+        format!("http://{addr}/child-classic.js"),
+        path_rx,
+        release_tx,
+        server,
+    )
 }
 
 async fn spawn_gated_media_resource_server(
@@ -11835,8 +11817,7 @@ async fn main_static_image_event_delays_complete_and_runs_before_window_load() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("the image event owner turn should run")
@@ -11920,8 +11901,7 @@ async fn main_document_replacement_retires_pending_image_request_sequence() {
     );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("stale image task should be consumed without dispatch")
@@ -12005,20 +11985,7 @@ async fn web_font_requests_and_registration_follow_effective_stylesheet_media() 
 
     release_tx.send(()).expect("release font response");
     server.await.expect("font server should finish");
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            resource_completions.wait_for_arrival_without_timeout(),
-        )
-        .await
-        .expect("web font completion should reach the Networking source")
-    );
-    let completion = resource_completions
-        .pop_next_async_subresource_event()
-        .expect("web font completion must retain its typed terminal");
-    let _ = vm
-        .complete_async_subresource_fetch_event_body(completion)
-        .expect("web font completion should apply to its current document owner");
+    apply_next_async_subresource_callback_for_test(&mut vm, &mut resource_completions).await;
     assert_eq!(
         vm.document_web_font_counts_for_test(),
         (1, 1, 1),
@@ -12130,20 +12097,7 @@ async fn imported_web_font_keeps_its_response_base_slot_through_layout_reconcili
     font_release
         .send(true)
         .expect("release imported Ahem response");
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            resource_completions.wait_for_arrival_without_timeout(),
-        )
-        .await
-        .expect("imported font completion should reach the resource source")
-    );
-    let completion = resource_completions
-        .pop_next_async_subresource_event()
-        .expect("imported font completion body");
-    let _ = vm
-        .complete_async_subresource_fetch_event_body(completion)
-        .expect("the response-base slot should accept its font completion");
+    apply_next_async_subresource_callback_for_test(&mut vm, &mut resource_completions).await;
     assert_eq!(
         vm.document_web_font_counts_for_test(),
         (1, 1, 1),
@@ -12216,20 +12170,7 @@ style.textContent = '@font-face {{ font-family: PendingPrint; src: url({font_url
 
     release_tx.send(()).expect("release stale font response");
     server.await.expect("font server should finish");
-    assert!(
-        tokio::time::timeout(
-            std::time::Duration::from_secs(2),
-            resource_completions.wait_for_arrival_without_timeout(),
-        )
-        .await
-        .expect("stale font completion should reach the Networking source")
-    );
-    let completion = resource_completions
-        .pop_next_async_subresource_event()
-        .expect("stale font completion must retain its typed terminal");
-    let _ = vm
-        .complete_async_subresource_fetch_event_body(completion)
-        .expect("stale font completion should settle without mutating layout fonts");
+    apply_next_async_subresource_callback_for_test(&mut vm, &mut resource_completions).await;
     assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
     assert_eq!(
         vm._context_host
@@ -12327,8 +12268,7 @@ async fn far_lazy_image_network_request_waits_for_sampled_scroll_reveal() {
     wait_for_image_load_event_executor_test_task(&mut vm, "lazy image decode completion").await;
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("lazy image load event turn")
@@ -12414,8 +12354,7 @@ async fn main_image_network_terminal_queues_later_load_event_and_retires_delay()
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("network image load event turn")
@@ -12523,8 +12462,7 @@ async fn removing_pending_image_preserves_request_and_document_delay_until_event
     wait_for_image_load_event_executor_test_task(&mut vm, "detached image decode completion").await;
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("detached image event should release the document delay")
@@ -12595,8 +12533,7 @@ async fn main_image_http_failure_dispatches_error_only_on_later_event_turn() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("failed image error event turn")
@@ -12672,24 +12609,20 @@ async fn main_image_source_restart_cancels_exact_request_and_drops_stale_termina
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: first_request_id,
-        request_url: Url::parse(&image_url).expect("image request URL"),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale cancelled image completion".to_owned()).into(),
+        result: Err("stale cancelled image completion".to_owned().into()),
     })
     .expect("stale cancelled image completion should be harmless");
     wait_for_image_load_event_executor_test_task(&mut vm, "replacement image decode completion")
         .await;
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ImageLoadEvent,
-            &loader,
+            PageDomManipulationTestFamily::ImageLoadEvent
         )
         .await
         .expect("replacement image event turn")
@@ -12848,8 +12781,8 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         "media resource selection must delay complete without blocking DOMContentLoaded"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "loadstart owner turn").await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "loadedmetadata owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "loadstart owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "loadedmetadata owner turn").await;
     assert_eq!(
         vm._context_host
             .borrow()
@@ -12857,7 +12790,7 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         Some(false),
         "metadata must not release the media delay"
     );
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "loadeddata owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "loadeddata owner turn").await;
     assert_eq!(
         vm.eval("__mainMediaLifecycleEvents.join('|')")
             .expect("main media event trace"),
@@ -12882,7 +12815,7 @@ async fn main_static_media_load_delays_complete_until_loadeddata_owner_turn() {
         } if binding_owner == owner
     ));
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "canplay owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "canplay owner turn").await;
     assert!(
         vm._context_host
             .borrow()
@@ -12952,7 +12885,6 @@ async fn main_media_source_mutation_replaces_sequence_without_stale_settlement()
 
     run_next_page_media_element_event_for_test(
         &mut vm,
-        &loader,
         "stale first-source task should be consumed",
     )
     .await;
@@ -12977,10 +12909,9 @@ async fn main_media_source_mutation_replaces_sequence_without_stale_settlement()
         "the stale callback must not settle the replacement sequence"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "new loadstart owner turn").await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "new loadedmetadata owner turn")
-        .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "new loadeddata owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "new loadstart owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "new loadedmetadata owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "new loadeddata owner turn").await;
     assert_eq!(
         vm.eval("__mainMediaRestartEvents.join('|')")
             .expect("new media event trace"),
@@ -13006,7 +12937,6 @@ async fn main_media_source_mutation_replaces_sequence_without_stale_settlement()
     );
     run_next_page_media_element_event_for_test(
         &mut vm,
-        &loader,
         "cancelled canplay task should be consumed",
     )
     .await;
@@ -13069,7 +12999,6 @@ async fn default_video_fetch_policy_synthesizes_lifecycle_without_a_network_requ
     for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("default-policy video {phase} turn"),
         )
         .await;
@@ -13164,8 +13093,7 @@ async fn main_media_network_terminal_drives_readiness_on_later_event_turns() {
             .to_ascii_lowercase()
             .contains("sec-fetch-mode: no-cors")
     );
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "network media loadstart turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "network media loadstart turn").await;
     assert_eq!(
         vm.eval(
             "JSON.stringify({events: __networkMediaEvents, ready: document.getElementById('network-media').readyState, network: document.getElementById('network-media').networkState})"
@@ -13189,11 +13117,9 @@ async fn main_media_network_terminal_drives_readiness_on_later_event_turns() {
         "resource completion may only enqueue the media event follow-up"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "network media metadata turn")
-        .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "network media data turn").await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "network media canplay turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "network media metadata turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "network media data turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "network media canplay turn").await;
     assert_eq!(
         vm.eval(
             "JSON.stringify({events: __networkMediaEvents, ready: document.getElementById('network-media').readyState, network: document.getElementById('network-media').networkState})"
@@ -13246,8 +13172,7 @@ async fn main_media_http_failure_dispatches_error_later_and_retires_delay() {
             .to_ascii_lowercase()
             .contains("sec-fetch-dest: audio")
     );
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "failed media loadstart turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "failed media loadstart turn").await;
     release_tx.send(()).expect("release failed media response");
     wait_for_one_page_resource_completion_executor_test_turn(
         &mut vm,
@@ -13261,7 +13186,7 @@ async fn main_media_http_failure_dispatches_error_later_and_retires_delay() {
         "network failure must not dispatch the element error inline"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "failed media error turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "failed media error turn").await;
     assert_eq!(
         vm.eval(
             "JSON.stringify({events: __failedMediaEvents, ready: document.getElementById('failed-media').readyState, network: document.getElementById('failed-media').networkState})"
@@ -13341,25 +13266,17 @@ async fn main_media_source_restart_cancels_exact_network_request_and_stale_termi
     );
 
     vm.complete_async_subresource_fetch(crate::types::AsyncSubresourceFetchCompletion {
+        network_request_headers: None,
         internal_id: first_request_id,
-        request_url: Url::parse(&media_url).expect("media request URL"),
-        request_method: "GET".to_owned(),
-        request_headers: Vec::new().into(),
-        request_body: None,
         response_status_text: None,
         skip_fetch_security_validation: false,
         response_filter: None,
         network_error_text: None,
-        result: Err("stale cancelled media completion".to_owned()).into(),
+        result: Err("stale cancelled media completion".to_owned().into()),
     })
     .expect("stale cancelled media completion should be harmless");
 
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "stale first media loadstart task",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "stale first media loadstart task").await;
     assert_eq!(
         vm.eval("__restartedNetworkMediaEvents.join('|')")
             .expect("stale media callback trace should evaluate"),
@@ -13368,7 +13285,6 @@ async fn main_media_source_restart_cancels_exact_network_request_and_stale_termi
     for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("replacement media {phase} turn"),
         )
         .await;
@@ -13434,12 +13350,10 @@ async fn main_media_source_children_reselect_through_parent_sequence() {
         .pending_media_load_sequence(media)
         .expect("source child mutation should replace the parent sequence");
     assert_ne!(first.id(), second.id());
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "stale source child media task")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "stale source child media task").await;
     for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("source child media {phase} turn"),
         )
         .await;
@@ -13506,8 +13420,7 @@ async fn main_static_text_track_starts_at_interactive_before_window_load() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("default mode DOM-manipulation turn"),
@@ -13515,20 +13428,19 @@ async fn main_static_text_track_starts_at_interactive_before_window_load() {
     );
     assert!(
         !vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("duplicate default-mode probe"),
         "parser insertion and interactive discovery must coalesce the same exact track"
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("track load-start networking turn")
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("track terminal networking turn")
     );
@@ -13580,14 +13492,13 @@ void captions.track;
         .expect("interactive should discover the default track");
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("default track mode-selection task")
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("default-policy track start task")
     );
@@ -13608,7 +13519,7 @@ void captions.track;
     }));
 
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("default-policy track terminal task")
     );
@@ -13703,7 +13614,7 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
     assert!(track_sequence.network_request_id().is_none());
 
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track stable-state networking turn")
     );
@@ -13729,21 +13640,17 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
         "the element sequence must be the sole text-track request producer"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadstart owner turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "media loadstart owner turn").await;
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("already-applied default track mode turn"),
         "interactive selection should leave one coalesced default-mode task"
     );
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadedmetadata owner turn")
-        .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadeddata owner turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "media loadedmetadata owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "media loadeddata owner turn").await;
     assert_eq!(
         vm.eval("__trackMediaEvents.join('|')")
             .expect("pre-track-terminal event trace"),
@@ -13772,7 +13679,12 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
     );
 
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        !vm.apply_one_page_resource_terminal_owner_admission()
+            .expect("apply the native terminal receipt before the text-track event"),
+        "the text-track resource callback must already be consumed"
+    );
+    assert!(
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track load-event networking turn")
     );
@@ -13787,12 +13699,7 @@ async fn main_text_track_network_terminal_gates_canplay_without_delaying_complet
             .pending_media_text_track_count(media, media_sequence),
         Some(0)
     );
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "media canplay follow-up owner turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "media canplay follow-up owner turn").await;
     assert_eq!(
         vm.eval("__trackMediaEvents.join('|')")
             .expect("canplay event trace"),
@@ -13861,20 +13768,16 @@ async fn stale_text_track_start_releases_media_canplay_gate() {
         .expect("media sequence")
         .id();
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadstart owner turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "media loadstart owner turn").await;
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("default-mode DOM turn")
     );
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadedmetadata owner turn")
-        .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media loadeddata owner turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "media loadedmetadata owner turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "media loadeddata owner turn").await;
     assert_eq!(
         vm.eval("__staleTrackGateEvents.join('|')")
             .expect("pre-stale event trace"),
@@ -13891,7 +13794,7 @@ async fn stale_text_track_start_releases_media_canplay_gate() {
     vm.exec("document.getElementById('captions').remove();", None)
         .expect("track removal should make the queued start stale");
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("stale text-track networking task should retire")
     );
@@ -13909,12 +13812,7 @@ async fn stale_text_track_start_releases_media_canplay_gate() {
         "stale retirement must settle the media selection gate"
     );
 
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "media canplay follow-up owner turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "media canplay follow-up owner turn").await;
     assert_eq!(
         vm.eval("__staleTrackGateEvents.join('|')")
             .expect("post-stale event trace"),
@@ -14004,12 +13902,11 @@ async fn main_document_replacement_retires_pending_media_and_text_track_sequence
 
     run_next_page_media_element_event_for_test(
         &mut vm,
-        &loader,
         "stale media event should be consumed without dispatch",
     )
     .await;
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("stale text-track networking task should settle")
     );
@@ -14078,12 +13975,60 @@ fn new_parsed_test_vm_with_loader_and_resource_completion_queue(
         .expect("script vm bootstrap should succeed")
         .finish()
         .map(|mut vm| {
+            vm.set_root_document_lifecycle(
+                crate::runtime::RendererDocumentLifecycleJournalHandle::new_initial(
+                    page_runtime_task_source.root_document().page_id,
+                ),
+            );
             vm.install_page_task_residence_for_executor_test(page_runtime_task_source);
             install_test_trusted_key_dispatcher(&mut vm);
             vm
         })
         .expect("script vm finish should succeed");
     (vm, resource_completion_queue)
+}
+
+#[tokio::test]
+async fn initial_document_registration_preserves_admitted_network_policy() {
+    let url = Url::parse("https://policy.test/document").unwrap();
+    let blocked = Url::parse("https://policy.test/blocked/script.js").unwrap();
+    for offline in [false, true] {
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        loader.set_extra_http_headers(&vec![("x-admitted".into(), "retained".into())].into());
+        loader.set_blocked_url_patterns(&["https://policy.test/blocked/*".into()]);
+        loader.set_network_offline(offline);
+        let (_vm, _queue) = new_parsed_test_vm_with_loader_and_resource_completion_queue(
+            url.as_str(),
+            "<!doctype html><title>policy</title>",
+            &loader,
+        );
+        // Initial registration runs before PageVm installs its environment.
+        // Concurrent preloads must still see the policy admitted with this loader.
+        let policy = loader.page_network_policy().snapshot();
+        assert!(
+            policy.blocks_url(&blocked),
+            "initial registration cleared the blocked URL policy"
+        );
+        assert_eq!(policy.network_offline(), offline);
+        let request = moli_fetch::Request::get(url.as_str())
+            .unwrap()
+            .with_page_network_policy();
+        match policy.apply_to_request(request) {
+            Ok(request) => {
+                assert!(!offline);
+                assert!(
+                    request
+                        .request_headers
+                        .iter()
+                        .any(|(name, value)| name == "x-admitted" && value == b"retained")
+                );
+            }
+            Err(error) => {
+                assert!(offline);
+                assert_eq!(error.to_string(), "Network emulation offline");
+            }
+        }
+    }
 }
 
 #[test]
@@ -14211,7 +14156,6 @@ async fn in_flight_connected_modulepreload_does_not_delay_window_load() {
     release_tx.send(()).expect("release modulepreload response");
     wait_for_one_page_resource_completion_selected_task_executor_test_turn(
         &mut vm,
-        &loader,
         "modulepreload network completion",
     )
     .await;
@@ -14226,15 +14170,14 @@ async fn in_flight_connected_modulepreload_does_not_delay_window_load() {
         "the module-map terminal must publish its joined link-client notification"
     );
     assert!(
-        vm.run_one_native_module_owner_event_task_executor_turn(&loader)
+        vm.run_one_native_module_owner_event_task_executor_turn()
             .await
             .expect("modulepreload owner-notification turn"),
         "the joined link client must be notified in a later selected task"
     );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ConnectedStyleEvent,
-            &loader,
+            PageDomManipulationTestFamily::ConnectedStyleEvent
         )
         .await
         .expect("modulepreload link-event turn")
@@ -15053,7 +14996,6 @@ async fn timer_callback_watchdog_terminates_runaway_timer_and_recovers_isolate()
             crate::v8_execution_watchdog::V8ExecutionWatchdogKind::TimerCallback,
             std::time::Duration::from_millis(500),
         );
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     vm.exec(
         "setTimeout(() => { for (;;) {} }, 0); window.__afterTimer = 1;",
@@ -15062,7 +15004,7 @@ async fn timer_callback_watchdog_terminates_runaway_timer_and_recovers_isolate()
     .expect("timer setup should run");
 
     let started = Instant::now();
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("runaway timer should be reported without poisoning the isolate");
 
@@ -15134,6 +15076,9 @@ mod observer_callbacks;
 mod post_parse;
 mod queue_microtask;
 mod rendering_update;
+mod request_body;
+mod request_options;
+mod request_stages;
 mod script_terminal_completion;
 mod streams;
 mod url_components;

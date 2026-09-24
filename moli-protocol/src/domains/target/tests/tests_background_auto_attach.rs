@@ -64,9 +64,7 @@ async fn set_auto_attach_true_ensures_existing_background_initial_document_befor
             "auto-attach must complete background initial document before emitting attachedToTarget"
         );
         assert!(
-            bc.background_target("TID-background-pending")
-                .expect("background target")
-                .has_loaded_page(),
+            bc.target_has_loaded_page("TID-background-pending"),
             "attached background target should expose a current Page immediately"
         );
     }
@@ -102,7 +100,7 @@ async fn set_auto_attach_true_still_reports_transient_no_page_target_like_chromi
         .attach_active_session("SID-active");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        bc.register_page_target_fixture(
             "TID-background-in-transit".to_owned(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -111,7 +109,7 @@ async fn set_auto_attach_true_still_reports_transient_no_page_target_like_chromi
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     }
 
     ctx.process_async(json!({

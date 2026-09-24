@@ -108,16 +108,22 @@ async fn rust_cdp_capability_browser_download_behavior_contract() {
     }))
     .await;
     ctx.expect_result(102_005, json!({}), None);
-    assert_eq!(ctx.conn.download_behavior.behavior, "allowAndName");
     assert_eq!(
-        ctx.conn.download_behavior.download_path.as_deref(),
+        ctx.conn.download_policy_for_browser_context(None).behavior,
+        moli_core::browser::DownloadBehavior::AllowAndName
+    );
+    assert_eq!(
+        ctx.conn
+            .download_policy_for_browser_context(None)
+            .download_path
+            .as_deref(),
         Some("/tmp/moli-chromium-import-downloads")
     );
-    assert!(!ctx.conn.download_behavior.automation_events_enabled);
-    assert_eq!(
-        ctx.conn.download_behavior.browser_event_session_ids(),
-        vec![None]
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(None)
     );
+    assert_eq!(ctx.conn.browser_download_event_session_ids(), vec![None]);
 }
 
 // Puppeteer Browser.target().createCDPSession() discovers the browser agent
@@ -228,7 +234,10 @@ async fn rust_cdp_puppeteer_browser_target_session_contract() {
     .await;
     ctx.expect_result(102_104, json!({}), Some(&browser_session_id));
     assert_eq!(
-        ctx.conn.download_behavior.download_path.as_deref(),
+        ctx.conn
+            .download_policy_for_browser_context(None)
+            .download_path
+            .as_deref(),
         Some("/tmp/moli-puppeteer-downloads")
     );
 }
@@ -421,11 +430,14 @@ async fn rust_cdp_capability_target_browser_context_proxy_and_enumeration() {
             .is_some_and(|ids| ids.iter().any(|id| id == &json!(browser_context_id))),
         "{contexts}"
     );
+    let policy = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .map(BrowserContext::network_policy)
+        .expect("default BrowserContext");
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|context| context.default_http_proxy_override.as_deref()),
+        policy.http_proxy.as_deref(),
         Some("http://proxy.example:8080")
     );
 }

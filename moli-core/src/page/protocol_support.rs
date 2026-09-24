@@ -1,6 +1,5 @@
 pub use crate::protocol_types::{
     BidiPreloadChannelHandoff, ChildFrameAttachmentSnapshot, ChildFrameDetachmentSnapshot,
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkSnapshot,
     ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
     ChildFrameTreeSnapshot, ContentSecurityPolicyIssueSnapshot, ContentSecurityPolicyViolationType,
     DocumentActivity, DocumentStartScript, EmulatedIdleOverride, EmulatedMediaOverrides,

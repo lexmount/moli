@@ -2020,11 +2020,13 @@ fn pending_body_source_cancel_callback<'s>(
         } else if let Some(worker_state) = get_worker_state(scope) {
             let mut worker_state = worker_state.borrow_mut();
             let worker_state = &mut *worker_state;
-            let _ = cancel_pending_network_body_source_in_maps(
+            if let Some(root_id) = cancel_pending_network_body_source_in_maps(
                 &mut worker_state.pending_network_body_sources,
                 &mut worker_state.pending_network_body_clones,
                 id,
-            );
+            ) {
+                worker_state.cancel_streaming_fetch(root_id);
+            }
         }
     }
     mark_registry_body_source_used(scope, args.this());

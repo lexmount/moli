@@ -3,7 +3,6 @@ use super::{
     WorkerConnectionState, WorkerExecutionState, WorkerModuleStaticImportPolicySnapshot,
     WorkerRelayTerminalState,
 };
-use crate::RendererSyntheticResponseBody;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::page_task_queue::{
     RendererDedicatedWorkerClientEvent, RendererDedicatedWorkerMessageEvent,
@@ -14,9 +13,8 @@ use crate::service_worker_runtime::{ServiceWorkerClientId, ServiceWorkerRequestD
 use crate::structured_clone::V8StructuredClonePayload;
 use crate::types::{DedicatedWorkerId, SubresourcePolicyContext};
 use crate::worker::{
-    WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerPendingFetchContinue,
-    WorkerPendingXhrContinue, WorkerRuntimeEvent, WorkerScriptKind, WorkerScriptSource,
-    WorkerSpawnOptions, spawn_worker_with_options,
+    WorkerGlobalKind, WorkerHandle, WorkerNetworkPolicy, WorkerRuntimeEvent, WorkerScriptKind,
+    WorkerScriptSource, WorkerSpawnOptions, spawn_dedicated_worker,
 };
 use moli_storage_key::MoliStorageKey;
 use url::Url;
@@ -24,7 +22,6 @@ use url::Url;
 struct LoadedWorkerScript {
     final_url: Url,
     source: WorkerScriptSource,
-    network_response: crate::protocol_types::NavigationResponse,
     response_referrer_policy: Option<String>,
     network_partition_key: Option<String>,
     policy_context: SubresourcePolicyContext,
@@ -34,31 +31,29 @@ struct LoadedWorkerScript {
         crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
 }
 
-struct WorkerScriptLoadFailure {
-    error_message: String,
-    network_response: Option<Box<crate::protocol_types::NavigationResponse>>,
-}
-
-impl WorkerScriptLoadFailure {
-    fn without_response(error: impl std::fmt::Display) -> Self {
-        Self {
-            error_message: error.to_string(),
-            network_response: None,
-        }
-    }
-
-    fn with_response(
-        error: impl std::fmt::Display,
-        response: crate::protocol_types::NavigationResponse,
-    ) -> Self {
-        Self {
-            error_message: error.to_string(),
-            network_response: Some(Box::new(response)),
-        }
-    }
-}
-
 impl JsContextHost {
+    pub(crate) fn prepare_dedicated_worker_host(
+        &self,
+        document_url: Url,
+        request_url: Url,
+        name: String,
+    ) -> crate::runtime::RendererDedicatedWorkerHost {
+        let page = self
+            .page_dedicated_worker_client_event_sender()
+            .page_token();
+        self.browser_context_runtime()
+            .worker_context_runtime()
+            .create_dedicated_worker(
+                crate::runtime::RendererDedicatedWorkerOwner::Document {
+                    owner_local_host_id: page.local_host_id(),
+                    page_id: page.page_id(),
+                },
+                request_url.to_string(),
+                document_url.to_string(),
+                name,
+            )
+    }
+
     pub(crate) fn register_dedicated_worker_outside_settings_load(
         &self,
         dispatch_scope: super::super::OwnerDispatchScope,
@@ -154,18 +149,10 @@ impl JsContextHost {
         wrapper: v8::Local<'_, v8::Object>,
         mut worker_handle: WorkerHandle,
         owner: super::super::WindowExecutionContextBinding,
+        native_host: crate::runtime::RendererDedicatedWorkerHost,
     ) -> DedicatedWorkerId {
         let worker_id = DedicatedWorkerId::new(self.next_worker_id);
         self.next_worker_id += 1;
-        let renderer_instance_id = self
-            .browser_context_runtime()
-            .allocate_dedicated_worker_instance_id();
-        self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(
-                renderer_instance_id,
-                &worker_handle,
-                self.renderer_output_journal(),
-            );
         let client_event_producer = self.dedicated_worker_client_event_producer(worker_id, &owner);
         Self::start_worker_message_relay(
             worker_id,
@@ -176,8 +163,7 @@ impl JsContextHost {
         self.workers.insert(
             worker_id,
             WorkerConnectionState {
-                renderer_instance_id,
-                target_created: false,
+                host: native_host,
                 wrapper: v8::Global::new(scope, wrapper),
                 owner,
                 client_event_producer,
@@ -196,7 +182,7 @@ impl JsContextHost {
         wrapper: v8::Local<'_, v8::Object>,
         storage_key_top_level_site: String,
         creator_storage_key: MoliStorageKey,
-        name: String,
+        native_host: crate::runtime::RendererDedicatedWorkerHost,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
         outside_settings_load: ResourceLoadLease,
@@ -204,15 +190,11 @@ impl JsContextHost {
     ) -> DedicatedWorkerId {
         let worker_id = DedicatedWorkerId::new(self.next_worker_id);
         self.next_worker_id += 1;
-        let renderer_instance_id = self
-            .browser_context_runtime()
-            .allocate_dedicated_worker_instance_id();
         let client_event_producer = self.dedicated_worker_client_event_producer(worker_id, &owner);
         self.workers.insert(
             worker_id,
             WorkerConnectionState {
-                renderer_instance_id,
-                target_created: false,
+                host: native_host,
                 wrapper: v8::Global::new(scope, wrapper),
                 owner,
                 client_event_producer,
@@ -222,7 +204,6 @@ impl JsContextHost {
                     load_task: None,
                     terminated: false,
                     outside_settings_load,
-                    name,
                     module_credentials_mode,
                     module_static_import_policy: None,
                     storage_key_top_level_site,
@@ -245,11 +226,10 @@ impl JsContextHost {
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         document_referrer_policy: Option<String>,
         document_content_security_policies: Vec<String>,
-        name: String,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     ) -> bool {
         let browser_context_runtime = self.browser_context_runtime();
-        let Some((outside_settings_load, client_event_producer)) =
+        let Some((outside_settings_load, client_event_producer, native_host)) =
             self.workers.get(&worker_id).map(|state| {
                 let outside_settings_load = match &state.execution {
                     WorkerExecutionState::Loading {
@@ -258,12 +238,20 @@ impl JsContextHost {
                     } => Some(outside_settings_load.clone()),
                     WorkerExecutionState::Running { .. } => None,
                 };
-                (outside_settings_load, state.client_event_producer.clone())
+                (
+                    outside_settings_load,
+                    state.client_event_producer.clone(),
+                    state.host.clone(),
+                )
             })
         else {
             return false;
         };
         let Some(outside_settings_load) = outside_settings_load else {
+            return false;
+        };
+        let Some(network) = native_host.start_main_script_request(&script_url, &initiator_url)
+        else {
             return false;
         };
         let request_client = outside_settings_load.request_client();
@@ -279,6 +267,7 @@ impl JsContextHost {
         let load_task = task_runner.spawn_abortable(async move {
             let result = fetch_worker_script_source(
                 &request_client,
+                &network,
                 fetch_task_runner,
                 cancel_handle,
                 &script_url,
@@ -307,7 +296,6 @@ impl JsContextHost {
                         RendererDedicatedWorkerClientEvent::ScriptLoaded {
                             script_url: final_url.to_string(),
                             script_source: loaded.source,
-                            network_response: Box::new(loaded.network_response),
                             script_kind,
                             secure_context,
                             response_referrer_policy: loaded.response_referrer_policy,
@@ -322,11 +310,13 @@ impl JsContextHost {
                     );
                 }
                 Err(error) => {
+                    network.failed(&crate::network::ResourceResponseFailure::Request(
+                        error.clone(),
+                    ));
                     let _ = client_event_producer.send(
                         RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
                             script_url: script_url.to_string(),
-                            error_message: error.error_message,
-                            network_response: error.network_response,
+                            error_message: error,
                         },
                     );
                 }
@@ -337,7 +327,6 @@ impl JsContextHost {
                 WorkerExecutionState::Loading {
                     load_task: slot,
                     terminated,
-                    name: loading_name,
                     module_static_import_policy: loading_module_static_import_policy,
                     ..
                 } => {
@@ -345,7 +334,6 @@ impl JsContextHost {
                         load_task.abort();
                         return false;
                     }
-                    *loading_name = name;
                     *loading_module_static_import_policy = Some(module_static_import_policy);
                     *slot = Some(load_task);
                     true
@@ -366,9 +354,10 @@ impl JsContextHost {
         &mut self,
         worker_id: DedicatedWorkerId,
         script_url: Url,
+        initiator_url: &Url,
         error_message: &'static str,
     ) -> bool {
-        let Some((client_event_producer, outside_settings_load)) = self
+        let Some((client_event_producer, outside_settings_load, network)) = self
             .workers
             .get(&worker_id)
             .and_then(|state| match &state.execution {
@@ -378,6 +367,9 @@ impl JsContextHost {
                 } => Some((
                     state.client_event_producer.clone(),
                     outside_settings_load.clone(),
+                    state
+                        .host
+                        .start_main_script_request(&script_url, initiator_url)?,
                 )),
                 WorkerExecutionState::Running { .. } => None,
             })
@@ -386,12 +378,14 @@ impl JsContextHost {
         };
         let task_runner = outside_settings_load.task_runner();
         let load_task = task_runner.spawn_abortable(async move {
+            network.failed(&crate::network::ResourceResponseFailure::Request(
+                error_message.to_owned(),
+            ));
             outside_settings_load.finish();
             let _ =
                 client_event_producer.send(RendererDedicatedWorkerClientEvent::ScriptLoadFailed {
                     script_url: script_url.to_string(),
                     error_message: error_message.to_owned(),
-                    network_response: None,
                 });
         });
         match self.workers.get_mut(&worker_id) {
@@ -435,75 +429,36 @@ impl JsContextHost {
         content_security_reporting_endpoints:
             crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     ) -> bool {
-        struct FinishLoadingWorkerSpawn {
-            pending_messages: Vec<V8StructuredClonePayload>,
-            name: String,
-            storage_key_top_level_site: String,
-            creator_storage_key: MoliStorageKey,
-            reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
-            module_credentials_mode: moli_fetch::RequestCredentialsMode,
-            module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
-            request_client: crate::network::ResourceRequestClient,
-        }
-
-        enum FinishLoadingAction {
-            MissingOrRunning,
-            DiscardTerminated,
-            Spawn(Box<FinishLoadingWorkerSpawn>),
-        }
-
-        let action = match self.workers.get_mut(&worker_id) {
-            Some(state) => match &mut state.execution {
-                WorkerExecutionState::Loading {
-                    pending_messages,
-                    load_task,
-                    terminated,
-                    name,
-                    module_credentials_mode,
-                    module_static_import_policy,
-                    storage_key_top_level_site,
-                    creator_storage_key,
-                    reserved_service_worker_client_id,
-                    outside_settings_load,
-                } => {
-                    let _ = load_task.take();
-                    if *terminated {
-                        FinishLoadingAction::DiscardTerminated
-                    } else {
-                        FinishLoadingAction::Spawn(Box::new(FinishLoadingWorkerSpawn {
-                            pending_messages: std::mem::take(pending_messages),
-                            name: name.clone(),
-                            storage_key_top_level_site: storage_key_top_level_site.clone(),
-                            creator_storage_key: creator_storage_key.clone(),
-                            reserved_service_worker_client_id: reserved_service_worker_client_id
-                                .take(),
-                            module_credentials_mode: *module_credentials_mode,
-                            module_static_import_policy: module_static_import_policy.take(),
-                            request_client: outside_settings_load.request_client(),
-                        }))
-                    }
-                }
-                WorkerExecutionState::Running { .. } => FinishLoadingAction::MissingOrRunning,
-            },
-            None => FinishLoadingAction::MissingOrRunning,
+        let Some(state) = self.workers.get_mut(&worker_id) else {
+            return false;
         };
-        let FinishLoadingWorkerSpawn {
+        let native_host = state.host.clone();
+        let WorkerExecutionState::Loading {
             pending_messages,
-            name,
+            load_task,
+            terminated,
+            module_credentials_mode,
+            module_static_import_policy,
             storage_key_top_level_site,
             creator_storage_key,
             reserved_service_worker_client_id,
-            module_credentials_mode,
-            module_static_import_policy,
-            request_client,
-        } = match action {
-            FinishLoadingAction::MissingOrRunning => return false,
-            FinishLoadingAction::DiscardTerminated => {
-                self.forget_worker(worker_id);
-                return false;
-            }
-            FinishLoadingAction::Spawn(spawn) => *spawn,
+            outside_settings_load,
+        } = &mut state.execution
+        else {
+            return false;
         };
+        let _ = load_task.take();
+        if *terminated {
+            self.forget_worker(worker_id);
+            return false;
+        }
+        let pending_messages = std::mem::take(pending_messages);
+        let storage_key_top_level_site = storage_key_top_level_site.clone();
+        let creator_storage_key = creator_storage_key.clone();
+        let reserved_service_worker_client_id = reserved_service_worker_client_id.take();
+        let module_credentials_mode = *module_credentials_mode;
+        let module_static_import_policy = module_static_import_policy.take();
+        let request_client = outside_settings_load.request_client();
         let network_policy = WorkerNetworkPolicy {
             secure_context,
             permission_overrides: self.permission_overrides().to_vec(),
@@ -515,10 +470,16 @@ impl JsContextHost {
             fetch_subresource_interception_resource_type: self
                 .fetch_subresource_interception_resource_type(),
         };
-        let mut spawn_options = WorkerSpawnOptions::with_source_and_request_client(
+        let script = crate::runtime::RendererDedicatedWorkerMainScript {
+            script_url: script_url.clone(),
+            outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Loaded,
+        };
+        let mut spawn_options = WorkerSpawnOptions::for_worker_source(
             script_source,
             script_url,
             request_client,
+            WorkerGlobalKind::Dedicated(native_host.clone()),
+            self.browser_context_runtime().worker_context_runtime(),
         )
         .with_script_kind(script_kind)
         .with_module_credentials_mode(module_credentials_mode)
@@ -528,17 +489,12 @@ impl JsContextHost {
         .with_content_security_reporting_endpoints(content_security_reporting_endpoints)
         .with_network_policy(network_policy)
         .with_policy_context(policy_context)
-        .with_worker_context_runtime(self.browser_context_runtime().worker_context_runtime())
         .with_service_worker_runtime(self.browser_context_runtime().service_worker_runtime())
-        .with_global_kind(WorkerGlobalKind::Dedicated { name })
         .with_storage_key_top_level_site(Some(storage_key_top_level_site))
         .with_creator_storage_key(creator_storage_key)
         .with_storage_bucket_store(Some(self.storage_bucket_store()))
         .with_indexed_db_manager(self.indexed_db_manager())
-        .with_pause_evaluation_until_debugger(
-            self.browser_context_runtime()
-                .dedicated_worker_pause_on_start_for_devtools(),
-        );
+        .with_pause_evaluation_until_debugger(native_host.pause_on_start());
         if let Some(policy) = module_static_import_policy {
             spawn_options = spawn_options
                 .with_module_static_import_initiator_url(policy.initiator_url)
@@ -549,18 +505,7 @@ impl JsContextHost {
         if let Some(client_id) = reserved_service_worker_client_id {
             spawn_options = spawn_options.with_reserved_service_worker_client_id(client_id);
         }
-        let mut worker_handle = spawn_worker_with_options(spawn_options);
-        let renderer_instance_id = self
-            .workers
-            .get(&worker_id)
-            .map(|state| state.renderer_instance_id)
-            .expect("loading DedicatedWorker must retain its renderer instance identity");
-        self.browser_context_runtime()
-            .attach_dedicated_worker_devtools_handle(
-                renderer_instance_id,
-                &worker_handle,
-                self.renderer_output_journal(),
-            );
+        let mut worker_handle = spawn_dedicated_worker(spawn_options, script);
         for message in pending_messages {
             worker_handle.post_message(message);
         }
@@ -586,153 +531,23 @@ impl JsContextHost {
         true
     }
 
-    pub(crate) fn record_dedicated_worker_target_created(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        document_url: Url,
-        request_url: Url,
-        name: String,
-    ) -> bool {
-        let renderer_instance_id = {
-            let Some(state) = self.workers.get_mut(&worker_id) else {
-                return false;
-            };
-            if state.target_created {
-                return false;
-            }
-            state.target_created = true;
-            state.renderer_instance_id
-        };
-        let page_token = self
-            .page_dedicated_worker_client_event_sender()
-            .page_token();
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::Created(
-                crate::runtime::RendererDedicatedWorkerTargetInfo {
-                    owner_local_host_id: page_token.local_host_id(),
-                    page_id: page_token.page_id(),
-                    instance_id: renderer_instance_id,
-                    request_url: request_url.to_string(),
-                    document_url: document_url.to_string(),
-                    name,
-                },
-            ),
-        );
-        true
-    }
-
-    /// Publishes one Worker lifecycle fact without conflating a test-only
-    /// missing output sink with a disappeared Worker.
-    ///
-    /// Production Pages structurally require an owner reservation and bind a
-    /// concrete output journal. Low-level standalone PageVm fixtures
-    /// deliberately omit that journal while still exercising Worker state.
-    fn append_dedicated_worker_target_lifecycle(
-        &self,
-        event: crate::runtime::RendererDedicatedWorkerTargetEvent,
-    ) {
-        let appended = self.append_live_turn_owner_action(
-            crate::runtime::RendererOwnerAction::DedicatedWorkerTargetLifecycle(event),
-        );
-        debug_assert!(
-            appended || cfg!(test),
-            "production DedicatedWorker lifecycle requires a renderer output sink"
-        );
-    }
-
-    pub(crate) fn record_dedicated_worker_target_script_loaded(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        script_url: String,
-        response: Box<crate::protocol_types::NavigationResponse>,
-    ) -> bool {
-        let Some(state) = self.workers.get(&worker_id) else {
-            return false;
-        };
-        if !state.target_created {
-            return true;
-        }
-        let instance_id = state.renderer_instance_id;
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoaded {
-                instance_id,
-                script_url,
-                response,
-            },
-        );
-        true
-    }
-
     pub(crate) fn record_dedicated_worker_target_script_load_failed(
         &mut self,
         worker_id: DedicatedWorkerId,
         script_url: String,
         error_message: String,
-        response: Option<Box<crate::protocol_types::NavigationResponse>>,
     ) -> bool {
         let Some(state) = self.workers.get(&worker_id) else {
             return false;
         };
-        if !state.target_created {
-            return true;
-        }
-        let instance_id = state.renderer_instance_id;
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::ScriptLoadFailed {
-                instance_id,
+        state
+            .host
+            .script_completed(crate::runtime::RendererDedicatedWorkerMainScript {
                 script_url,
-                error_message,
-                response,
-            },
-        );
-        true
-    }
-
-    pub(crate) fn record_dedicated_worker_runtime_inspector_messages(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        batches: Vec<crate::worker::WorkerRuntimeInspectorMessageBatch>,
-    ) -> bool {
-        let Some(state) = self.workers.get(&worker_id) else {
-            return false;
-        };
-        if !state.target_created {
-            return true;
-        }
-        let instance_id = state.renderer_instance_id;
-        for batch in batches {
-            self.append_dedicated_worker_target_lifecycle(
-                crate::runtime::RendererDedicatedWorkerTargetEvent::RuntimeInspectorMessages {
-                    instance_id,
-                    inspector_session_id: batch.inspector_session_id,
-                    messages: batch.messages,
+                outcome: crate::runtime::RendererDedicatedWorkerMainScriptOutcome::Failed {
+                    error_message,
                 },
-            );
-        }
-        true
-    }
-
-    pub(crate) fn record_dedicated_worker_target_console_message(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        message: crate::worker::WorkerConsoleMessage,
-    ) -> bool {
-        let Some(state) = self.workers.get(&worker_id) else {
-            return false;
-        };
-        if !state.target_created {
-            return true;
-        }
-        self.append_dedicated_worker_target_lifecycle(
-            crate::runtime::RendererDedicatedWorkerTargetEvent::Console {
-                instance_id: state.renderer_instance_id,
-                message: crate::runtime::RendererSharedWorkerConsoleMessage {
-                    message: message.message,
-                    args: message.args,
-                    stack: message.stack,
-                },
-            },
-        );
+            });
         true
     }
 
@@ -760,350 +575,6 @@ impl JsContextHost {
                     }
                 }
                 true
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn continue_worker_fetch(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.continue_pending_fetch(request);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn continue_worker_xhr(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.continue_pending_xhr(request);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn continue_worker_csp_report(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.continue_pending_csp_report(request);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn continue_worker_fetch_response(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.continue_pending_fetch_response(
-                        request,
-                        response_code,
-                        response_headers,
-                    );
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn continue_worker_xhr_response(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-        response_code: Option<u16>,
-        response_headers: Option<Vec<(String, Vec<u8>)>>,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.continue_pending_xhr_response(request, response_code, response_headers);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_fetch(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_fetch(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_xhr(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_xhr(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_csp_report(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_csp_report(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_fetch_response(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_fetch_response(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_xhr_response(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_xhr_response(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_fetch_auth(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_fetch_auth(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fail_worker_xhr_auth(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-        error_text: String,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fail_pending_xhr_auth(request, error_text);
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fulfill_worker_fetch(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fulfill_pending_fetch(
-                        request,
-                        response_code,
-                        response_headers,
-                        response_body,
-                    );
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fulfill_worker_xhr(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fulfill_pending_xhr(
-                        request,
-                        response_code,
-                        response_headers,
-                        response_body,
-                    );
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fulfill_worker_csp_report(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fulfill_pending_csp_report(
-                        request,
-                        response_code,
-                        response_headers,
-                        response_body,
-                    );
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fulfill_worker_fetch_response(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingFetchContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fulfill_pending_fetch_response(
-                        request,
-                        response_code,
-                        response_headers,
-                        response_body,
-                    );
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
-            })
-            .unwrap_or(false)
-    }
-
-    pub(crate) fn fulfill_worker_xhr_response(
-        &mut self,
-        worker_id: DedicatedWorkerId,
-        request: WorkerPendingXhrContinue,
-        response_code: u16,
-        response_headers: Vec<(String, Vec<u8>)>,
-        response_body: RendererSyntheticResponseBody,
-    ) -> bool {
-        self.workers
-            .get_mut(&worker_id)
-            .map(|state| match &mut state.execution {
-                WorkerExecutionState::Running { handle } => {
-                    handle.fulfill_pending_xhr_response(
-                        request,
-                        response_code,
-                        response_headers,
-                        response_body,
-                    );
-                    true
-                }
-                WorkerExecutionState::Loading { .. } => false,
             })
             .unwrap_or(false)
     }
@@ -1349,18 +820,8 @@ impl JsContextHost {
     }
 
     pub(crate) fn forget_worker(&mut self, worker_id: DedicatedWorkerId) {
-        let retired_subresource_count = self.cancel_subresource_fetches_for_worker(worker_id);
         let browser_context_runtime = self.browser_context_runtime();
         if let Some(state) = self.workers.remove(&worker_id) {
-            self.browser_context_runtime()
-                .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
-            if state.target_created {
-                self.append_dedicated_worker_target_lifecycle(
-                    crate::runtime::RendererDedicatedWorkerTargetEvent::Destroyed {
-                        instance_id: state.renderer_instance_id,
-                    },
-                );
-            }
             let owner = state.owner.owner();
             let realm_token = state.owner.realm_token();
             let execution_state = match &state.execution {
@@ -1387,41 +848,24 @@ impl JsContextHost {
                 ?owner,
                 ?realm_token,
                 execution_state,
-                retired_subresource_count,
                 "forgot DedicatedWorker execution-context state"
             );
         }
     }
 
     pub(crate) fn shutdown_workers(&mut self) {
-        let browser_context_runtime = self.browser_context_runtime();
-        let workers = std::mem::take(&mut self.workers);
-        for (_, state) in workers {
-            browser_context_runtime
-                .unregister_dedicated_worker_devtools_handle(state.renderer_instance_id);
-            match state.execution {
-                WorkerExecutionState::Loading {
-                    load_task,
-                    reserved_service_worker_client_id,
-                    ..
-                } => {
-                    if let Some(load_task) = load_task {
-                        load_task.abort();
-                    }
-                    if let Some(client_id) = reserved_service_worker_client_id {
-                        browser_context_runtime.unregister_service_worker_client(client_id);
-                    }
-                }
-                WorkerExecutionState::Running { handle } => {
-                    handle.terminate_and_join();
-                }
-            }
+        // Use the same single-consumption retirement as explicit terminate and
+        // realm destruction, including the native occurrence before dropping
+        // each running handle (whose Drop terminates its thread).
+        for worker_id in self.workers.keys().copied().collect::<Vec<_>>() {
+            self.forget_worker(worker_id);
         }
     }
 }
 
 async fn fetch_worker_script_source(
     request_client: &crate::network::ResourceRequestClient,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
     resource_task_runner: crate::network::RendererResourceTaskRunner,
     cancel_handle: moli_fetch::FetchCancelHandle,
     script_url: &Url,
@@ -1433,11 +877,11 @@ async fn fetch_worker_script_source(
     document_referrer_policy: Option<String>,
     browser_context_runtime: RendererBrowserContextRuntime,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
-) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
+) -> Result<LoadedWorkerScript, String> {
     let mut request_url = script_url.clone();
     request_url.set_fragment(None);
     let mut request = moli_fetch::Request::new("GET", request_url.as_str(), None, vec![])
-        .map_err(WorkerScriptLoadFailure::without_response)?
+        .map_err(|error| error.to_string())?
         .with_page_network_policy()
         .with_network_partition_key(network_partition_key.clone())
         .with_initiator_url(initiator_url)
@@ -1454,43 +898,50 @@ async fn fetch_worker_script_source(
     }
     if let Some(client_id) = reserved_service_worker_client_id
         && let Some(response) = browser_context_runtime
-            .fetch_service_worker_main_resource_for_worker(
+            .service_worker_runtime()
+            .fetch_main_resource_for_worker_client(
                 client_id,
                 &request,
                 request_client,
                 resource_task_runner,
                 ServiceWorkerRequestDestination::Worker,
+                cancel_handle.clone(),
             )
             .await
             .map_err(|error| {
-                WorkerScriptLoadFailure::without_response(format!(
+                format!(
                     "failed to fetch worker script `{script_url}` through service worker: {error}"
-                ))
+                )
             })?
     {
+        let resource = crate::network::ResourceResponseStream::with_disk_pool(
+            network.clone(),
+            request_client.disk_pool(),
+        );
+        let response = resource
+            .collect(response)
+            .await
+            .inspect_err(|error| network.failed(error))
+            .map_err(|error| format!("failed to fetch worker script `{script_url}`: {error}"))?
+            .into_navigation_response()?;
         return loaded_worker_script_from_navigation_response(
             response,
+            network,
             initiator_url,
             network_partition_key,
             creator_policy_context,
             script_kind,
         );
     }
-    let observed = request_client
-        .fetch_text_stream_with_cancel_and_network_metadata(request, cancel_handle)
+    let response = request_client
+        .fetch_observed_script_text_with_cancel(request, cancel_handle, network.as_ref())
         .await
-        .map_err(|error| {
-            WorkerScriptLoadFailure::without_response(format!(
-                "failed to fetch worker script `{script_url}`: {error}"
-            ))
-        })?;
-    let (response, request_observation) = observed.into_parts();
-    let network_request_headers =
-        request_observation.map(moli_fetch::NetworkRequestObservation::into_headers);
+        .inspect_err(|error| network.failed(error))
+        .map_err(|error| format!("failed to fetch worker script `{script_url}`: {error}"))?;
 
     loaded_worker_script_from_navigation_response(
-        crate::protocol_types::NavigationResponse::from(response)
-            .with_network_request_headers(network_request_headers),
+        crate::protocol_types::NavigationResponse::from(response),
+        network,
         initiator_url,
         network_partition_key,
         creator_policy_context,
@@ -1500,73 +951,77 @@ async fn fetch_worker_script_source(
 
 fn loaded_worker_script_from_navigation_response(
     response: crate::protocol_types::NavigationResponse,
+    network: &crate::network::ResourceTransfer,
     initiator_url: &Url,
     network_partition_key: Option<String>,
     creator_policy_context: SubresourcePolicyContext,
     script_kind: WorkerScriptKind,
-) -> Result<LoadedWorkerScript, WorkerScriptLoadFailure> {
-    let response_head = response.head();
-    if let Err(error) = crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        initiator_url,
-        &response_head.redirect_chain,
-        &response.final_url,
-    ) {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
-    }
-    if let Err(error) =
-        moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-    {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
-    }
-    let content_security_policies =
-        crate::content_security_policy::content_security_policy_headers(&response.headers);
-    let content_security_report_only_policies =
-        crate::content_security_policy::content_security_policy_report_only_headers(
-            &response.headers,
-        );
-    let content_security_reporting_endpoints =
+) -> Result<LoadedWorkerScript, String> {
+    let result = (|| {
+        let response_head = response.head();
+        if let Err(error) = crate::worker::ensure_worker_script_redirect_chain_same_origin(
+            initiator_url,
+            &response_head.redirect_chain,
+            &response.final_url,
+        ) {
+            return Err(error.to_string());
+        }
+        if let Err(error) = moli_fetch::ensure_http_status_success(
+            response.final_url.as_str(),
+            response.status,
+            false,
+        ) {
+            return Err(error.to_string());
+        }
+        let content_security_policies =
+            crate::content_security_policy::content_security_policy_headers(&response.headers);
+        let content_security_report_only_policies =
+            crate::content_security_policy::content_security_policy_report_only_headers(
+                &response.headers,
+            );
+        let content_security_reporting_endpoints =
         crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
             &response.headers,
             &response.final_url,
         );
-    let response_referrer_policy =
-        crate::referrer_policy::response_referrer_policy_from_headers(&response.headers);
-    let policy_context =
-        dedicated_worker_policy_context_from_headers(&response.headers, creator_policy_context);
-    if script_kind == WorkerScriptKind::Module
-        && crate::worker::worker_response_has_webassembly_mime(&response.headers)
-    {
-        return Ok(LoadedWorkerScript {
+        let response_referrer_policy =
+            crate::referrer_policy::response_referrer_policy_from_headers(&response.headers);
+        let policy_context =
+            dedicated_worker_policy_context_from_headers(&response.headers, creator_policy_context);
+        if script_kind == WorkerScriptKind::Module
+            && crate::worker::worker_response_has_webassembly_mime(&response.headers)
+        {
+            return Ok(LoadedWorkerScript {
+                final_url: response.final_url.clone(),
+                source: WorkerScriptSource::binary(response.clone_body_bytes()),
+                response_referrer_policy,
+                network_partition_key,
+                policy_context,
+                content_security_policies,
+                content_security_report_only_policies,
+                content_security_reporting_endpoints,
+            });
+        }
+        if let Err(error) = crate::worker::ensure_worker_script_mime_acceptable(
+            &response.final_url,
+            &response.headers,
+            response.body_bytes(),
+        ) {
+            return Err(error.to_string());
+        }
+
+        Ok(LoadedWorkerScript {
             final_url: response.final_url.clone(),
-            source: WorkerScriptSource::binary(response.clone_body_bytes()),
+            source: WorkerScriptSource::text(response.body_text().to_owned()),
             response_referrer_policy,
             network_partition_key,
             policy_context,
             content_security_policies,
             content_security_report_only_policies,
             content_security_reporting_endpoints,
-            network_response: response,
-        });
-    }
-    if let Err(error) = crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    ) {
-        return Err(WorkerScriptLoadFailure::with_response(error, response));
-    }
-
-    Ok(LoadedWorkerScript {
-        final_url: response.final_url.clone(),
-        source: WorkerScriptSource::text(response.body_text().to_owned()),
-        response_referrer_policy,
-        network_partition_key,
-        policy_context,
-        content_security_policies,
-        content_security_report_only_policies,
-        content_security_reporting_endpoints,
-        network_response: response,
-    })
+        })
+    })();
+    network.main_script_response(&response, result)
 }
 
 fn dedicated_worker_policy_context_from_headers(

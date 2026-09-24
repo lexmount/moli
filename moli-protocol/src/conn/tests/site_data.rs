@@ -4,7 +4,8 @@ use super::*;
 fn browser_context_cookie_sites_and_clear_for_sites_use_site_keys() {
     let bc = BrowserContext::new("BID-sites".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
@@ -31,7 +32,8 @@ fn browser_context_cookie_sites_and_clear_for_sites_use_site_keys() {
 fn browser_context_clear_cookies_for_sites_report_projects_replaced_and_remaining_state() {
     let bc = BrowserContext::new("BID-site-clear-report".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -68,7 +70,8 @@ fn browser_context_clear_cookies_for_sites_report_projects_replaced_and_remainin
 fn browser_context_cookie_site_data_summarizes_counts_by_site() {
     let bc = BrowserContext::new("BID-site-data".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"a=1; Path=/app".to_vec())],
@@ -99,7 +102,8 @@ fn browser_context_cookie_site_data_summarizes_counts_by_site() {
 fn browser_context_preview_clear_cookies_for_sites_reports_targeted_removal_without_mutation() {
     let bc = BrowserContext::new("BID-site-clear-preview".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -142,7 +146,8 @@ fn browser_context_preview_clear_cookies_for_sites_reports_targeted_removal_with
 fn browser_context_preview_clear_cookies_for_sites_with_persistent_scope_keeps_session_slice() {
     let bc = BrowserContext::new("BID-site-clear-preview-persistent".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -179,7 +184,8 @@ fn browser_context_preview_clear_cookies_for_sites_with_persistent_scope_keeps_s
 fn browser_context_preview_clear_cookie_store_defaults_to_all_scope() {
     let bc = BrowserContext::new("BID-store-clear-preview-all".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -211,36 +217,29 @@ fn browser_context_preview_clear_cookie_store_defaults_to_all_scope() {
 #[tokio::test]
 async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_invalidate_live_document_cookie_cache()
  {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-store-clear-preview-live",
         "TID-store-clear-preview-live",
     ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![
-                ("set-cookie".into(), "theme=dark; Path=/app".into()),
-                (
-                    "set-cookie".into(),
-                    "persist=1; Path=/app; Max-Age=3600".into(),
-                ),
-            ],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![
+            ("set-cookie".into(), "theme=dark; Path=/app".into()),
+            (
+                "set-cookie".into(),
+                "persist=1; Path=/app; Max-Age=3600".into(),
+            ),
+        ],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -270,7 +269,8 @@ async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_in
 fn browser_context_preview_clear_cookie_storage_with_site_target_projects_target() {
     let bc = BrowserContext::new("BID-store-clear-target-preview".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -303,36 +303,29 @@ fn browser_context_preview_clear_cookie_storage_with_site_target_projects_target
 #[tokio::test]
 async fn connection_clear_cookie_store_with_session_scope_invalidates_live_document_cookie_cache_but_preserves_persistent_cookie()
  {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-store-clear-session-live",
         "TID-store-clear-session-live",
     ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![
-                ("set-cookie".into(), "theme=dark; Path=/app".into()),
-                (
-                    "set-cookie".into(),
-                    "persist=1; Path=/app; Max-Age=3600".into(),
-                ),
-            ],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![
+            ("set-cookie".into(), "theme=dark; Path=/app".into()),
+            (
+                "set-cookie".into(),
+                "persist=1; Path=/app; Max-Age=3600".into(),
+            ),
+        ],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -360,16 +353,14 @@ async fn connection_clear_cookie_store_with_session_scope_invalidates_live_docum
 
 #[test]
 fn connection_clear_cookie_storage_with_site_target_projects_targeted_report() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-store-clear-target-report".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test("BID-store-clear-target-report"));
 
     {
-        let mut store = conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .cookie_store_for_test()
-            .lock();
+        let browser_context = conn.browser_context.as_ref().unwrap();
+        let store_handle = browser_context.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -414,7 +405,8 @@ fn connection_clear_cookie_storage_with_site_target_projects_targeted_report() {
 fn browser_context_preview_cookie_site_data_operation_clear_projects_generic_owner_seam() {
     let bc = BrowserContext::new("BID-op-preview-clear".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -447,7 +439,8 @@ fn browser_context_preview_cookie_site_data_operation_clear_projects_generic_own
 fn browser_context_cookie_storage_state_snapshot_distinguishes_live_and_persistent_views() {
     let bc = BrowserContext::new("BID-site-state".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -486,7 +479,8 @@ fn browser_context_cookie_storage_state_snapshot_distinguishes_live_and_persiste
 fn browser_context_cookie_storage_state_snapshot_for_sites_filters_views() {
     let bc = BrowserContext::new("BID-site-state-scoped".into());
     {
-        let mut store = bc.cookie_store_for_test().lock();
+        let store_handle = bc.cookie_store_for_test();
+        let mut store = store_handle.lock();
         store.store_response_headers(
             &Url::parse("https://app.example.com/app/index.html").unwrap(),
             &[("set-cookie".to_owned(), b"session=1; Path=/app".to_vec())],
@@ -518,30 +512,21 @@ fn browser_context_cookie_storage_state_snapshot_for_sites_filters_views() {
 
 #[tokio::test]
 async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-live-sites",
-        "TID-live-sites",
-    ));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_page_target_fixture_for_test("BID-live-sites", "TID-live-sites"));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -560,8 +545,9 @@ async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
 
 #[test]
 fn connection_clear_cookies_for_sites_report_projects_targeted_state() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-site-clear-report".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test("BID-live-site-clear-report"));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
         let mut store = cookie_store.lock();
@@ -598,30 +584,23 @@ fn connection_clear_cookies_for_sites_report_projects_targeted_state() {
 #[tokio::test]
 async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_document_cookie_cache()
 {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-live-site-clear-preview",
         "TID-live-site-clear-preview",
     ));
     let url = Url::parse("https://app.example.com/app").unwrap();
 
-    let navigation = conn
-        .build_loaded_navigation_from_buffered_response_async(
-            url.clone(),
-            "GET".into(),
-            vec![].into(),
-            200,
-            vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
-            "<!doctype html><html><body>ok</body></html>".into(),
-        )
-        .await
-        .expect("navigation should build");
-    conn.browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+    conn.install_buffered_navigation_fixture_for_test(
+        url.clone(),
+        "GET".into(),
+        vec![],
+        200,
+        vec![("set-cookie".into(), "theme=dark; Path=/app".into())],
+        "<!doctype html><html><body>ok</body></html>".into(),
+    )
+    .await
+    .expect("navigation should build");
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -665,8 +644,8 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
 
 #[test]
 fn connection_cookie_sites_reflect_active_browser_store() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-sites".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-live-sites"));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
         let mut store = cookie_store.lock();
@@ -688,8 +667,8 @@ fn connection_cookie_sites_reflect_active_browser_store() {
 
 #[test]
 fn connection_cookie_site_data_reflects_active_browser_store() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-site-data".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-live-site-data"));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
         let mut store = cookie_store.lock();
@@ -718,8 +697,8 @@ fn connection_cookie_site_data_reflects_active_browser_store() {
 
 #[test]
 fn connection_cookie_storage_state_snapshot_reflects_active_browser_store() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-site-state".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-live-site-state"));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
         let mut store = cookie_store.lock();
@@ -745,8 +724,9 @@ fn connection_cookie_storage_state_snapshot_reflects_active_browser_store() {
 
 #[test]
 fn connection_cookie_storage_state_snapshot_for_sites_filters_active_store() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-live-site-state-scoped".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test("BID-live-site-state-scoped"));
     {
         let cookie_store = conn.ensure_cookie_store().unwrap();
         let mut store = cookie_store.lock();

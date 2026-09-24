@@ -18,6 +18,8 @@ use super::{
     DocumentResourceLoaderState,
 };
 
+mod script_cache;
+
 fn owner(document_id: u64) -> FrameDocumentTaskOwner {
     FrameDocumentTaskOwner::new(
         FrameSchedulerLaneId(7),
@@ -65,6 +67,36 @@ fn synthetic_document_context_preserves_its_inherited_origin() {
     );
 
     assert_eq!(context.origin(), "https://creator.test");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn document_bootstrap_uses_the_executor_already_owned_by_its_context() {
+    let browser_context = crate::runtime::RendererBrowserContextRuntime::new();
+    let worker = browser_context.worker_context_runtime();
+    let selected = crate::network::RendererResourceTaskRunner::for_test();
+    browser_context.bind_resource_task_runner(selected.clone());
+    let page_executor = resource_task_runner();
+    assert!(!page_executor.shares_executor_with(&selected));
+    let transport = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+    let dom = crate::dom::native::DomHost::from_dom(crate::dom::native::NativeDom::new(
+        "https://example.test/page".parse().unwrap(),
+    ));
+    let document = crate::script_vm::MainDocumentBootstrap::new(
+        &dom,
+        transport.handle(),
+        page_executor,
+        &browser_context,
+    )
+    .resource_loader;
+    let child = document.fork_for_document(context(2, "https://example.test/child"));
+
+    for executor in [
+        document.task_runner(),
+        child.task_runner(),
+        worker.resource_task_runner().unwrap(),
+    ] {
+        assert!(executor.shares_executor_with(&selected));
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -187,7 +219,7 @@ async fn registry_replaces_future_transport_without_rebinding_existing_loads() {
     let document_owner = WindowDocumentOwner::Frame(owner(1));
     registry.register(document_owner, authority.clone());
 
-    registry.replace_transport_view(document_owner, replacement_view);
+    registry.replace_view(document_owner, replacement_view);
 
     let installed = registry.get(document_owner).expect("installed authority");
     assert!(installed.shares_authority_with(&authority));
@@ -274,7 +306,7 @@ async fn registry_rejects_transport_replacement_without_registered_authority() {
     );
 
     DocumentResourceLoaderRegistry::default()
-        .replace_transport_view(WindowDocumentOwner::Frame(owner(1)), replacement);
+        .replace_view(WindowDocumentOwner::Frame(owner(1)), replacement);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -292,7 +324,7 @@ async fn registry_rejects_transport_replacement_with_different_authority() {
     let document_owner = WindowDocumentOwner::Frame(owner(1));
     registry.register(document_owner, registered);
 
-    registry.replace_transport_view(document_owner, replacement);
+    registry.replace_view(document_owner, replacement);
 }
 
 #[tokio::test(flavor = "current_thread")]

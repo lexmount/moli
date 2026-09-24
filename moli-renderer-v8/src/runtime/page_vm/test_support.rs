@@ -52,7 +52,6 @@ impl PageVm {
     /// those contracts must use the owner-loop integration harness.
     pub(crate) async fn run_one_oldest_ready_page_task_on_owner_lane_for_test(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         let sources = self.page_task_executor_sources_for_test();
         let task = if let Some(task) =
@@ -73,7 +72,7 @@ impl PageVm {
         } else {
             return Ok(false);
         };
-        self.apply_selected_page_scheduler_task_on_owner_lane_for_test(task, loader.clone())
+        self.apply_selected_page_scheduler_task_on_owner_lane_for_test(task)
             .await?;
         Ok(true)
     }
@@ -103,7 +102,7 @@ impl PageVmTaskExecutorTestHarness {
     }
 
     pub(crate) fn new(document_url: Url, loader: &ResourceRequestClient) -> Self {
-        let owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let mut harness =
             Self::new_with_browser_context_runtime(document_url, loader, owner.handle());
         harness._browser_context_owner = Some(owner);
@@ -134,7 +133,7 @@ impl PageVmTaskExecutorTestHarness {
     /// dispatcher. It must not be used as evidence for owner-slot admission or
     /// scheduler fairness, which this fixture deliberately does not model.
     pub(crate) fn new_with_dom_host(dom_host: DomHost, loader: &ResourceRequestClient) -> Self {
-        let owner = crate::runtime::RendererBrowserContextRuntime::new();
+        let owner = crate::runtime::RendererBrowserContextRuntime::new_for_test();
         let mut harness =
             Self::new_with_dom_host_and_browser_context_runtime(dom_host, loader, owner.handle());
         harness._browser_context_owner = Some(owner);
@@ -187,18 +186,19 @@ impl PageVmTaskExecutorTestHarness {
     /// terminal application instead of duplicating those rules in tests.
     pub(crate) async fn run_one_oldest_ready_page_task_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(
                 self.page_vm
-                    .run_one_oldest_ready_page_task_on_owner_lane_for_test(loader),
+                    .run_one_oldest_ready_page_task_on_owner_lane_for_test(),
             )
             .await
     }
 
     /// Execute one exact Networking resource terminal through the production
     /// selected-task dispatcher and its unique task-end coordinator.
+    /// Preceding native progress receipts run through the same dispatcher but
+    /// do not count as a resource callback.
     ///
     /// Tests that only inspect the resource owner's body effect may use
     /// `apply_one_page_resource_terminal_owner_admission`. Complete Page
@@ -206,14 +206,26 @@ impl PageVmTaskExecutorTestHarness {
     /// post-checkpoint follow-ups cannot drift from production.
     pub(crate) async fn run_one_page_resource_completion_selected_task_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
-        self.selected_task_local_set
-            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::ResourceCompletion,
-                loader,
-            ))
-            .await
+        while let Some(owner) = self.page_resource_completion_source.next_ready_owner() {
+            // This harness is the sole consumer. Once a FIFO head exists,
+            // arrivals can only append behind the task we are about to run.
+            assert!(
+                self.selected_task_local_set
+                    .run_until(self.page_vm.run_exact_selected_page_task_for_test(
+                        PageSelectedTaskTestSelector::ResourceCompletion,
+                    ))
+                    .await?,
+                "the observed resource task must remain available to its owner"
+            );
+            if !matches!(owner.local_owner(),
+                crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+                    crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Execute one exact main-Document native-module owner notification.
@@ -221,14 +233,12 @@ impl PageVmTaskExecutorTestHarness {
     /// older unrelated Page task cannot obscure the modulepreload follow-up.
     pub(crate) async fn run_one_native_module_owner_event_task_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MainDocumentRuntime(
                     crate::page_task_queue::PageMainDocumentRuntimeActionKind::NativeModuleOwnerEvent,
                 ),
-                loader,
             ))
             .await
     }
@@ -240,10 +250,7 @@ impl PageVmTaskExecutorTestHarness {
     /// synchronous domain setup. Without this explicit proxy, method
     /// resolution would select the standalone ScriptVm timer helper and
     /// silently bypass Page task completion.
-    pub(crate) async fn advance_timers_until_deadline_for_test(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<()> {
+    pub(crate) async fn advance_timers_until_deadline_for_test(&mut self) -> anyhow::Result<()> {
         let deadline = std::time::Instant::now()
             .checked_add(std::time::Duration::from_millis(3_200))
             .unwrap_or_else(std::time::Instant::now);
@@ -262,7 +269,6 @@ impl PageVmTaskExecutorTestHarness {
                                     deadline,
                                     selection,
                                 },
-                                loader.clone(),
                             ),
                     )
                     .await?;
@@ -294,15 +300,10 @@ impl PageVmTaskExecutorTestHarness {
     /// unbounded generic wait driver.
     pub(crate) async fn drain_ready_page_task_executor_turns_for_setup(
         &mut self,
-        loader: &ResourceRequestClient,
         max_tasks: usize,
     ) -> anyhow::Result<usize> {
         let mut completed = 0;
-        while completed < max_tasks
-            && self
-                .run_one_oldest_ready_page_task_executor_turn(loader)
-                .await?
-        {
+        while completed < max_tasks && self.run_one_oldest_ready_page_task_executor_turn().await? {
             completed += 1;
         }
         Ok(completed)
@@ -311,36 +312,28 @@ impl PageVmTaskExecutorTestHarness {
     pub(crate) async fn run_one_dom_manipulation_task_executor_turn(
         &mut self,
         family: super::PageDomManipulationTestFamily,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::DomManipulation(family),
-                loader,
             ))
             .await
     }
 
     pub(crate) async fn run_one_media_element_event_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::MediaElementEvent,
-                loader,
             ))
             .await
     }
 
-    pub(crate) async fn run_one_rendering_update_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
+    pub(crate) async fn run_one_rendering_update_executor_turn(&mut self) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::RenderingUpdate,
-                loader,
             ))
             .await
     }
@@ -362,12 +355,10 @@ impl PageVmTaskExecutorTestHarness {
     /// exact-root arbiter and selected-task completion coordinator.
     pub(crate) async fn run_one_service_worker_internal_task_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ServiceWorkerInternal,
-                loader,
             ))
             .await
     }
@@ -382,7 +373,6 @@ impl PageVmTaskExecutorTestHarness {
     pub(crate) async fn run_one_child_frame_task_executor_turn(
         &mut self,
         turn: crate::frame_owner_model::ChildFrameSemanticTurnKind,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         use crate::frame_owner_model::ChildFrameSemanticTurnKind;
 
@@ -408,21 +398,16 @@ impl PageVmTaskExecutorTestHarness {
             }
         };
         self.selected_task_local_set
-            .run_until(
-                self.page_vm
-                    .run_exact_selected_page_task_for_test(selector, loader),
-            )
+            .run_until(self.page_vm.run_exact_selected_page_task_for_test(selector))
             .await
     }
 
     pub(crate) async fn run_one_child_module_script_terminal_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::ChildModuleScriptTerminal,
-                loader,
             ))
             .await
     }
@@ -439,7 +424,6 @@ impl PageVmTaskExecutorTestHarness {
     /// production selected-task dispatcher and completion coordinator.
     pub(crate) async fn drain_ready_child_frame_task_executor_turns_for_setup(
         &mut self,
-        loader: &ResourceRequestClient,
         max_tasks: usize,
     ) -> anyhow::Result<usize> {
         use crate::frame_owner_model::ChildFrameSemanticTurnKind;
@@ -458,10 +442,7 @@ impl PageVmTaskExecutorTestHarness {
         while completed < max_tasks {
             let mut progressed = false;
             for turn in CHILD_SETUP_ORDER {
-                if self
-                    .run_one_child_frame_task_executor_turn(turn, loader)
-                    .await?
-                {
+                if self.run_one_child_frame_task_executor_turn(turn).await? {
                     completed += 1;
                     progressed = true;
                     break;
@@ -476,36 +457,30 @@ impl PageVmTaskExecutorTestHarness {
 
     pub(crate) async fn run_one_text_track_networking_task_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::TextTrackNetworking,
-                loader,
             ))
             .await
     }
 
     pub(crate) async fn run_one_broadcast_channel_delivery_executor_turn(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> anyhow::Result<bool> {
         self.run_one_dom_manipulation_task_executor_turn(
             super::PageDomManipulationTestFamily::BroadcastChannel,
-            loader,
         )
         .await
     }
 
-    pub(crate) async fn run_one_webcrypto_task_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
+    pub(crate) async fn run_one_webcrypto_task_executor_turn(&mut self) -> anyhow::Result<bool> {
         self.selected_task_local_set
-            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::WebCryptoTask,
-                loader,
-            ))
+            .run_until(
+                self.page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::WebCryptoTask,
+                ),
+            )
             .await
     }
 
@@ -547,50 +522,39 @@ impl PageVmTaskExecutorTestHarness {
             .await
     }
 
-    pub(crate) async fn run_one_window_message_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
+    pub(crate) async fn run_one_window_message_executor_turn(&mut self) -> anyhow::Result<bool> {
         self.selected_task_local_set
-            .run_until(self.page_vm.run_exact_selected_page_task_for_test(
-                PageSelectedTaskTestSelector::WindowMessage,
-                loader,
-            ))
+            .run_until(
+                self.page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::WindowMessage,
+                ),
+            )
             .await
     }
 
-    pub(crate) async fn run_one_history_traversal_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
+    pub(crate) async fn run_one_history_traversal_executor_turn(&mut self) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::HistoryTraversal,
-                loader,
             ))
             .await
     }
 
-    pub(crate) async fn run_one_user_interaction_executor_turn(
-        &mut self,
-        loader: &ResourceRequestClient,
-    ) -> anyhow::Result<bool> {
+    pub(crate) async fn run_one_user_interaction_executor_turn(&mut self) -> anyhow::Result<bool> {
         self.selected_task_local_set
             .run_until(self.page_vm.run_exact_selected_page_task_for_test(
                 PageSelectedTaskTestSelector::UserInteraction,
-                loader,
             ))
             .await
     }
 
     pub(crate) async fn apply_pending_broadcast_channel_delivery_tasks(
         &mut self,
-        loader: &ResourceRequestClient,
         max_tasks: usize,
     ) -> anyhow::Result<usize> {
         let mut completed = 0;
         while self
-            .run_one_broadcast_channel_delivery_executor_turn(loader)
+            .run_one_broadcast_channel_delivery_executor_turn()
             .await?
         {
             completed += 1;
@@ -604,17 +568,27 @@ impl PageVmTaskExecutorTestHarness {
 
     /// Apply one terminal only when the test observes the boundary between
     /// network settlement and a later typed Page successor.
+    /// Preceding native progress receipts are applied in FIFO order.
     ///
     /// This is not a Page-task executor. Complete behavior tests must use
     /// `run_one_page_resource_completion_selected_task_executor_turn`.
     pub(crate) fn apply_one_page_resource_terminal_owner_admission(
         &mut self,
     ) -> anyhow::Result<bool> {
-        self.page_vm
+        while let Some(outcome) = self
+            .page_vm
             .apply_one_page_resource_terminal_owner_admission_for_test(
                 &mut self.page_resource_completion_source,
-            )
-            .map(|outcome| outcome.is_some())
+            )?
+        {
+            if !matches!(outcome.action.owner.local_owner(),
+                crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+                    crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork))
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub(crate) fn modulepreload_start_test_source(
@@ -699,6 +673,7 @@ fn minimal_test_page_vm_env_config() -> PageVmEnvConfig {
         layout_policy: crate::real_layout_test_policy(),
         wpt_extensions_enabled: false,
         navigation_bootstrap_entry: None,
+        session_history_position: None,
         reserved_service_worker_client_id: None,
     }
 }

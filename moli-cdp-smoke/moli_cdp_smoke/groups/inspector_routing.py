@@ -2170,6 +2170,16 @@ async def _session_detach_with_interrupts_in_flight(
     results: list[dict[str, Any]],
 ) -> None:
     await _reset_witness(fixture)
+    fetch_enable_id = await client.send(
+        "Fetch.enable",
+        {"patterns": [{"urlPattern": "*", "resourceType": "Script"}]},
+        session_id=page.attached_session_id,
+    )
+    fetch_enable, _ = await client.recv_until_id(fetch_enable_id, timeout=5)
+    if "error" in fetch_enable:
+        raise SmokeError(
+            f"attached session could not enable Fetch before detach: {fetch_enable}"
+        )
     source = """const xhr = new XMLHttpRequest();
 xhr.open('GET', '/inspector-routing-witness/entered', false);
 xhr.send();
@@ -2289,11 +2299,13 @@ for (;;) {}"""
         "raw_cdp_session_detach_with_interrupts_in_flight",
         contract=(
             "Detaching a session while many IO interrupts are queued cannot double-claim a "
-            "command or retain a destroyed V8InspectorSession. Another session terminates "
-            "the active script, and a fresh attachment remains usable."
+            "command, retain a destroyed V8InspectorSession, or wait for its Fetch handler "
+            "to reconfigure a busy Page. Another session terminates the active script, and "
+            "a fresh attachment remains usable."
         ),
         source="Chromium DevToolsSession detach/IO executable race probe",
         commands=[
+            "Fetch.enable",
             "Runtime.runScript",
             "Debugger.getScriptSource x32",
             "Target.detachFromTarget",

@@ -1485,13 +1485,6 @@ impl PageVm {
     }
 
     #[cfg(test)]
-    pub(crate) fn take_completed_child_document_networks(
-        &mut self,
-    ) -> Vec<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot> {
-        self.vm_mut().take_completed_child_document_networks()
-    }
-
-    #[cfg(test)]
     pub(crate) fn take_pending_child_frame_tree_events(
         &mut self,
     ) -> Vec<crate::protocol_types::ChildFrameTreeEventSnapshot> {
@@ -3924,6 +3917,10 @@ impl PageVm {
         let session_key = DevToolsSessionKey::from_wire_session_id(
             inspector_session_id.filter(|session_id| !session_id.is_empty()),
         );
+        self.document_start_scripts
+            .retain(|script| script.devtools_session.as_ref() != Some(&session_key));
+        let scripts = self.document_start_scripts.clone();
+        self.vm_mut().set_stored_document_start_scripts(&scripts);
         self.runtime_bindings
             .retain(|binding| binding.devtools_session.as_ref() != Some(&session_key));
         let runtime_bindings = self.runtime_bindings.clone();

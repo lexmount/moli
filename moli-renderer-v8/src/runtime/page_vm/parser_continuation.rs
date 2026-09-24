@@ -5,7 +5,6 @@ use anyhow::Result;
 use crate::document_script_scheduler::ParserDeferredScriptReady;
 use crate::frame_owner_model::FrameDocumentTaskOwner;
 use crate::module_script_continuation::MainParserDocumentOwner;
-use crate::network::ResourceRequestClient;
 use crate::script_vm::ParserOwnedModuleSuccessTerminal;
 use crate::types::ScriptRun;
 
@@ -223,7 +222,6 @@ impl PageVm {
 
     pub(super) async fn run_next_main_parser_deferred_script(
         &mut self,
-        loader: &ResourceRequestClient,
         task_owner: FrameDocumentTaskOwner,
     ) -> Result<MainParserDeferredExecution> {
         if self.vm().current_main_document_task_owner() != Some(task_owner) {
@@ -246,7 +244,7 @@ impl PageVm {
             .take_next_after_parsing_ready_script(owner);
         let (run, task_effect) = match ready {
             Some(ParserDeferredScriptReady::Classic(script)) => {
-                let execution = MainParserDeferredClassicDocumentScriptOwner::new(self, loader)
+                let execution = MainParserDeferredClassicDocumentScriptOwner::new(self)
                     .run_work(task_owner, script)
                     .await?;
                 let (run, effect) = execution.into_parts();
@@ -254,7 +252,7 @@ impl PageVm {
             }
             Some(ParserDeferredScriptReady::Module(ready)) => {
                 let (terminal, load_delay_token) = ready.into_parts();
-                let execution = MainParserOwnedDocumentScriptOwner::new(self, loader)
+                let execution = MainParserOwnedDocumentScriptOwner::new(self)
                     .run_parser_deferred_module_terminal(task_owner, terminal, load_delay_token)
                     .await?;
                 match execution {

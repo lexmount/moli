@@ -25,19 +25,33 @@ impl RendererJavaScriptDialogId {
 /// Dialog-domain name for the shared exact Window/Document source identity.
 pub type RendererJavaScriptDialogSource = RendererWindowDocumentSource;
 
-#[derive(Debug, Clone)]
+/// A concrete opening observation. It carries no modal completion authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererJavaScriptDialogOpening {
+    pub id: RendererJavaScriptDialogId,
+    pub source_document: RendererDocumentLifecycleIdentity,
+    pub source: RendererJavaScriptDialogSource,
+    pub source_url: String,
+    pub dialog_type: String,
+    pub message: String,
+    pub default_prompt: String,
+}
+
+#[derive(Debug)]
 pub struct RendererPendingJavaScriptDialog {
-    id: RendererJavaScriptDialogId,
-    source_document: RendererDocumentLifecycleIdentity,
-    source: RendererJavaScriptDialogSource,
-    source_url: String,
-    dialog_type: String,
-    message: String,
-    default_prompt: String,
+    opening: std::sync::Arc<RendererJavaScriptDialogOpening>,
     completion: Option<RendererJavaScriptDialogCompletion>,
 }
 
 impl RendererPendingJavaScriptDialog {
+    pub fn opening(&self) -> std::sync::Arc<RendererJavaScriptDialogOpening> {
+        self.opening.clone()
+    }
+
+    pub(crate) fn is_modal(&self) -> bool {
+        self.completion.is_some()
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: RendererJavaScriptDialogId,
@@ -50,43 +64,45 @@ impl RendererPendingJavaScriptDialog {
         completion: Option<RendererJavaScriptDialogCompletion>,
     ) -> Self {
         Self {
-            id,
-            source_document,
-            source,
-            source_url,
-            dialog_type,
-            message,
-            default_prompt,
+            opening: std::sync::Arc::new(RendererJavaScriptDialogOpening {
+                id,
+                source_document,
+                source,
+                source_url,
+                dialog_type,
+                message,
+                default_prompt,
+            }),
             completion,
         }
     }
 
     pub fn id(&self) -> RendererJavaScriptDialogId {
-        self.id
+        self.opening.id
     }
 
     pub fn source_document(&self) -> RendererDocumentLifecycleIdentity {
-        self.source_document
+        self.opening.source_document
     }
 
     pub fn source(&self) -> &RendererJavaScriptDialogSource {
-        &self.source
+        &self.opening.source
     }
 
     pub fn source_url(&self) -> &str {
-        &self.source_url
+        &self.opening.source_url
     }
 
     pub fn dialog_type(&self) -> &str {
-        &self.dialog_type
+        &self.opening.dialog_type
     }
 
     pub fn message(&self) -> &str {
-        &self.message
+        &self.opening.message
     }
 
     pub fn default_prompt(&self) -> &str {
-        &self.default_prompt
+        &self.opening.default_prompt
     }
 
     pub(crate) fn install_completion(&mut self, completion: RendererJavaScriptDialogCompletion) {
@@ -123,13 +139,7 @@ impl RendererPendingJavaScriptDialog {
 
 impl PartialEq for RendererPendingJavaScriptDialog {
     fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-            && self.source_document == other.source_document
-            && self.source == other.source
-            && self.source_url == other.source_url
-            && self.dialog_type == other.dialog_type
-            && self.message == other.message
-            && self.default_prompt == other.default_prompt
+        self.opening == other.opening
     }
 }
 

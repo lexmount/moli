@@ -4,7 +4,6 @@ use crate::page_task_queue::{PageDomManipulationTurnAction, PageViewTransitionUp
 
 async fn run_next_view_transition_update_task_through_selected_dispatcher_for_test(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
 ) -> anyhow::Result<bool> {
     let Some(claimed) = page_vm.claim_exact_selected_page_task_for_test(
         PageSelectedTaskTestSelector::DomManipulation(
@@ -14,7 +13,7 @@ async fn run_next_view_transition_update_task_through_selected_dispatcher_for_te
         return Ok(false);
     };
     page_vm
-        .run_claimed_selected_page_task_for_test(claimed, loader)
+        .run_claimed_selected_page_task_for_test(claimed)
         .await?;
     Ok(true)
 }
@@ -230,7 +229,7 @@ JSON.stringify({
         );
 
         page_vm
-            .finish_selected_page_task_completion(action.into_page_task_completion(), &loader)
+            .finish_selected_page_task_completion(action.into_page_task_completion())
             .await?;
         assert_eq!(
             page_vm
@@ -319,11 +318,8 @@ document.body.appendChild(frame);
         )?;
 
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?
         );
         assert_eq!(
             page_vm
@@ -390,11 +386,8 @@ document.body.appendChild(frame);
         )?;
 
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?
         );
         assert_eq!(
             page_vm
@@ -456,10 +449,7 @@ document.body.appendChild(frame);
         )?;
 
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
             .await?
         );
         assert_eq!(
@@ -524,11 +514,8 @@ __viewTransitionDocumentOpenEvents.push("after-open");
             "document.open must preserve the LocalWindow task owner"
         );
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?,
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?,
             "the pre-document.open callback must remain queued on its LocalWindow"
         );
         assert_eq!(
@@ -629,7 +616,7 @@ __replacementViewTransition.finished.then(() => {
                         "the first selected task must remain bound to the retired PageVm"
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -665,7 +652,7 @@ __replacementViewTransition.finished.then(() => {
                         "fresh PageVm-local ledgers should reuse the local task id"
                     );
                     page_vm
-                        .run_claimed_selected_page_task_for_test(current, &loader)
+                        .run_claimed_selected_page_task_for_test(current)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -726,11 +713,8 @@ __detachedViewTransitionEvents.push("after-start");
         );
 
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?,
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?,
             "the detached Document callback must project onto the incumbent Window"
         );
         assert_eq!(
@@ -801,10 +785,7 @@ __viewTransitionReplaceEvents.push("after-second");
         );
 
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
             .await?,
             "the replaced transition callback should remain queued"
         );
@@ -823,10 +804,7 @@ __viewTransitionReplaceEvents.push("after-second");
         );
 
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
             .await?,
             "the replacement transition callback should remain queued"
         );
@@ -881,11 +859,8 @@ __asyncViewTransition.finished.then(
 "#,
         )?;
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?,
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?,
             "the asynchronous update callback should queue"
         );
         assert_eq!(
@@ -956,11 +931,8 @@ __rejectedViewTransition.finished.then(
 "#,
         )?;
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?,
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?,
             "the rejecting transition callback should queue"
         );
         assert_eq!(
@@ -1000,11 +972,8 @@ __waitingViewTransition.finished.then(
 "#,
         )?;
         assert!(
-            run_next_view_transition_update_task_through_selected_dispatcher_for_test(
-                &mut page_vm,
-                &loader,
-            )
-            .await?,
+            run_next_view_transition_update_task_through_selected_dispatcher_for_test(&mut page_vm)
+                .await?,
             "the waiting transition callback should queue"
         );
         assert_eq!(

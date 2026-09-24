@@ -1,28 +1,16 @@
 use crate::conn::{
-    CdpConnection, CommandOwnerScope, DocumentBodySource, DocumentNavigationToken,
-    FetchAuthChallenge, NavigationDispatchState, NavigationLoadOutcome, PendingFetchNavigation,
+    CdpConnection, CommandOwnerScope, FetchAuthChallenge, PendingFetchNavigation,
     PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
-    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest, decode_data_url_response,
+    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
-use crate::domains::{command_output::CommandOutputBuffer, network, page};
 use moli_cookie_jar::StoredCookieQueryReport;
-use moli_core::page::{SubresourceAuthCredentials, SubresourceAuthScheme, SubresourceResourceType};
-use moli_fetch::{
-    NetworkFetchResult, NetworkObservationJournal, RawResponse, ResponseHead, StreamingRawResponse,
-};
-use moli_web_mime::response_headers_indicate_attachment_download;
+use moli_core::page::SubresourceResourceType;
 use url::Url;
 
-use super::{
-    FetchCommandOutput,
-    helpers::{
-        extract_auth_challenge, navigation_response_stage_request_paused_event,
-        pending_fetch_auth_navigation_required_event, populate_auth_challenge_origin,
-    },
-};
+use super::helpers::pending_fetch_auth_navigation_required_event;
 
-fn prepare_navigation_response_stage(
+pub(crate) fn prepare_navigation_response_stage(
     conn: &CdpConnection,
     pending: &mut PendingFetchNavigation,
     final_url: &Url,
@@ -55,675 +43,44 @@ fn prepare_navigation_response_stage(
     true
 }
 
-pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
+pub(super) fn continue_navigation_request(
     conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    mut pending: PendingFetchNavigation,
-    auth: Option<SubresourceAuthCredentials>,
-    prior_network_observation_journal: Option<NetworkObservationJournal>,
+    claimed: crate::conn::ClaimedFetchNavigation,
 ) {
-    let navigate_owner = pending.navigation.owner.clone();
-    network::record_main_document_request_body(conn, &pending.navigation);
-    let should_handle_auth = conn.target_fetch_matches_auth_required_for_owner(
-        &navigate_owner,
-        &pending.navigation.requested_url,
-    ) && pending.navigation.requested_url.scheme() != "data";
-
-    if should_handle_auth {
-        let has_auth_credentials = auth.is_some();
-        if pending.intercept_response && navigation_response_stage_auth_can_stream(auth.as_ref()) {
-            match conn
-                .fetch_navigation_streaming_raw_response_for_navigation_async(
-                    &pending.navigation,
-                    auth,
-                )
-                .await
-            {
-                Ok(response) => {
-                    let response = append_prior_network_observations(
-                        response,
-                        prior_network_observation_journal,
-                    );
-                    handle_streaming_response_head_for_navigation_into_buffer_async(
-                        conn, out, pending, response, true,
-                    )
-                    .await;
-                }
-                Err(message) => {
-                    complete_pending_fetch_navigation_result_into_buffer_async(
-                        conn,
-                        out,
-                        pending,
-                        Err(message),
-                    )
-                    .await;
-                }
-            }
-            return;
-        }
-
-        if pending.intercept_response && has_auth_credentials {
-            let auth_scheme = auth
-                .as_ref()
-                .map(|auth| format!("{:?}", auth.scheme))
-                .unwrap_or_else(|| "Unknown".to_owned());
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn,
-                out,
-                pending,
-                Err(anyhow::anyhow!(
-                    "Fetch response-stage interception after {auth_scheme} authentication is not supported for navigation without buffering"
-                )),
-            )
-            .await;
-            return;
-        }
-
-        let response = if let Some(auth) = auth {
-            // Digest auth retries are still driven by libcurl internally. The
-            // streaming collector sees the intermediate 401 response head
-            // before libcurl has completed the credential retry, so keep
-            // credential replay on the buffered path until the fetch runtime
-            // can mark intermediate auth responses separately.
-            conn.fetch_navigation_auth_raw_response_for_navigation_async(&pending.navigation, auth)
-                .await
-        } else {
-            match conn
-                .fetch_navigation_streaming_raw_response_for_navigation_async(
-                    &pending.navigation,
-                    auth,
-                )
-                .await
-            {
-                Ok(response) => collect_navigation_streaming_response(conn, response).await,
-                Err(message) => Err(message),
-            }
-        };
-        match response {
-            Ok(response) => {
-                let response =
-                    append_prior_network_observations(response, prior_network_observation_journal);
-                let response_head = response.response();
-                if matches!(response_head.status, 401 | 407)
-                    && let Some(mut challenge) = extract_auth_challenge(&response_head.headers)
-                {
-                    populate_auth_challenge_origin(
-                        conn,
-                        pending.navigation.owner.session_id(),
-                        &response_head.final_url,
-                        &mut challenge,
-                    );
-                    let event = register_navigation_auth_required_event(
-                        conn,
-                        &pending,
-                        challenge,
-                        response_head.request_cookie_report.clone(),
-                        response,
-                    );
-                    out.extend_background_events_after_messages([event]);
-                    return;
-                }
-                if prepare_navigation_response_stage(conn, &mut pending, &response_head.final_url) {
-                    pause_buffered_raw_response_stage_navigation_into_buffer(
-                        conn, out, pending, response,
-                    );
-                } else {
-                    let navigation = conn
-                        .build_navigation_from_buffered_raw_response_for_navigation_async(
-                            &pending.navigation,
-                            response,
-                        )
-                        .await;
-                    complete_or_pause_response_stage_into_buffer_async(
-                        conn, out, pending, navigation,
-                    )
-                    .await;
-                }
-            }
-            Err(message) => {
-                complete_pending_fetch_navigation_result_into_buffer_async(
-                    conn,
-                    out,
-                    pending,
-                    Err(message),
-                )
-                .await;
-            }
-        }
-        return;
-    }
-
-    if pending.intercept_response && pending.navigation.requested_url.scheme() != "data" {
-        match conn
-            .fetch_navigation_streaming_raw_response_for_navigation_async(&pending.navigation, None)
-            .await
-        {
-            Ok(response) => {
-                handle_streaming_response_head_for_navigation_into_buffer_async(
-                    conn, out, pending, response, false,
-                )
-                .await;
-            }
-            Err(message) => {
-                complete_pending_fetch_navigation_result_into_buffer_async(
-                    conn,
-                    out,
-                    pending,
-                    Err(message),
-                )
-                .await;
-            }
-        }
-        return;
-    }
-
-    if pending.intercept_response && pending.navigation.requested_url.scheme() == "data" {
-        pause_data_url_response_stage_navigation_into_buffer(conn, out, pending);
-        return;
-    }
-
-    let navigation = conn
-        .load_navigation_request_via_runtime_with_network_events_for_navigation_async(
-            &pending.navigation,
-            network::MainDocumentBodyProgressSource::default(),
-        )
-        .await;
-    complete_or_pause_response_stage_into_buffer_async(conn, out, pending, navigation).await;
-}
-
-pub(super) async fn load_or_pause_navigation_for_auth_as_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut FetchCommandOutput,
-    pending: PendingFetchNavigation,
-    auth: Option<SubresourceAuthCredentials>,
-    prior_network_observation_journal: Option<NetworkObservationJournal>,
-) {
-    let command_id = pending.navigation.navigate_id;
-    let command_session_id = pending.navigation.owner.session_id().map(str::to_owned);
-    let mut output = CommandOutputBuffer::default();
-    Box::pin(load_or_pause_navigation_for_auth_into_buffer_async(
-        conn,
-        &mut output,
-        pending,
-        auth,
-        prior_network_observation_journal,
-    ))
-    .await;
-    out.extend_plan_as_background_events(
-        output.into_plan(),
-        command_id,
-        command_session_id.as_deref(),
-    );
-}
-
-pub(super) async fn cancel_navigation_auth_as_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut FetchCommandOutput,
-    pending_auth: crate::conn::PendingFetchAuthNavigation,
-) {
-    let response = match std::sync::Arc::try_unwrap(pending_auth.auth_response) {
-        Ok(response) => response,
-        Err(response) => response.as_ref().clone(),
-    };
-    let mut pending = PendingFetchNavigation {
-        fetch_request_id: pending_auth.response_stage_request_id,
-        interception_session_id: pending_auth.interception_session_id.clone(),
-        document_navigation_token: pending_auth.document_navigation_token,
-        navigation: pending_auth.navigation,
-        request_cookie_report: pending_auth.request_cookie_report,
-        intercept_response: pending_auth.intercept_response,
-        response_stage_url_match_policy: pending_auth.response_stage_url_match_policy,
-        auth_required_blocked_intercepts: Vec::new(),
-    };
-    let command_id = pending.navigation.navigate_id;
-    let command_session_id = pending.navigation.owner.session_id().map(str::to_owned);
-    let mut output = CommandOutputBuffer::default();
-    if response
-        .observation_journal()
-        .terminal_response_is_failed_proxy_connect()
-    {
-        let response_head = response.response();
-        let progress = network::response_stage_main_document_navigation_network_progress(
-            conn,
-            &pending.navigation,
-            pending.request_cookie_report.as_ref(),
+    let (pending, request) = claimed.into_parts();
+    if let Some(request) = request {
+        conn.update_native_navigation_dispatch(&pending);
+        conn.resolve_native_navigation_decision(
+            pending.navigation.web_contents,
+            pending.navigation_permit,
+            request.into_navigation_decision(),
         );
-        let mut response_events = Vec::new();
-        progress.emit_response_without_extra_info_into_background_events(
-            &mut response_events,
-            &response_head.final_url,
-            response_head.status,
-            &response_head.headers,
-            false,
+    }
+}
+
+pub(super) fn continue_navigation_response_neutrally(
+    conn: &mut CdpConnection,
+    pending: crate::conn::PendingFetchResponseNavigation,
+    transfer: Option<crate::conn::PausedDocumentTransfer>,
+) {
+    if let Some(transfer) = transfer {
+        conn.resolve_native_navigation_decision(
+            pending.navigation.web_contents,
+            pending.permit,
+            moli_core::browser::NavigationDecision::Response {
+                transfer: Box::new(transfer),
+                status: None,
+                headers: Vec::new(),
+            },
         );
-        output.extend_background_events_after_messages(response_events);
-        complete_pending_fetch_navigation_result_into_buffer_async(
-            conn,
-            &mut output,
-            pending,
-            Ok(NavigationLoadOutcome::network_failure(
-                "net::ERR_HTTP_RESPONSE_CODE_FAILURE".to_owned(),
-            )),
-        )
-        .await;
-        out.extend_plan_as_background_events(
-            output.into_plan(),
-            command_id,
-            command_session_id.as_deref(),
-        );
-        return;
     }
-    if prepare_navigation_response_stage(conn, &mut pending, &response.response().final_url) {
-        pause_buffered_raw_response_stage_navigation_into_buffer(
-            conn,
-            &mut output,
-            pending,
-            response,
-        );
-    } else {
-        pending.intercept_response = false;
-        let navigation = conn
-            .build_navigation_from_buffered_raw_response_for_navigation_async(
-                &pending.navigation,
-                response,
-            )
-            .await;
-        complete_or_pause_response_stage_into_buffer_async(conn, &mut output, pending, navigation)
-            .await;
-    }
-    out.extend_plan_as_background_events(
-        output.into_plan(),
-        command_id,
-        command_session_id.as_deref(),
-    );
-}
-
-pub(super) async fn complete_tokened_materialized_navigation_as_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut FetchCommandOutput,
-    token: Option<DocumentNavigationToken>,
-    navigation_state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-) {
-    let command_id = navigation_state.navigate_id;
-    let command_session_id = navigation_state.owner.session_id().map(str::to_owned);
-    let mut output = CommandOutputBuffer::default();
-    complete_tokened_materialized_navigation_into_buffer_async(
-        conn,
-        &mut output,
-        token,
-        navigation_state,
-        navigation,
-    )
-    .await;
-    out.extend_plan_as_background_events(
-        output.into_plan(),
-        command_id,
-        command_session_id.as_deref(),
-    );
-}
-
-pub(super) async fn complete_tokened_materialized_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    token: Option<DocumentNavigationToken>,
-    navigation_state: NavigationDispatchState,
-    navigation: network::MaterializedNavigationLoadOutcome,
-) {
-    let Some(token) = token else {
-        if navigation_state.navigate_id.is_some() {
-            page::push_superseded_navigation_result(out, &navigation_state);
-        } else {
-            tracing::warn!(
-                session_id = navigation_state.owner.session_id(),
-                "direct navigation aborted after command result was handled"
-            );
-        }
-        return;
-    };
-    // Keep this boxed: fetch continue/auth futures compose with main-document
-    // navigation commit futures and can exceed nextest's per-test stack when
-    // inlined through navigation subresource tests.
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    Box::pin(page::complete_materialized_navigation_into_buffer_async(
-        conn,
-        out,
-        token,
-        navigation_state,
-        navigation,
-        &mut command_context,
-    ))
-    .await;
-    if let Some(predecessor) = command_context.take_renderer_output_predecessor() {
-        out.set_renderer_output_predecessor(predecessor);
-    }
-}
-
-async fn complete_pending_fetch_navigation_result_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-    navigation: anyhow::Result<NavigationLoadOutcome>,
-) {
-    let token = pending.document_navigation_token;
-    let navigation_state = pending.navigation;
-    let navigation = match navigation {
-        Err(error) => {
-            Box::pin(conn.prepare_navigation_load_error_for_navigation_async(
-                &navigation_state,
-                error.context("failed to continue intercepted navigation"),
-            ))
-            .await
-        }
-        navigation => navigation,
-    };
-    let navigation =
-        network::materialize_navigation_load_result(conn, &navigation_state, navigation);
-    complete_tokened_materialized_navigation_into_buffer_async(
-        conn,
-        out,
-        token,
-        navigation_state,
-        navigation,
-    )
-    .await;
-}
-
-fn navigation_response_stage_auth_can_stream(auth: Option<&SubresourceAuthCredentials>) -> bool {
-    match auth {
-        None => true,
-        Some(auth) => matches!(auth.scheme, SubresourceAuthScheme::Basic),
-    }
-}
-
-async fn handle_streaming_response_head_for_navigation_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    mut pending: PendingFetchNavigation,
-    response: NetworkFetchResult<StreamingRawResponse>,
-    allow_auth_challenge: bool,
-) {
-    let response_head = response.response();
-    if allow_auth_challenge
-        && matches!(response_head.status, 401 | 407)
-        && let Some(mut challenge) = extract_auth_challenge(&response_head.headers)
-    {
-        populate_auth_challenge_origin(
-            conn,
-            pending.navigation.owner.session_id(),
-            &response_head.final_url,
-            &mut challenge,
-        );
-        let request_cookie_report = response_head.request_cookie_report.clone();
-        match collect_navigation_streaming_response(conn, response).await {
-            Ok(response) => {
-                let event = register_navigation_auth_required_event(
-                    conn,
-                    &pending,
-                    challenge,
-                    request_cookie_report,
-                    response,
-                );
-                out.extend_background_events_after_messages([event]);
-            }
-            Err(message) => {
-                complete_pending_fetch_navigation_result_into_buffer_async(
-                    conn,
-                    out,
-                    pending,
-                    Err(message),
-                )
-                .await;
-            }
-        }
-        return;
-    }
-
-    if response_headers_indicate_attachment_download(&response_head.headers) {
-        let navigation = conn
-            .build_navigation_from_streaming_raw_response_for_navigation_async(
-                &pending.navigation,
-                response,
-                network::MainDocumentBodyProgressSource::default(),
-            )
-            .await;
-        complete_pending_fetch_navigation_result_into_buffer_async(conn, out, pending, navigation)
-            .await;
-        return;
-    }
-
-    if !prepare_navigation_response_stage(conn, &mut pending, &response_head.final_url) {
-        let navigation = conn
-            .build_navigation_from_streaming_raw_response_for_navigation_async(
-                &pending.navigation,
-                response,
-                network::MainDocumentBodyProgressSource::default(),
-            )
-            .await;
-        complete_pending_fetch_navigation_result_into_buffer_async(conn, out, pending, navigation)
-            .await;
-        return;
-    }
-
-    let response_status = response_head.status;
-    let final_url = response_head.final_url.clone();
-    let response_headers = response_head.headers.clone();
-    let request_cookie_report = response_head.request_cookie_report.clone();
-    let network_observation_journal = response.observation_journal();
-    let network_extra_info_available = !network_observation_journal.is_empty();
-    let body_progress_source = network::response_stage_main_document_navigation_network_progress(
-        conn,
-        &pending.navigation,
-        pending.request_cookie_report.as_ref(),
-    );
-    let mut response_extra_info_events = Vec::new();
-    body_progress_source.emit_response_extra_info_before_pause(
-        &mut response_extra_info_events,
-        &pending.navigation.request_method,
-        &pending.navigation.request_headers.to_byte_strings(),
-        request_cookie_report.as_ref(),
-        &response_head.redirect_chain,
-        response_status,
-        &response_headers,
-        &response_head.cookie_set_reports,
-        network_observation_journal,
-        network_extra_info_available,
-    );
-    out.extend_background_events_after_messages(response_extra_info_events);
-    let prepared_document = match conn
-        .prepare_paused_streaming_response_navigation_async(
-            &pending.navigation,
-            response.response(),
-            network_observation_journal,
-            body_progress_source.clone(),
-        )
-        .await
-    {
-        Ok(prepared_document) => prepared_document,
-        Err(error) => {
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn,
-                out,
-                pending,
-                Err(error),
-            )
-            .await;
-            return;
-        }
-    };
-    let (response, network_observation_journal) = response.into_parts_with_observation_journal();
-    conn.register_pending_fetch_response_navigation_for_owner(
-        &pending.navigation.owner,
-        pending.fetch_request_id.clone(),
-        pending.document_navigation_token.clone(),
-        pending.navigation.clone(),
-        DocumentBodySource::StreamingRaw {
-            requested_url: pending.navigation.requested_url.clone(),
-            request_method: pending.navigation.request_method.clone(),
-            request_headers: pending.navigation.request_headers.clone(),
-            response,
-            network_observation_journal,
-            body_progress_source,
-            prepared_document: prepared_document.map(Box::new),
-        },
-    );
-    out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
-        pending.interception_session_id.as_deref(),
-        &pending.fetch_request_id,
-        &pending.navigation,
-        &final_url,
-        request_cookie_report.as_ref(),
-        response_status,
-        &response_headers,
-    )]);
-}
-
-async fn complete_or_pause_response_stage_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-    navigation: anyhow::Result<NavigationLoadOutcome>,
-) {
-    match navigation {
-        Ok(NavigationLoadOutcome::Loaded(_)) if pending.intercept_response => {
-            debug_assert!(
-                false,
-                "response-stage document pause should register a body source before building a LoadedNavigation"
-            );
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn,
-                out,
-                pending,
-                Err(anyhow::anyhow!(
-                    "response-stage document pause reached unexpected loaded-navigation path"
-                )),
-            )
-            .await;
-        }
-        navigation @ Ok(_) => {
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn, out, pending, navigation,
-            )
-            .await;
-        }
-        navigation @ Err(_) => {
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn, out, pending, navigation,
-            )
-            .await;
-        }
-    }
-}
-
-fn pause_data_url_response_stage_navigation_into_buffer(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-) {
-    let (content_type, body) =
-        match decode_data_url_response(pending.navigation.requested_url.as_str())
-            .and_then(Result::ok)
-        {
-            Some(decoded) => (decoded.content_type, decoded.body),
-            None => ("text/plain;charset=US-ASCII".to_owned(), Vec::new()),
-        };
-    let response = RawResponse::from_head_and_body(
-        ResponseHead {
-            final_url: pending.navigation.requested_url.clone(),
-            status: 200,
-            headers: vec![(
-                "Content-Type".to_owned(),
-                moli_fetch::header_value_from_byte_string(&content_type)
-                    .expect("serialized MIME types contain ByteStrings"),
-            )],
-            request_cookie_report: None,
-            cookie_set_reports: Vec::new(),
-            redirected: false,
-            redirect_chain: Vec::new(),
-            from_cache: false,
-            negotiated_http_version: None,
-        },
-        body,
-    );
-    pause_buffered_raw_response_stage_navigation_into_buffer(
-        conn,
-        out,
-        pending,
-        NetworkFetchResult::without_request_observation(response),
-    );
-}
-
-fn pause_buffered_raw_response_stage_navigation_into_buffer(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-    response: NetworkFetchResult<RawResponse>,
-) {
-    let response_status = response.response().status;
-    let final_url = response.response().final_url.clone();
-    let response_headers = response.response().headers.clone();
-    let request_cookie_report = response.response().request_cookie_report.clone();
-    let (response, network_observation_journal) = response.into_parts_with_observation_journal();
-    conn.register_pending_fetch_response_navigation_for_owner(
-        &pending.navigation.owner,
-        pending.fetch_request_id.clone(),
-        pending.document_navigation_token.clone(),
-        pending.navigation.clone(),
-        DocumentBodySource::BufferedRaw {
-            requested_url: pending.navigation.requested_url.clone(),
-            request_method: pending.navigation.request_method.clone(),
-            request_headers: pending.navigation.request_headers.clone(),
-            response,
-            network_observation_journal,
-        },
-    );
-    out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
-        pending.interception_session_id.as_deref(),
-        &pending.fetch_request_id,
-        &pending.navigation,
-        &final_url,
-        request_cookie_report.as_ref(),
-        response_status,
-        &response_headers,
-    )]);
-}
-
-async fn collect_navigation_streaming_response(
-    conn: &mut CdpConnection,
-    response: NetworkFetchResult<StreamingRawResponse>,
-) -> anyhow::Result<NetworkFetchResult<RawResponse>> {
-    conn.collect_navigation_streaming_raw_response_async(response)
-        .await
-}
-
-fn append_prior_network_observations<R>(
-    response: NetworkFetchResult<R>,
-    prior: Option<NetworkObservationJournal>,
-) -> NetworkFetchResult<R> {
-    let Some(mut prior) = prior else {
-        return response;
-    };
-    let (response, current) = response.into_parts_with_observation_journal();
-    prior.append(current);
-    NetworkFetchResult::with_observation_journal(response, prior)
-}
-
-pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-) {
-    Box::pin(load_or_pause_navigation_for_auth_into_buffer_async(
-        conn, out, pending, None, None,
-    ))
-    .await;
 }
 
 pub(crate) async fn continue_subresource_without_fetch_pause_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
     request_id: Option<String>,
-    page_owner: crate::conn::TargetPageResidenceIdentity,
+    residence: crate::conn::PendingSubresourceFetchResidence,
     internal_id: u64,
     network_request_id: String,
     network_request_handle: Option<moli_core::page::SubresourceNetworkRequestHandle>,
@@ -734,7 +91,7 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
     owner_kind: PendingSubresourceFetchOwnerKind,
 ) {
     let pending = PendingSubresourceFetchRequest {
-        residence: crate::conn::PendingSubresourceFetchResidence::InstalledPage(page_owner),
+        residence,
         owner_session_id: None,
         action_session_id: None,
         owner_kind,
@@ -748,15 +105,18 @@ pub(crate) async fn continue_subresource_without_fetch_pause_async(
         request_stage_chain: None,
     };
     if conn
-        .continue_pending_subresource_fetch_for_owner_async(
+        .execute_subresource_fetch_command(
             owner,
-            internal_id,
-            None,
-            None,
-            None,
-            None,
-            false,
-            handle_auth_requests,
+            &pending.residence,
+            crate::conn::DocumentFetchCommand::ContinueRequest {
+                internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: false,
+                handle_auth_requests,
+            },
         )
         .await
         .is_ok()
@@ -812,22 +172,27 @@ fn routable_stage_owner_session_id(
     fallback_session_id.map(str::to_owned)
 }
 
-fn register_navigation_auth_required_event(
+pub(crate) fn register_navigation_auth_required_event_for_permit(
     conn: &mut CdpConnection,
     pending: &PendingFetchNavigation,
     challenge: FetchAuthChallenge,
+    response: &moli_fetch::ResponseHead,
     request_cookie_report: Option<StoredCookieQueryReport>,
-    response: NetworkFetchResult<RawResponse>,
-) -> crate::conn::BackgroundProtocolEvent {
+    auth_permit: moli_core::browser::web_contents::NavigationInterceptionPermit,
+) -> Result<crate::conn::BackgroundProtocolEvent, String> {
     let mut navigation = pending.navigation.clone();
-    let head = response.response();
+    let head = response;
     if !head.redirect_chain.is_empty() {
         let mut request = moli_fetch::Request::get_with_url(navigation.requested_url.clone())
             .with_redirect_headers(navigation.redirect_headers.take());
         request.method = navigation.request_method.clone();
         request.body = navigation.clone_request_body_bytes();
         request.request_headers = navigation.request_headers.clone();
-        for redirect in &head.redirect_chain {
+        for redirect in head
+            .redirect_chain
+            .iter()
+            .skip(navigation.redirect_chain.len())
+        {
             request.apply_redirect_status(redirect.status);
         }
         navigation.requested_url = head.final_url.clone();
@@ -847,10 +212,9 @@ fn register_navigation_auth_required_event(
         owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
         fetch_request_id: pending.fetch_request_id.clone(),
         response_stage_request_id: pending.fetch_request_id.clone(),
-        document_navigation_token: pending.document_navigation_token.clone(),
         navigation,
         request_cookie_report,
-        auth_response: std::sync::Arc::new(response),
+        auth_permit,
         challenge,
         intercept_response: pending.intercept_response,
         response_stage_url_match_policy: pending.response_stage_url_match_policy,
@@ -915,16 +279,18 @@ fn register_navigation_auth_required_event(
     let pending_owner = pending_owner_session_id
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| pending.navigation.owner.clone());
-    conn.register_pending_fetch_auth_navigation_for_owner(
+    if !conn.register_pending_fetch_auth_navigation_for_owner(
         &pending_owner,
         pending.fetch_request_id.clone(),
         pending_auth.clone(),
-    );
-    pending_fetch_auth_navigation_required_event(
+    ) {
+        return Err("navigation auth projection unavailable".to_owned());
+    }
+    Ok(pending_fetch_auth_navigation_required_event(
         auth_event_session_id.as_deref(),
         &pending_auth,
         &auth_event_blocked_intercepts,
-    )
+    ))
 }
 
 pub(crate) async fn continue_subresource_for_response_stage_async(
@@ -940,15 +306,18 @@ pub(crate) async fn continue_subresource_for_response_stage_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| owner.clone());
     if conn
-        .continue_pending_subresource_fetch_for_owner_async(
+        .execute_subresource_fetch_command(
             &action_owner,
-            pending.internal_id,
-            None,
-            None,
-            None,
-            None,
-            true,
-            handle_auth_requests,
+            &pending.residence,
+            crate::conn::DocumentFetchCommand::ContinueRequest {
+                internal_id: pending.internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: true,
+                handle_auth_requests,
+            },
         )
         .await
         .is_ok()
@@ -974,15 +343,18 @@ pub(crate) async fn continue_subresource_for_deferred_response_stage_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| owner.clone());
     if conn
-        .continue_pending_subresource_fetch_for_owner_async(
+        .execute_subresource_fetch_command(
             &action_owner,
-            pending.internal_id,
-            None,
-            None,
-            None,
-            None,
-            true,
-            handle_auth_requests,
+            &pending.residence,
+            crate::conn::DocumentFetchCommand::ContinueRequest {
+                internal_id: pending.internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: true,
+                handle_auth_requests,
+            },
         )
         .await
         .is_ok()

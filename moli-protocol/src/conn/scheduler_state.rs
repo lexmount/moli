@@ -1,6 +1,6 @@
 use std::collections::VecDeque;
 
-use super::{BackgroundProtocolEvent, NavigationBackgroundEvent};
+use super::BackgroundProtocolEvent;
 #[cfg(test)]
 use crate::domains::command_output::protocol_message_background_event;
 use serde_json::{Value, json};
@@ -136,7 +136,7 @@ impl CdpTurnOutcome {
         (
             protocol_events
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message)
+                .filter_map(crate::testing::protocol_event_into_wire_message)
                 .collect(),
             self.scheduler_events,
         )
@@ -270,8 +270,6 @@ mod tests {
 
 #[derive(Default)]
 pub(super) struct CdpConnectionSchedulerState {
-    pending_navigation_background_events: Vec<NavigationBackgroundEvent>,
-    next_deferred_main_document_load_observation_id: u64,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
     scheduler_events: Vec<CdpSchedulerEvent>,
@@ -289,18 +287,6 @@ impl CdpConnectionSchedulerState {
             .expect("protocol work publish sequence exhausted");
         crate::domains::activity::ProtocolWorkPublishSequence::new(
             self.next_protocol_work_publish_sequence,
-        )
-    }
-
-    pub(super) fn allocate_deferred_main_document_load_observation_id(
-        &mut self,
-    ) -> super::DeferredMainDocumentLoadObservationId {
-        self.next_deferred_main_document_load_observation_id = self
-            .next_deferred_main_document_load_observation_id
-            .checked_add(1)
-            .expect("deferred main-document load observation identity exhausted");
-        super::DeferredMainDocumentLoadObservationId(
-            self.next_deferred_main_document_load_observation_id,
         )
     }
 
@@ -330,17 +316,8 @@ impl CdpConnectionSchedulerState {
         }
     }
 
-    pub(super) fn push_navigation_background_event(&mut self, event: NavigationBackgroundEvent) {
-        self.pending_navigation_background_events.push(event);
-    }
-
-    pub(super) fn take_navigation_background_events(&mut self) -> Vec<NavigationBackgroundEvent> {
-        std::mem::take(&mut self.pending_navigation_background_events)
-    }
-
     pub(super) fn moli_memory_diagnostics(&self) -> Value {
         json!({
-            "pendingNavigationBackgroundEventCount": self.pending_navigation_background_events.len(),
             "pendingSchedulerEventCount": self.scheduler_events.len(),
             "recentActivityTraceCount": self.recent_activity_traces.len(),
             "recentActivityTraces": self

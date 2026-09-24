@@ -1218,7 +1218,7 @@ async fn interrupted_intercepted_traversal_rejects_finished_after_commit() {
     assert_eq!(setup, "");
 
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("queued interrupted traversal should run")
     );
@@ -1291,11 +1291,11 @@ async fn traversal_intercept_settlement_promise_ignores_prototype_setter_spoof()
     assert_eq!(setup, "spoof:false:spoof-url:");
 
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("queued intercepted traversal should run")
     );
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("traversal intercept handler timer should drain");
     let settled = vm
@@ -1314,7 +1314,7 @@ async fn closed_history_traversal_route_rejects_navigation_promises_without_time
 
     vm.eval(r##"history.pushState(null, "", "#one"); "created""##)
         .expect("history route-retirement fixture should create an entry");
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("entry-creation fixture timers should drain");
     drop(
@@ -1358,7 +1358,7 @@ history.pushState(null, "", "#two");
 "##,
     )
     .expect("multi-realm history fixture should create entries");
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("multi-realm entry-creation timers should drain");
     let isolated_context_id = vm
@@ -1375,7 +1375,7 @@ history.pushState(null, "", "#two");
     );
 
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("default realm traversal should run")
     );
@@ -1385,7 +1385,7 @@ history.pushState(null, "", "#two");
         "#one"
     );
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("isolated realm traversal should run after the default realm traversal")
     );
@@ -1395,7 +1395,7 @@ history.pushState(null, "", "#two");
         ""
     );
     assert!(
-        !vm.run_one_history_traversal_executor_turn(&loader)
+        !vm.run_one_history_traversal_executor_turn()
             .await
             .expect("history source should be drained after both traversals")
     );

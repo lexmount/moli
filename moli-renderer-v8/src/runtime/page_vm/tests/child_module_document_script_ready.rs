@@ -55,7 +55,7 @@ async fn queue_child_module_document_script_ready(
         .expect("child module task-boundary source should complete before timeout");
         assert!(arrived, "child module completion source must remain open");
     }
-    let terminal = run_next_resource_completion_as_typed_page_turn(page_vm)?;
+    let terminal = run_next_resource_result_as_typed_page_turn(page_vm).await?;
     assert_eq!(
         terminal.action.source(),
         RendererOwnerResourceActivitySource::ModuleGraphFetch
@@ -95,10 +95,7 @@ Promise.resolve().then(() => {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildDocumentScriptReady)
                 .await?,
             "the exact child module task must run through the production selected dispatcher"
         );
@@ -153,10 +150,7 @@ Promise.resolve().then(() => {
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildDocumentScriptReady,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ChildDocumentScriptReady)
                 .await?
         );
         assert_eq!(

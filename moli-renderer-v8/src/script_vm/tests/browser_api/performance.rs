@@ -40,7 +40,7 @@ fn record_failed_script_resource(vm: &mut ScriptVm, document_url: &Url, resource
         .expect("resource URL");
     let result: std::result::Result<crate::types::NavigationResponse, String> =
         Err("synthetic resource failure".to_owned());
-    vm.record_script_subresource_network_result(document_url.clone(), request_url, &result);
+    vm.record_script_resource_timing(request_url, &result);
 }
 
 #[test]

@@ -1,67 +1,110 @@
 use std::{
     collections::BTreeSet,
     ops::{Deref, DerefMut},
+    sync::Arc,
 };
 
-use moli_core::page::NavigationResponse;
+use moli_core::page::{
+    RendererDedicatedWorkerMainScript, RendererDedicatedWorkerMainScriptOutcome,
+    RendererWorkerIdentity,
+};
 use moli_shared_worker::SharedWorkerInstanceId;
 
-use super::{SharedWorkerTargetState, TargetPageResidenceIdentity};
+use super::{BrowserContext, SharedWorkerTargetState, TargetPageResidenceIdentity};
+use crate::conn::BackgroundProtocolEvent;
+
+/// The creator is an exact Document or Worker execution, never an inferred
+/// active Page. Nested workers can also be created by Shared/Service workers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DedicatedWorkerOwner {
+    Document(TargetPageResidenceIdentity),
+    Worker(RendererWorkerIdentity),
+}
+
+impl DedicatedWorkerOwner {
+    pub(crate) fn target_id<'a>(&'a self, context: &'a BrowserContext) -> Option<&'a str> {
+        match self {
+            Self::Document(page) => context
+                .target_page_residence_is_current(page)
+                .then(|| page.target_id())
+                .flatten(),
+            Self::Worker(RendererWorkerIdentity::Dedicated(instance)) => {
+                let target = context.dedicated_worker_targets.get(instance)?;
+                target.owner.target_id(context)?;
+                Some(&target.target_id)
+            }
+            Self::Worker(RendererWorkerIdentity::Shared(instance)) => {
+                Some(&context.shared_worker_targets.get(instance)?.target_id)
+            }
+            Self::Worker(RendererWorkerIdentity::Service { version, run }) => {
+                let target = context.service_worker_targets.get(version)?;
+                (target.active_renderer_run() == Some(run)).then_some(target.target_id.as_str())
+            }
+        }
+    }
+
+    pub(crate) fn belongs_to_document(
+        &self,
+        context: &BrowserContext,
+        document: &TargetPageResidenceIdentity,
+    ) -> bool {
+        match self {
+            Self::Document(owner) => owner == document,
+            Self::Worker(RendererWorkerIdentity::Dedicated(instance)) => context
+                .dedicated_worker_targets
+                .get(instance)
+                .is_some_and(|target| target.owner.belongs_to_document(context, document)),
+            Self::Worker(_) => false,
+        }
+    }
+}
 
 /// Protocol state for one renderer-owned DedicatedWorker lifetime.
 ///
 /// The V8 inspector/session bookkeeping is identical to a SharedWorker target,
-/// so the inner state intentionally reuses that implementation. Page ownership
+/// so the inner state intentionally reuses that implementation. Creator ownership
 /// and main-script Network delivery remain DedicatedWorker-specific here.
 #[derive(Debug)]
 pub(crate) struct DedicatedWorkerTargetState {
     pub(crate) renderer_instance_id: u64,
-    pub(crate) owner_page: TargetPageResidenceIdentity,
-    pub(crate) owner_page_network_sessions: Vec<Option<String>>,
+    pub(crate) owner: DedicatedWorkerOwner,
+    pub(crate) owner_network_sessions: Vec<Option<String>>,
     pub(crate) inner: SharedWorkerTargetState,
-    main_script: Option<DedicatedWorkerMainScriptSnapshot>,
+    pub(crate) main_script_request: Option<moli_core::page::SubresourceNetworkRequestHandle>,
+    // At most one header and terminal projection; no body or chunk history.
+    pub(crate) main_script_response_event: Option<BackgroundProtocolEvent>,
+    pub(crate) main_script_terminal_event: Option<BackgroundProtocolEvent>,
+    main_script: Option<Arc<RendererDedicatedWorkerMainScript>>,
     delivered_main_script_sessions: BTreeSet<String>,
     replayable_main_script_sessions: BTreeSet<String>,
     defer_failed_load_destroy_until_debugger_resume: bool,
     renderer_destroyed_while_waiting_for_debugger: bool,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum DedicatedWorkerMainScriptOutcome {
-    Loaded(Box<NavigationResponse>),
-    Failed {
-        error_message: String,
-        response: Option<Box<NavigationResponse>>,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct DedicatedWorkerMainScriptSnapshot {
-    pub(crate) outcome: DedicatedWorkerMainScriptOutcome,
-}
-
 impl DedicatedWorkerTargetState {
     pub(crate) fn new(
-        owner_page: TargetPageResidenceIdentity,
-        renderer_owner_local_host_id: moli_core::RendererOwnerLocalHostId,
+        owner: DedicatedWorkerOwner,
         renderer_instance_id: u64,
         target_id: String,
         name: String,
-        owner_page_network_sessions: Vec<Option<String>>,
+        owner_network_sessions: Vec<Option<String>>,
     ) -> Self {
         Self {
             renderer_instance_id,
-            owner_page,
-            owner_page_network_sessions,
+            owner,
+            owner_network_sessions,
             inner: SharedWorkerTargetState::new(
-                renderer_owner_local_host_id,
                 SharedWorkerInstanceId::from_u64(renderer_instance_id),
                 target_id,
                 None,
                 String::new(),
                 name,
+                true,
             ),
             main_script: None,
+            main_script_request: None,
+            main_script_response_event: None,
+            main_script_terminal_event: None,
             delivered_main_script_sessions: BTreeSet::new(),
             replayable_main_script_sessions: BTreeSet::new(),
             defer_failed_load_destroy_until_debugger_resume: false,
@@ -71,21 +114,38 @@ impl DedicatedWorkerTargetState {
 
     pub(crate) fn record_main_script(
         &mut self,
-        script_url: String,
-        outcome: DedicatedWorkerMainScriptOutcome,
+        script: Arc<RendererDedicatedWorkerMainScript>,
         pause_failed_target_until_debugger_resume: bool,
     ) {
         self.defer_failed_load_destroy_until_debugger_resume =
             pause_failed_target_until_debugger_resume
-                && matches!(&outcome, DedicatedWorkerMainScriptOutcome::Failed { .. });
-        self.inner.url = script_url.clone();
-        self.main_script = Some(DedicatedWorkerMainScriptSnapshot { outcome });
+                && matches!(
+                    &script.outcome,
+                    RendererDedicatedWorkerMainScriptOutcome::Failed { .. }
+                );
+        self.inner.url = script.script_url.clone();
+        self.main_script = Some(script);
         self.delivered_main_script_sessions.clear();
         self.replayable_main_script_sessions.clear();
     }
 
-    pub(crate) fn main_script(&self) -> Option<&DedicatedWorkerMainScriptSnapshot> {
-        self.main_script.as_ref()
+    pub(crate) fn main_script(&self) -> Option<&RendererDedicatedWorkerMainScript> {
+        self.main_script.as_deref()
+    }
+
+    pub(crate) fn main_script_network_events(
+        &self,
+        session_id: &str,
+    ) -> Vec<BackgroundProtocolEvent> {
+        self.main_script_response_event
+            .iter()
+            .chain(self.main_script_terminal_event.iter())
+            .cloned()
+            .map(|mut event| {
+                event.ensure_protocol_session_id(Some(session_id));
+                event
+            })
+            .collect()
     }
 
     pub(crate) fn main_script_was_delivered_to(&self, session_id: &str) -> bool {

@@ -462,14 +462,6 @@ impl LivePageEntry {
         page_vm
     }
 
-    pub(in crate::runtime) fn pending_phase_one_navigation_has_ready_streaming_input(
-        &mut self,
-    ) -> bool {
-        self.pending_phase_one_navigation
-            .as_mut()
-            .is_some_and(PageVmPendingPhaseOneNavigation::has_ready_streaming_input)
-    }
-
     pub(super) fn page_vm_and_document_lifecycle_turn_mut(
         &mut self,
     ) -> (&mut PageVm, &mut Option<PendingDocumentLifecycleTurn>) {

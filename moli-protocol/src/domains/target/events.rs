@@ -1,9 +1,11 @@
 #[cfg(test)]
 use serde_json::Value;
 
-use crate::devtools_runtime::{AutomationEvent, DevToolsTargetId, DevToolsTargetInfo};
 #[cfg(test)]
-use crate::devtools_runtime::{DevToolsSessionId, TargetAttachmentEvent, TargetDetachmentEvent};
+use crate::devtools_runtime::{
+    AutomationEvent, DevToolsSessionId, DevToolsTargetId, DevToolsTargetInfo,
+    TargetAttachmentEvent, TargetDetachmentEvent,
+};
 use crate::domains::command_output::CommandOutputPlan;
 
 use super::*;
@@ -128,7 +130,8 @@ fn emit_attached_to_target_with_waiting_from_cdp_value(
     );
 }
 
-pub(super) fn target_created_automation_event(target_info: DevToolsTargetInfo) -> AutomationEvent {
+#[cfg(test)]
+fn target_created_automation_event(target_info: DevToolsTargetInfo) -> AutomationEvent {
     let target_id = target_info
         .target_id
         .clone()

@@ -31,7 +31,6 @@ use crate::module_script_continuation::{
     ModuleScriptContinuation, ModuleScriptEvaluationContinuation, ModuleScriptEvaluationUpdate,
 };
 use crate::native_bridge::JsContextHost;
-use crate::network::ResourceRequestClient;
 use crate::page_task_queue::PageTaskQueue;
 use crate::page_task_queue::{
     PostParseLifecycleQueueStats, PostParseLifecycleWork, PostParsePageOwnedWork,
@@ -49,10 +48,11 @@ use crate::script_vm::{
 #[cfg(test)]
 use crate::script_vm::{MainDocumentLifecycleBody, NonScriptPageTaskExecutionOutcome};
 use crate::types::{ScriptExecutionReport, SubresourceResourceType};
-use crate::types::{ScriptKind, ScriptMode, ScriptSourceKind, SubresourceRequestInitiatorType};
+use crate::types::{ScriptKind, ScriptMode, ScriptSourceKind};
 
 fn preload_like_resource_initiator_type(resource_type: SubresourceResourceType) -> &'static str {
     match resource_type {
+        SubresourceResourceType::Document => "iframe",
         SubresourceResourceType::Script => "link",
         SubresourceResourceType::Image => "img",
         SubresourceResourceType::Audio => "audio",
@@ -111,8 +111,6 @@ impl RuntimeOwnedModuleFailureBodySettlement {
 impl ScriptVm {
     pub(crate) fn admit_main_document_runtime_script_task(
         &mut self,
-        loader: &ResourceRequestClient,
-        task_runner: crate::network::RendererResourceTaskRunner,
         admission: RuntimeScriptAdmission,
     ) {
         // Check CSP before starting the source fetch. A CORS or network failure
@@ -162,27 +160,22 @@ impl ScriptVm {
             payload => payload,
         };
         let admission = RuntimeScriptAdmission::from_boxed_payload(Box::new(payload), binding);
+        let loader = self
+            .current_main_document_resource_loader()
+            .expect("runtime script admission requires its current Document resource loader");
         let document_character_set = self.document_runtime.document_character_set().to_owned();
         let service_worker_context = {
             let host = self._context_host.borrow();
             DynamicScriptServiceWorkerContext {
                 browser_context_runtime: host.browser_context_runtime(),
                 client_id: host.service_worker_client_id_for_window_fetch(None),
-                document_url: self.document_runtime.document_url().clone(),
             }
         };
-        let request_origin = self
-            .current_main_document_resource_loader()
-            .expect("dynamic script requires its Document authority")
-            .fetch_context()
-            .request_origin();
         self.document_runtime
             .runtime_script_work_mut()
             .dynamic_scripts
             .enqueue_admission(
-                loader,
-                request_origin,
-                task_runner,
+                &loader,
                 admission,
                 Some(&document_character_set),
                 Some(&service_worker_context),
@@ -299,11 +292,7 @@ impl ScriptVm {
                 match self.start_runtime_module_script_graph_for_owner(&script, id) {
                     RuntimeModuleScriptGraphStart::Started(actions) => {
                         if let Some(network_result) = source_network_result.as_deref() {
-                            self.record_script_subresource_network_result(
-                                script.initiator_url.clone(),
-                                script.url.clone(),
-                                network_result,
-                            );
+                            self.record_script_resource_timing(script.url.clone(), network_result);
                         }
                         self.commit_runtime_module_graph_start_actions(actions);
                         advance = Some(RuntimeScriptOwnerAdvance::StartedModuleGraph);
@@ -616,7 +605,6 @@ impl ScriptVm {
 
     async fn flush_pending_runtime_script_work_until_document_owner_stable(
         &mut self,
-        loader: &ResourceRequestClient,
         initial_wait_for_dynamic_loads: bool,
         yield_after_one_runnable: bool,
         pause_kind_on_yield: Option<RuntimeScriptWorkPauseKind>,
@@ -626,7 +614,6 @@ impl ScriptVm {
             let document_owner_before = self.current_main_document_task_owner();
             let outcome = self
                 .flush_pending_work_with_turn_budget(
-                    loader,
                     wait_for_dynamic_loads,
                     yield_after_one_runnable,
                 )
@@ -1566,11 +1553,7 @@ impl ScriptVm {
             terminal.script.url, terminal.message
         ));
         if let Some(network_result) = terminal.source_network_result.as_deref() {
-            self.record_script_subresource_network_result(
-                terminal.script.initiator_url.clone(),
-                terminal.script.url.clone(),
-                network_result,
-            );
+            self.record_script_resource_timing(terminal.script.url.clone(), network_result);
         }
         let lease = self
             .document_runtime
@@ -1923,7 +1906,6 @@ impl ScriptVm {
 
     pub(super) async fn next_post_parse_processing_step(
         &mut self,
-        loader: &ResourceRequestClient,
         page_task_queue: &mut PageTaskQueue,
         report: &mut ScriptExecutionReport,
     ) -> std::result::Result<PostParseProcessingStep, String> {
@@ -1943,7 +1925,7 @@ impl ScriptVm {
                 self.resume_runtime_script_work_after_deferred_page_tasks();
                 match self
                     .flush_pending_runtime_script_work_until_document_owner_stable(
-                        loader, true, false, None,
+                        true, false, None,
                     )
                     .await?
                 {
@@ -1974,14 +1956,13 @@ impl ScriptVm {
 
     pub(super) async fn next_post_parse_lifecycle_advance_from_driver(
         &mut self,
-        loader: &ResourceRequestClient,
         page_task_queue: &mut PageTaskQueue,
         report: &mut ScriptExecutionReport,
         driver: PostParseLifecycleDriver,
     ) -> std::result::Result<PostParseLifecycleAdvance, String> {
         loop {
             match self
-                .next_post_parse_processing_step(loader, page_task_queue, report)
+                .next_post_parse_processing_step(page_task_queue, report)
                 .await?
             {
                 PostParseProcessingStep::Action(action) => {
@@ -2013,7 +1994,6 @@ impl ScriptVm {
 
     pub(crate) async fn advance_post_parse_lifecycle(
         &mut self,
-        loader: &ResourceRequestClient,
         page_task_queue: &mut PageTaskQueue,
         report: &mut ScriptExecutionReport,
         driver: PostParseLifecycleDriver,
@@ -2029,7 +2009,7 @@ impl ScriptVm {
         {
             return Ok(advance);
         }
-        self.next_post_parse_lifecycle_advance_from_driver(loader, page_task_queue, report, driver)
+        self.next_post_parse_lifecycle_advance_from_driver(page_task_queue, report, driver)
             .await
     }
 
@@ -2504,7 +2484,6 @@ impl ScriptVm {
                 blocking_operation: _,
                 source_operation: _,
                 import_roots,
-                document_url,
                 request_url,
                 source_owners,
                 resource_type,
@@ -2625,14 +2604,6 @@ impl ScriptVm {
                     }
                 }
             }
-            host.record_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                request_url,
-                resource_type,
-                SubresourceRequestInitiatorType::Parser,
-                &result,
-            );
         }
         for (root, responses) in import_graph_results {
             if host
@@ -2741,63 +2712,18 @@ impl ScriptVm {
         }
     }
 
-    pub(crate) fn record_script_subresource_network_result(
+    pub(crate) fn record_script_resource_timing(
         &mut self,
-        document_url: Url,
         request_url: Url,
         result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
     ) {
-        self.record_script_subresource_network_result_with_initiator(
-            document_url,
-            request_url,
-            SubresourceRequestInitiatorType::Parser,
+        let entry = crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
+            request_url.as_str(),
+            "script",
+            None,
             result,
         );
-    }
-
-    pub(crate) fn record_script_subresource_network_result_with_initiator(
-        &mut self,
-        document_url: Url,
-        request_url: Url,
-        request_initiator_type: SubresourceRequestInitiatorType,
-        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
-    ) {
-        let performance_entry =
-            crate::context_bootstrap::ResourcePerformanceEntry::from_network_result(
-                request_url.as_str(),
-                "script",
-                None,
-                result,
-            );
-        self._context_host
-            .borrow_mut()
-            .record_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                request_url,
-                SubresourceResourceType::Script,
-                request_initiator_type,
-                result,
-            );
-        self.record_resource_performance_entries(vec![performance_entry]);
-    }
-
-    pub(crate) fn record_historical_script_subresource_network_result(
-        &mut self,
-        document_url: Url,
-        request_url: Url,
-        result: &std::result::Result<crate::protocol_types::NavigationResponse, String>,
-    ) {
-        self._context_host
-            .borrow_mut()
-            .record_historical_get_subresource_network_result_with_initiator(
-                None,
-                document_url,
-                request_url,
-                SubresourceResourceType::Script,
-                SubresourceRequestInitiatorType::Parser,
-                result,
-            );
+        self.record_resource_performance_entries(vec![entry]);
     }
 }
 

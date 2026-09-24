@@ -460,19 +460,19 @@ impl<Target> ParserClassicScriptSourceLoadCompletionAction<Target> {
 pub(crate) struct ParserPendingClassicScriptSourceResultAction<'a> {
     notification: ParserPendingClassicScriptNotification,
     network_result: Option<&'a SharedNavigationResponseResult>,
-    network_record_urls: Option<ParserClassicScriptNetworkRecordUrls>,
+    request_url: Option<Url>,
 }
 
 impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
     pub(crate) fn new(
         notification: ParserPendingClassicScriptNotification,
         network_result: Option<&'a SharedNavigationResponseResult>,
-        network_record_urls: Option<ParserClassicScriptNetworkRecordUrls>,
+        request_url: Option<Url>,
     ) -> Self {
         Self {
             notification,
             network_result,
-            network_record_urls,
+            request_url,
         }
     }
 
@@ -484,31 +484,8 @@ impl<'a> ParserPendingClassicScriptSourceResultAction<'a> {
         self.network_result
     }
 
-    pub(crate) fn network_record_urls(&self) -> Option<&ParserClassicScriptNetworkRecordUrls> {
-        self.network_record_urls.as_ref()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParserClassicScriptNetworkRecordUrls {
-    initiator_url: Url,
-    script_url: Url,
-}
-
-impl ParserClassicScriptNetworkRecordUrls {
-    pub(crate) fn from_prepared_script(script: &crate::planning::PreparedScript) -> Self {
-        Self {
-            initiator_url: script.initiator_url.clone(),
-            script_url: script.url.clone(),
-        }
-    }
-
-    pub(crate) fn initiator_url(&self) -> &Url {
-        &self.initiator_url
-    }
-
-    pub(crate) fn script_url(&self) -> &Url {
-        &self.script_url
+    pub(crate) fn request_url(&self) -> Option<&Url> {
+        self.request_url.as_ref()
     }
 }
 

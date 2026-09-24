@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use moli_core::browser::ServiceWorkerCommand;
 use serde::Deserialize;
 use url::Url;
 
@@ -53,17 +54,23 @@ fn disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan
     let Ok(browser_context_id) = browser_context_id_for_command(conn, cmd.session_id) else {
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
-    if let Some(context) = conn.browser_context_by_id_mut(&browser_context_id) {
+    let reset_context = if let Some(context) = conn.browser_context_by_id_mut(&browser_context_id) {
         let was_enabled = context
             .service_worker_domain_enabled_sessions()
             .iter()
             .any(|session_id| session_id.as_deref() == cmd.session_id);
         context.set_service_worker_domain_enabled(cmd.session_id, false);
-        if was_enabled {
-            context
-                .renderer_runtime()
-                .set_service_worker_force_update_on_page_load_for_devtools(false);
-        }
+        was_enabled.then(|| context.browser_context_id())
+    } else {
+        None
+    };
+    if let Some(context) = reset_context
+        && let Err(message) = conn.execute_browser_service_worker_command(
+            context,
+            ServiceWorkerCommand::SetForceUpdateOnPageLoad(false),
+        )
+    {
+        return CommandOutputPlan::error(-32000, message);
     }
     CommandOutputPlan::success()
 }
@@ -75,7 +82,7 @@ fn set_force_update_on_page_load_command(
     let Ok(browser_context_id) = browser_context_id_for_command(conn, cmd.session_id) else {
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
-    let Some(context) = conn.browser_context_by_id(&browser_context_id) else {
+    let Ok(context) = conn.browser_context_handle_for_devtools_id(&browser_context_id) else {
         return CommandOutputPlan::error(-32000, "No browser context");
     };
     let Some(force_update) = force_update_on_page_load_param(cmd) else {
@@ -84,10 +91,13 @@ fn set_force_update_on_page_load_command(
             "Invalid ServiceWorker setForceUpdateOnPageLoad params",
         );
     };
-    context
-        .renderer_runtime()
-        .set_service_worker_force_update_on_page_load_for_devtools(force_update);
-    CommandOutputPlan::success()
+    match conn.execute_browser_service_worker_command(
+        context,
+        ServiceWorkerCommand::SetForceUpdateOnPageLoad(force_update),
+    ) {
+        Ok(()) => CommandOutputPlan::success(),
+        Err(message) => CommandOutputPlan::error(-32000, message),
+    }
 }
 
 fn lifecycle_command(
@@ -98,60 +108,50 @@ fn lifecycle_command(
     let Ok(browser_context_id) = browser_context_id_for_command(conn, cmd.session_id) else {
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
-    let Some(context) = conn.browser_context_by_id(&browser_context_id) else {
+    let Some(context_projection) = conn.browser_context_by_id(&browser_context_id) else {
         return CommandOutputPlan::error(-32000, "No browser context");
     };
-    if !context
+    if !context_projection
         .service_worker_domain_enabled_sessions()
         .iter()
         .any(|session_id| session_id.as_deref() == cmd.session_id)
     {
         return CommandOutputPlan::error(-32000, "ServiceWorker domain is not enabled");
     }
-    let renderer_runtime = context.renderer_runtime();
-    let result = match action {
+    let Ok(context) = conn.browser_context_handle_for_devtools_id(&browser_context_id) else {
+        return CommandOutputPlan::error(-32000, "No browser context");
+    };
+    let command = match action {
         ServiceWorkerAction::Unregister => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .unregister_service_worker_scope_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::Unregister { scope: scope_url }
         }
         ServiceWorkerAction::StartWorker => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .start_service_worker_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::Start { scope: scope_url }
         }
         ServiceWorkerAction::StopWorker => {
             let Some(version_id) = version_id_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker versionId");
             };
-            renderer_runtime
-                .stop_service_worker_for_devtools(version_id)
-                .map(|_| ())
+            ServiceWorkerCommand::StopVersion { version_id }
         }
-        ServiceWorkerAction::StopAllWorkers => renderer_runtime
-            .stop_all_service_workers_for_devtools()
-            .map(|_| ()),
+        ServiceWorkerAction::StopAllWorkers => ServiceWorkerCommand::StopAll,
         ServiceWorkerAction::SkipWaiting => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .skip_waiting_service_worker_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::SkipWaiting { scope: scope_url }
         }
         ServiceWorkerAction::UpdateRegistration => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .update_service_worker_registration_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::UpdateRegistration { scope: scope_url }
         }
         ServiceWorkerAction::DeliverPushMessage => {
             let Some(params) = deliver_push_message_params(cmd) else {
@@ -160,13 +160,11 @@ fn lifecycle_command(
                     "Invalid ServiceWorker deliverPushMessage params",
                 );
             };
-            renderer_runtime
-                .deliver_push_message_for_devtools(
-                    &params.origin,
-                    params.registration_id,
-                    params.data,
-                )
-                .map(|_| ())
+            ServiceWorkerCommand::DeliverPushMessage {
+                origin: params.origin,
+                registration_id: params.registration_id,
+                data: params.data,
+            }
         }
         ServiceWorkerAction::DispatchSyncEvent => {
             let Some(params) = sync_event_params(cmd) else {
@@ -175,14 +173,12 @@ fn lifecycle_command(
                     "Invalid ServiceWorker dispatchSyncEvent params",
                 );
             };
-            renderer_runtime
-                .dispatch_sync_event_for_devtools(
-                    &params.origin,
-                    params.registration_id,
-                    params.tag,
-                    params.last_chance,
-                )
-                .map(|_| ())
+            ServiceWorkerCommand::DispatchSyncEvent {
+                origin: params.origin,
+                registration_id: params.registration_id,
+                tag: params.tag,
+                last_chance: params.last_chance,
+            }
         }
         ServiceWorkerAction::DispatchPeriodicSyncEvent => {
             let Some(params) = periodic_sync_event_params(cmd) else {
@@ -191,21 +187,22 @@ fn lifecycle_command(
                     "Invalid ServiceWorker dispatchPeriodicSyncEvent params",
                 );
             };
-            renderer_runtime
-                .dispatch_periodic_sync_event_for_devtools(
-                    &params.origin,
-                    params.registration_id,
-                    params.tag,
-                )
-                .map(|_| ())
+            ServiceWorkerCommand::DispatchPeriodicSyncEvent {
+                origin: params.origin,
+                registration_id: params.registration_id,
+                tag: params.tag,
+            }
         }
         ServiceWorkerAction::Enable
         | ServiceWorkerAction::Disable
         | ServiceWorkerAction::SetForceUpdateOnPageLoad => {
-            Err(format!("ServiceWorker.{} is not implemented", cmd.action))
+            return CommandOutputPlan::error(
+                -32000,
+                format!("ServiceWorker.{} is not implemented", cmd.action),
+            );
         }
     };
-    match result {
+    match conn.execute_browser_service_worker_command(context, command) {
         Ok(()) => CommandOutputPlan::success(),
         Err(message) => CommandOutputPlan::error(-32000, message),
     }
@@ -542,12 +539,10 @@ fn controlled_client_target_ids_for_target(
     context: &BrowserContext,
     target: &ServiceWorkerTargetState,
 ) -> Vec<String> {
-    let controlled_client_ids = context
-        .renderer_runtime()
-        .controlled_service_worker_window_client_ids_for_devtools(
-            target.renderer_registration_id,
-            target.renderer_version_id,
-        );
+    let controlled_client_ids = context.controlled_service_worker_window_client_ids(
+        target.renderer_registration_id,
+        target.renderer_version_id,
+    );
     page_target_ids_for_controlled_client_ids(context, &controlled_client_ids)
 }
 
@@ -564,16 +559,11 @@ fn page_target_ids_for_controlled_client_ids(
     }
 
     let mut target_ids = BTreeSet::new();
-    if let (Some(target_id), Some(page)) = (context.active_target_id(), context.loaded_page())
-        && controlled_client_ids.contains(&page.service_worker_client_id())
-    {
-        target_ids.insert(target_id.to_owned());
-    }
-    for target in context.background_targets() {
-        let Some(page) = target.loaded_page() else {
-            continue;
-        };
-        if controlled_client_ids.contains(&page.service_worker_client_id()) {
+    for target in context.page_targets.iter() {
+        if context
+            .target_service_worker_client_id(target.target_id())
+            .is_some_and(|id| controlled_client_ids.contains(&id))
+        {
             target_ids.insert(target.target_id().to_owned());
         }
     }
@@ -600,7 +590,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        conn::{BrowserContext, PageTargetHost, ServiceWorkerTargetState},
+        conn::{BrowserContext, ServiceWorkerTargetState},
         testing::TestContext,
     };
 
@@ -623,40 +613,44 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn controlled_client_ids_map_to_exact_page_target_ids_even_for_same_url() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
+        let mut context = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<title>same-url</title>")
-            .await
-            .expect("active page should load");
-        let background_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>same-url</title>")
-            .await
-            .expect("background page should load");
-        let active_client_id = active_page.service_worker_client_id();
-        let background_client_id = background_page.service_worker_client_id();
-        assert_ne!(active_client_id, background_client_id);
-
-        let mut context = BrowserContext::new("BID-1".to_owned());
+            .new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-active".to_owned());
+        context.attach_active_session("SID-active".to_owned());
         context.set_target_url("data:text/html,<title>same-url</title>".to_owned());
-        let _ = context.replace_loaded_page(Some(active_page));
-
-        let mut background = PageTargetHost::with_url(
+        context.register_page_target_url_fixture(
             "TID-background".to_owned(),
-            None,
+            Some("SID-background".to_owned()),
             "data:text/html,<title>same-url</title>".to_owned(),
         );
-        let _ = background.replace_loaded_page(Some(background_page));
-        context.insert_page_target_host(background);
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>same-url</title>",
+            Some("SID-active"),
+        )
+        .await;
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>same-url</title>",
+            Some("SID-background"),
+        )
+        .await;
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        let active_client_id = context
+            .target_service_worker_client_id("TID-active")
+            .expect("active client id");
+        let background_client_id = context
+            .target_service_worker_client_id("TID-background")
+            .expect("background client id");
+        assert_ne!(active_client_id, background_client_id);
 
         assert_eq!(
-            super::page_target_ids_for_controlled_client_ids(&context, &[background_client_id]),
+            super::page_target_ids_for_controlled_client_ids(context, &[background_client_id]),
             vec!["TID-background".to_owned()]
         );
         assert_eq!(
             super::page_target_ids_for_controlled_client_ids(
-                &context,
+                context,
                 &[
                     active_client_id,
                     background_client_id,
@@ -864,8 +858,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .renderer_runtime()
-                .service_worker_force_update_on_page_load_for_devtools()
+                .service_worker_force_update_on_page_load()
         );
 
         ctx.process_async(json!({
@@ -889,8 +882,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .renderer_runtime()
-                .service_worker_force_update_on_page_load_for_devtools()
+                .service_worker_force_update_on_page_load()
         );
     }
 

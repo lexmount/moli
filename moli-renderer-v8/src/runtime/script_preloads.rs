@@ -14,12 +14,10 @@ use url::Url;
 
 use parking_lot::Mutex;
 
-use crate::network::ResourceRequestClient;
+use crate::network::context::DocumentResourceLoader;
 use crate::page_task_queue::RendererOwnerWakeSender;
 use crate::parser::{PreparedScript, ScriptSource};
-use crate::planning::{
-    SharedScriptSourceLoad, prepared_script_with_loaded_source, script_preload_network_result,
-};
+use crate::planning::{SharedScriptSourceLoad, prepared_script_with_loaded_source};
 use crate::runtime::RendererBrowserContextRuntime;
 use crate::runtime::page_vm::{
     PageVm, ScannedImageAdmission, ScannedImageDeferral, ScannedScriptAdmission,
@@ -49,7 +47,7 @@ pub(super) struct BufferedDocumentPreloadState {
     script_fetch_requires_owner_admission: bool,
     response_csp_requires_parser_admission: bool,
     owner_wake: Option<RendererOwnerWakeSender>,
-    resource_task_runner: Option<crate::network::RendererResourceTaskRunner>,
+    resource_loader: Option<DocumentResourceLoader>,
     main_document_scanner: Option<Box<IncrementalHtmlPreloadScanner>>,
     pub(super) insertion_scanner: Option<Box<IncrementalHtmlPreloadScanner>>,
     meta_csp_preload_gate: MetaCspPreloadGate,
@@ -114,10 +112,53 @@ impl std::fmt::Debug for DocumentScriptPreloadStore {
 }
 
 impl DocumentScriptPreloadStore {
+    pub(crate) fn load_classic_script(
+        &self,
+        script: &PreparedScript,
+        loader: DocumentResourceLoader,
+        document_character_set: String,
+        resource_type: moli_fetch::RequestResourceType,
+        owner_wake: Option<RendererOwnerWakeSender>,
+    ) -> SharedScriptSourceLoad {
+        debug_assert_eq!(script.kind, crate::types::ScriptKind::Classic);
+        debug_assert!(matches!(script.source, ScriptSource::External));
+        let key = BufferedScriptPreloadKey::from_script(script)
+            .expect("external classic scripts have a preload key");
+        self.entries
+            .lock()
+            .entry(key)
+            .or_insert_with(|| {
+                let load = SharedScriptSourceLoad::spawn(
+                    script.clone(),
+                    loader,
+                    Some(document_character_set),
+                    Some(resource_type),
+                    crate::types::SubresourceRequestInitiatorType::Parser,
+                    None,
+                    owner_wake,
+                );
+                BufferedScriptPreloadEntry {
+                    request: BufferedScriptPreloadRequest {
+                        url: script.url.clone(),
+                        initiator_url: script.initiator_url.clone(),
+                        kind_hint: script.kind,
+                        mode_hint: script.mode,
+                        resource_type_hint: resource_type,
+                        fetch_metadata: script.fetch_metadata.clone(),
+                    },
+                    load,
+                }
+            })
+            .load
+            .clone()
+    }
+
+    #[cfg(test)]
     pub(super) fn contains_key(&self, key: &BufferedScriptPreloadKey) -> bool {
         self.entries.lock().contains_key(key)
     }
 
+    #[cfg(test)]
     pub(super) fn insert(
         &mut self,
         key: BufferedScriptPreloadKey,
@@ -174,22 +215,16 @@ impl DocumentScriptPreloadStore {
 pub(super) struct ServiceWorkerScriptPreloadContext {
     browser_context_runtime: RendererBrowserContextRuntime,
     client_id: ServiceWorkerClientId,
-    document_url: Url,
-    owner_wake: Option<RendererOwnerWakeSender>,
 }
 
 impl ServiceWorkerScriptPreloadContext {
     pub(super) fn new(
         browser_context_runtime: RendererBrowserContextRuntime,
         client_id: ServiceWorkerClientId,
-        document_url: Url,
-        owner_wake: Option<RendererOwnerWakeSender>,
     ) -> Self {
         Self {
             browser_context_runtime,
             client_id,
-            document_url,
-            owner_wake,
         }
     }
 }
@@ -202,7 +237,7 @@ impl Default for BufferedDocumentPreloadState {
             script_fetch_requires_owner_admission: false,
             response_csp_requires_parser_admission: false,
             owner_wake: None,
-            resource_task_runner: None,
+            resource_loader: None,
             main_document_scanner: None,
             insertion_scanner: None,
             meta_csp_preload_gate: MetaCspPreloadGate::default(),
@@ -221,60 +256,36 @@ impl BufferedDocumentPreloadState {
     pub(super) fn bind_resource_runtime(
         &mut self,
         owner_wake: Option<RendererOwnerWakeSender>,
-        resource_task_runner: Option<crate::network::RendererResourceTaskRunner>,
+        resource_loader: DocumentResourceLoader,
     ) {
         self.owner_wake = owner_wake;
-        self.resource_task_runner = resource_task_runner;
+        self.resource_loader = Some(resource_loader);
     }
 
     fn start_preloads_for_requests(
         &mut self,
         requests: Vec<BufferedScriptPreloadRequest>,
-        request_origin: &moli_url::WebOrigin,
-        loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
         if requests.is_empty() {
             return;
         }
-        let resource_task_runner = self
-            .resource_task_runner
-            .clone()
-            .expect("script preloads require the navigation resource task runner");
+        let loader = self
+            .resource_loader
+            .as_ref()
+            .expect("script preloads require their admitted Document resource loader");
+        let mut loader = loader.clone();
+        if let Some(context) = service_worker_context {
+            loader.bind_service_worker(context.browser_context_runtime.clone(), context.client_id);
+        }
         for request in requests {
-            let key = request.cache_key();
-            if self.entries.contains_key(&key) {
-                continue;
-            }
-
-            let script = request.to_preload_script();
-            let document_character_set = self.document_character_set.to_owned();
-            let load = if let Some(context) = service_worker_context {
-                crate::planning::spawn_service_worker_aware_external_script_source_load(
-                    script,
-                    request_origin.clone(),
-                    loader.clone(),
-                    resource_task_runner.clone(),
-                    Some(document_character_set),
-                    Some(request.resource_type_hint),
-                    context.browser_context_runtime.clone(),
-                    context.client_id,
-                    context.document_url.clone(),
-                    context.owner_wake.clone(),
-                )
-            } else {
-                SharedScriptSourceLoad::spawn_with_request_resource_type_and_owner_wake(
-                    script,
-                    request_origin.clone(),
-                    loader.clone(),
-                    resource_task_runner.clone(),
-                    Some(document_character_set),
-                    Some(request.resource_type_hint),
-                    self.owner_wake.clone(),
-                )
-            };
-            self.entries
-                .insert(key, BufferedScriptPreloadEntry { request, load });
+            self.entries.load_classic_script(
+                &request.to_preload_script(),
+                loader.clone(),
+                self.document_character_set.clone(),
+                request.resource_type_hint,
+                self.owner_wake.clone(),
+            );
         }
     }
 
@@ -320,32 +331,22 @@ impl BufferedDocumentPreloadState {
     fn schedule_preloads_for_requests(
         &mut self,
         requests: Vec<BufferedScriptPreloadRequest>,
-        navigation_url: &Url,
-        loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
         let requires_owner_admission = self.script_fetch_requires_owner_admission
             || self.response_csp_requires_parser_admission
             || self.meta_csp_preload_gate.has_seen_meta_csp();
-        let (owner_admitted, legacy_preloads): (Vec<_>, Vec<_>) =
+        let (owner_admitted, classic_preloads): (Vec<_>, Vec<_>) =
             requests.into_iter().partition(|request| {
                 requires_owner_admission || request.kind_hint == crate::types::ScriptKind::Module
             });
         // Native module graphs share fetches through the Document's module
-        // map. They cannot enter the legacy SharedScriptSourceLoad cache: a
+        // map. They cannot enter the classic script source cache: a
         // parser module would have no way to join that in-flight request and
         // would issue a second fetch. PageVm bootstrap drains these descriptors
         // into the native module map as soon as the Document owner exists.
         self.queue_script_preloads_for_owner_admission(owner_admitted);
-        // Requests requiring Document policy (including response CSP) are
-        // deferred above. Only the navigation's ordinary tuple origin is
-        // needed for the remaining requests before realm creation.
-        self.start_preloads_for_requests(
-            legacy_preloads,
-            &moli_url::WebOrigin::from_url(navigation_url),
-            loader,
-            service_worker_context,
-        );
+        self.start_preloads_for_requests(classic_preloads, service_worker_context);
     }
 
     pub(super) fn set_document_character_set(&mut self, document_character_set: &str) {
@@ -360,22 +361,14 @@ impl BufferedDocumentPreloadState {
         self.response_csp_requires_parser_admission = required;
     }
 
-    pub(super) fn append_to_main_document_scan(
-        &mut self,
-        final_url: &Url,
-        html: &str,
-        loader: &ResourceRequestClient,
-    ) {
-        self.append_to_main_document_scan_with_service_worker_context(
-            final_url, html, loader, None,
-        );
+    pub(super) fn append_to_main_document_scan(&mut self, final_url: &Url, html: &str) {
+        self.append_to_main_document_scan_with_service_worker_context(final_url, html, None);
     }
 
     pub(super) fn append_to_main_document_scan_with_service_worker_context(
         &mut self,
         final_url: &Url,
         html: &str,
-        loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
         if html.is_empty() {
@@ -387,12 +380,7 @@ impl BufferedDocumentPreloadState {
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
             .note_scanner_seen(batch.discovered_meta_csp_count);
-        self.schedule_preloads_for_requests(
-            batch.script_requests,
-            final_url,
-            loader,
-            service_worker_context,
-        );
+        self.schedule_preloads_for_requests(batch.script_requests, service_worker_context);
         self.queue_stylesheet_preloads_for_owner_admission(batch.stylesheet_requests);
         self.queue_image_preloads_for_owner_admission(batch.image_requests);
     }
@@ -401,7 +389,6 @@ impl BufferedDocumentPreloadState {
         &mut self,
         final_url: &Url,
         html: &str,
-        loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
         if html.is_empty() {
@@ -425,7 +412,7 @@ impl BufferedDocumentPreloadState {
             .filter(prebootstrap_preload_request_is_dcl_relevant)
             .collect::<Vec<_>>();
         let request_count = requests.len();
-        self.schedule_preloads_for_requests(requests, final_url, loader, service_worker_context);
+        self.schedule_preloads_for_requests(requests, service_worker_context);
         self.queue_stylesheet_preloads_for_owner_admission(batch.stylesheet_requests);
         self.queue_image_preloads_for_owner_admission(batch.image_requests);
         if let Some(started) = timing_started
@@ -444,23 +431,17 @@ impl BufferedDocumentPreloadState {
         }
     }
 
-    pub(super) fn catch_up_main_document_scan_if_absent(
-        &mut self,
-        final_url: &Url,
-        html: &str,
-        loader: &ResourceRequestClient,
-    ) {
+    pub(super) fn catch_up_main_document_scan_if_absent(&mut self, final_url: &Url, html: &str) {
         if self.main_document_scanner.is_some() || html.is_empty() {
             return;
         }
-        self.append_to_main_document_scan(final_url, html, loader);
+        self.append_to_main_document_scan(final_url, html);
     }
 
     pub(super) fn append_to_insertion_scan_with_service_worker_context(
         &mut self,
         final_url: &Url,
         html: &str,
-        loader: &ResourceRequestClient,
         service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
     ) {
         if html.is_empty() {
@@ -474,12 +455,7 @@ impl BufferedDocumentPreloadState {
         let batch = scanner.scan_chunk(html);
         self.meta_csp_preload_gate
             .note_scanner_seen(batch.discovered_meta_csp_count);
-        self.schedule_preloads_for_requests(
-            batch.script_requests,
-            final_url,
-            loader,
-            service_worker_context,
-        );
+        self.schedule_preloads_for_requests(batch.script_requests, service_worker_context);
     }
 
     pub(super) fn reset_insertion_scan(&mut self) {
@@ -600,7 +576,7 @@ impl BufferedDocumentPreloadState {
                     outcome.source_bytes,
                 );
                 ParserBlockingPreloadDisposition::Ready(AppliedPreloadedScriptSource {
-                    network_result: script_preload_network_result(outcome.network_result),
+                    network_result: outcome.network_result,
                 })
             }
             // A completed fetch failure is still the terminal result for this
@@ -677,7 +653,7 @@ impl BufferedDocumentPreloadState {
                         outcome.source_bytes,
                     );
                     Some(AppliedPreloadedScriptSource {
-                        network_result: script_preload_network_result(outcome.network_result),
+                        network_result: outcome.network_result,
                     })
                 }
                 Err(_) => None,
@@ -975,7 +951,6 @@ fn admit_script_preloads(
     page_vm: &mut PageVm,
     state: &mut BufferedDocumentPreloadState,
     requests: Vec<BufferedScriptPreloadRequest>,
-    loader: &ResourceRequestClient,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
     let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
@@ -999,19 +974,10 @@ fn admit_script_preloads(
         }
     }
     let admitted_count = admitted.len();
-    let (native_modules, legacy_preloads): (Vec<_>, Vec<_>) = admitted
+    let (native_modules, classic_preloads): (Vec<_>, Vec<_>) = admitted
         .into_iter()
         .partition(|request| request.kind_hint == crate::types::ScriptKind::Module);
-    let request_origin = page_vm
-        .main_document_resource_loader()
-        .fetch_context()
-        .request_origin();
-    state.start_preloads_for_requests(
-        legacy_preloads,
-        &request_origin,
-        loader,
-        service_worker_context,
-    );
+    state.start_preloads_for_requests(classic_preloads, service_worker_context);
     for request in native_modules {
         let request_url = request.url.clone();
         if let Err(error) = page_vm
@@ -1042,19 +1008,12 @@ fn admit_script_preloads(
 pub(super) fn admit_pending_preloads(
     page_vm: &mut PageVm,
     state: &mut BufferedDocumentPreloadState,
-    loader: &ResourceRequestClient,
     service_worker_context: Option<&ServiceWorkerScriptPreloadContext>,
 ) {
     let script_preloads = state.take_pending_script_preloads();
     let stylesheet_preloads = state.take_pending_stylesheet_preloads();
     let image_preloads = state.take_pending_image_preloads();
-    admit_script_preloads(
-        page_vm,
-        state,
-        script_preloads,
-        loader,
-        service_worker_context,
-    );
+    admit_script_preloads(page_vm, state, script_preloads, service_worker_context);
     admit_stylesheet_preloads(page_vm, stylesheet_preloads);
     admit_image_preloads(page_vm, image_preloads);
 }

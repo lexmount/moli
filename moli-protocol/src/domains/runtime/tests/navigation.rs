@@ -1,20 +1,16 @@
 use super::*;
 
 #[tokio::test]
-async fn enable_with_background_event_sender_defers_initial_document_page_build() {
+async fn enable_without_document_rejects_even_with_background_event_sender() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let (background_tx, _) = tokio::sync::mpsc::unbounded_channel();
-    let (completion_tx, _) =
-        tokio::sync::mpsc::unbounded_channel::<BackgroundNavigationCompletion>();
     ctx.conn.set_background_event_sender(background_tx);
-    ctx.conn
-        .set_background_navigation_completion_sender(completion_tx);
 
     ctx.process_async(json!({
         "id": 21,
@@ -22,7 +18,13 @@ async fn enable_with_background_event_sender_defers_initial_document_page_build(
         "sessionId": "SID-1"
     }))
     .await;
-    ctx.expect_result(21, json!({}), Some("SID-1"));
+    ctx.expect_error(21, -32000, "NoDocumentLoaded");
+    assert!(
+        !ctx.conn
+            .target_runtime_session_state_for_session(Some("SID-1"))
+            .expect("target runtime session state")
+            .runtime_frontend_enabled
+    );
     assert!(ctx.sent.is_empty());
 }
 #[tokio::test]
@@ -77,13 +79,14 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
         "Runtime.enable should replay the existing about:blank default context: {messages:?}"
     );
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx
+                .conn
+                .browser_context
+                .as_ref()
+                .expect("browser context should exist");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Runtime.enable should observe the already-installed about:blank page"
     );
 }
@@ -91,7 +94,7 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
 #[tokio::test]
 async fn enable_reports_no_document_without_legacy_materialization_adapter() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());

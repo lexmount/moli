@@ -1074,6 +1074,25 @@ impl DocumentParserSession {
         std::mem::take(&mut *self.discovery_signals.borrow_mut())
     }
 
+    pub(crate) fn with_initial_document<R>(&self, read: impl FnOnce(&DomHost) -> R) -> R {
+        match self.backend() {
+            ExecutableDocumentParserBackend::Html(stream) => {
+                let stream = stream.borrow_mut();
+                let dom = stream.take_parser_stream_dom_host();
+                let result = read(&dom);
+                stream.restore_parser_stream_dom_host(dom);
+                result
+            }
+            ExecutableDocumentParserBackend::Xml(stream) => {
+                let mut stream = stream.borrow_mut();
+                let dom = stream.take_parser_stream_dom_host();
+                let result = read(&dom);
+                stream.restore_parser_stream_dom_host(dom);
+                result
+            }
+        }
+    }
+
     pub(crate) fn with_parser_stream_dom_host_for_bootstrap<R>(
         &mut self,
         f: impl FnOnce(DomHost) -> std::result::Result<R, Box<(anyhow::Error, DomHost)>>,

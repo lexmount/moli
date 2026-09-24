@@ -33,9 +33,8 @@ async fn media_load_honors_media_src_csp() {
         2
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "blocked media loadstart turn")
-        .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "blocked media error turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "blocked media loadstart turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "blocked media error turn").await;
 
     assert_eq!(
         vm.eval(
@@ -85,7 +84,6 @@ async fn media_report_only_csp_reports_without_blocking_load() {
     for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("report-only media {phase} turn"),
         )
         .await;
@@ -142,14 +140,8 @@ async fn media_invalid_base_url_fails_before_csp_check() {
         "an invalid base URL must fail before CSP queues a violation task"
     );
 
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "invalid-base media loadstart turn",
-    )
-    .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "invalid-base media error turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "invalid-base media loadstart turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "invalid-base media error turn").await;
 
     assert_eq!(
         vm.eval(
@@ -187,14 +179,8 @@ async fn media_invalid_request_url_fails_before_load() {
     )
     .expect("invalid media URL setup should evaluate");
 
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "invalid-URL media loadstart turn",
-    )
-    .await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "invalid-URL media error turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "invalid-URL media loadstart turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "invalid-URL media error turn").await;
 
     assert_eq!(
         vm.eval(
@@ -220,16 +206,11 @@ async fn media_invalid_request_url_fails_before_load() {
 
     run_next_page_media_element_event_for_test(
         &mut vm,
-        &loader,
         "reloaded invalid-URL media loadstart turn",
     )
     .await;
-    run_next_page_media_element_event_for_test(
-        &mut vm,
-        &loader,
-        "reloaded invalid-URL media error turn",
-    )
-    .await;
+    run_next_page_media_element_event_for_test(&mut vm, "reloaded invalid-URL media error turn")
+        .await;
     assert_eq!(
         vm.eval(
             r#"[
@@ -282,7 +263,6 @@ async fn media_blocks_http_dangling_markup_without_blocking_safe_url_inputs() {
     for turn in 0..10 {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("dangling-markup media event turn {turn}"),
         )
         .await;
@@ -327,13 +307,11 @@ async fn media_dangling_markup_still_dispatches_report_only_csp() {
     );
     run_next_page_media_element_event_for_test(
         &mut vm,
-        &loader,
         "report-only dangling-markup media loadstart turn",
     )
     .await;
     run_next_page_media_element_event_for_test(
         &mut vm,
-        &loader,
         "report-only dangling-markup media error turn",
     )
     .await;
@@ -573,7 +551,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         "media seeking events must not create Page timer descriptors"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media seeking event turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "media seeking event turn").await;
 
     assert_eq!(
         vm.eval(
@@ -583,7 +561,7 @@ async fn media_pseudo_classes_update_has_ancestor_styles() {
         "true,1,0"
     );
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "media seeked event turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "media seeked event turn").await;
 
     let after_task = vm
         .eval(
@@ -641,7 +619,7 @@ async fn media_seek_completion_ignores_stale_seek_tokens() {
 
     for _ in 0..4 {
         if !vm
-            .run_one_media_element_event_executor_turn(&loader)
+            .run_one_media_element_event_executor_turn()
             .await
             .expect("selected dispatcher should advance stale seek completions")
         {
@@ -707,7 +685,7 @@ async fn slotted_media_state_invalidates_shadow_stylesheet_source() {
 
     for _ in 0..4 {
         if !vm
-            .run_one_media_element_event_executor_turn(&loader)
+            .run_one_media_element_event_executor_turn()
             .await
             .expect("selected dispatcher should advance slotted media completion")
         {
@@ -1295,20 +1273,19 @@ async fn media_text_track_data_src_loads_after_media_parent_and_clears_cues() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("already-applied default-mode task should settle"),
         "track insertion should queue one coalesced default-mode task"
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track load-start networking turn")
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track terminal networking turn")
     );
@@ -1335,12 +1312,12 @@ async fn media_text_track_data_src_loads_after_media_parent_and_clears_cues() {
     assert_eq!(after_first_load, "2:2:1:2|3:middle|0|0|true");
 
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track reload-start networking turn")
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track reload terminal networking turn")
     );
@@ -1375,14 +1352,13 @@ async fn media_text_track_data_src_loads_after_media_parent_and_clears_cues() {
     assert_eq!(before_missing_source, "0:0");
 
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("missing text-track source start should settle")
     );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackLoad,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackLoad
         )
         .await
         .expect("missing text-track source failure should settle")
@@ -1428,15 +1404,14 @@ async fn media_text_track_load_honors_media_src_csp() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("text-track default-mode task should settle"),
         "track insertion should queue one default-mode task"
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("text-track CSP load-start networking turn"),
         "track source should queue one typed load-start task"
@@ -1447,8 +1422,7 @@ async fn media_text_track_load_honors_media_src_csp() {
     );
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackLoad,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackLoad
         )
         .await
         .expect("text-track CSP failure terminal DOM-manipulation turn"),
@@ -1505,9 +1479,8 @@ async fn media_text_track_list_addtrack_events_are_queued() {
 
     assert_eq!(before, "1|0");
 
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "first addtrack event turn").await;
-    run_next_page_media_element_event_for_test(&mut vm, &loader, "second addtrack event turn")
-        .await;
+    run_next_page_media_element_event_for_test(&mut vm, "first addtrack event turn").await;
+    run_next_page_media_element_event_for_test(&mut vm, "second addtrack event turn").await;
 
     let after = vm
         .eval(
@@ -1575,7 +1548,6 @@ async fn media_active_cues_update_after_media_load_and_play() {
     for phase in ["loadstart", "loadedmetadata", "loadeddata", "canplay"] {
         run_next_page_media_element_event_for_test(
             &mut vm,
-            &loader,
             &format!("active-cue media {phase} turn"),
         )
         .await;
@@ -1634,20 +1606,19 @@ async fn default_track_inserted_while_playing_refreshes_active_cues() {
 
     assert!(
         vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::TextTrackDefaultMode,
-            &loader,
+            PageDomManipulationTestFamily::TextTrackDefaultMode
         )
         .await
         .expect("default-mode DOM-manipulation task should settle"),
         "dynamic default track should queue one typed mode-selection task"
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("default text-track load-start networking turn")
     );
     assert!(
-        vm.run_one_text_track_networking_task_executor_turn(&loader)
+        vm.run_one_text_track_networking_task_executor_turn()
             .await
             .expect("default text-track terminal networking turn")
     );
@@ -2986,7 +2957,6 @@ fn match_media_uses_renderer_viewport_surface_for_viewport_and_screen_queries() 
 
 #[tokio::test(flavor = "current_thread")]
 async fn match_media_viewport_surface_change_dispatches_change_event() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm =
         new_storage_page_task_executor_test_vm("https://match-media-viewport-change.test/");
 
@@ -3016,11 +2986,7 @@ async fn match_media_viewport_surface_change_dispatches_change_event() {
 
     vm.set_viewport_surface(Some(viewport_surface_800_600_on_1920_1080_screen()))
         .expect("viewport surface should update");
-    assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_rendering_update_executor_turn().await.unwrap());
 
     let result = vm
         .eval(
@@ -3041,7 +3007,6 @@ JSON.stringify({
 
 #[tokio::test(flavor = "current_thread")]
 async fn match_media_change_event_uses_event_prototype_and_declared_properties() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm("https://match-media-change-event.test/");
 
     let initial = vm
@@ -3080,11 +3045,7 @@ async fn match_media_change_event_uses_event_prototype_and_declared_properties()
         color_scheme: Some("dark".to_owned()),
         ..Default::default()
     });
-    assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_rendering_update_executor_turn().await.unwrap());
 
     let result = vm
         .eval("JSON.stringify(globalThis.__mqlChangeEvents)")
@@ -3098,7 +3059,6 @@ async fn match_media_change_event_uses_event_prototype_and_declared_properties()
 
 #[tokio::test(flavor = "current_thread")]
 async fn match_media_declared_slots_ignore_string_property_spoofing() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
     let mut vm = new_storage_page_task_executor_test_vm("https://match-media-declared-slots.test/");
 
     let initial = vm
@@ -3195,11 +3155,7 @@ async fn match_media_declared_slots_ignore_string_property_spoofing() {
         color_scheme: Some("dark".to_owned()),
         ..Default::default()
     });
-    assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_rendering_update_executor_turn().await.unwrap());
 
     let result = vm
         .eval("JSON.stringify(globalThis.__mqlSlotProbe)")
@@ -3214,11 +3170,7 @@ async fn match_media_declared_slots_ignore_string_property_spoofing() {
         color_scheme: Some("light".to_owned()),
         ..Default::default()
     });
-    assert!(
-        vm.run_one_rendering_update_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_rendering_update_executor_turn().await.unwrap());
 
     let result = vm
         .eval("JSON.stringify(globalThis.__mqlSlotProbe)")

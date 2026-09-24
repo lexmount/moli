@@ -16,7 +16,6 @@ impl PageVm {
     pub(in crate::runtime) async fn apply_selected_page_scheduler_task(
         &mut self,
         task: RendererPageSchedulerTask,
-        loader: &crate::network::ResourceRequestClient,
     ) -> Result<()> {
         match task {
             RendererPageSchedulerTask::ActionWindow { deadline } => {
@@ -24,7 +23,7 @@ impl PageVm {
             }
             RendererPageSchedulerTask::DomManipulation(task) => {
                 let outcome = self.apply_selected_page_dom_manipulation_turn(task)?;
-                self.finish_selected_page_dom_manipulation_task(outcome.action, loader)
+                self.finish_selected_page_dom_manipulation_task(outcome.action)
                     .await?;
                 Ok(())
             }
@@ -32,7 +31,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_user_interaction_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -41,7 +39,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_file_reading_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -50,7 +47,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_misc_platform_api_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -61,28 +57,19 @@ impl PageVm {
                     crate::page_task_queue::PageNavigationAndTraversalTurnAction::HistoryTraversal(
                         action,
                     ) => {
-                        self.finish_selected_page_task_completion(
-                            action.into_page_task_completion(),
-                            loader,
-                        )
+                        self.finish_selected_page_task_completion(action.into_page_task_completion())
                         .await?;
                     }
                     crate::page_task_queue::PageNavigationAndTraversalTurnAction::NavigationApi(
                         action,
                     ) => {
-                        self.finish_selected_page_task_completion(
-                            action.into_page_task_completion(),
-                            loader,
-                        )
+                        self.finish_selected_page_task_completion(action.into_page_task_completion())
                         .await?;
                     }
                     crate::page_task_queue::PageNavigationAndTraversalTurnAction::ChildNavigationCommit(
                         action,
                     ) => {
-                        self.finish_selected_page_task_completion(
-                            action.into_page_task_completion(),
-                            loader,
-                        )
+                        self.finish_selected_page_task_completion(action.into_page_task_completion())
                         .await?;
                     }
                 }
@@ -92,7 +79,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_rendering_update_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -101,7 +87,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_media_element_event_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -110,7 +95,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_dedicated_worker_client_event_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -119,7 +103,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_shared_worker_client_event_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -128,7 +111,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_service_worker_internal_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -137,7 +119,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_service_worker_client_message_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -153,7 +134,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_indexed_db_task_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -162,7 +142,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_opfs_task_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -171,14 +150,13 @@ impl PageVm {
                 let outcome = self.apply_selected_page_internal_loading_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
             }
             RendererPageSchedulerTask::MainDocumentRuntime(task) => {
                 let outcome = self
-                    .apply_selected_page_main_document_runtime_turn(task, loader)
+                    .apply_selected_page_main_document_runtime_turn(task)
                     .await?;
                 let action = outcome.action;
                 let completion = match action {
@@ -203,14 +181,14 @@ impl PageVm {
                     crate::page_task_queue::PageMainDocumentRuntimeTurnAction::DynamicModuleJob(
                         action,
                     ) => {
-                        self.finish_selected_page_dynamic_module_job(action, loader)
+                        self.finish_selected_page_dynamic_module_job(action)
                             .await?;
                         None
                     }
                     crate::page_task_queue::PageMainDocumentRuntimeTurnAction::NativeModuleOwnerEvent(
                         action,
                     ) => {
-                        self.finish_selected_page_native_module_owner_event(action, loader)
+                        self.finish_selected_page_native_module_owner_event(action)
                             .await?;
                         None
                     }
@@ -229,7 +207,7 @@ impl PageVm {
                     }
                 };
                 if let Some(completion) = completion {
-                    self.finish_selected_page_task_completion(completion, loader)
+                    self.finish_selected_page_task_completion(completion)
                         .await?;
                 }
                 Ok(())
@@ -239,7 +217,6 @@ impl PageVm {
                     self.apply_selected_page_child_module_dependency_fetch_start_turn(*task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -248,7 +225,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_child_module_script_terminal_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -257,14 +233,12 @@ impl PageVm {
                 let outcome = self.apply_selected_page_child_modulepreload_event_action_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
             }
             RendererPageSchedulerTask::ChildFrameTask(task) => {
-                self.apply_selected_page_child_frame_task_turn(task, loader)
-                    .await
+                self.apply_selected_page_child_frame_task_turn(task).await
             }
             RendererPageSchedulerTask::V8ForegroundTask(task) => {
                 let outcome = self.apply_selected_page_v8_foreground_task_turn(task)?;
@@ -277,7 +251,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_module_reaction_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -286,7 +259,7 @@ impl PageVm {
                 let outcome = self.apply_selected_page_window_message_turn(task)?;
                 match outcome.action.target_effect {
                     crate::page_task_queue::PageWindowMessageTargetEffect::AppliedToCurrentOwner => {
-                        self.finish_selected_page_callback_task(loader).await?;
+                        self.finish_selected_page_callback_task().await?;
                     }
                     crate::page_task_queue::PageWindowMessageTargetEffect::CurrentOwnerHadNoPendingMessage => {
                         // The current exact task entered its Window context,
@@ -313,7 +286,7 @@ impl PageVm {
                     crate::page_task_queue::PageMessagePortDeliveryTargetEffect::ConsumedByCurrentOwner {
                         ..
                     } => {
-                        self.finish_selected_page_callback_task(loader).await?;
+                        self.finish_selected_page_callback_task().await?;
                     }
                     crate::page_task_queue::PageMessagePortDeliveryTargetEffect::CurrentOwnerHadNoReadyEvent => {
                         // The old context helper still checkpointed an exact
@@ -331,7 +304,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_dynamic_import_owner_action_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -340,14 +312,13 @@ impl PageVm {
                 let outcome = self.apply_selected_page_modulepreload_start_turn(task);
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
             }
             RendererPageSchedulerTask::Networking(task) => {
                 let outcome = self.apply_selected_page_networking_turn(task)?;
-                self.finish_selected_page_networking_task(outcome.action, loader)
+                self.finish_selected_page_networking_task(outcome.action)
                     .await?;
                 Ok(())
             }
@@ -355,7 +326,6 @@ impl PageVm {
                 let outcome = self.apply_selected_page_websocket_turn(task)?;
                 self.finish_selected_page_task_completion(
                     outcome.action.into_page_task_completion(),
-                    loader,
                 )
                 .await?;
                 Ok(())
@@ -366,7 +336,7 @@ impl PageVm {
             } => {
                 let outcome = self.apply_selected_page_timer_turn(deadline, selection)?;
                 if matches!(outcome.action, PageTimerTurnAction::Consumed { .. }) {
-                    self.finish_selected_page_callback_task(loader).await?;
+                    self.finish_selected_page_callback_task().await?;
                 }
                 Ok(())
             }
@@ -377,7 +347,6 @@ impl PageVm {
     pub(crate) async fn apply_selected_page_scheduler_task_on_owner_lane_for_test(
         &mut self,
         task: RendererPageSchedulerTask,
-        loader: crate::network::ResourceRequestClient,
     ) -> Result<()> {
         let local_executor = self.local_executor.clone();
         let mut page_vm_ref = super::AwaitedOwnerLocalPageVm::new(self);
@@ -387,7 +356,7 @@ impl PageVm {
             async move {
                 page_vm_ref
                     .get_mut()
-                    .apply_selected_page_scheduler_task(task, &loader)
+                    .apply_selected_page_scheduler_task(task)
                     .await
             },
         )

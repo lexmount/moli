@@ -5,9 +5,7 @@ use std::sync::{
 
 use anyhow::{Result, bail, ensure};
 use moli_cookie_jar::BrowserCookieFacadeContext;
-use moli_fetch::{
-    FetchCancelHandle, NetworkFetchResult, RawResponse, Request, Response, StreamingRawResponse,
-};
+use moli_fetch::{FetchCancelHandle, NetworkFetchResult, Request, StreamingRawResponse};
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use parking_lot::Mutex;
 
@@ -158,6 +156,10 @@ impl NavigationResourceLoader {
         &self.request_client
     }
 
+    pub(crate) fn cancellation_handle(&self) -> FetchCancelHandle {
+        self.inner.cancel.clone()
+    }
+
     pub(crate) fn task_runner(&self) -> RendererResourceTaskRunner {
         self.task_runner.clone()
     }
@@ -167,81 +169,6 @@ impl NavigationResourceLoader {
         task: impl std::future::Future<Output = ()> + Send + 'static,
     ) {
         self.task_runner.spawn(task);
-    }
-
-    pub async fn fetch(&self, request: Request) -> Result<Response> {
-        self.begin_fetch()?;
-        match self
-            .request_client
-            .fetch_with_cancel(
-                request.with_page_network_policy(),
-                self.inner.cancel.clone(),
-            )
-            .await
-        {
-            Ok(response) => {
-                self.finish_response_ready()?;
-                Ok(response)
-            }
-            Err(error) => {
-                self.finish_failed();
-                Err(error)
-            }
-        }
-    }
-
-    pub async fn fetch_with_network_metadata(
-        &self,
-        request: Request,
-    ) -> Result<NetworkFetchResult<Response>> {
-        self.begin_fetch()?;
-        match self
-            .request_client
-            .fetch_text_stream_with_cancel_and_network_metadata(
-                request.with_page_network_policy(),
-                self.inner.cancel.clone(),
-            )
-            .await
-        {
-            Ok(response) => {
-                self.finish_response_ready()?;
-                Ok(response)
-            }
-            Err(error) => {
-                self.finish_failed();
-                Err(error)
-            }
-        }
-    }
-
-    pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
-        self.begin_fetch()?;
-        match self
-            .request_client
-            .fetch_raw_stream_with_cancel(
-                request.with_page_network_policy(),
-                self.inner.cancel.clone(),
-            )
-            .await
-        {
-            Ok(mut response) => {
-                let head = response.head();
-                let mut body = Vec::new();
-                while let Some(chunk) = response.next_chunk().await {
-                    body.extend_from_slice(&chunk);
-                }
-                if let Err(error) = response.finish().await {
-                    self.finish_failed();
-                    return Err(error);
-                }
-                self.finish_response_ready()?;
-                Ok(RawResponse::from_head_and_body(head, body))
-            }
-            Err(error) => {
-                self.finish_failed();
-                Err(error)
-            }
-        }
     }
 
     pub async fn fetch_raw_stream(&self, request: Request) -> Result<StreamingRawResponse> {

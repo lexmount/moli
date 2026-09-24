@@ -12,13 +12,6 @@ struct AttachParams {
     target_id: String,
 }
 
-fn target_command_error_without_session(
-    code: i32,
-    message: impl Into<String>,
-) -> TargetCommandTaskStep {
-    TargetCommandTaskStep::Complete(CommandOutputPlan::error_without_session(code, message))
-}
-
 fn attach_session_events_then_result_plan(
     session_id: String,
     events: Vec<BackgroundProtocolEvent>,
@@ -69,7 +62,7 @@ impl TargetCommandOutput {
 
     fn push_error(&mut self, code: i32, message: impl Into<String>) {
         self.flush_side_effects();
-        self.plan.push_error_without_session(code, message);
+        self.plan.push_error(code, message);
     }
 
     fn insert_renderer_output_boundary(&mut self, cursor: moli_core::RendererOutputFence) {
@@ -94,7 +87,7 @@ pub(super) fn start_attach_to_target_command(
     let params: AttachParams = match cmd.get_params() {
         Ok(Some(p)) => p,
         _ => {
-            return target_command_error_without_session(-32602, "InvalidParams");
+            return target_command_error(-32602, "InvalidParams");
         }
     };
     do_attach(conn, cmd, &params.target_id)
@@ -149,7 +142,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
             restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
         }
-        return target_command_error_without_session(-31998, message);
+        return target_command_error(-31998, message);
     }
     let bc = match conn.browser_context.as_ref() {
         Some(bc) => bc,
@@ -160,7 +153,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
                     restore_browser_context_id.as_deref(),
                 );
             }
-            return target_command_error_without_session(-31998, "BrowserContextNotLoaded");
+            return target_command_error(-31998, "BrowserContextNotLoaded");
         }
     };
     if bc.has_shared_worker_target(target_id) {
@@ -176,7 +169,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
             restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
         }
-        return target_command_error_without_session(-31998, "TargetNotLoaded");
+        return target_command_error(-31998, "TargetNotLoaded");
     }
     let active_target_identity = bc.active_target_identity();
     let target_has_primary_session = if matches!(
@@ -193,7 +186,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
             restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
         }
-        return target_command_error_without_session(-31998, "UnknownTargetId");
+        return target_command_error(-31998, "UnknownTargetId");
     };
     let browser_context_id = bc.id.clone();
 
@@ -208,7 +201,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
         if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
             restore_previously_active_browser_context(conn, restore_browser_context_id.as_deref());
         }
-        return target_command_error_without_session(-31998, "UnknownTargetId");
+        return target_command_error(-31998, "UnknownTargetId");
     }
     let session_key = if attach_from_browser_session || target_has_primary_session {
         moli_page_types::DevToolsSessionKey::Attached(session_id.clone())
@@ -227,7 +220,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
     );
     let owner = crate::conn::CommandOwnerScope::for_route(prepared_session.route().clone());
 
-    let initial_document = match conn.start_initial_document_page_ensure_for_owner(&owner) {
+    let initial_document = match conn.start_initial_document_ensure_for_owner(&owner) {
         Ok(pending) => pending.map(Box::new),
         Err(message) => {
             if let Some(restore_browser_context_id) = restore_browser_context_id.as_ref() {
@@ -236,7 +229,7 @@ fn do_attach(conn: &mut CdpConnection, cmd: &Cmd<'_>, target_id: &str) -> Target
                     restore_browser_context_id.as_deref(),
                 );
             }
-            return target_command_error_without_session(-32000, message);
+            return target_command_error(-32000, message);
         }
     };
     let bc = conn.browser_context.as_ref().unwrap();
@@ -275,7 +268,7 @@ fn do_attach_tab_target(
         is_attached_session,
     ) {
         Ok(event_plan) => event_plan,
-        Err(message) => return target_command_error_without_session(-31998, message),
+        Err(message) => return target_command_error(-31998, message),
     };
     attach_session_events_then_result_step(session_id, event_plan.into_background_events())
 }
@@ -286,29 +279,21 @@ pub(super) async fn complete_attach_to_target_command_async(
     target_info: DevToolsTargetInfo,
     initial_document: Option<
         Result<
-            Box<crate::conn::CompletedInitialDocumentPageBuild>,
-            crate::conn::FailedInitialDocumentPageBuild,
+            Box<moli_core::browser::BrowserCommittedInitialDocument>,
+            crate::conn::FailedInitialDocumentProjection,
         >,
     >,
 ) -> CommandOutputPlan {
     let attached_session_id = prepared_session.session_id().to_owned();
     match initial_document {
         Some(Ok(completed_initial_document)) => {
-            let completed_initial_document = *completed_initial_document;
-            if let Err(message) = conn
-                .complete_initial_document_page_build_for_owner(completed_initial_document)
-                .await
-            {
-                conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
-                    .await;
-                return CommandOutputPlan::error_without_session(-32000, message);
-            }
+            conn.project_initial_document_completion(*completed_initial_document);
         }
         Some(Err(failed)) => {
-            let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
+            let message = conn.retire_failed_initial_document_projection(failed);
             conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
                 .await;
-            return CommandOutputPlan::error_without_session(-32000, message);
+            return CommandOutputPlan::error(-32000, message);
         }
         None => {}
     }
@@ -328,7 +313,7 @@ pub(super) async fn complete_attach_to_target_command_async(
     if let Some(message) = super::transient_no_page_devtools_target_info_error(conn, &target_info) {
         conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
             .await;
-        return CommandOutputPlan::error_without_session(-32000, message);
+        return CommandOutputPlan::error(-32000, message);
     }
     let Some(attached_target_id) = target_info
         .target_id
@@ -337,7 +322,7 @@ pub(super) async fn complete_attach_to_target_command_async(
     else {
         conn.rollback_prepared_attach_session_without_event_async(&prepared_session)
             .await;
-        return CommandOutputPlan::error_without_session(-32000, "MissingTargetId");
+        return CommandOutputPlan::error(-32000, "MissingTargetId");
     };
     let event_plan = conn.commit_prepared_attach_event_plan(PreparedTargetAttach::new(
         &attached_target_id,
@@ -359,7 +344,7 @@ fn do_attach_shared_worker_target(
         target_id,
     ) {
         Ok(event_plan) => event_plan,
-        Err(message) => return target_command_error_without_session(-31998, message),
+        Err(message) => return target_command_error(-31998, message),
     };
     attach_session_events_then_result_step(session_id, event_plan.into_background_events())
 }
@@ -376,7 +361,7 @@ fn do_attach_service_worker_target(
         target_id,
     ) {
         Ok(event_plan) => event_plan,
-        Err(message) => return target_command_error_without_session(-31998, message),
+        Err(message) => return target_command_error(-31998, message),
     };
     attach_session_events_then_result_step(session_id, event_plan.into_background_events())
 }
@@ -393,7 +378,7 @@ fn do_attach_dedicated_worker_target(
         target_id,
     ) {
         Ok(event_plan) => event_plan,
-        Err(message) => return target_command_error_without_session(-31998, message),
+        Err(message) => return target_command_error(-31998, message),
     };
     attach_session_events_then_result_step(session_id, event_plan.into_background_events())
 }

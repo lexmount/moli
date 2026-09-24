@@ -8,7 +8,7 @@ use super::{
     PendingFetchNavigation, emit_auth_required, encode_basic_auth, extract_auth_challenge,
     request_auth_for_challenge, response_headers_from_params, url_pattern_matches,
 };
-use crate::conn::{BrowserContext, NETWORK_ERROR_PAGE_URL, PageTargetHost};
+use crate::conn::{BrowserContext, NETWORK_ERROR_PAGE_URL};
 use crate::domains::page::LOADER_ID;
 use crate::testing::{
     TestContext, wait_until_frame_stopped_loading, wait_until_message, wait_until_messages,
@@ -29,9 +29,37 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::Url;
 
-fn attached_browser_context() -> BrowserContext {
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-1");
+fn request_started_before_fetch_pause(ctx: &TestContext, pause: &Value) -> Value {
+    let requests = ctx
+        .sent
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == pause["params"]["networkId"]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requests.len(),
+        1,
+        "one initial Network event per admitted request"
+    );
+    let (index, request) = requests[0];
+    let pause_index = ctx
+        .sent
+        .iter()
+        .position(|message| message == pause)
+        .expect("Fetch pause");
+    assert!(index < pause_index, "Network start precedes Fetch pause");
+    assert_eq!(
+        request["params"]["request"]["url"],
+        pause["params"]["request"]["url"]
+    );
+    request.clone()
+}
+
+fn attached_browser_context(conn: &crate::conn::CdpConnection) -> BrowserContext {
+    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.attach_active_session("SID-1");
     bc
 }
@@ -42,7 +70,7 @@ async fn with_loaded_http_document(
     session_id: &str,
     target_id: &str,
 ) {
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id(target_id.to_owned());
     bc.attach_active_session(session_id.to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -62,29 +90,26 @@ async fn with_loaded_http_background_document(
     background_session_id: &str,
     background_target_id: &str,
 ) {
-    let background = PageTargetHost::with_url(
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
+    bc.set_active_target_id(active_target_id.to_owned());
+    bc.attach_active_session(active_session_id.to_owned());
+    bc.register_page_target_url_fixture(
         background_target_id.to_owned(),
         Some(background_session_id.to_owned()),
         url.to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id(active_target_id.to_owned());
-    bc.attach_active_session(active_session_id.to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(url, Some(background_session_id))
         .await;
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    let context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let target_id = context
+        .active_target_id_owned()
+        .expect("active document target");
+    context
+        .serialize_target_html_for_test(&target_id)
         .await
         .expect("loaded page should serialize HTML")
 }
@@ -96,6 +121,36 @@ fn take_response_by_id(ctx: &mut TestContext, id: u64) -> Value {
         .position(|message| message["id"] == json!(id))
         .expect("expected a response with the requested id");
     ctx.sent.remove(pos)
+}
+
+async fn wait_for_navigation_reply(ctx: &mut TestContext, id: u64) {
+    wait_until_scheduler_message(ctx, "original navigation command reply", |message| {
+        message["id"] == json!(id)
+    })
+    .await;
+}
+
+async fn wait_for_navigation_auth(ctx: &mut TestContext, session_id: &str, request_id: &str) {
+    wait_until_scheduler_message(ctx, "navigation authentication decision", |message| {
+        message["method"] == json!("Fetch.authRequired")
+            && message["sessionId"] == json!(session_id)
+            && message["params"]["requestId"] == json!(request_id)
+    })
+    .await;
+}
+
+async fn wait_for_navigation_response_pause(
+    ctx: &mut TestContext,
+    session_id: &str,
+    request_id: &str,
+) {
+    wait_until_scheduler_message(ctx, "navigation response decision", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["sessionId"] == json!(session_id)
+            && message["params"]["requestId"] == json!(request_id)
+            && message["params"]["responseStatusCode"].is_number()
+    })
+    .await;
 }
 
 fn network_request_announced_before_fetch_pause(
@@ -240,7 +295,17 @@ async fn take_main_document_request_pause(ctx: &mut TestContext) -> Value {
     }
 }
 
-fn take_main_document_response_pause(ctx: &mut TestContext) -> Value {
+async fn take_main_document_response_pause(ctx: &mut TestContext) -> Value {
+    wait_until_scheduler_message(
+        ctx,
+        "main-document response-stage Fetch.requestPaused",
+        |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["resourceType"] == json!("Document")
+                && message["params"]["responseStatusCode"].is_number()
+        },
+    )
+    .await;
     loop {
         let message = ctx.take_one();
         match message["method"].as_str() {
@@ -329,3 +394,4 @@ mod runtime_auth_response;
 mod runtime_fetch;
 mod runtime_websocket;
 mod runtime_xhr;
+mod worker_network;

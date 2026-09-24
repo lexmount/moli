@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope, PageTargetHost};
+use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope, PageAgentHost};
 use moli_page_types::DevToolsSessionKey;
 
 pub(super) struct TargetSessionOwner {
@@ -33,7 +33,7 @@ impl CdpConnection {
     pub(crate) fn mutate_target_page_state_for_session(
         &mut self,
         session_id: Option<&str>,
-        f: impl FnOnce(&mut PageTargetHost),
+        f: impl FnOnce(&mut PageAgentHost),
     ) -> bool {
         self.target_session_owner_mut(session_id)
             .map(|mut owner| owner.mutate_page_state(|state, _| f(state)))
@@ -99,12 +99,12 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::BrowserContext;
 
     #[test]
     fn empty_browser_context_does_not_materialize_a_page_owner() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-empty-owner".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-empty-owner".to_owned()));
 
         assert!(conn.target_session_owner(None).is_none());
         assert!(conn.accepts_unmaterialized_page_command(&CommandOwnerScope::capture(&conn, None)));
@@ -117,11 +117,9 @@ mod tests {
 
     #[test]
     fn stale_page_route_is_not_reinterpreted_as_the_active_page() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-            "BID-stale-owner",
-            "TID-live",
-        ));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_page_target_fixture_for_test("BID-stale-owner", "TID-live"));
         let stale_route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-stale-owner".to_owned(),
             target_id: "TID-stale".to_owned(),

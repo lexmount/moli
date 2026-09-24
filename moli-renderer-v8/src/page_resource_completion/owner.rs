@@ -16,6 +16,7 @@ use super::{
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageResourceCompletionLocalOwner {
+    SharedScriptSource(crate::native_bridge::WindowDocumentOwner),
     MainDocument(FrameDocumentTaskOwner),
     MainParserModuleGraphFetch(MainParserModuleGraphFetchTarget),
     MainRuntimeModuleGraphFetch(MainRuntimeModuleGraphFetchTarget),
@@ -47,6 +48,16 @@ pub(crate) struct RendererPageResourceCompletionOwner {
 }
 
 impl RendererPageResourceCompletionOwner {
+    pub(crate) fn shared_script_source(
+        root_document: RendererDocumentToken,
+        owner: crate::native_bridge::WindowDocumentOwner,
+    ) -> Self {
+        Self {
+            root_document,
+            local_owner: RendererPageResourceCompletionLocalOwner::SharedScriptSource(owner),
+        }
+    }
+
     pub(crate) fn main_document(
         root_document: RendererDocumentToken,
         owner: FrameDocumentTaskOwner,

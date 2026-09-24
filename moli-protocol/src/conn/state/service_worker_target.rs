@@ -1,3 +1,4 @@
+use moli_page_types::OutputHistory;
 use std::collections::{BTreeMap, BTreeSet};
 
 use moli_core::page::{
@@ -39,6 +40,7 @@ const SERVICE_WORKER_SYNTHETIC_EXECUTION_CONTEXT_ID_BASE: i64 = -20_000_000;
 /// state only records the CDP-observable projection for target-scoped events.
 #[derive(Debug)]
 pub(crate) struct ServiceWorkerTargetState {
+    pub(crate) network: crate::domains::network::TargetNetworkAgentState,
     pub(crate) renderer_registration_id: u64,
     pub(crate) renderer_version_id: u64,
     pub(crate) target_id: String,
@@ -49,10 +51,10 @@ pub(crate) struct ServiceWorkerTargetState {
     version_scope: Option<TargetServiceWorkerVersionScope>,
     run_state: ServiceWorkerTargetRunState,
     inspector_target_crashed_session_ids: BTreeSet<String>,
-    runtime_execution_context_id: Option<i64>,
-    console_messages: Vec<RuntimeConsoleMessageSnapshot>,
-    exception_messages: Vec<ServiceWorkerRuntimeExceptionSnapshot>,
-    fetch_diagnostics: Vec<RendererServiceWorkerFetchDiagnostic>,
+    runtime_execution_context: Option<RuntimeExecutionContextEvent>,
+    console_messages: OutputHistory<RuntimeConsoleMessageSnapshot>,
+    exception_messages: OutputHistory<ServiceWorkerRuntimeExceptionSnapshot>,
+    fetch_diagnostics: OutputHistory<RendererServiceWorkerFetchDiagnostic>,
     classic_log_cursors: BTreeMap<String, usize>,
 }
 
@@ -150,6 +152,7 @@ impl ServiceWorkerTargetState {
         };
         Self {
             renderer_registration_id,
+            network: Default::default(),
             renderer_version_id,
             target_id,
             sessions: BTreeMap::new(),
@@ -159,16 +162,16 @@ impl ServiceWorkerTargetState {
             version_scope: Some(TargetServiceWorkerVersionScope::new()),
             run_state,
             inspector_target_crashed_session_ids: BTreeSet::new(),
-            runtime_execution_context_id: None,
-            console_messages: Vec::new(),
-            exception_messages: Vec::new(),
-            fetch_diagnostics: Vec::new(),
+            runtime_execution_context: None,
+            console_messages: OutputHistory::default(),
+            exception_messages: OutputHistory::default(),
+            fetch_diagnostics: OutputHistory::default(),
             classic_log_cursors: BTreeMap::new(),
         }
     }
 
     pub(crate) fn execution_context_id(&self) -> i64 {
-        if let Some(id) = self.runtime_execution_context_id {
+        if let Some(id) = self.real_runtime_execution_context_id() {
             return id;
         }
         let version_id = i64::try_from(self.renderer_version_id).unwrap_or(i64::MAX);
@@ -176,16 +179,30 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn real_runtime_execution_context_id(&self) -> Option<i64> {
-        self.runtime_execution_context_id
+        self.runtime_execution_context.as_ref()?.context_id
+    }
+
+    pub(crate) fn runtime_execution_context(&self) -> Option<&RuntimeExecutionContextEvent> {
+        self.runtime_execution_context.as_ref()
+    }
+
+    pub(crate) fn inspection_target(&self) -> Option<moli_core::runtime::RendererWorkerIdentity> {
+        let ServiceWorkerTargetRunState::Live { run, .. } = &self.run_state else {
+            return None;
+        };
+        Some(moli_core::runtime::RendererWorkerIdentity::Service {
+            version: self.renderer_version_id,
+            run: run.scope.renderer_run().clone(),
+        })
     }
 
     fn rebind_synthetic_runtime_snapshots(&mut self, synthetic_id: i64, real_id: i64) {
-        for message in &mut self.console_messages {
+        for message in self.console_messages.iter_mut() {
             if message.execution_context_id == synthetic_id {
                 message.execution_context_id = real_id;
             }
         }
-        for message in &mut self.exception_messages {
+        for message in self.exception_messages.iter_mut() {
             if message.execution_context_id == synthetic_id {
                 message.execution_context_id = real_id;
             }
@@ -202,7 +219,7 @@ impl ServiceWorkerTargetState {
         ) && let Some(id) = event.context_id
         {
             let previous_id = self.execution_context_id();
-            self.runtime_execution_context_id = Some(id);
+            self.runtime_execution_context = Some(event.clone());
             if previous_id < 0 {
                 self.rebind_synthetic_runtime_snapshots(previous_id, id);
             }
@@ -213,13 +230,23 @@ impl ServiceWorkerTargetState {
         &mut self,
         event: &RuntimeExecutionContextEvent,
     ) {
-        if event.context_id == self.runtime_execution_context_id {
-            self.runtime_execution_context_id = None;
+        if self
+            .runtime_execution_context
+            .as_ref()
+            .is_some_and(|current| {
+                current.context_id == event.context_id
+                    && event
+                        .realm_id
+                        .as_ref()
+                        .is_none_or(|id| current.realm_id.as_ref() == Some(id))
+            })
+        {
+            self.runtime_execution_context = None;
         }
     }
 
     pub(crate) fn record_runtime_execution_contexts_cleared_event(&mut self) {
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
     }
 
     pub(crate) fn version_identity(
@@ -247,7 +274,6 @@ impl ServiceWorkerTargetState {
         )
     }
 
-    #[cfg(test)]
     pub(crate) fn runtime_attachment_identity_for_current_run(
         &self,
         browser_context_id: &str,
@@ -289,13 +315,25 @@ impl ServiceWorkerTargetState {
                 == Some(runtime.attachment())
     }
 
-    /// Projects one exact renderer run into this protocol target.
-    ///
-    /// Runtime inspector output can arrive before the public `Started` event,
-    /// so the first run-specific fact may establish a `Starting` projection.
-    /// A different identity can be admitted only after the prior run moved to
-    /// an ordered retirement output.
+    pub(crate) fn active_renderer_run(&self) -> Option<&RendererServiceWorkerRunIdentity> {
+        match &self.run_state {
+            ServiceWorkerTargetRunState::Live { run, .. } => Some(run.scope.renderer_run()),
+            ServiceWorkerTargetRunState::Stopped { .. } => None,
+        }
+    }
+
     pub(crate) fn observe_worker_run(
+        &self,
+        browser_context_id: &str,
+        renderer_run: RendererServiceWorkerRunIdentity,
+    ) -> Option<TargetServiceWorkerRunIdentity> {
+        let identity = self.current_run_identity(browser_context_id)?;
+        (identity.renderer_run() == &renderer_run).then_some(identity)
+    }
+
+    /// Projects an explicit Browser-committed physical host installation.
+    /// Observations cannot introduce a run or replace one awaiting retirement.
+    pub(crate) fn mark_worker_starting(
         &mut self,
         browser_context_id: &str,
         renderer_run: RendererServiceWorkerRunIdentity,
@@ -313,13 +351,18 @@ impl ServiceWorkerTargetState {
             } if retired == &renderer_run => return None,
             ServiceWorkerTargetRunState::Stopped { .. } => {}
         }
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         self.run_state = ServiceWorkerTargetRunState::Live {
             phase: ServiceWorkerTargetLiveRunPhase::Starting,
             run: ServiceWorkerTargetLiveRun {
                 scope: TargetServiceWorkerRunScope::new(renderer_run),
             },
         };
+        let network_sessions = self.network.event_session_ids(None, None);
+        self.network = Default::default();
+        for session in network_sessions.into_iter().flatten() {
+            self.network.enable_attached_events(&session);
+        }
         self.current_run_identity(browser_context_id)
     }
 
@@ -328,7 +371,7 @@ impl ServiceWorkerTargetState {
         browser_context_id: &str,
         renderer_run: RendererServiceWorkerRunIdentity,
     ) -> Option<TargetServiceWorkerRunIdentity> {
-        let run = self.observe_worker_run(browser_context_id, renderer_run)?;
+        let run = self.mark_worker_starting(browser_context_id, renderer_run)?;
         match &mut self.run_state {
             ServiceWorkerTargetRunState::Live { phase, .. }
                 if *phase == ServiceWorkerTargetLiveRunPhase::Starting =>
@@ -349,7 +392,7 @@ impl ServiceWorkerTargetState {
         renderer_run: RendererServiceWorkerRunIdentity,
         _reason: &str,
     ) -> Option<TargetServiceWorkerRunRetirement> {
-        let identity = self.observe_worker_run(browser_context_id, renderer_run.clone())?;
+        let identity = self.mark_worker_starting(browser_context_id, renderer_run.clone())?;
         let live_state = std::mem::replace(
             &mut self.run_state,
             ServiceWorkerTargetRunState::Stopped {
@@ -364,7 +407,7 @@ impl ServiceWorkerTargetState {
             &renderer_run,
             "service-worker stop must retire the exact observed run"
         );
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         Some(run.scope.into_retirement(identity))
     }
 
@@ -584,6 +627,7 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn detach_session(&mut self, session_id: &str) -> bool {
+        self.set_network_enabled(session_id, false);
         self.inspector_target_crashed_session_ids.remove(session_id);
         self.sessions.remove(session_id).is_some()
     }
@@ -594,6 +638,7 @@ impl ServiceWorkerTargetState {
         session_id: &str,
     ) -> Option<TargetServiceWorkerProtocolAttachmentRetirement> {
         self.inspector_target_crashed_session_ids.remove(session_id);
+        self.set_network_enabled(session_id, false);
         let session = self.sessions.remove(session_id)?;
         let identity = session
             .attachment_scope
@@ -616,7 +661,7 @@ impl ServiceWorkerTargetState {
         let ServiceWorkerTargetRunState::Live { run, .. } = live_state else {
             unreachable!("current service-worker run identity must retain its unique scope")
         };
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         Some(run.scope.into_retirement(identity))
     }
 
@@ -653,9 +698,14 @@ impl ServiceWorkerTargetState {
         self.sessions.keys().cloned().collect()
     }
 
+    pub(crate) fn runtime_frontend_enabled(&self, session_id: &str) -> bool {
+        self.session_state(session_id)
+            .is_some_and(|state| state.runtime_session_state.runtime_frontend_enabled)
+    }
+
     pub(crate) fn set_runtime_frontend_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
-        let exception_len = self.exception_messages.len();
+        let console_len = self.console_messages.end();
+        let exception_len = self.exception_messages.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -713,7 +763,7 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn set_console_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -722,7 +772,7 @@ impl ServiceWorkerTargetState {
     }
 
     pub(crate) fn set_network_enabled(&mut self, session_id: &str, enabled: bool) -> bool {
-        let diagnostic_len = self.fetch_diagnostics.len();
+        let diagnostic_len = self.fetch_diagnostics.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return false;
         };
@@ -740,23 +790,35 @@ impl ServiceWorkerTargetState {
                 .network_session_state
                 .service_worker_fetch_diagnostic_entries = diagnostic_len;
         }
+        if enabled {
+            if !was_enabled {
+                self.network
+                    .initialize_session_observation_cursor_at_output_tail(Some(session_id));
+            }
+            self.network.enable_attached_events(session_id);
+        } else {
+            self.network.remove_attached_session(session_id);
+            self.network
+                .remove_captured_response_body_visibility_for_session(Some(session_id));
+        }
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn network_enabled(&self, session_id: &str) -> bool {
         self.session_state(session_id)
             .is_some_and(|state| state.network_session_state.network_enabled)
     }
 
     pub(crate) fn clear_console_messages(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.console_domain_entries = console_len;
         }
     }
 
     pub(crate) fn discard_runtime_console_entries(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.runtime_console_entries = console_len;
         }
@@ -768,134 +830,143 @@ impl ServiceWorkerTargetState {
         args: Vec<Value>,
         stack: Option<String>,
     ) {
-        self.console_messages.push(RuntimeConsoleMessageSnapshot {
+        let message = RuntimeConsoleMessageSnapshot {
             execution_context_id: self.execution_context_id(),
             message,
             args,
             stack,
-        });
+        };
+        let bytes = message.retained_payload_bytes();
+        self.console_messages.push(message, bytes);
     }
 
     pub(crate) fn record_exception_message(
         &mut self,
         message: RendererServiceWorkerExceptionMessage,
     ) {
-        self.exception_messages
-            .push(ServiceWorkerRuntimeExceptionSnapshot {
+        let bytes = message.retained_payload_bytes();
+        self.exception_messages.push(
+            ServiceWorkerRuntimeExceptionSnapshot {
                 execution_context_id: self.execution_context_id(),
                 message,
-            });
+            },
+            bytes,
+        );
     }
 
     pub(crate) fn record_fetch_diagnostic(
         &mut self,
         diagnostic: RendererServiceWorkerFetchDiagnostic,
     ) {
-        self.fetch_diagnostics.push(diagnostic);
+        let bytes = diagnostic.retained_payload_bytes();
+        self.fetch_diagnostics.push(diagnostic, bytes);
     }
 
     pub(crate) fn mark_console_domain_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.console_domain_entries =
-                console_end.min(console_len);
+            state.console_output_session_state.console_domain_entries = state
+                .console_output_session_state
+                .console_domain_entries
+                .max(console_end)
+                .min(console_len);
         }
     }
 
     pub(crate) fn pending_console_domain_messages(
         &self,
         session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.console_output_session_state.console_enabled {
-            return &[];
+            return Vec::new();
         }
-        &self.console_messages[state
-            .console_output_session_state
-            .console_domain_entries
-            .min(self.console_messages.len())..]
+        self.console_messages
+            .since(state.console_output_session_state.console_domain_entries)
     }
 
     pub(crate) fn pending_runtime_console_messages(
         &self,
         session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
+            return Vec::new();
         }
-        if self.runtime_execution_context_id.is_none() {
-            return &[];
+        if self.runtime_execution_context.is_none() {
+            return Vec::new();
         }
-        &self.console_messages[state
-            .console_output_session_state
-            .runtime_console_entries
-            .min(self.console_messages.len())..]
+        self.console_messages
+            .since(state.console_output_session_state.runtime_console_entries)
     }
 
     pub(crate) fn pending_classic_log_messages(
         &self,
         cursor_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let start = self
             .classic_log_cursors
             .get(cursor_id)
             .copied()
             .unwrap_or_default()
-            .min(self.console_messages.len());
-        &self.console_messages[start..]
+            .min(self.console_messages.end());
+        self.console_messages.since(start)
     }
 
     pub(crate) fn pending_runtime_exception_messages(
         &self,
         session_id: &str,
-    ) -> &[ServiceWorkerRuntimeExceptionSnapshot] {
+    ) -> Vec<ServiceWorkerRuntimeExceptionSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
+            return Vec::new();
         }
-        if self.runtime_execution_context_id.is_none() {
-            return &[];
+        if self.runtime_execution_context.is_none() {
+            return Vec::new();
         }
-        &self.exception_messages[state
-            .console_output_session_state
-            .runtime_exception_entries
-            .min(self.exception_messages.len())..]
+        self.exception_messages
+            .since(state.console_output_session_state.runtime_exception_entries)
     }
 
     pub(crate) fn pending_fetch_diagnostics(
         &self,
         session_id: &str,
-    ) -> &[RendererServiceWorkerFetchDiagnostic] {
+    ) -> Vec<RendererServiceWorkerFetchDiagnostic> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.network_session_state.network_enabled {
-            return &[];
+            return Vec::new();
         }
-        &self.fetch_diagnostics[state
-            .network_session_state
-            .service_worker_fetch_diagnostic_entries
-            .min(self.fetch_diagnostics.len())..]
+        self.fetch_diagnostics.since(
+            state
+                .network_session_state
+                .service_worker_fetch_diagnostic_entries,
+        )
     }
 
     pub(crate) fn mark_runtime_console_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries =
-                console_end.min(console_len);
+            state.console_output_session_state.runtime_console_entries = state
+                .console_output_session_state
+                .runtime_console_entries
+                .max(console_end)
+                .min(console_len);
         }
     }
 
     pub(crate) fn mark_classic_log_emitted(&mut self, cursor_id: String, console_end: usize) {
-        self.classic_log_cursors
-            .insert(cursor_id, console_end.min(self.console_messages.len()));
+        let position = self.classic_log_cursors.entry(cursor_id).or_default();
+        *position = (*position)
+            .max(console_end)
+            .min(self.console_messages.end());
     }
 
     pub(crate) fn mark_runtime_exception_emitted(
@@ -903,10 +974,13 @@ impl ServiceWorkerTargetState {
         session_id: &str,
         exception_end: usize,
     ) {
-        let exception_len = self.exception_messages.len();
+        let exception_len = self.exception_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_exception_entries =
-                exception_end.min(exception_len);
+            state.console_output_session_state.runtime_exception_entries = state
+                .console_output_session_state
+                .runtime_exception_entries
+                .max(exception_end)
+                .min(exception_len);
         }
     }
 
@@ -915,24 +989,39 @@ impl ServiceWorkerTargetState {
         session_id: &str,
         diagnostic_end: usize,
     ) {
-        let diagnostic_len = self.fetch_diagnostics.len();
+        let diagnostic_len = self.fetch_diagnostics.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state
                 .network_session_state
-                .service_worker_fetch_diagnostic_entries = diagnostic_end.min(diagnostic_len);
+                .service_worker_fetch_diagnostic_entries = state
+                .network_session_state
+                .service_worker_fetch_diagnostic_entries
+                .max(diagnostic_end)
+                .min(diagnostic_len);
         }
     }
 
+    pub(crate) fn retained_output_stats(&self) -> (usize, usize) {
+        (
+            self.console_messages.len()
+                + self.exception_messages.len()
+                + self.fetch_diagnostics.len(),
+            self.console_messages.retained_bytes()
+                + self.exception_messages.retained_bytes()
+                + self.fetch_diagnostics.retained_bytes(),
+        )
+    }
+
     pub(crate) fn console_message_count(&self) -> usize {
-        self.console_messages.len()
+        self.console_messages.end()
     }
 
     pub(crate) fn exception_message_count(&self) -> usize {
-        self.exception_messages.len()
+        self.exception_messages.end()
     }
 
     pub(crate) fn fetch_diagnostic_count(&self) -> usize {
-        self.fetch_diagnostics.len()
+        self.fetch_diagnostics.end()
     }
 
     #[cfg(test)]
@@ -1105,8 +1194,43 @@ impl ServiceWorkerTargetState {
         cdp_request_id: u64,
     ) -> Option<PendingInspectorAwait> {
         self.session_state_mut(owner_session_id)?
-            .pending_inspector_awaits
-            .remove(cdp_request_id)
+            .remove_pending_inspector_await(cdp_request_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_claimed_pending_inspector_awaits_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session_state(session_id)
+            .is_some_and(DevToolsSessionState::has_claimed_pending_inspector_awaits)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_unclaimed_pending_inspector_awaits_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session_state(session_id)
+            .is_some_and(DevToolsSessionState::has_unclaimed_pending_inspector_awaits)
+    }
+
+    pub(crate) fn claim_pending_inspector_await(
+        &mut self,
+        owner_session_id: &str,
+        cdp_request_id: u64,
+    ) -> bool {
+        self.session_state_mut(owner_session_id)
+            .is_some_and(|state| state.claim_pending_inspector_await(cdp_request_id))
+    }
+
+    pub(crate) fn take_claimed_pending_inspector_await(
+        &mut self,
+        owner_session_id: &str,
+        cdp_request_id: u64,
+    ) -> Option<PendingInspectorAwait> {
+        self.session_state_mut(owner_session_id)?
+            .take_claimed_pending_inspector_await(cdp_request_id)
     }
 
     fn current_run_identity(
@@ -1188,6 +1312,172 @@ mod tests {
         }
     }
 
+    fn record_history_entries(target: &mut ServiceWorkerTargetState, count: u64, payload: &str) {
+        for index in 0..count {
+            target.record_console_message(payload.to_owned(), Vec::new(), None);
+            target.record_exception_message(RendererServiceWorkerExceptionMessage {
+                message: payload.to_owned(),
+                filename: "https://example.test/sw.js".into(),
+                lineno: 1,
+                colno: 1,
+                event_kind: "error_event".into(),
+                phase: "runtime".into(),
+                source: "runtime".into(),
+            });
+            target.record_fetch_diagnostic(RendererServiceWorkerFetchDiagnostic {
+                internal_id: index,
+                document_url: "https://example.test/".into(),
+                request_url: "https://example.test/resource".into(),
+                method: "POST".into(),
+                request_headers: Vec::new(),
+                request_body: Some(payload.to_owned()),
+                destination: "empty".into(),
+                result: moli_core::page::RendererServiceWorkerFetchDiagnosticResult::Fallback,
+            });
+        }
+    }
+
+    #[test]
+    fn service_worker_history_without_sessions_bounds_all_three_logs() {
+        let mut target = target();
+        record_history_entries(&mut target, 4096, "history");
+        assert_eq!(
+            [
+                target.console_messages.len(),
+                target.exception_messages.len(),
+                target.fetch_diagnostics.len(),
+            ],
+            [1000; 3]
+        );
+        assert_eq!(
+            [
+                target.console_message_count(),
+                target.exception_message_count(),
+                target.fetch_diagnostic_count(),
+            ],
+            [4096; 3],
+            "emission positions survive eviction"
+        );
+        assert_eq!(
+            target.fetch_diagnostics.iter().next().unwrap().internal_id,
+            3096
+        );
+        assert_eq!(
+            target
+                .fetch_diagnostics
+                .iter()
+                .next_back()
+                .unwrap()
+                .internal_id,
+            4095
+        );
+    }
+
+    #[test]
+    fn service_worker_history_bounds_console_exception_and_request_body_bytes() {
+        let mut target = target();
+        record_history_entries(&mut target, 32, &"x".repeat(512 * 1024));
+        let retained = [
+            target
+                .console_messages
+                .iter()
+                .map(|entry| entry.message.len())
+                .sum::<usize>(),
+            target
+                .exception_messages
+                .iter()
+                .map(|entry| entry.message.message.len())
+                .sum(),
+            target
+                .fetch_diagnostics
+                .iter()
+                .map(|entry| entry.request_body.as_ref().unwrap().len())
+                .sum(),
+        ];
+        assert!(
+            retained.iter().all(|bytes| *bytes <= 10 * 1024 * 1024),
+            "retained bytes: {retained:?}"
+        );
+        assert_eq!(
+            target
+                .fetch_diagnostics
+                .iter()
+                .next_back()
+                .unwrap()
+                .internal_id,
+            31
+        );
+    }
+
+    #[test]
+    fn service_worker_history_positions_and_contexts_survive_eviction_and_restart() {
+        let (mut target, run) = target_with_started_run();
+        target.record_runtime_execution_context_created_event(
+            &service_worker_context_created_event(9101, "service-worker"),
+        );
+        for session in ["fast", "slow"] {
+            target.attach_session(session.into());
+            target.set_runtime_frontend_enabled(session, true);
+            target.set_console_enabled(session, true);
+            target.set_network_enabled(session, true);
+        }
+        record_history_entries(&mut target, 1005, "old run");
+        target
+            .mark_worker_stopped("BID-1", run, "idle")
+            .unwrap()
+            .retire();
+        target.record_runtime_execution_context_destroyed_event(&context_destroyed_event(9101));
+        target
+            .mark_worker_started("BID-1", RendererServiceWorkerRunIdentity::fresh())
+            .unwrap();
+        target.record_runtime_execution_context_created_event(
+            &service_worker_context_created_event(9102, "service-worker"),
+        );
+        record_history_entries(&mut target, 1, "new run");
+        for (end, expected) in [(1000, 6), (1006, 0), (1000, 0)] {
+            target.mark_console_domain_emitted("fast", end);
+            target.mark_runtime_console_emitted("fast", end);
+            target.mark_runtime_exception_emitted("fast", end);
+            target.mark_fetch_diagnostics_emitted("fast", end);
+            target.mark_classic_log_emitted("classic-fast".into(), end);
+            assert_eq!(
+                [
+                    target.pending_console_domain_messages("fast").len(),
+                    target.pending_runtime_console_messages("fast").len(),
+                    target.pending_runtime_exception_messages("fast").len(),
+                    target.pending_fetch_diagnostics("fast").len(),
+                    target.pending_classic_log_messages("classic-fast").len(),
+                ],
+                [expected; 5]
+            );
+        }
+        let messages = target.pending_runtime_console_messages("slow");
+        let exceptions = target.pending_runtime_exception_messages("slow");
+        assert_eq!(
+            [
+                messages.len(),
+                exceptions.len(),
+                target.pending_fetch_diagnostics("slow").len(),
+                target.pending_classic_log_messages("classic-slow").len()
+            ],
+            [1000; 4]
+        );
+        assert_eq!(
+            [
+                messages[0].execution_context_id,
+                exceptions[0].execution_context_id
+            ],
+            [9101; 2]
+        );
+        assert_eq!(
+            [
+                messages.last().unwrap().execution_context_id,
+                exceptions.last().unwrap().execution_context_id
+            ],
+            [9102; 2]
+        );
+    }
+
     fn context_destroyed_event(context_id: i64) -> RuntimeExecutionContextEvent {
         RuntimeExecutionContextEvent {
             target_id: None,
@@ -1199,6 +1489,33 @@ mod tests {
             is_default: None,
             context_type: None,
             grant_universal_access: None,
+        }
+    }
+
+    #[test]
+    fn service_worker_network_retirement_removes_only_its_listener() {
+        for retire in [false, true] {
+            let mut target = target();
+            for session in ["SID-a", "SID-b"] {
+                target.attach_session(session.into());
+                assert!(target.set_network_enabled(session, true));
+            }
+            if retire {
+                assert!(
+                    target
+                        .take_protocol_attachment_retirement("BID-1", "SID-a")
+                        .is_some()
+                );
+            } else {
+                assert!(target.detach_session("SID-a"));
+            }
+            assert_eq!(
+                target.network.event_session_ids(None, None),
+                vec![Some("SID-b".into())]
+            );
+            target.attach_session("SID-a".into());
+            assert!(!target.network_enabled("SID-a"));
+            assert!(!target.network.attached_events_enabled_for_session("SID-a"));
         }
     }
 
@@ -1369,7 +1686,7 @@ mod tests {
     fn a_different_renderer_identity_cannot_replace_a_live_protocol_run() {
         let (mut target, _) = target_with_started_run();
 
-        let _ = target.observe_worker_run("BID-1", RendererServiceWorkerRunIdentity::fresh());
+        let _ = target.mark_worker_starting("BID-1", RendererServiceWorkerRunIdentity::fresh());
     }
 
     #[test]

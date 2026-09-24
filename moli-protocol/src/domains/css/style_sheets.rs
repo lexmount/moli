@@ -1,13 +1,14 @@
-use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd, build_event};
+use crate::conn::{BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, build_event};
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
-    RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
+    PendingPageCommand, RendererStyleSheetHeader, RendererStyleSheetInventoryUpdate,
+    RendererStyleSheetPayload,
 };
 use serde_json::{Value, json};
 
 use super::{
     PendingCssCommandDispatch, PendingCssCommandKind, PendingCssCommandStartError,
-    loaded_page_mut_for_session, top_frame_id_for_session,
+    css_inspection_for_owner, top_frame_id_for_session,
 };
 
 pub(super) fn start_pending_enable_command(
@@ -22,15 +23,14 @@ pub(super) fn start_pending_enable_command(
         return Ok(None);
     }
     let frame_id = top_frame_id_for_session(conn, cmd.session_id).unwrap_or_default();
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        css_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Ok(None);
     };
-    let pending = page
-        .start_style_sheet_inventory_for_document_and_inspector_session(
-            renderer_inspector_session_id,
-        )
+    let pending = inspection
+        .start_style_sheet_inventory()
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
     Ok(Some(PendingCssCommandDispatch::from_command(
         conn,
@@ -45,13 +45,14 @@ pub(super) fn start_pending_disable_command(
     cmd: &Cmd<'_>,
 ) -> Result<Option<PendingCssCommandDispatch>, PendingCssCommandStartError> {
     set_css_enabled(conn, cmd, false);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let Some(inspection) =
+        css_inspection_for_owner(conn, &CommandOwnerScope::capture(conn, cmd.session_id))
+    else {
         return Ok(None);
     };
-    let pending = page
-        .start_reset_css_agent_session(renderer_inspector_session_id)
+    let pending = inspection
+        .start_reset()
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
     Ok(Some(PendingCssCommandDispatch::from_command(
         conn,

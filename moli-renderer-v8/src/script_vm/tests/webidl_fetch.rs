@@ -7064,7 +7064,6 @@ async fn headers_for_each_visits_live_entries_in_window_and_worker() {
         vm.eval(&script).unwrap();
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(headersForEachResult !== null)",
             "true",
             "Headers.forEach checks should finish",

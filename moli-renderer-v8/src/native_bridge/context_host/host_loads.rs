@@ -40,8 +40,6 @@ pub(crate) struct ChildFrameNavigationSnapshot {
     pub(crate) security_origin_inherited: bool,
     #[serde(default)]
     pub(crate) security_origin_opaque: bool,
-    #[serde(default)]
-    pub(crate) document_network: Option<crate::protocol_types::ChildFrameDocumentNetworkSnapshot>,
 }
 
 impl ChildFrameNavigationSnapshot {
@@ -55,7 +53,6 @@ impl ChildFrameNavigationSnapshot {
             document_open_replacement: self.document_open_replacement,
             security_origin_inherited: self.security_origin_inherited,
             security_origin_opaque: self.security_origin_opaque,
-            document_network: self.document_network,
         }
     }
 }
@@ -187,13 +184,6 @@ impl JsContextHost {
         &mut self,
     ) -> Vec<ChildFrameNavigationSnapshot> {
         std::mem::take(&mut self.completed_child_browsing_context_loads)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn take_completed_child_document_networks(
-        &mut self,
-    ) -> Vec<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot> {
-        std::mem::take(&mut self.completed_child_document_networks)
     }
 
     #[cfg(test)]
@@ -524,8 +514,10 @@ impl JsContextHost {
                 // protocol projection.
             } else {
                 #[cfg(test)]
-                self.completed_child_browsing_context_loads
-                    .push(navigation_snapshot);
+                {
+                    self.completed_child_browsing_context_loads
+                        .push(navigation_snapshot);
+                }
                 #[cfg(not(test))]
                 {
                     let _ = navigation_snapshot;
@@ -587,7 +579,6 @@ impl JsContextHost {
             document_open_replacement,
             security_origin_inherited: identity.security_origin_inherited,
             security_origin_opaque,
-            document_network: entry.take_completed_document_network_for_owner(finish.owner),
         })
     }
 

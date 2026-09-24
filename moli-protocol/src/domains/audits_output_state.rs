@@ -91,57 +91,25 @@ impl TargetAuditsOutputCursor {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct TargetAuditsStorageState {
     generation: u64,
-    source_issue_count: usize,
-    first_stored_issue_index: usize,
+    issue_end: usize,
     issues: VecDeque<InspectorIssueSnapshot>,
 }
 
 impl TargetAuditsStorageState {
     pub(crate) fn reset_for_new_document(&mut self) {
-        self.reset_storage();
-    }
-
-    fn reset_storage(&mut self) {
         self.generation = self.generation.wrapping_add(1);
-        self.source_issue_count = 0;
-        self.first_stored_issue_index = 0;
+        self.issue_end = 0;
         self.issues.clear();
     }
 
-    pub(crate) fn ingest_source_issues(&mut self, source: &[InspectorIssueSnapshot]) {
-        let source_prefix_changed = self.source_issue_count > source.len()
-            || (self.source_issue_count > 0
-                && self
-                    .issues
-                    .back()
-                    .zip(source.get(self.source_issue_count - 1))
-                    .is_some_and(|(stored, current)| stored != current));
-        if source_prefix_changed {
-            self.reset_storage();
-        }
-
-        for issue in source.iter().skip(self.source_issue_count) {
-            self.issues.push_back(issue.clone());
-            self.source_issue_count += 1;
-            if self.issues.len() > MAX_STORED_INSPECTOR_ISSUES {
-                self.issues.pop_front();
-                self.first_stored_issue_index += 1;
-            }
-        }
-    }
-
     pub(crate) fn append_concrete_issue(&mut self, issue: InspectorIssueSnapshot) {
-        self.issues.push_back(issue);
-        self.source_issue_count = self
-            .source_issue_count
+        self.issue_end = self
+            .issue_end
             .checked_add(1)
-            .expect("Audits source issue count exhausted");
+            .expect("Audits issue index exhausted");
+        self.issues.push_back(issue);
         if self.issues.len() > MAX_STORED_INSPECTOR_ISSUES {
             self.issues.pop_front();
-            self.first_stored_issue_index = self
-                .first_stored_issue_index
-                .checked_add(1)
-                .expect("Audits first stored issue index exhausted");
         }
     }
 
@@ -150,12 +118,12 @@ impl TargetAuditsStorageState {
     }
 
     pub(crate) fn first_issue_index(&self) -> usize {
-        self.first_stored_issue_index
+        self.issue_end - self.issues.len()
     }
 
     #[cfg(test)]
     pub(crate) fn issue_end(&self) -> usize {
-        self.source_issue_count
+        self.issue_end
     }
 
     pub(crate) fn pending_cursor_from(
@@ -164,14 +132,14 @@ impl TargetAuditsStorageState {
         issue_index: usize,
     ) -> Option<TargetAuditsOutputCursor> {
         let issue_start = if generation == self.generation {
-            issue_index.max(self.first_stored_issue_index)
+            issue_index.max(self.first_issue_index())
         } else {
-            self.first_stored_issue_index
+            self.first_issue_index()
         };
-        (issue_start < self.source_issue_count).then_some(TargetAuditsOutputCursor {
+        (issue_start < self.issue_end).then_some(TargetAuditsOutputCursor {
             generation: self.generation,
             issue_start,
-            issue_end: self.source_issue_count,
+            issue_end: self.issue_end,
         })
     }
 
@@ -180,13 +148,13 @@ impl TargetAuditsStorageState {
         cursor: TargetAuditsOutputCursor,
     ) -> Option<Vec<InspectorIssueSnapshot>> {
         if cursor.generation != self.generation
-            || cursor.issue_start < self.first_stored_issue_index
+            || cursor.issue_start < self.first_issue_index()
             || cursor.issue_start > cursor.issue_end
-            || cursor.issue_end > self.source_issue_count
+            || cursor.issue_end > self.issue_end
         {
             return None;
         }
-        let start = cursor.issue_start - self.first_stored_issue_index;
+        let start = cursor.issue_start - self.first_issue_index();
         let len = cursor.issue_end - cursor.issue_start;
         Some(self.issues.iter().skip(start).take(len).cloned().collect())
     }
@@ -255,7 +223,8 @@ mod tests {
     #[test]
     fn enable_replays_storage_once_and_reenable_replays_current_storage() {
         let mut storage = TargetAuditsStorageState::default();
-        storage.ingest_source_issues(&[issue(0), issue(1)]);
+        storage.append_concrete_issue(issue(0));
+        storage.append_concrete_issue(issue(1));
         let mut session = TargetAuditsSessionState::default();
 
         let replay = session
@@ -277,10 +246,9 @@ mod tests {
     #[test]
     fn storage_matches_chromium_issue_limit_and_advances_slow_sessions() {
         let mut storage = TargetAuditsStorageState::default();
-        let source = (0..=MAX_STORED_INSPECTOR_ISSUES)
-            .map(issue)
-            .collect::<Vec<_>>();
-        storage.ingest_source_issues(&source);
+        for index in 0..=MAX_STORED_INSPECTOR_ISSUES {
+            storage.append_concrete_issue(issue(index));
+        }
 
         assert_eq!(storage.first_issue_index(), 1);
         assert_eq!(storage.issue_end(), MAX_STORED_INSPECTOR_ISSUES + 1);
@@ -293,13 +261,14 @@ mod tests {
     #[test]
     fn new_document_invalidates_session_cursor_without_disabling_domain() {
         let mut storage = TargetAuditsStorageState::default();
-        storage.ingest_source_issues(&[issue(0)]);
+        storage.append_concrete_issue(issue(0));
         let mut session = TargetAuditsSessionState::default();
         let cursor = session.enable(&storage).unwrap();
         session.mark_emitted(cursor);
 
         storage.reset_for_new_document();
-        storage.ingest_source_issues(&[issue(2)]);
+        storage.append_concrete_issue(issue(2));
+        assert!(storage.issues_for_cursor(cursor).is_none());
         let cursor = session
             .pending_cursor(&storage)
             .expect("enabled session should observe the replacement document");

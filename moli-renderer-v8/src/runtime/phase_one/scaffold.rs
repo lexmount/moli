@@ -42,7 +42,7 @@ fn prepare_phase_one_runtime_on_execution_context_backend(
         .buffered_document_preloads
         .bind_resource_runtime(
             runtime.page_vm.runtime_hooks.owner_wake(),
-            runtime.page_vm.runtime_hooks.resource_task_runner(),
+            runtime.page_vm.main_document_resource_loader(),
         );
     runtime
 }

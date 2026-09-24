@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use url::Url;
 
-use crate::{conn::BrowserContext, testing::TestContext};
+use crate::testing::TestContext;
 
 fn take_response_by_id(ctx: &mut TestContext, id: u64) -> Value {
     let index = ctx
@@ -111,7 +111,9 @@ async fn loaded_dom_storage_context() -> (TestContext, String, String, tokio::ta
         .origin()
         .ascii_serialization();
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-DOM-STORAGE".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-DOM-STORAGE".to_owned());
     browser_context.set_active_target_id("TID-DOM-STORAGE");
     browser_context.set_target_url(page_url.clone());
     browser_context.set_target_security_origin(origin.clone());
@@ -119,18 +121,8 @@ async fn loaded_dom_storage_context() -> (TestContext, String, String, tokio::ta
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
-        .await
-        .expect("DOMStorage test page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context should exist")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(&page_url, None)
+        .await;
     (ctx, page_url, origin, server)
 }
 
@@ -448,25 +440,17 @@ async fn dom_storage_resolves_child_frame_storage_ids_without_collapsing_to_top_
         .origin()
         .ascii_serialization();
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-DOM-STORAGE-CHILD".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-DOM-STORAGE-CHILD".to_owned());
     browser_context.set_active_target_id("TID-DOM-STORAGE-CHILD");
     browser_context.set_target_url(page_url.clone());
     browser_context.set_target_security_origin(top_origin.clone());
     browser_context.set_target_secure_context_type("Secure".to_owned());
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
-        .await
-        .expect("child-frame DOMStorage test page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+    ctx.install_quiet_navigation_fixture_for_session_owner(&page_url, None)
+        .await;
 
     let child_frame_loaded = tokio::time::timeout(
         std::time::Duration::from_secs(10),

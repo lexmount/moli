@@ -1,23 +1,57 @@
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
+use crate::conn::OpenBodyStreamError;
+use crate::conn::state::{ClaimedNavigationRequest, NavigationInterceptionPermit};
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
 use crate::conn::{
-    CapturedBody, CommandOwnerScope, CompletedFetchResponseBodyStreamReadDispatch,
-    FetchInterceptionPattern, FetchRequestStage, InFlightSubresourceFetchRequest,
-    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadStart,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
+    ClaimedFetchNavigation, ClaimedFetchResponseNavigation, CommandOwnerScope,
+    CompletedFetchResponseBodyStreamReadDispatch, FetchInterceptionPattern, FetchRequestStage,
+    InFlightSubresourceFetchRequest, PausedDocumentTransfer, PendingDocumentFetchCommand,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
+    PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+    PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::TargetIoStreamRead;
 
+impl CdpConnection {
+    pub(crate) fn subresource_fetch_residence_is_current(
+        &self,
+        residence: &crate::conn::PendingSubresourceFetchResidence,
+    ) -> bool {
+        residence
+            .observer()
+            .is_none_or(|owner| self.target_page_residence_identity_is_current(owner))
+    }
+
+    pub(crate) fn take_navigation_request(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<ClaimedNavigationRequest> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find_map(|context| context.take_navigation_request(permit))
+    }
+
+    pub(crate) fn take_navigation_response(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<PausedDocumentTransfer> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find_map(|context| context.take_navigation_response(permit))
+    }
+}
+
 pub(crate) type SessionOwnerPendingFetchState = (
     Vec<PendingFetchNavigation>,
     Vec<PendingFetchAuthNavigation>,
-    Vec<PausedDocumentTransfer>,
+    Vec<PendingFetchResponseNavigation>,
     Vec<(String, PendingSubresourceFetchRequest)>,
     Vec<(String, PendingSubresourceFetchAuthRequest)>,
     Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -53,65 +87,6 @@ impl SessionPendingFetchOwner<'_> {
     }
 }
 
-struct SessionFetchBodyStreamOwner<'a> {
-    owner_key: String,
-    fetch_owner: &'a mut TargetFetchOwner,
-    runtime_slot: &'a mut TargetRuntimeSlot,
-}
-
-impl SessionFetchBodyStreamOwner<'_> {
-    fn open_pending_fetch_response_body_stream(
-        &mut self,
-        request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
-        let handle = target_scoped_stream_handle(
-            &self.owner_key,
-            self.runtime_slot.allocate_io_stream_handle(),
-        );
-        self.fetch_owner.open_pending_fetch_response_body_stream(
-            self.runtime_slot,
-            request_id,
-            handle,
-        )
-    }
-
-    fn start_pending_fetch_response_body_stream_read(
-        &mut self,
-        handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> PendingFetchResponseBodyStreamReadStart {
-        self.fetch_owner
-            .start_pending_fetch_response_body_stream_read(handle, offset, size)
-    }
-
-    fn finish_pending_fetch_response_body_stream_read(
-        &mut self,
-        completed: CompletedFetchResponseBodyStreamReadDispatch,
-    ) -> PendingFetchResponseBodyStreamRead {
-        self.fetch_owner
-            .finish_pending_fetch_response_body_stream_read(self.runtime_slot, completed)
-    }
-
-    fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        self.fetch_owner
-            .close_pending_fetch_response_body_stream(handle)
-    }
-}
-
-fn fetch_body_stream_owner_for_target_mut<'a>(
-    browser_context: &'a mut BrowserContext,
-    target_id: &str,
-) -> Option<SessionFetchBodyStreamOwner<'a>> {
-    let owner_key = fetch_stream_owner_key(&browser_context.id, target_id);
-    let active_target = browser_context.page_target_mut(target_id)?;
-    Some(SessionFetchBodyStreamOwner {
-        owner_key,
-        fetch_owner: &mut active_target.fetch_owner,
-        runtime_slot: &mut active_target.runtime_slot,
-    })
-}
-
 fn runtime_slot_for_target_scoped_stream_mut<'a>(
     browser_context: &'a mut BrowserContext,
     target_id: &str,
@@ -121,8 +96,32 @@ fn runtime_slot_for_target_scoped_stream_mut<'a>(
         .map(|target| &mut target.runtime_slot)
 }
 
+fn restore_response_transfer_for_target(
+    context: &mut BrowserContext,
+    target_id: &str,
+    request_id: &str,
+    permit: NavigationInterceptionPermit,
+    transfer: PausedDocumentTransfer,
+) -> bool {
+    if context
+        .restore_navigation_response(permit, transfer)
+        .is_ok()
+    {
+        return true;
+    }
+    if let Some(target) = context.page_target_mut(target_id) {
+        target
+            .fetch_owner
+            .take_pending_fetch_response_navigation_for_terminal_action(request_id);
+    }
+    false
+}
+
 impl TargetSessionOwnerMut<'_> {
-    fn open_scoped_io_stream_body_source(&mut self, body: CapturedBody) -> Result<String, String> {
+    fn open_scoped_io_stream_body_source(
+        &mut self,
+        body: impl Into<crate::domains::network::IoStreamBody>,
+    ) -> Result<String, String> {
         let owner_key = fetch_stream_owner_key(&self.browser_context.id, &self.target_id);
         let Some(target) = self.browser_context.page_target_mut(&self.target_id) else {
             return Err("NoDocumentLoaded".to_owned());
@@ -185,36 +184,30 @@ fn target_scoped_stream_owner_matches_session(
 fn remove_network_intercept_from_browser_context(
     browser_context: &mut BrowserContext,
     intercept_id: &str,
-) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
-    let target = browser_context.active_page_target_mut();
-    if target.fetch_owner.remove_network_intercept(intercept_id) {
-        let (subresource_enabled, subresource_resource_type) =
-            target.fetch_owner.subresource_interception_config();
-        let Some(page) = target.runtime_slot.loaded_page_mut() else {
-            return Ok(Some(None));
-        };
-        return page
-            .start_set_fetch_subresource_interception(
-                subresource_enabled,
-                subresource_resource_type,
-            )
-            .map(Some)
-            .map(Some)
-            .map_err(|error| format!("failed to update page fetch interception: {error}"));
-    }
-
+) -> Result<Option<Option<PendingDocumentFetchCommand>>, String> {
     let target_ids = browser_context
-        .background_targets()
+        .page_targets
+        .iter()
         .map(|target| target.target_id().to_owned())
         .collect::<Vec<_>>();
     for target_id in target_ids {
-        let removed = browser_context
+        let web_contents = browser_context
+            .web_contents_handle_for_target(&target_id)
+            .ok_or("WebContents unavailable")?;
+        let target = browser_context
             .page_target_mut(&target_id)
-            .expect("background target must remain registered")
-            .fetch_owner
-            .remove_network_intercept(intercept_id);
-        if removed {
-            return Ok(Some(None));
+            .expect("target must remain registered");
+        if target.fetch_owner.remove_network_intercept(intercept_id) {
+            let (enabled, resource_type) = target.fetch_owner.subresource_interception_config();
+            return browser_context
+                .start_web_contents_fetch_interception_update(
+                    web_contents,
+                    enabled,
+                    resource_type,
+                    true,
+                )
+                .map(Some)
+                .map_err(|error| format!("failed to update page fetch interception: {error}"));
         }
     }
 
@@ -228,6 +221,14 @@ impl CdpConnection {
     ) -> Option<TargetFetchSubresourceInterceptionSnapshot> {
         self.target_session_owner_aggregate_fetch_config_for_owner(owner)
             .map(|config| config.subresource_interception_snapshot())
+    }
+
+    pub(crate) fn target_fetch_interception_config_after_session_disposal(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<(bool, Option<moli_core::page::SubresourceResourceType>)> {
+        self.target_session_owner_aggregate_fetch_config_for_owner(owner)?
+            .subresource_interception_config_after_removing_fetch_session(owner.session_id())
     }
 
     pub(crate) fn target_fetch_subresource_interception_snapshot_for_target(
@@ -353,14 +354,14 @@ impl CdpConnection {
     ) -> Result<String, String> {
         self.open_io_stream_body_source_for_session_owner(
             session_id,
-            CapturedBody::from_bytes_spooled(bytes),
+            crate::conn::CapturedBody::from_bytes_spooled(bytes),
         )
     }
 
     pub(crate) fn open_io_stream_body_source_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-        body: CapturedBody,
+        body: impl Into<crate::domains::network::IoStreamBody>,
     ) -> Result<String, String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.open_io_stream_body_source_for_owner(&owner, body)
@@ -369,7 +370,7 @@ impl CdpConnection {
     pub(crate) fn open_io_stream_body_source_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        body: CapturedBody,
+        body: impl Into<crate::domains::network::IoStreamBody>,
     ) -> Result<String, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) else {
             return Err("NoDocumentLoaded".to_owned());
@@ -450,7 +451,7 @@ impl CdpConnection {
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
         pending
-            .installed_page_owner()
+            .observer_page_owner()
             .is_none_or(|owner| self.target_page_residence_identity_is_current(owner))
     }
 
@@ -459,7 +460,7 @@ impl CdpConnection {
         pending: &PendingSubresourceFetchRequest,
     ) -> bool {
         pending
-            .installed_page_owner()
+            .observer_page_owner()
             .is_some_and(|owner| self.target_page_residence_identity_is_current(owner))
     }
 
@@ -467,7 +468,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         expected_page_owner: &crate::conn::TargetPageResidenceIdentity,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
         allow_pending_completion: bool,
     ) -> Option<crate::conn::ClaimedSubresourceContinueRequest> {
         if !self.target_page_residence_identity_is_current(expected_page_owner) {
@@ -496,9 +497,12 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         action_session_id: Option<&str>,
         request_id: &str,
-    ) -> Option<PendingFetchNavigation> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .take_pending_fetch_navigation_for_action_session(request_id, action_session_id)
+    ) -> Option<ClaimedFetchNavigation> {
+        let pending = self
+            .target_session_owner_mut_for_owner(owner)?
+            .take_pending_fetch_navigation_for_action_session(request_id, action_session_id)?;
+        let request = self.take_navigation_request(pending.navigation_permit);
+        Some(ClaimedFetchNavigation::new(pending, request))
     }
 
     pub(crate) fn take_pending_fetch_auth_navigation_for_owner(
@@ -533,32 +537,58 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn register_pending_fetch_response_navigation_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) -> bool {
-        self.target_session_owner_mut_for_owner(owner)
-            .is_some_and(|mut owner| {
-                owner.register_pending_fetch_response_navigation(
-                    request_id,
-                    document_navigation_token,
-                    navigation,
-                    body,
-                )
-            })
-    }
-
     pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .take_pending_fetch_response_transfer_for_terminal_action(request_id)
+    ) -> Option<ClaimedFetchResponseNavigation> {
+        let (browser_context_id, target_id) = self.resolved_page_owner_identity_for_owner(owner)?;
+        let context = self.browser_context_by_id_mut(&browser_context_id)?;
+        let pending = context
+            .page_target_mut(&target_id)?
+            .fetch_owner
+            .take_pending_fetch_response_navigation_for_terminal_action(request_id)?;
+        let transfer = context.take_navigation_response(pending.permit);
+        Some(ClaimedFetchResponseNavigation::new(
+            request_id.to_owned(),
+            pending,
+            transfer,
+        ))
+    }
+
+    pub(crate) fn register_native_fetch_response_for_owner(
+        &mut self,
+        pending: PendingFetchNavigation,
+        permit: crate::conn::state::NavigationInterceptionPermit,
+    ) -> bool {
+        let Some((context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&pending.navigation.owner)
+        else {
+            return false;
+        };
+        let Some(target) = self
+            .browser_context_by_id_mut(&context_id)
+            .and_then(|context| context.page_target_mut(&target_id))
+        else {
+            return false;
+        };
+        if target
+            .fetch_owner
+            .pending_fetch_response_navigation(&pending.fetch_request_id)
+            .is_some()
+        {
+            return false;
+        }
+        target
+            .fetch_owner
+            .register_pending_fetch_response_navigation(
+                pending.fetch_request_id,
+                PendingFetchResponseNavigation::new(pending.navigation, permit),
+            );
+        self.browser_context_by_id_mut(&context_id)
+            .expect("resolved Context")
+            .observe_native_navigation_response_pause(&target_id, permit.navigation());
+        true
     }
 
     pub(crate) fn take_pending_fetch_response_transfer_for_body_read_for_owner(
@@ -566,20 +596,75 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         request_id: &str,
     ) -> Option<PausedDocumentTransfer> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .take_pending_fetch_response_transfer(request_id)
+        let (browser_context_id, target_id) = self.resolved_page_owner_identity_for_owner(owner)?;
+        let context = self.browser_context_by_id_mut(&browser_context_id)?;
+        let permit = context
+            .page_target(&target_id)?
+            .fetch_owner
+            .pending_fetch_response_navigation(request_id)?
+            .permit;
+        context.take_navigation_response(permit)
     }
 
-    pub(crate) fn register_pending_fetch_response_transfer_for_owner(
+    pub(crate) fn restore_pending_fetch_response_transfer_for_body_read_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        request_id: String,
+        request_id: &str,
         transfer: PausedDocumentTransfer,
     ) -> bool {
-        self.target_session_owner_mut_for_owner(owner)
-            .is_some_and(|mut owner| {
-                owner.register_pending_fetch_response_transfer(request_id, transfer)
+        let Some((browser_context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return false;
+        };
+        let Some(context) = self.browser_context_by_id_mut(&browser_context_id) else {
+            return false;
+        };
+        let Some(permit) = context
+            .page_target(&target_id)
+            .and_then(|target| {
+                target
+                    .fetch_owner
+                    .pending_fetch_response_navigation(request_id)
             })
+            .map(|pending| pending.permit)
+        else {
+            return false;
+        };
+        restore_response_transfer_for_target(context, &target_id, request_id, permit, transfer)
+    }
+
+    pub(crate) fn restore_pending_fetch_response_navigation_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        claimed: ClaimedFetchResponseNavigation,
+    ) -> bool {
+        let Some((request_id, pending, transfer)) = claimed.into_restore_parts() else {
+            return false;
+        };
+        let Some((browser_context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return false;
+        };
+        let Some(context) = self.browser_context_by_id_mut(&browser_context_id) else {
+            return false;
+        };
+        let permit = pending.permit;
+        if context
+            .restore_navigation_response(permit, transfer)
+            .is_ok()
+        {
+            let Some(target) = context.page_target_mut(&target_id) else {
+                drop(context.take_navigation_response(permit));
+                return false;
+            };
+            target
+                .fetch_owner
+                .register_pending_fetch_response_navigation(request_id, pending);
+            return true;
+        }
+        false
     }
 
     pub(crate) fn pending_subresource_fetch_response_request_for_owner(
@@ -588,8 +673,15 @@ impl CdpConnection {
         action_session_id: Option<&str>,
         request_id: &str,
     ) -> Option<PendingSubresourceFetchResponseRequest> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .pending_subresource_fetch_response_request(request_id, action_session_id)
+        let pending = self
+            .target_session_owner_mut_for_owner(owner)?
+            .pending_subresource_fetch_response_request(request_id, action_session_id)?;
+        (self.subresource_fetch_residence_is_current(&pending.residence)
+            && pending
+                .residence
+                .worker()
+                .is_none_or(|pause| pause.pause.is_available()))
+        .then_some(pending)
     }
 
     pub(crate) fn mark_pending_subresource_fetch_response_body_taken_as_stream_for_owner(
@@ -607,15 +699,211 @@ impl CdpConnection {
             })
     }
 
+    fn open_pending_fetch_response_body_stream_for_target(
+        &mut self,
+        browser_context_id: &str,
+        target_id: &str,
+        request_id: &str,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(context) = self.browser_context_by_id_mut(browser_context_id) else {
+            return Ok(None);
+        };
+        let owner_key = fetch_stream_owner_key(browser_context_id, target_id);
+        let Some((permit, handle)) = context.page_target_mut(target_id).and_then(|target| {
+            let permit = target
+                .fetch_owner
+                .pending_fetch_response_navigation(request_id)?
+                .permit;
+            let handle = target_scoped_stream_handle(
+                &owner_key,
+                target.runtime_slot.allocate_io_stream_handle(),
+            );
+            Some((permit, handle))
+        }) else {
+            return Ok(None);
+        };
+        let Some(transfer) = context.take_navigation_response(permit) else {
+            return Ok(None);
+        };
+        let opened = match transfer.open_body_stream(handle) {
+            Ok(opened) => opened,
+            Err(OpenBodyStreamError::NotOpenable(transfer)) => {
+                restore_response_transfer_for_target(
+                    context, target_id, request_id, permit, *transfer,
+                );
+                return Ok(None);
+            }
+            Err(OpenBodyStreamError::Failed { transfer, error }) => {
+                restore_response_transfer_for_target(
+                    context, target_id, request_id, permit, *transfer,
+                );
+                return Err(error);
+            }
+        };
+        let crate::conn::PendingFetchResponseOpenedBodyStream {
+            handle,
+            buffered_bytes,
+            transfer,
+        } = opened;
+        if !restore_response_transfer_for_target(context, target_id, request_id, permit, transfer) {
+            return Ok(None);
+        }
+        let Some(target) = context.page_target_mut(target_id) else {
+            return Ok(None);
+        };
+        if let Some(bytes) = buffered_bytes {
+            target
+                .runtime_slot
+                .insert_io_stream(handle.clone(), bytes, 0);
+        } else if !target
+            .fetch_owner
+            .set_pending_fetch_response_body_stream_handle(request_id, Some(handle.clone()))
+        {
+            return Ok(None);
+        }
+        Ok(Some(handle))
+    }
+
+    fn start_pending_fetch_response_body_stream_read_for_target(
+        &mut self,
+        browser_context_id: &str,
+        target_id: &str,
+        handle: &str,
+        offset: Option<usize>,
+        size: Option<usize>,
+    ) -> PendingFetchResponseBodyStreamReadStart {
+        let Some(context) = self.browser_context_by_id_mut(browser_context_id) else {
+            return PendingFetchResponseBodyStreamReadStart::NotFound;
+        };
+        let Some((request_id, permit)) = context.page_target(target_id).and_then(|target| {
+            target
+                .fetch_owner
+                .pending_fetch_response_body_stream(handle)
+                .map(|(request_id, pending)| (request_id.to_owned(), pending.permit))
+        }) else {
+            return PendingFetchResponseBodyStreamReadStart::NotFound;
+        };
+        let Some(transfer) = context.take_navigation_response(permit) else {
+            return PendingFetchResponseBodyStreamReadStart::NotFound;
+        };
+        if let Some(offset) = offset
+            && offset != transfer.body_stream_offset().unwrap_or(0)
+        {
+            restore_response_transfer_for_target(context, target_id, &request_id, permit, transfer);
+            return PendingFetchResponseBodyStreamReadStart::OffsetNotSupported;
+        }
+        PendingFetchResponseBodyStreamReadStart::Pending(Box::new(
+            PendingFetchResponseBodyStreamReadDispatch::new(
+                request_id,
+                handle.to_owned(),
+                transfer,
+                size,
+            ),
+        ))
+    }
+
+    fn finish_pending_fetch_response_body_stream_read_for_target(
+        &mut self,
+        browser_context_id: &str,
+        target_id: &str,
+        completed: CompletedFetchResponseBodyStreamReadDispatch,
+    ) -> PendingFetchResponseBodyStreamRead {
+        let request_id = completed.request_id().to_owned();
+        let handle = completed.handle().to_owned();
+        let Some(context) = self.browser_context_by_id_mut(browser_context_id) else {
+            return PendingFetchResponseBodyStreamRead::NotFound;
+        };
+        let Some(permit) = context
+            .page_target(target_id)
+            .and_then(|target| {
+                target
+                    .fetch_owner
+                    .pending_fetch_response_navigation(&request_id)
+            })
+            .filter(|pending| pending.active_body_stream_handle() == Some(handle.as_str()))
+            .map(|pending| pending.permit)
+        else {
+            return PendingFetchResponseBodyStreamRead::NotFound;
+        };
+        match completed.into_completed() {
+            Ok((bytes, eof, transfer)) => {
+                if !restore_response_transfer_for_target(
+                    context,
+                    target_id,
+                    &request_id,
+                    permit,
+                    transfer,
+                ) {
+                    return PendingFetchResponseBodyStreamRead::NotFound;
+                }
+                if eof && let Some(target) = context.page_target_mut(target_id) {
+                    target
+                        .fetch_owner
+                        .set_pending_fetch_response_body_stream_handle(&request_id, None);
+                    target.runtime_slot.insert_io_stream(handle, Vec::new(), 0);
+                }
+                PendingFetchResponseBodyStreamRead::Read { bytes, eof }
+            }
+            Err(completed) => {
+                let (transfer, message) = *completed;
+                if !restore_response_transfer_for_target(
+                    context,
+                    target_id,
+                    &request_id,
+                    permit,
+                    transfer,
+                ) {
+                    return PendingFetchResponseBodyStreamRead::NotFound;
+                }
+                PendingFetchResponseBodyStreamRead::Failed(message)
+            }
+        }
+    }
+
+    fn close_pending_fetch_response_body_stream_for_target(
+        &mut self,
+        browser_context_id: &str,
+        target_id: &str,
+        handle: &str,
+    ) -> bool {
+        let Some(context) = self.browser_context_by_id_mut(browser_context_id) else {
+            return false;
+        };
+        let Some(request_id) = context.page_target(target_id).and_then(|target| {
+            target
+                .fetch_owner
+                .pending_fetch_response_body_stream(handle)
+                .map(|(request_id, _)| request_id.to_owned())
+        }) else {
+            return false;
+        };
+        let Some(pending) = context.page_target_mut(target_id).and_then(|target| {
+            target
+                .fetch_owner
+                .take_pending_fetch_response_navigation_for_terminal_action(&request_id)
+        }) else {
+            return false;
+        };
+        drop(context.take_navigation_response(pending.permit));
+        true
+    }
+
     pub(crate) fn open_pending_fetch_response_body_stream_for_session_owner(
         &mut self,
         session_id: Option<&str>,
         request_id: &str,
     ) -> anyhow::Result<Option<String>> {
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let Some((browser_context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&owner)
+        else {
             return Ok(None);
         };
-        owner.open_pending_fetch_response_body_stream(request_id)
+        self.open_pending_fetch_response_body_stream_for_target(
+            &browser_context_id,
+            &target_id,
+            request_id,
+        )
     }
 
     pub(crate) fn start_pending_fetch_response_body_stream_read_for_session_owner(
@@ -625,10 +913,19 @@ impl CdpConnection {
         offset: Option<usize>,
         size: Option<usize>,
     ) -> PendingFetchResponseBodyStreamReadStart {
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let Some((browser_context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&owner)
+        else {
             return PendingFetchResponseBodyStreamReadStart::NotFound;
         };
-        owner.start_pending_fetch_response_body_stream_read(handle, offset, size)
+        self.start_pending_fetch_response_body_stream_read_for_target(
+            &browser_context_id,
+            &target_id,
+            handle,
+            offset,
+            size,
+        )
     }
 
     pub(crate) fn start_pending_fetch_response_body_stream_read_for_stream_owner(
@@ -646,17 +943,13 @@ impl CdpConnection {
         if !target_scoped_stream_owner_matches_session(self, session_id, &stream_owner) {
             return PendingFetchResponseBodyStreamReadStart::NotFound;
         }
-        let Some(browser_context) =
-            self.browser_context_by_id_mut(&stream_owner.browser_context_id)
-        else {
-            return PendingFetchResponseBodyStreamReadStart::NotFound;
-        };
-        let Some(mut owner) =
-            fetch_body_stream_owner_for_target_mut(browser_context, &stream_owner.target_id)
-        else {
-            return PendingFetchResponseBodyStreamReadStart::NotFound;
-        };
-        owner.start_pending_fetch_response_body_stream_read(handle, offset, size)
+        self.start_pending_fetch_response_body_stream_read_for_target(
+            &stream_owner.browser_context_id,
+            &stream_owner.target_id,
+            handle,
+            offset,
+            size,
+        )
     }
 
     pub(crate) fn finish_pending_fetch_response_body_stream_read_for_session_owner(
@@ -664,10 +957,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         completed: CompletedFetchResponseBodyStreamReadDispatch,
     ) -> PendingFetchResponseBodyStreamRead {
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let Some((browser_context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&owner)
+        else {
             return PendingFetchResponseBodyStreamRead::NotFound;
         };
-        owner.finish_pending_fetch_response_body_stream_read(completed)
+        self.finish_pending_fetch_response_body_stream_read_for_target(
+            &browser_context_id,
+            &target_id,
+            completed,
+        )
     }
 
     pub(crate) fn finish_pending_fetch_response_body_stream_read_for_stream_owner(
@@ -684,17 +984,11 @@ impl CdpConnection {
         if !target_scoped_stream_owner_matches_session(self, session_id, &stream_owner) {
             return PendingFetchResponseBodyStreamRead::NotFound;
         }
-        let Some(browser_context) =
-            self.browser_context_by_id_mut(&stream_owner.browser_context_id)
-        else {
-            return PendingFetchResponseBodyStreamRead::NotFound;
-        };
-        let Some(mut owner) =
-            fetch_body_stream_owner_for_target_mut(browser_context, &stream_owner.target_id)
-        else {
-            return PendingFetchResponseBodyStreamRead::NotFound;
-        };
-        owner.finish_pending_fetch_response_body_stream_read(completed)
+        self.finish_pending_fetch_response_body_stream_read_for_target(
+            &stream_owner.browser_context_id,
+            &stream_owner.target_id,
+            completed,
+        )
     }
 
     pub(crate) fn close_pending_fetch_response_body_stream_for_session_owner(
@@ -702,8 +996,17 @@ impl CdpConnection {
         session_id: Option<&str>,
         handle: &str,
     ) -> bool {
-        self.target_session_owner_mut(session_id)
-            .is_some_and(|mut owner| owner.close_pending_fetch_response_body_stream(handle))
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let Some((browser_context_id, target_id)) =
+            self.resolved_page_owner_identity_for_owner(&owner)
+        else {
+            return false;
+        };
+        self.close_pending_fetch_response_body_stream_for_target(
+            &browser_context_id,
+            &target_id,
+            handle,
+        )
     }
 
     pub(crate) fn close_pending_fetch_response_body_stream_for_stream_owner(
@@ -718,13 +1021,11 @@ impl CdpConnection {
         if !target_scoped_stream_owner_matches_session(self, session_id, &stream_owner) {
             return false;
         }
-        let Some(browser_context) =
-            self.browser_context_by_id_mut(&stream_owner.browser_context_id)
-        else {
-            return false;
-        };
-        fetch_body_stream_owner_for_target_mut(browser_context, &stream_owner.target_id)
-            .is_some_and(|mut owner| owner.close_pending_fetch_response_body_stream(handle))
+        self.close_pending_fetch_response_body_stream_for_target(
+            &stream_owner.browser_context_id,
+            &stream_owner.target_id,
+            handle,
+        )
     }
 
     pub(crate) fn close_io_stream_for_stream_owner(
@@ -784,7 +1085,7 @@ impl CdpConnection {
         let pending = self
             .target_session_owner_mut_for_owner(owner)?
             .take_pending_subresource_fetch_auth_request(request_id, action_session_id)?;
-        self.target_page_residence_identity_is_current(&pending.page_owner)
+        self.subresource_fetch_residence_is_current(&pending.residence)
             .then_some(pending)
     }
 
@@ -797,14 +1098,14 @@ impl CdpConnection {
         let pending = self
             .target_session_owner_mut_for_owner(owner)?
             .take_pending_subresource_fetch_response_request(request_id, action_session_id)?;
-        self.target_page_residence_identity_is_current(&pending.page_owner)
+        self.subresource_fetch_residence_is_current(&pending.residence)
             .then_some(pending)
     }
 
     pub(crate) fn take_in_flight_subresource_fetch_request_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
     ) -> Option<InFlightSubresourceFetchRequest> {
         let in_flight = self
             .target_session_owner_mut_for_owner(owner)?
@@ -925,7 +1226,7 @@ impl CdpConnection {
         request_id: String,
         pending: PendingSubresourceFetchAuthRequest,
     ) -> bool {
-        if !self.target_page_residence_identity_is_current(&pending.page_owner) {
+        if !self.subresource_fetch_residence_is_current(&pending.residence) {
             return false;
         }
         self.record_pending_subresource_auth_network_request_identity_for_owner(owner, &pending);
@@ -953,7 +1254,7 @@ impl CdpConnection {
         request_id: String,
         pending: PendingSubresourceFetchResponseRequest,
     ) -> bool {
-        if !self.target_page_residence_identity_is_current(&pending.page_owner) {
+        if !self.subresource_fetch_residence_is_current(&pending.residence) {
             return false;
         }
         self.record_pending_subresource_response_network_request_identity_for_owner(
@@ -970,6 +1271,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchRequest,
     ) {
+        if pending.residence.worker().is_some() {
+            return;
+        }
         let Some(handle) = pending.network_request_handle else {
             return;
         };
@@ -986,6 +1290,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchAuthRequest,
     ) {
+        if pending.residence.worker().is_some() {
+            return;
+        }
         let Some(handle) = pending.network_request_handle else {
             return;
         };
@@ -1002,6 +1309,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         pending: &PendingSubresourceFetchResponseRequest,
     ) {
+        if pending.residence.worker().is_some() {
+            return;
+        }
         let Some(handle) = pending.network_request_handle else {
             return;
         };
@@ -1018,7 +1328,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_enable_fetch_for_owner(&owner, handle_auth_requests, patterns)
     }
@@ -1028,7 +1338,7 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -1037,15 +1347,19 @@ impl CdpConnection {
             handle_auth_requests,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        let web_contents = owner
+            .browser_context
+            .web_contents_handle_for_target(&owner.target_id)
+            .ok_or("WebContents unavailable")?;
+        owner
+            .browser_context
+            .start_web_contents_fetch_interception_update(
+                web_contents,
+                subresource_enabled,
+                subresource_resource_type,
+                false,
+            )
+            .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1057,7 +1371,7 @@ impl CdpConnection {
         handle_auth_requests: bool,
         auth_url_patterns: Vec<String>,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -1068,15 +1382,19 @@ impl CdpConnection {
             auth_url_patterns,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        let web_contents = owner
+            .browser_context
+            .web_contents_handle_for_target(&owner.target_id)
+            .ok_or("WebContents unavailable")?;
+        owner
+            .browser_context
+            .start_web_contents_fetch_interception_update(
+                web_contents,
+                subresource_enabled,
+                subresource_resource_type,
+                false,
+            )
+            .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
 
     pub(crate) fn start_remove_network_intercept_for_owner(
@@ -1084,7 +1402,7 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         intercept_id: &str,
         allow_global_lookup: bool,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -1096,21 +1414,25 @@ impl CdpConnection {
             }
             return Err("NetworkInterceptNotFound".to_owned());
         };
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        let web_contents = owner
+            .browser_context
+            .web_contents_handle_for_target(&owner.target_id)
+            .ok_or("WebContents unavailable")?;
+        owner
+            .browser_context
+            .start_web_contents_fetch_interception_update(
+                web_contents,
+                subresource_enabled,
+                subresource_resource_type,
+                false,
+            )
+            .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
 
     fn start_remove_network_intercept_from_any_target(
         &mut self,
         intercept_id: &str,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         if let Some(browser_context) = self.browser_context.as_mut()
             && let Some(pending) =
                 remove_network_intercept_from_browser_context(browser_context, intercept_id)?
@@ -1130,47 +1452,76 @@ impl CdpConnection {
     pub(crate) fn start_disable_fetch_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Result<Option<PendingDocumentFetchCommand>, String>,
+    )> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        self.start_disable_fetch_for_owner(&owner)
+        self.start_disable_fetch_for_owner(&owner, true)
     }
 
-    pub(crate) fn start_disable_fetch_for_owner(
+    pub(crate) fn start_dispose_fetch_for_session_owner(
+        &mut self,
+        session_id: Option<&str>,
+        renderer_policy_reconciled: bool,
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Result<Option<PendingDocumentFetchCommand>, String>,
+    )> {
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.start_disable_fetch_for_owner(&owner, !renderer_policy_reconciled)
+    }
+
+    fn start_disable_fetch_for_owner(
         &mut self,
         command_owner: &CommandOwnerScope,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
-        let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Ok(None);
-        };
-        let (pending, (subresource_enabled, subresource_resource_type), page_update_required) =
+        enqueue_renderer_update: bool,
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Result<Option<PendingDocumentFetchCommand>, String>,
+    )> {
+        let mut owner = self.target_session_owner_mut_for_owner(command_owner)?;
+        let (pending, (subresource_enabled, subresource_resource_type), removed) = owner
+            .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
+        // Explicit Fetch.disable and a failed renderer finalization must
+        // reinstall the current aggregate even on a retry. Successful session
+        // finalization has already applied this source-free value through the
+        // renderer lifecycle interrupt, so only publish it to the Browser
+        // owner here and never wait behind active JavaScript.
+        let page_command = if enqueue_renderer_update {
+            let web_contents = owner
+                .browser_context
+                .web_contents_handle_for_target(&owner.target_id)
+                .ok_or_else(|| "WebContents unavailable".to_owned());
+            web_contents.and_then(|web_contents| {
+                owner
+                    .browser_context
+                    .start_web_contents_fetch_interception_update(
+                        web_contents,
+                        subresource_enabled,
+                        subresource_resource_type,
+                        false,
+                    )
+            })
+        } else if removed {
             owner
-                .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
-        let page_command = if page_update_required
-            && let Some(page) = owner.runtime_slot_mut().loaded_page_mut()
-        {
-            Some(
-                page.start_set_fetch_subresource_interception(
-                    subresource_enabled,
-                    subresource_resource_type,
-                )
-                .map_err(|error| error.to_string())?,
-            )
+                .browser_context
+                .web_contents_handle_for_target(&owner.target_id)
+                .ok_or_else(|| "WebContents unavailable".to_owned())
+                .and_then(|web_contents| {
+                    owner
+                        .browser_context
+                        .install_web_contents_fetch_interception_policy(
+                            web_contents,
+                            subresource_enabled,
+                            subresource_resource_type,
+                        )
+                })
+                .map(|()| None)
         } else {
-            None
+            Ok(None)
         };
-        Ok(Some((pending, page_command)))
+        Some((pending, page_command))
     }
 
     pub(crate) fn take_pending_fetch_state_for_owner(
@@ -1212,10 +1563,6 @@ impl TargetSessionOwnerMut<'_> {
                 .page_target_mut(&self.target_id)?
                 .fetch_owner,
         ))
-    }
-
-    fn fetch_body_stream_owner_mut(&mut self) -> Option<SessionFetchBodyStreamOwner<'_>> {
-        fetch_body_stream_owner_for_target_mut(self.browser_context, &self.target_id)
     }
 
     pub(super) fn register_pending_fetch_navigation_request(
@@ -1264,53 +1611,6 @@ impl TargetSessionOwnerMut<'_> {
             return false;
         };
         owner.register_pending_fetch_auth_navigation(request_id, pending);
-        true
-    }
-
-    fn register_pending_fetch_response_navigation(
-        &mut self,
-        request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
-        navigation: crate::conn::NavigationDispatchState,
-        body: crate::conn::DocumentBodySource,
-    ) -> bool {
-        let Some(mut owner) = self.pending_fetch_owner_mut() else {
-            return false;
-        };
-        owner.register_pending_fetch_response_navigation(
-            request_id,
-            document_navigation_token,
-            navigation,
-            body,
-        );
-        true
-    }
-
-    fn take_pending_fetch_response_transfer_for_terminal_action(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        self.pending_fetch_owner_mut()?
-            .take_pending_fetch_response_transfer_for_terminal_action(request_id)
-    }
-
-    fn take_pending_fetch_response_transfer(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        self.pending_fetch_owner_mut()?
-            .take_pending_fetch_response_transfer(request_id)
-    }
-
-    fn register_pending_fetch_response_transfer(
-        &mut self,
-        request_id: String,
-        transfer: PausedDocumentTransfer,
-    ) -> bool {
-        let Some(mut owner) = self.pending_fetch_owner_mut() else {
-            return false;
-        };
-        owner.register_pending_fetch_response_transfer(request_id, transfer);
         true
     }
 
@@ -1365,7 +1665,7 @@ impl TargetSessionOwnerMut<'_> {
 
     fn take_in_flight_subresource_fetch_request(
         &mut self,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
     ) -> Option<InFlightSubresourceFetchRequest> {
         self.pending_fetch_owner_mut()?
             .take_in_flight_subresource_fetch_request(internal_id)
@@ -1374,7 +1674,7 @@ impl TargetSessionOwnerMut<'_> {
     fn claim_subresource_continue_request(
         &mut self,
         expected_page_owner: &crate::conn::TargetPageResidenceIdentity,
-        internal_id: u64,
+        internal_id: impl Into<crate::conn::SubresourceFetchKey> + Copy,
         session_id: Option<&str>,
         allow_pending_completion: bool,
     ) -> Option<crate::conn::ClaimedSubresourceContinueRequest> {
@@ -1511,42 +1811,5 @@ impl TargetSessionOwnerMut<'_> {
         };
         owner.register_pending_subresource_fetch_response_request(request_id, pending);
         true
-    }
-
-    fn open_pending_fetch_response_body_stream(
-        &mut self,
-        request_id: &str,
-    ) -> anyhow::Result<Option<String>> {
-        let Some(mut owner) = self.fetch_body_stream_owner_mut() else {
-            return Ok(None);
-        };
-        owner.open_pending_fetch_response_body_stream(request_id)
-    }
-
-    fn start_pending_fetch_response_body_stream_read(
-        &mut self,
-        handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> PendingFetchResponseBodyStreamReadStart {
-        let Some(mut owner) = self.fetch_body_stream_owner_mut() else {
-            return PendingFetchResponseBodyStreamReadStart::NotFound;
-        };
-        owner.start_pending_fetch_response_body_stream_read(handle, offset, size)
-    }
-
-    fn finish_pending_fetch_response_body_stream_read(
-        &mut self,
-        completed: CompletedFetchResponseBodyStreamReadDispatch,
-    ) -> PendingFetchResponseBodyStreamRead {
-        let Some(mut owner) = self.fetch_body_stream_owner_mut() else {
-            return PendingFetchResponseBodyStreamRead::NotFound;
-        };
-        owner.finish_pending_fetch_response_body_stream_read(completed)
-    }
-
-    fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        self.fetch_body_stream_owner_mut()
-            .is_some_and(|mut owner| owner.close_pending_fetch_response_body_stream(handle))
     }
 }

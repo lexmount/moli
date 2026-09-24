@@ -1,43 +1,37 @@
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
 
 use tracing::trace;
 
 use crate::{
     runtime::{
-        PendingRendererOutputRecord, RendererOwnerAction, RendererRuntimeInspectorMessage,
-        RendererSharedWorkerConsoleMessage, RendererSharedWorkerTargetEvent,
-        RendererSharedWorkerTargetInfo,
+        PendingRendererOutputRecord, RendererProtocolObservation, RendererRuntimeInspectorMessage,
+        RendererSharedWorkerConsoleMessage, RendererSharedWorkerObservation,
+        RendererSharedWorkerTargetInfo, RendererWorkerLifecycle,
     },
     worker::{WorkerConsoleMessage, WorkerRuntimeInspectorMessageBatch},
 };
 
 use super::host::RendererSharedWorkerHost;
-use super::host::SharedWorkerRuntimeResponsePublicationState;
+use super::host::SharedWorkerOutputPublicationState;
 
 impl RendererSharedWorkerHost {
     pub(super) fn publish_created_target_event(&self) {
-        self.publish_target_event(RendererSharedWorkerTargetEvent::Created(self.target_info()));
+        let state = self.output_publications.lock();
+        if matches!(*state, SharedWorkerOutputPublicationState::Active) {
+            self.publish_lifecycle(RendererWorkerLifecycle::SharedCreated(self.target_info()));
+        }
     }
 
-    pub(super) fn publish_destroyed_target_event(self: &Arc<Self>) {
-        self.begin_runtime_response_retirement();
-        if !self.claim_target_output_retirement() {
-            return;
+    pub(super) fn publish_started_target_event(&self) {
+        let state = self.output_publications.lock();
+        if matches!(*state, SharedWorkerOutputPublicationState::Active) {
+            self.publish_lifecycle(RendererWorkerLifecycle::SharedStarted(self.target_info()));
         }
-        self.publish_target_event(RendererSharedWorkerTargetEvent::Destroyed {
-            instance_id: self.instance_id(),
-        });
-        self.finish_runtime_response_retirement();
-        self.finish_target_output_retirement();
     }
 
-    pub(super) fn retire_target_output_without_destroyed(&self) {
+    pub(super) fn publish_destroyed_target_event(&self) {
         self.begin_runtime_response_retirement();
-        if self.claim_target_output_retirement() {
-            self.finish_runtime_response_retirement();
-            self.finish_target_output_retirement();
-        }
+        self.finish_output_retirement();
     }
 
     /// Stops direct response publication before target retirement begins.
@@ -50,9 +44,9 @@ impl RendererSharedWorkerHost {
     /// whereas Chromium closes the target/session and rejects the outstanding
     /// command as `Target closed`.
     pub(super) fn begin_runtime_response_retirement(&self) {
-        let mut state = self.runtime_response_publications.lock();
-        if matches!(*state, SharedWorkerRuntimeResponsePublicationState::Active) {
-            *state = SharedWorkerRuntimeResponsePublicationState::Closing(Vec::new());
+        let mut state = self.output_publications.lock();
+        if matches!(*state, SharedWorkerOutputPublicationState::Active) {
+            *state = SharedWorkerOutputPublicationState::Closing(Vec::new());
         }
     }
 
@@ -60,19 +54,19 @@ impl RendererSharedWorkerHost {
         &self,
         publication: crate::runtime::RendererRuntimeInspectorResponsePublication,
     ) {
-        let mut state = self.runtime_response_publications.lock();
+        let mut state = self.output_publications.lock();
         match &mut *state {
-            SharedWorkerRuntimeResponsePublicationState::Active => {
+            SharedWorkerOutputPublicationState::Active => {
                 let target_output = self.target_output();
                 let predecessor = target_output
                     .last_published_cursor()
                     .map(|cursor| target_output.declare_fence(cursor));
                 let _ = publication.commit(predecessor);
             }
-            SharedWorkerRuntimeResponsePublicationState::Closing(pending) => {
+            SharedWorkerOutputPublicationState::Closing(pending) => {
                 pending.push(publication);
             }
-            SharedWorkerRuntimeResponsePublicationState::Retired {
+            SharedWorkerOutputPublicationState::Retired {
                 terminal_predecessor,
             } => {
                 let _ = publication.commit(terminal_predecessor.clone());
@@ -80,24 +74,32 @@ impl RendererSharedWorkerHost {
         }
     }
 
-    fn finish_runtime_response_retirement(&self) {
+    fn finish_output_retirement(&self) {
+        // One lock orders ordinary receipts, terminal facts and Inspector replies.
+        // A queued parent message may outlive the VM, but cannot append after
+        // Destroyed or race the journal's closure.
+        let mut state = self.output_publications.lock();
+        if matches!(*state, SharedWorkerOutputPublicationState::Retired { .. }) {
+            return;
+        }
+        self.publish_lifecycle(RendererWorkerLifecycle::SharedDestroyed(self.instance_id()));
+        self.network.close_source();
         let target_output = self.target_output();
         let predecessor = target_output
             .last_published_cursor()
             .map(|cursor| target_output.declare_fence(cursor));
         let pending = {
-            let mut state = self.runtime_response_publications.lock();
             match std::mem::replace(
                 &mut *state,
-                SharedWorkerRuntimeResponsePublicationState::Retired {
+                SharedWorkerOutputPublicationState::Retired {
                     terminal_predecessor: predecessor.clone(),
                 },
             ) {
-                SharedWorkerRuntimeResponsePublicationState::Closing(pending) => pending,
-                SharedWorkerRuntimeResponsePublicationState::Active => {
+                SharedWorkerOutputPublicationState::Closing(pending) => pending,
+                SharedWorkerOutputPublicationState::Active => {
                     panic!("SharedWorker response retirement must begin before it finishes")
                 }
-                SharedWorkerRuntimeResponsePublicationState::Retired { .. } => {
+                SharedWorkerOutputPublicationState::Retired { .. } => {
                     panic!("SharedWorker response retirement finished twice")
                 }
             }
@@ -105,6 +107,7 @@ impl RendererSharedWorkerHost {
         for publication in pending {
             let _ = publication.commit(predecessor.clone());
         }
+        self.finish_target_output_retirement();
     }
 
     pub(super) fn record_runtime_inspector_messages_if_running(
@@ -136,7 +139,7 @@ impl RendererSharedWorkerHost {
                 continue;
             }
             recorded |= self.publish_target_event_if_running(
-                RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+                RendererSharedWorkerObservation::RuntimeInspectorMessages {
                     instance_id: self.instance_id(),
                     inspector_session_id: batch.inspector_session_id,
                     messages: notifications,
@@ -158,7 +161,7 @@ impl RendererSharedWorkerHost {
         console: &WorkerConsoleMessage,
     ) -> bool {
         self.publish_target_event_if_running(
-            RendererSharedWorkerTargetEvent::Console {
+            RendererSharedWorkerObservation::Console {
                 instance_id: self.instance_id(),
                 message: RendererSharedWorkerConsoleMessage {
                     message: console.message.clone(),
@@ -172,7 +175,7 @@ impl RendererSharedWorkerHost {
 
     fn publish_target_event_if_running(
         self: &Arc<Self>,
-        event: RendererSharedWorkerTargetEvent,
+        event: RendererSharedWorkerObservation,
         on_not_running: impl FnOnce(),
     ) -> bool {
         if !self.is_running_in_runtime_service() {
@@ -193,30 +196,39 @@ impl RendererSharedWorkerHost {
             instance_id: self.instance_id(),
             url: self.current_script_url(),
             name: self.worker_name(),
+            execution_ready: matches!(
+                *self.state.lock(),
+                super::host::RendererSharedWorkerHostState::Running { .. }
+            ),
         }
     }
 
-    fn publish_target_event(&self, event: RendererSharedWorkerTargetEvent) {
-        self.target_output().publish_record(
-            PendingRendererOutputRecord::owner_action(
-                None,
-                RendererOwnerAction::SharedWorkerTargetLifecycle(event),
-            )
-            .resolve()
-            .unwrap_or_else(|_| {
-                panic!("SharedWorker target output must have resolved source identity")
-            }),
-        );
+    fn publish_lifecycle(&self, lifecycle: RendererWorkerLifecycle) {
+        self.append_observation(RendererProtocolObservation::WorkerLifecycle(
+            self.worker_lifecycle.report(lifecycle),
+        ));
     }
 
-    /// Claims the one terminal transition before appending a terminal record.
-    ///
-    /// A worker-close acknowledgement can race a browser-side terminate. The
-    /// claim must happen before `Destroyed` is appended; checking only while
-    /// closing the stream would let the loser append to an already-closed
-    /// journal.
-    fn claim_target_output_retirement(&self) -> bool {
-        !self.target_output_retired().swap(true, Ordering::AcqRel)
+    fn publish_target_event(&self, event: RendererSharedWorkerObservation) {
+        self.publish_observation(RendererProtocolObservation::SharedWorker(event));
+    }
+
+    pub(super) fn publish_observation(&self, observation: RendererProtocolObservation) {
+        let state = self.output_publications.lock();
+        if matches!(*state, SharedWorkerOutputPublicationState::Active) {
+            self.append_observation(observation);
+        }
+    }
+
+    /// Caller holds the output publication lock through append and settlement.
+    fn append_observation(&self, observation: RendererProtocolObservation) {
+        self.target_output().publish_record(
+            PendingRendererOutputRecord::observation(None, observation)
+                .resolve()
+                .unwrap_or_else(|_| {
+                    panic!("SharedWorker target output must have resolved source identity")
+                }),
+        );
     }
 
     fn finish_target_output_retirement(&self) {
@@ -235,12 +247,42 @@ mod tests {
 
     use crate::{
         runtime::{
-            RendererOutputItem, RendererOwnerAction, RendererRuntimeInspectorMessage,
-            RendererSharedWorkerTargetEvent,
+            RendererOutputItem, RendererProtocolObservation, RendererRuntimeInspectorMessage,
+            RendererWorkerLifecycle,
         },
         shared_worker_runtime::test_support,
         worker::{WorkerConsoleMessage, WorkerRuntimeInspectorMessageBatch},
     };
+
+    #[test]
+    fn retired_host_rejects_queued_network_tail() {
+        let key = test_support::shared_worker_key();
+        let host = test_support::loading_host(SharedWorkerInstanceId::from_u64(42), &key);
+        host.publish_created_target_event();
+        host.publish_destroyed_target_event();
+        let terminal = host.target_output().last_published_cursor();
+        let source = crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test();
+        let request = source.start_request().unwrap();
+
+        // Native request reporting precedes its optional parent FIFO receipt.
+        // The original VM may have queued that receipt before browser close.
+        host.handle_worker_parent_message(
+            crate::worker::WorkerToParentMessage::Network(request.report(
+                moli_page_types::ScriptNetworkOutputItem::SubresourceBodyFinished(
+                    std::sync::Arc::new(moli_page_types::SubresourceBodyFinished::failed(
+                        request.handle(),
+                        "cancelled".into(),
+                    )),
+                ),
+            )),
+            key.script_url(),
+        );
+        assert_eq!(
+            host.target_output().last_published_cursor(),
+            terminal,
+            "a retired Worker must not append a late receipt after its terminal cursor"
+        );
+    }
 
     #[test]
     fn non_running_host_drops_tail_target_output() {
@@ -268,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn created_target_fact_is_frozen_until_transport_binding() {
+    fn unobserved_created_target_is_not_retained_for_late_transport() {
         let runtime_service = test_support::runtime_service();
         let key = test_support::shared_worker_key();
         let instance_id = SharedWorkerInstanceId::from_u64(42);
@@ -276,6 +318,7 @@ mod tests {
             test_support::loading_host_with_runtime_service(instance_id, &key, &runtime_service);
 
         host.publish_created_target_event();
+        assert!(host.target_output().last_published_cursor().is_none());
         let (tx, mut rx) = crate::runtime::renderer_output_transport_channel();
         runtime_service.bind_target_output_transport(tx);
 
@@ -285,22 +328,21 @@ mod tests {
                 crate::runtime::RendererOutputStreamControl::Opened { .. }
             )
         ));
+        assert!(rx.try_recv().is_err(), "unobserved history is not replayed");
+        host.publish_destroyed_target_event();
         let crate::runtime::RendererOutputTransportMessage::Publication(publication) = rx
             .try_recv()
-            .expect("pre-transport target fact should publish after open")
+            .expect("observed retirement must publish after open")
         else {
             panic!("target fact must use concrete output")
         };
         let [record] = publication.records() else {
-            panic!("one created fact should produce one record")
+            panic!("one retirement must produce one record")
         };
         assert!(matches!(
             record.item(),
-            RendererOutputItem::OwnerAction(
-                RendererOwnerAction::SharedWorkerTargetLifecycle(
-                    RendererSharedWorkerTargetEvent::Created(info)
-                )
-            ) if info.instance_id == instance_id
+            RendererOutputItem::Observation(RendererProtocolObservation::WorkerLifecycle(observation))
+                if matches!(observation.lifecycle(), RendererWorkerLifecycle::SharedDestroyed(retired) if *retired == instance_id)
         ));
     }
 
@@ -321,7 +363,7 @@ mod tests {
         assert!(matches!(
             rx.try_recv().expect("stream open"),
             crate::runtime::RendererOutputTransportMessage::StreamControl(
-                crate::runtime::RendererOutputStreamControl::Opened { stream: actual }
+                crate::runtime::RendererOutputStreamControl::Opened { stream: actual, .. }
             ) if actual == stream
         ));
         for expected_sequence in [1, 2] {

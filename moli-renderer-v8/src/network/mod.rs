@@ -15,6 +15,8 @@ pub(crate) mod loads;
 pub mod navigation;
 mod policy;
 mod request_client;
+pub(crate) mod resource_response;
+mod response_body;
 mod task_runner;
 
 pub use backend::{
@@ -30,6 +32,13 @@ pub use devtools_resource_load::{
 };
 pub use policy::{PageNetworkPolicy, PageNetworkPolicySnapshot};
 pub use request_client::{ResourceRequestClient, ResourceRequestClientOwner};
+pub(crate) use resource_response::{
+    ResourceBodyResponse, ResourceResponseFailure, ResourceResponseHead, ResourceResponseObserver,
+    ResourceResponseResult, ResourceResponseStream,
+};
+pub(crate) use response_body::{
+    PausedResourceResponse, ResourceResponseBody, ResourceResponseConsumer,
+};
 pub use task_runner::RendererResourceTaskRunner;
 
 pub(crate) fn request_resource_type_for_subresource(
@@ -48,9 +57,13 @@ pub(crate) fn request_resource_type_for_subresource(
         SubresourceResourceType::CspReport => Some(RequestResourceType::CspReport),
         SubresourceResourceType::Dictionary => Some(RequestResourceType::Dictionary),
         SubresourceResourceType::Manifest => Some(RequestResourceType::Manifest),
-        SubresourceResourceType::Fetch
+        SubresourceResourceType::Document
+        | SubresourceResourceType::Fetch
         | SubresourceResourceType::EventSource
         | SubresourceResourceType::Xhr
         | SubresourceResourceType::WebSocket => None,
     }
 }
+
+mod resource_transfer;
+pub(crate) use resource_transfer::ResourceTransfer;

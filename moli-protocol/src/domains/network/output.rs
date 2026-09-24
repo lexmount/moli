@@ -11,6 +11,7 @@ use crate::devtools_runtime::DevToolsNetworkInterceptId;
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TargetSubresourceFetchPauseOutput {
     network_output: TargetSubresourceFetchPauseNetworkOutput,
+    network_worker: Option<moli_core::page::RendererWorkerIdentity>,
     fetch_event_session_id: Option<String>,
     fetch_request_id: String,
     pending_fetch_request: PendingSubresourceFetchRequest,
@@ -20,6 +21,7 @@ pub(crate) struct TargetSubresourceFetchPauseOutput {
 impl TargetSubresourceFetchPauseOutput {
     pub(crate) fn new(
         network_output: TargetSubresourceFetchPauseNetworkOutput,
+        network_worker: Option<moli_core::page::RendererWorkerIdentity>,
         fetch_event_session_id: Option<String>,
         fetch_request_id: String,
         pending_fetch_request: PendingSubresourceFetchRequest,
@@ -27,6 +29,7 @@ impl TargetSubresourceFetchPauseOutput {
     ) -> Self {
         Self {
             network_output,
+            network_worker,
             fetch_event_session_id,
             fetch_request_id,
             pending_fetch_request,
@@ -36,6 +39,10 @@ impl TargetSubresourceFetchPauseOutput {
 
     pub(crate) fn network_output(&self) -> &TargetSubresourceFetchPauseNetworkOutput {
         &self.network_output
+    }
+
+    pub(crate) fn network_worker(&self) -> Option<&moli_core::page::RendererWorkerIdentity> {
+        self.network_worker.as_ref()
     }
 
     pub(crate) fn into_fetch_event_parts(

@@ -497,7 +497,7 @@ impl ServiceWorkerRuntimeService {
             .values()
             .cloned()
             .collect();
-        let (new_version_id, _, _, _) =
+        let (new_version_id, owner, _, _) =
             self.create_installing_version_locked(state, registration_id, &queued_job, false)?;
         state.bind_force_update_page_load_waiters(
             new_version_id,
@@ -514,6 +514,7 @@ impl ServiceWorkerRuntimeService {
             ),
         };
         let update_check_params = ServiceWorkerScriptUpdateCheckParams {
+            owner,
             main_script: load_params,
             newest_main_body_sha256: newest_body_sha256.clone(),
             imported_scripts,
@@ -552,25 +553,35 @@ impl ServiceWorkerRuntimeService {
         registration_id: ServiceWorkerRegistrationId,
         load_params: ServiceWorkerScriptUpdateCheckParams,
     ) {
-        let service_for_task = self.clone();
-        let spawn_result = std::thread::Builder::new()
-            .name(format!(
-                "service-worker-update-check-{}",
-                registration_id.as_u64()
-            ))
-            .spawn(move || {
-                let result = load_service_worker_script_update_check(&load_params);
-                service_for_task
-                    .enqueue_main_script_update_check_completed(registration_id, result);
-            });
-        if let Err(error) = spawn_result {
+        let owner = load_params.owner.clone();
+        let loading = {
+            let state = self.inner.state.lock();
+            state.pending_main_script_update_checks.get(&registration_id)
+                .filter(|pending| pending.new_version_id == owner.version_id())
+                .and_then(|_| state.versions.get(&owner.version_id()))
+                .filter(|version| version.run_owner() == owner)
+                .and_then(|version| {
+                    let ServiceWorkerVersionRunningState::Starting { host } = &version.running_state else { return None };
+                    let runner = version.launch_config.worker_context_runtime.resource_task_runner()
+                        .expect("BrowserContext must select a resource executor before checking a ServiceWorker update");
+                    Some((host.script_loader(self), runner))
+                })
+        };
+        let Some((loader, runner)) = loading else {
             self.enqueue_main_script_update_check_completed(
                 registration_id,
-                Err(ServiceWorkerScriptUpdateCheckFailure::internal(format!(
-                    "service worker script update check failed to start: {error}"
-                ))),
+                owner,
+                Err(ServiceWorkerScriptUpdateCheckFailure::stale(
+                    "service worker update run stopped".into(),
+                )),
             );
-        }
+            return;
+        };
+        let service = self.clone();
+        runner.spawn(async move {
+            let result = loader.check_update(&load_params).await;
+            service.enqueue_main_script_update_check_completed(registration_id, owner, result);
+        });
     }
 
     fn start_queued_registration_now(
@@ -747,7 +758,8 @@ impl ServiceWorkerRuntimeService {
         registration.installing_version_id = Some(version_id);
         registration.pending_unregistration = false;
         let launch_config = ServiceWorkerVersionLaunchConfig::from_queued_register_job(queued_job);
-        let host = RendererServiceWorkerHost::new_loading(&owner);
+        let host =
+            RendererServiceWorkerHost::new_loading(&owner, &launch_config.worker_context_runtime);
         let should_pause_on_start_for_devtools = self
             .should_pause_new_worker_on_start_for_devtools_locked(
                 state,

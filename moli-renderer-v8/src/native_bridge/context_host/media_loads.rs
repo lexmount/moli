@@ -376,9 +376,6 @@ impl JsContextHost {
     ) -> bool {
         self.retire_pending_media_text_track_gates(pending.id());
         if let Some(internal_id) = pending.network_request_id() {
-            let _ = self
-                .browser_context_runtime
-                .abort_service_worker_fetch(internal_id);
             let aborted = self.abort_subresource_fetch(internal_id);
             tracing::debug!(
                 sequence = pending.id().get(),

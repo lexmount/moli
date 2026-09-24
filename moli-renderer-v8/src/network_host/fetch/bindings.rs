@@ -268,7 +268,7 @@ fn window_fetch_callback_in_relevant_realm<'s>(
         &prepared.request_origin,
         &prepared.resolved_url,
         prepared.request_mode,
-        prepared.redirect_mode,
+        prepared.options.redirect_mode,
     ) {
         let message = reject_url_policy_fetch(host, prepared, error.to_string());
         rv.set(make_rejected_promise(scope, &message).into());

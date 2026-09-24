@@ -26,12 +26,35 @@ use super::{
 };
 use crate::worker::WorkerScriptResource;
 
+/// Output work from one physical Worker parent FIFO, not published facts.
+/// It shares the existing service lane with bootstrap and lifecycle decisions.
+#[derive(Debug)]
+pub(super) enum ServiceWorkerTargetOutput {
+    Network(crate::runtime::RendererNetworkObservation),
+    Console(crate::worker::WorkerConsoleMessage),
+    Exception {
+        message: String,
+        filename: String,
+        lineno: u32,
+        colno: u32,
+        event_kind: crate::worker::WorkerParentErrorEventKind,
+        phase: crate::worker::WorkerErrorPhase,
+        source: crate::worker::WorkerErrorSource,
+    },
+    InspectorMessages(Vec<crate::worker::WorkerRuntimeInspectorMessageBatch>),
+    InspectorResponse(crate::runtime::RendererRuntimeInspectorResponsePublication),
+}
+
 pub(super) struct ServiceWorkerRuntimeCompletion {
     runtime_service: WeakServiceWorkerRuntimeService,
     kind: ServiceWorkerRuntimeCompletionKind,
 }
 
 enum ServiceWorkerRuntimeCompletionKind {
+    TargetOutput {
+        owner: ServiceWorkerRunOwner,
+        output: ServiceWorkerTargetOutput,
+    },
     VersionStartCompleted {
         owner: ServiceWorkerRunOwner,
         final_script_url: String,
@@ -49,6 +72,7 @@ enum ServiceWorkerRuntimeCompletionKind {
     },
     MainScriptUpdateCheckCompleted {
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     },
     LifecycleEventCompleted {
@@ -165,6 +189,17 @@ enum ServiceWorkerRuntimeCompletionKind {
 }
 
 impl ServiceWorkerRuntimeCompletion {
+    pub(super) fn target_output(
+        runtime_service: WeakServiceWorkerRuntimeService,
+        owner: ServiceWorkerRunOwner,
+        output: ServiceWorkerTargetOutput,
+    ) -> Self {
+        Self {
+            runtime_service,
+            kind: ServiceWorkerRuntimeCompletionKind::TargetOutput { owner, output },
+        }
+    }
+
     pub(super) fn version_start_completed(
         runtime_service: WeakServiceWorkerRuntimeService,
         owner: ServiceWorkerRunOwner,
@@ -213,12 +248,14 @@ impl ServiceWorkerRuntimeCompletion {
     pub(super) fn main_script_update_check_completed(
         runtime_service: WeakServiceWorkerRuntimeService,
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     ) -> Self {
         Self {
             runtime_service,
             kind: ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
+                owner,
                 result,
             },
         }
@@ -599,6 +636,11 @@ impl ServiceWorkerRuntimeCompletion {
 
     pub(super) fn complete(self) {
         match self.kind {
+            ServiceWorkerRuntimeCompletionKind::TargetOutput { owner, output } => {
+                if let Some(service) = self.runtime_service.upgrade() {
+                    service.finish_target_output(owner, output);
+                }
+            }
             ServiceWorkerRuntimeCompletionKind::VersionStartCompleted {
                 owner,
                 final_script_url,
@@ -634,10 +676,11 @@ impl ServiceWorkerRuntimeCompletion {
             }
             ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
+                owner,
                 result,
             } => self
                 .runtime_service
-                .finish_main_script_update_check_completed(registration_id, result),
+                .finish_main_script_update_check_completed(registration_id, owner, result),
             ServiceWorkerRuntimeCompletionKind::LifecycleEventCompleted { completion } => {
                 self.runtime_service
                     .finish_lifecycle_event_completed(completion);
@@ -828,6 +871,10 @@ impl ServiceWorkerRuntimeCompletion {
 impl fmt::Debug for ServiceWorkerRuntimeCompletion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.kind {
+            ServiceWorkerRuntimeCompletionKind::TargetOutput { owner, .. } => f
+                .debug_struct("ServiceWorkerRuntimeCompletion::TargetOutput")
+                .field("owner", owner)
+                .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::VersionStartCompleted { owner, .. } => f
                 .debug_struct("ServiceWorkerRuntimeCompletion::VersionStartCompleted")
                 .field("owner", owner)
@@ -847,10 +894,12 @@ impl fmt::Debug for ServiceWorkerRuntimeCompletion {
                 .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::MainScriptUpdateCheckCompleted {
                 registration_id,
+                owner,
                 result,
             } => f
                 .debug_struct("ServiceWorkerRuntimeCompletion::MainScriptUpdateCheckCompleted")
                 .field("registration_id", registration_id)
+                .field("owner", owner)
                 .field("result_is_ok", &result.is_ok())
                 .finish_non_exhaustive(),
             ServiceWorkerRuntimeCompletionKind::LifecycleEventCompleted { completion } => f

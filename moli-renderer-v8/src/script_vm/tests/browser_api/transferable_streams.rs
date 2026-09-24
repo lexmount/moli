@@ -97,7 +97,7 @@ async fn transferred_streams_absent_from_message_data_release_unclaimed_channels
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("unclaimed transfer cleanup should advance page tasks");
     }
@@ -205,7 +205,7 @@ async fn transferred_writable_stream_forwards_writes_and_close_with_backpressure
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance transferred writable messages");
     }
@@ -263,7 +263,7 @@ async fn transferred_transform_stream_materializes_both_remote_endpoints() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance transferred transform messages");
     }
@@ -347,7 +347,7 @@ async fn transferred_readable_stream_ids_follow_transfer_list_order() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver ordered ReadableStreams");
     }
@@ -398,7 +398,7 @@ async fn window_post_message_preserves_message_event_ports_with_readable_stream_
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver combined transfer");
     }
@@ -465,7 +465,7 @@ async fn window_post_message_transferred_readable_stream_forwards_later_chunks()
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance transferred ReadableStream messages");
     }
@@ -528,7 +528,7 @@ async fn retransferred_readable_stream_preserves_each_transfer_channel() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance both ReadableStream transfer channels");
     }
@@ -617,7 +617,7 @@ async fn terminating_echo_worker_does_not_error_retransferred_readable_stream() 
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should advance worker and stream tasks");
     }
@@ -678,7 +678,7 @@ async fn window_post_message_transferred_readable_stream_serializes_chunks_on_de
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver transferred ReadableStream");
     }
@@ -694,7 +694,7 @@ async fn window_post_message_transferred_readable_stream_serializes_chunks_on_de
     );
     for _ in 0..10 {
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should flush without reading transferred chunk");
     }
@@ -722,7 +722,7 @@ __transferredStreamReader.read().then(
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver transferred ReadableStream chunk");
     }
@@ -778,7 +778,7 @@ async fn transferred_readable_stream_cancel_rejects_uncloneable_reason() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver transferred stream cancel messages");
     }
@@ -829,7 +829,7 @@ async fn transferred_readable_stream_propagates_source_error() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver transferred source error");
     }
@@ -882,7 +882,7 @@ async fn transferred_readable_stream_forwards_cloneable_cancel_reason_once() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver transferred cancel reason");
     }
@@ -935,7 +935,7 @@ async fn transferred_readable_stream_chunk_clone_failure_errors_receiver() {
             break;
         }
         let _ = vm
-            .run_one_oldest_ready_page_task_executor_turn(&loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("wait driver should deliver transferred chunk clone error");
     }

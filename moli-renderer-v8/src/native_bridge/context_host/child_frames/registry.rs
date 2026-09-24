@@ -132,7 +132,7 @@ impl JsContextHost {
                 let frame_id = existing
                     .as_ref()
                     .map(|entry| entry.frame_id().to_owned())
-                    .unwrap_or_else(|| self.next_child_browsing_context_frame_id());
+                    .unwrap_or_else(Self::next_child_browsing_context_frame_id);
                 let live_bootstrap = existing
                     .as_ref()
                     .map(|entry| entry.live_bootstrap())
@@ -406,10 +406,6 @@ impl JsContextHost {
                         committed_navigation_entry_seed,
                         cached_snapshot,
                         document_policy_container,
-                        completed_document_network: existing.as_ref().and_then(|entry| {
-                            entry
-                                .completed_document_network_for_refresh(attribute_bootstrap_changed)
-                        }),
                         completed_frame_owner_resource_timing: existing.as_ref().and_then(
                             |entry| {
                                 entry.completed_frame_owner_resource_timing_for_refresh(
@@ -806,15 +802,8 @@ impl JsContextHost {
         for handle in stale_meta_refresh_handles {
             self.cancel_child_meta_refresh_navigation(handle);
         }
-        let stale_shared_worker_client_handles = self
-            .child_shared_worker_client_owner_ids
-            .keys()
-            .copied()
-            .filter(|handle| !live_handles.contains(handle))
-            .collect::<Vec<_>>();
-        for handle in stale_shared_worker_client_handles {
-            self.disconnect_shared_worker_clients_for_child_context(handle);
-        }
+        self.shared_worker_clients
+            .disconnect_inactive_child_contexts(&live_handles);
         let mut stale_registry_context_handles = self
             .child_browsing_context_document_handles
             .keys()

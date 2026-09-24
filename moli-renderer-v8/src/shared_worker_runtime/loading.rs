@@ -1,7 +1,7 @@
 use moli_fetch::{FetchCancelHandle, Request, RequestCredentialsMode, ScriptFetchRequestMetadata};
 use moli_shared_worker::{
-    SharedWorkerClientOwnerId, SharedWorkerCredentialsMode, SharedWorkerDescriptor,
-    SharedWorkerKey, SharedWorkerSameSiteCookies, SharedWorkerScriptType,
+    SharedWorkerCredentialsMode, SharedWorkerDescriptor, SharedWorkerKey,
+    SharedWorkerSameSiteCookies, SharedWorkerScriptType,
 };
 use url::Url;
 
@@ -45,8 +45,7 @@ pub(super) struct SharedWorkerLoadedScript {
 
 #[derive(Clone, Debug)]
 pub(super) enum SharedWorkerScriptLoadKind {
-    Ready(SharedWorkerLoadedScript),
-    Blob { script_url: Url },
+    Local { script_url: Url },
     Fetch(Box<SharedWorkerScriptFetch>),
     Failure { message: String },
 }
@@ -54,7 +53,6 @@ pub(super) enum SharedWorkerScriptLoadKind {
 #[derive(Clone, Debug)]
 pub(super) struct SharedWorkerScriptFetch {
     pub(super) request_client: ResourceRequestClient,
-    pub(super) task_runner: crate::network::RendererResourceTaskRunner,
     pub(super) script_url: Url,
     pub(super) initiator_url: Url,
     pub(super) request_policy: SharedWorkerScriptRequestPolicy,
@@ -67,7 +65,6 @@ pub(crate) struct SharedWorkerLaunchParams {
     pub(super) launch_context: SharedWorkerLaunchContext,
     pub(super) client_port_id: MessagePortId,
     pub(super) worker_port_id: MessagePortId,
-    pub(super) client_owner_id: SharedWorkerClientOwnerId,
     pub(super) client_event_realm: RendererPageSharedWorkerClientEventRealmSender,
     pub(super) worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
     pub(super) parent_service_worker_client_id: Option<ServiceWorkerClientId>,
@@ -112,7 +109,6 @@ impl SharedWorkerLaunchParams {
         launch_context: SharedWorkerLaunchContext,
         client_port_id: MessagePortId,
         worker_port_id: MessagePortId,
-        client_owner_id: SharedWorkerClientOwnerId,
         parent_service_worker_client_id: Option<ServiceWorkerClientId>,
         client_event_realm: RendererPageSharedWorkerClientEventRealmSender,
         worker_host_bridge_sender: RendererWorkerHostBridgeEventSender,
@@ -123,7 +119,6 @@ impl SharedWorkerLaunchParams {
             launch_context,
             client_port_id,
             worker_port_id,
-            client_owner_id,
             client_event_realm,
             worker_host_bridge_sender,
             parent_service_worker_client_id,
@@ -356,24 +351,14 @@ impl SharedWorkerLoadedScript {
 }
 
 impl SharedWorkerScriptLoad {
-    pub(crate) fn ready(script_url: String, script_source: String) -> Self {
+    pub(crate) fn local(script_url: Url) -> Self {
         Self {
-            kind: SharedWorkerScriptLoadKind::Ready(SharedWorkerLoadedScript::new(
-                script_url,
-                script_source,
-            )),
-        }
-    }
-
-    pub(crate) fn blob(script_url: Url) -> Self {
-        Self {
-            kind: SharedWorkerScriptLoadKind::Blob { script_url },
+            kind: SharedWorkerScriptLoadKind::Local { script_url },
         }
     }
 
     pub(crate) fn fetch(
         request_client: ResourceRequestClient,
-        task_runner: crate::network::RendererResourceTaskRunner,
         script_url: Url,
         initiator_url: Url,
         request_policy: SharedWorkerScriptRequestPolicy,
@@ -381,7 +366,6 @@ impl SharedWorkerScriptLoad {
         Self {
             kind: SharedWorkerScriptLoadKind::Fetch(Box::new(SharedWorkerScriptFetch {
                 request_client,
-                task_runner,
                 script_url,
                 initiator_url,
                 request_policy,
@@ -404,8 +388,8 @@ impl SharedWorkerScriptLoad {
     fn can_reserve_service_worker_worker_client(&self) -> bool {
         matches!(
             self.kind,
-            SharedWorkerScriptLoadKind::Blob { .. } | SharedWorkerScriptLoadKind::Fetch(_)
-        )
+            SharedWorkerScriptLoadKind::Local { ref script_url } if script_url.scheme() == "blob"
+        ) || matches!(self.kind, SharedWorkerScriptLoadKind::Fetch(_))
     }
 }
 
@@ -418,6 +402,8 @@ pub(super) async fn fetch_shared_worker_script_source_async(
     service_worker_runtime: Option<ServiceWorkerRuntimeService>,
     reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     cancel_handle: FetchCancelHandle,
+    cancel_wait: tokio::sync::oneshot::Receiver<()>,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
 ) -> Result<SharedWorkerLoadedScript, String> {
     if cancel_handle.is_cancelled() {
         return Err("SharedWorker script load canceled.".to_owned());
@@ -428,86 +414,51 @@ pub(super) async fn fetch_shared_worker_script_source_async(
     if let (Some(service_worker_runtime), Some(client_id)) = (
         service_worker_runtime.as_ref(),
         reserved_service_worker_client_id,
-    ) && let Some(response) = service_worker_runtime
-        .fetch_main_resource_for_worker_client(
-            client_id,
-            &request,
-            request_client,
-            resource_task_runner,
-            ServiceWorkerRequestDestination::SharedWorker,
-            cancel_handle.clone(),
-        )
-        .await?
-    {
-        return loaded_shared_worker_script_from_navigation_response(
-            response,
-            initiator_url,
-            script_url,
-        );
+    ) {
+        let response = tokio::select! {
+            result = async {
+                let response = service_worker_runtime.fetch_main_resource_for_worker_client(
+                    client_id, &request, request_client, resource_task_runner,
+                    ServiceWorkerRequestDestination::SharedWorker, cancel_handle.clone(),
+                ).await?;
+                let Some(response) = response else { return Ok(None) };
+                let resource = crate::network::ResourceResponseStream::with_disk_pool(network.clone(), request_client.disk_pool());
+                let response = resource.collect(response).await.inspect_err(|error| network.failed(error))
+                    .map_err(|error| format!("Failed to load shared worker script `{request_url}`: {error}"))?
+                    .into_navigation_response()?;
+                let result = loaded_shared_worker_script_from_navigation_response(
+                    &response, initiator_url, script_url,
+                );
+                network.main_script_response(&response, result).map(Some)
+            } => result,
+            _ = cancel_wait => Err("SharedWorker script load canceled.".into()),
+        }?;
+        if let Some(response) = response {
+            return Ok(response);
+        }
     }
     if cancel_handle.is_cancelled() {
         return Err("SharedWorker script load canceled.".to_owned());
     }
     let response = request_client
-        .fetch_text_stream_with_cancel(request, cancel_handle)
+        .fetch_observed_script_text_with_cancel(request, cancel_handle, network.as_ref())
         .await
-        .map_err(|error| format!("Failed to load shared worker script `{request_url}`: {error}"))?;
-    loaded_shared_worker_script_from_fetch_response(response, initiator_url, script_url)
-}
-
-fn loaded_shared_worker_script_from_fetch_response(
-    response: moli_fetch::Response,
-    initiator_url: &Url,
-    script_url: &Url,
-) -> Result<SharedWorkerLoadedScript, String> {
-    crate::worker::ensure_worker_script_redirect_chain_same_origin(
-        initiator_url,
-        &response.redirect_chain,
-        &response.final_url,
-    )
-    .map_err(|message| format!("Failed to load shared worker script `{script_url}`: {message}"))?;
-    moli_fetch::ensure_http_status_success(response.final_url.as_str(), response.status, false)
-        .map_err(|error| error.to_string())?;
-    crate::worker::ensure_worker_script_mime_acceptable(
-        &response.final_url,
-        &response.headers,
-        response.body_bytes(),
-    )?;
-    let response_referrer_policy = response_referrer_policy(&response.headers);
-    let response_policy_context =
-        worker_policy_context_from_response(&response.final_url, &response.headers);
-    let response_content_security_policies =
-        crate::content_security_policy::content_security_policy_headers(&response.headers);
-    let response_content_security_report_only_policies =
-        crate::content_security_policy::content_security_policy_report_only_headers(
-            &response.headers,
-        );
-    let response_content_security_reporting_endpoints =
-        crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
-            &response.headers,
-            &response.final_url,
-        );
-    let (head, body) = response.into_text_parts();
-    let mut final_url = head.final_url;
-    final_url.set_fragment(script_url.fragment());
-    Ok(SharedWorkerLoadedScript::new(final_url.to_string(), body)
-        .with_response_referrer_policy(response_referrer_policy)
-        .with_response_policy_context(response_policy_context)
-        .with_response_content_security_policies(response_content_security_policies)
-        .with_response_content_security_report_only_policies(
-            response_content_security_report_only_policies,
-        )
-        .with_response_content_security_reporting_endpoints(
-            response_content_security_reporting_endpoints,
-        ))
+        .map_err(|error| {
+            network.failed(&error);
+            format!("Failed to load shared worker script `{request_url}`: {error}")
+        })?;
+    let response = NavigationResponse::from(response);
+    let result =
+        loaded_shared_worker_script_from_navigation_response(&response, initiator_url, script_url);
+    network.main_script_response(&response, result)
 }
 
 fn loaded_shared_worker_script_from_navigation_response(
-    response: NavigationResponse,
+    response: &NavigationResponse,
     initiator_url: &Url,
     script_url: &Url,
 ) -> Result<SharedWorkerLoadedScript, String> {
-    let (head, body, body_bytes) = response.into_parts();
+    let head = response.head();
     crate::worker::ensure_worker_script_redirect_chain_same_origin(
         initiator_url,
         &head.redirect_chain,
@@ -524,7 +475,7 @@ fn loaded_shared_worker_script_from_navigation_response(
     crate::worker::ensure_worker_script_mime_acceptable(
         &head.final_url,
         &head.headers,
-        &body_bytes,
+        response.body_bytes(),
     )?;
     let response_referrer_policy = response_referrer_policy(&head.headers);
     let response_policy_context =
@@ -540,16 +491,18 @@ fn loaded_shared_worker_script_from_navigation_response(
         );
     let mut final_url = head.final_url;
     final_url.set_fragment(script_url.fragment());
-    Ok(SharedWorkerLoadedScript::new(final_url.to_string(), body)
-        .with_response_referrer_policy(response_referrer_policy)
-        .with_response_policy_context(response_policy_context)
-        .with_response_content_security_policies(response_content_security_policies)
-        .with_response_content_security_report_only_policies(
-            response_content_security_report_only_policies,
-        )
-        .with_response_content_security_reporting_endpoints(
-            response_content_security_reporting_endpoints,
-        ))
+    Ok(
+        SharedWorkerLoadedScript::new(final_url.to_string(), response.body_text().to_owned())
+            .with_response_referrer_policy(response_referrer_policy)
+            .with_response_policy_context(response_policy_context)
+            .with_response_content_security_policies(response_content_security_policies)
+            .with_response_content_security_report_only_policies(
+                response_content_security_report_only_policies,
+            )
+            .with_response_content_security_reporting_endpoints(
+                response_content_security_reporting_endpoints,
+            ),
+    )
 }
 
 fn shared_worker_script_request(
@@ -590,16 +543,32 @@ pub(super) fn shared_worker_script_credentials_mode(
     }
 }
 
-pub(super) fn load_shared_worker_blob_script_source(
+pub(super) fn load_shared_worker_local_script(
     script_url: &Url,
+    network: &std::sync::Arc<crate::network::ResourceTransfer>,
 ) -> Result<SharedWorkerLoadedScript, String> {
     let mut resource_url = script_url.clone();
     resource_url.set_fragment(None);
-    crate::blob::object_url_body_and_type(resource_url.as_str())
-        .map(|(body, _)| SharedWorkerLoadedScript::new(script_url.to_string(), body))
-        .ok_or_else(|| {
-            format!("Failed to load shared worker script `{script_url}`: blob URL is unavailable.")
-        })
+    if resource_url.scheme() == "data" {
+        crate::worker::decode_data_url_script_source(
+            &resource_url,
+            "Failed to load shared worker script",
+        )?;
+    }
+    let response = crate::network_host::local_url_response(&resource_url).ok_or_else(|| {
+        format!(
+            "Failed to load shared worker script `{script_url}`: {} URL is unavailable.",
+            script_url.scheme()
+        )
+    })?;
+    let response = NavigationResponse::from(response);
+    network.main_script_response(
+        &response,
+        Ok(SharedWorkerLoadedScript::new(
+            script_url.to_string(),
+            response.body_text().to_owned(),
+        )),
+    )
 }
 
 fn response_referrer_policy(headers: &[(String, Vec<u8>)]) -> Option<String> {

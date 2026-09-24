@@ -10,10 +10,15 @@ mod inspector_state;
 mod layout;
 mod navigation_history;
 mod navigator_overrides;
+mod output_history;
 mod renderer_transport_memory;
 mod session_history;
 
 pub use session_history::{SessionHistoryCommit, SessionHistorySeed, SessionHistoryUpdate};
+mod response_body_source;
+
+pub use output_history::OutputHistory;
+pub use response_body_source::{SubresourceResponseBodyRead, SubresourceResponseBodySource};
 
 use std::{
     borrow::Cow,
@@ -43,7 +48,7 @@ const SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT: usize = 1024 * 1024;
 pub use document_activity::DocumentActivity;
 pub use inspector_identity::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
-    RendererCallIdOutOfRange, RendererDevToolsAgentToken, RendererDevToolsCommandId,
+    RendererCallIdOutOfRange, RendererCommandId, RendererDevToolsAgentToken,
     RendererInspectorResponseDelivery,
 };
 pub use layout::LayoutPolicy;
@@ -571,7 +576,7 @@ pub struct ScriptExecutionReport {
     pub runs: Vec<ScriptRun>,
     globals: Arc<BTreeMap<String, JsValueSnapshot>>,
     globals_snapshot_state: ScriptGlobalsSnapshotState,
-    observable_output_items: Vec<ScriptObservableOutputItem>,
+    observable_output_items: OutputHistory<ScriptObservableOutputItem>,
     console_messages: Vec<String>,
     lifecycle_errors: Vec<String>,
     inspector_issues: Vec<InspectorIssueSnapshot>,
@@ -583,9 +588,9 @@ pub struct ScriptExecutionReport {
 
 #[derive(Debug, Clone, Default)]
 struct StagedSubresourceReportState {
-    requests: BTreeMap<u64, SubresourceRequestStarted>,
-    responses: BTreeMap<u64, SubresourceResponseStarted>,
-    bodies: BTreeMap<u64, SubresourceBodyFinished>,
+    requests: BTreeMap<u64, Arc<SubresourceRequestStarted>>,
+    responses: BTreeMap<u64, Arc<SubresourceResponseStarted>>,
+    bodies: BTreeMap<u64, Arc<SubresourceBodyFinished>>,
     completed_handles: BTreeSet<u64>,
 }
 
@@ -597,11 +602,14 @@ pub struct ScriptNetworkOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptNetworkOutputItem {
     SubresourceNetworkRecord(Box<SubresourceNetworkRecord>),
-    SubresourceRequestStarted(Box<SubresourceRequestStarted>),
-    SubresourceResponseStarted(Box<SubresourceResponseStarted>),
+    SubresourceRequestStarted(Arc<SubresourceRequestStarted>),
+    /// Accepted request overrides before transport; the handle and admission
+    /// remain unchanged. Recovery retains the current metadata, not this history.
+    SubresourceRequestUpdated(Arc<SubresourceRequestStarted>),
+    SubresourceResponseStarted(Arc<SubresourceResponseStarted>),
     SubresourceDataReceived(SubresourceDataReceived),
     SubresourceEventSourceMessageReceived(Box<SubresourceEventSourceMessageReceived>),
-    SubresourceBodyFinished(Box<SubresourceBodyFinished>),
+    SubresourceBodyFinished(Arc<SubresourceBodyFinished>),
     WebSocketNetworkEvent(WebSocketNetworkEvent),
     WebSocketLifecycleEvent(WebSocketLifecycleEvent),
 }
@@ -609,9 +617,6 @@ pub enum ScriptNetworkOutputItem {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScriptObservableOutput {
     items: Vec<ScriptObservableOutputItem>,
-    console_messages: Vec<String>,
-    lifecycle_errors: Vec<String>,
-    inspector_issues: Vec<InspectorIssueSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -805,18 +810,7 @@ impl ScriptObservableOutput {
     }
 
     pub fn push_item(&mut self, item: ScriptObservableOutputItem) {
-        self.items.push(item.clone());
-        match item {
-            ScriptObservableOutputItem::ConsoleMessage(message) => {
-                self.console_messages.push(message);
-            }
-            ScriptObservableOutputItem::LifecycleError(error) => {
-                self.lifecycle_errors.push(error);
-            }
-            ScriptObservableOutputItem::InspectorIssue(issue) => {
-                self.inspector_issues.push(*issue);
-            }
-        }
+        self.items.push(item);
     }
 }
 
@@ -901,7 +895,11 @@ impl ScriptExecutionReport {
     }
 
     pub fn observable_output_items(&self) -> &[ScriptObservableOutputItem] {
-        &self.observable_output_items
+        self.observable_output_items.as_slice()
+    }
+
+    pub fn observable_output_end(&self) -> usize {
+        self.observable_output_items.end()
     }
 
     pub fn extend_observable_output(&mut self, output: ScriptObservableOutput) {
@@ -917,7 +915,28 @@ impl ScriptExecutionReport {
     }
 
     fn push_observable_output_item(&mut self, item: ScriptObservableOutputItem) {
-        self.observable_output_items.push(item.clone());
+        let payload_bytes = match &item {
+            ScriptObservableOutputItem::ConsoleMessage(text)
+            | ScriptObservableOutputItem::LifecycleError(text) => text.capacity(),
+            ScriptObservableOutputItem::InspectorIssue(issue) => {
+                issue.renderer_transport_charge_bytes()
+            }
+        };
+        // Include the derived report views in the same retention budget.
+        let evicted = self
+            .observable_output_items
+            .push(item.clone(), payload_bytes.saturating_mul(2));
+        let (mut consoles, mut errors, mut issues) = (0, 0, 0);
+        for old in evicted {
+            match old {
+                ScriptObservableOutputItem::ConsoleMessage(_) => consoles += 1,
+                ScriptObservableOutputItem::LifecycleError(_) => errors += 1,
+                ScriptObservableOutputItem::InspectorIssue(_) => issues += 1,
+            }
+        }
+        self.console_messages.drain(..consoles);
+        self.lifecycle_errors.drain(..errors);
+        self.inspector_issues.drain(..issues);
         match item {
             ScriptObservableOutputItem::ConsoleMessage(message) => {
                 self.console_messages.push(message);
@@ -946,13 +965,14 @@ impl ScriptExecutionReport {
                 }
                 self.subresource_network_records.push(*record);
             }
-            ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
+            ScriptNetworkOutputItem::SubresourceRequestStarted(request)
+            | ScriptNetworkOutputItem::SubresourceRequestUpdated(request) => {
                 let handle = request.handle().get();
                 let state = self.staged_subresource_report_state_mut();
                 if state.completed_handles.contains(&handle) {
                     return;
                 }
-                state.requests.insert(handle, *request);
+                state.requests.insert(handle, request);
                 self.try_materialize_staged_subresource_record(handle);
             }
             ScriptNetworkOutputItem::SubresourceResponseStarted(response) => {
@@ -961,7 +981,7 @@ impl ScriptExecutionReport {
                 if state.completed_handles.contains(&handle) {
                     return;
                 }
-                state.responses.insert(handle, *response);
+                state.responses.insert(handle, response);
                 self.try_materialize_staged_subresource_record(handle);
             }
             ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
@@ -970,7 +990,7 @@ impl ScriptExecutionReport {
                 if state.completed_handles.contains(&handle) {
                     return;
                 }
-                state.bodies.insert(handle, *body);
+                state.bodies.insert(handle, body);
                 self.try_materialize_staged_subresource_record(handle);
             }
             ScriptNetworkOutputItem::SubresourceDataReceived(_)
@@ -1000,7 +1020,7 @@ impl ScriptExecutionReport {
             let Some(body) = state.bodies.get(&handle) else {
                 return;
             };
-            let response = state.responses.get(&handle);
+            let response = state.responses.get(&handle).map(Arc::as_ref);
             let Some(record) =
                 SubresourceNetworkRecord::from_staged_lifecycle(request, response, body)
             else {
@@ -1091,6 +1111,19 @@ struct SubresourceNetworkRecordInner {
 pub struct SubresourceNetworkRequestHandle(u64);
 
 impl SubresourceNetworkRequestHandle {
+    /// Allocate a request identity before crossing an owner/thread boundary.
+    pub fn allocate() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self(
+            NEXT.fetch_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |value| value.checked_add(1),
+            )
+            .expect("network request identity exhausted"),
+        )
+    }
+
     pub fn new(value: u64) -> Self {
         Self(value)
     }
@@ -1104,6 +1137,7 @@ impl SubresourceNetworkRequestHandle {
 pub struct SubresourceRequestStarted {
     handle: SubresourceNetworkRequestHandle,
     frame_id: Option<String>,
+    navigation_loader_id: Option<String>,
     document_url: Url,
     url: Url,
     method: String,
@@ -1111,6 +1145,7 @@ pub struct SubresourceRequestStarted {
     request_body: Option<String>,
     request_body_bytes: Option<Vec<u8>>,
     keepalive: bool,
+    worker_main_script: bool,
     resource_type: SubresourceResourceType,
     request_initiator_type: SubresourceRequestInitiatorType,
     request_cookie_report: Option<StoredCookieQueryReport>,
@@ -1125,6 +1160,7 @@ pub struct SubresourceResponseStarted {
     status_text: Option<String>,
     response_headers: Vec<(String, Vec<u8>)>,
     cookie_set_reports: Vec<StoredCookieSetReport>,
+    request_cookie_report: Option<StoredCookieQueryReport>,
     from_cache: bool,
     network_request_headers: Option<Vec<(String, String)>>,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
@@ -1150,6 +1186,7 @@ pub struct SubresourceBodyFinished {
     handle: SubresourceNetworkRequestHandle,
     result: SubresourceBodyFinishedResult,
     data_was_streamed: bool,
+    failure_context: Option<Arc<moli_fetch::NetworkFetchFailureContext>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1205,6 +1242,7 @@ impl SubresourceRequestStarted {
         Self {
             handle,
             frame_id,
+            navigation_loader_id: None,
             document_url,
             url,
             method,
@@ -1212,6 +1250,7 @@ impl SubresourceRequestStarted {
             request_body,
             request_body_bytes,
             keepalive: false,
+            worker_main_script: false,
             resource_type,
             request_initiator_type,
             request_cookie_report,
@@ -1220,6 +1259,26 @@ impl SubresourceRequestStarted {
 
     pub fn handle(&self) -> SubresourceNetworkRequestHandle {
         self.handle
+    }
+
+    /// A Worker constructor's outside-settings request, whose protocol
+    /// notifications span the creator and the newly created Worker target.
+    pub fn with_worker_main_script(mut self) -> Self {
+        self.worker_main_script = true;
+        self
+    }
+
+    pub fn is_worker_main_script(&self) -> bool {
+        self.worker_main_script
+    }
+
+    pub fn with_navigation_loader_id(mut self, loader_id: String) -> Self {
+        self.navigation_loader_id = Some(loader_id);
+        self
+    }
+
+    pub fn navigation_loader_id(&self) -> Option<&str> {
+        self.navigation_loader_id.as_deref()
     }
 
     pub fn with_request_body_bytes(mut self, request_body_bytes: Option<Vec<u8>>) -> Self {
@@ -1279,6 +1338,14 @@ impl SubresourceRequestStarted {
 }
 
 impl SubresourceResponseStarted {
+    pub fn with_request_cookie_report(mut self, report: Option<StoredCookieQueryReport>) -> Self {
+        self.request_cookie_report = report;
+        self
+    }
+
+    pub fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
+        self.request_cookie_report.as_ref()
+    }
     pub fn new(
         handle: SubresourceNetworkRequestHandle,
         redirect_chain: Vec<NavigationRedirect>,
@@ -1295,6 +1362,7 @@ impl SubresourceResponseStarted {
             status_text: None,
             response_headers,
             cookie_set_reports,
+            request_cookie_report: None,
             from_cache: false,
             network_request_headers: None,
             negotiated_http_version: None,
@@ -1432,6 +1500,7 @@ impl SubresourceBodyFinished {
             handle,
             result: SubresourceBodyFinishedResult::Ready(body),
             data_was_streamed: false,
+            failure_context: None,
         }
     }
 
@@ -1443,6 +1512,7 @@ impl SubresourceBodyFinished {
             handle,
             result: SubresourceBodyFinishedResult::Ready(body),
             data_was_streamed: true,
+            failure_context: None,
         }
     }
 
@@ -1451,6 +1521,7 @@ impl SubresourceBodyFinished {
             handle,
             result: SubresourceBodyFinishedResult::Failed(error_text),
             data_was_streamed: false,
+            failure_context: None,
         }
     }
 
@@ -1466,7 +1537,23 @@ impl SubresourceBodyFinished {
                 partial_body,
             },
             data_was_streamed: false,
+            failure_context: None,
         }
+    }
+
+    pub fn failed_with_network_context(
+        handle: SubresourceNetworkRequestHandle,
+        error_text: String,
+        context: Arc<moli_fetch::NetworkFetchFailureContext>,
+    ) -> Self {
+        Self {
+            failure_context: Some(context),
+            ..Self::failed(handle, error_text)
+        }
+    }
+
+    pub fn failure_context(&self) -> Option<&moli_fetch::NetworkFetchFailureContext> {
+        self.failure_context.as_deref()
     }
 
     pub fn handle(&self) -> SubresourceNetworkRequestHandle {
@@ -1514,41 +1601,8 @@ impl PooledSubresourceResponseBody {
         Ok(bytes)
     }
 
-    fn read_exact_at(&self, mut offset: usize, mut buffer: &mut [u8]) -> io::Result<()> {
-        for chunk in &self.chunks {
-            if buffer.is_empty() {
-                break;
-            }
-            if offset >= chunk.len() {
-                offset -= chunk.len();
-                continue;
-            }
-            let len = buffer.len().min(chunk.len() - offset);
-            chunk.read_exact_at(offset, &mut buffer[..len])?;
-            buffer = &mut buffer[len..];
-            offset = 0;
-        }
-
-        if !buffer.is_empty() {
-            let trailing = self.trailing_bytes.get(offset..).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "pooled resource body ended before its recorded length",
-                )
-            })?;
-            let len = buffer.len().min(trailing.len());
-            buffer[..len].copy_from_slice(&trailing[..len]);
-            buffer = &mut buffer[len..];
-        }
-
-        if buffer.is_empty() {
-            Ok(())
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "pooled resource body ended before its recorded length",
-            ))
-        }
+    fn read_exact_at(&self, offset: usize, buffer: &mut [u8]) -> io::Result<()> {
+        read_pooled_body_exact_at(&self.chunks, &self.trailing_bytes, offset, buffer)
     }
 
     fn write_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
@@ -1556,6 +1610,48 @@ impl PooledSubresourceResponseBody {
             chunk.write_to(writer)?;
         }
         writer.write_all(&self.trailing_bytes)
+    }
+}
+
+fn read_pooled_body_exact_at(
+    chunks: &[DiskData],
+    trailing_bytes: &[u8],
+    mut offset: usize,
+    mut buffer: &mut [u8],
+) -> io::Result<()> {
+    for chunk in chunks {
+        if buffer.is_empty() {
+            break;
+        }
+        if offset >= chunk.len() {
+            offset -= chunk.len();
+            continue;
+        }
+        let len = buffer.len().min(chunk.len() - offset);
+        chunk.read_exact_at(offset, &mut buffer[..len])?;
+        buffer = &mut buffer[len..];
+        offset = 0;
+    }
+
+    if !buffer.is_empty() {
+        let trailing = trailing_bytes.get(offset..).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "pooled resource body ended before its recorded length",
+            )
+        })?;
+        let len = buffer.len().min(trailing.len());
+        buffer[..len].copy_from_slice(&trailing[..len]);
+        buffer = &mut buffer[len..];
+    }
+
+    if buffer.is_empty() {
+        Ok(())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "pooled resource body ended before its recorded length",
+        ))
     }
 }
 
@@ -1588,6 +1684,7 @@ pub struct SubresourceResponseBodyWriter {
     disk_pool: Option<DiskPool>,
     disk_chunks: Vec<DiskData>,
     disk_write_failed: bool,
+    image_manager: Option<moli_parkable_image::ParkableImageManager>,
 }
 
 impl Default for SubresourceResponseBodyWriter {
@@ -1597,6 +1694,14 @@ impl Default for SubresourceResponseBodyWriter {
 }
 
 impl SubresourceResponseBodyWriter {
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn new(memory_limit: usize) -> Self {
         Self::with_memory_limit_and_disk_pool(memory_limit, None)
     }
@@ -1618,6 +1723,14 @@ impl SubresourceResponseBodyWriter {
             disk_pool,
             disk_chunks: Vec::new(),
             disk_write_failed: false,
+            image_manager: None,
+        }
+    }
+
+    pub fn for_image(manager: moli_parkable_image::ParkableImageManager) -> Self {
+        Self {
+            image_manager: Some(manager),
+            ..Self::default()
         }
     }
 
@@ -1657,7 +1770,23 @@ impl SubresourceResponseBodyWriter {
         }
     }
 
+    /// Read received bytes without sealing the writer or materializing its disk chunks.
+    pub fn read_range(&self, offset: usize, size: usize) -> io::Result<Vec<u8>> {
+        let end = offset.saturating_add(size).min(self.len);
+        if offset >= end {
+            return Ok(Vec::new());
+        }
+        let mut bytes = vec![0; end - offset];
+        read_pooled_body_exact_at(&self.disk_chunks, &self.memory, offset, &mut bytes)?;
+        Ok(bytes)
+    }
+
     pub fn finish(mut self) -> SubresourceResponseBody {
+        if let Some(manager) = self.image_manager.take() {
+            return SubresourceResponseBody::from_parkable_image(
+                manager.from_frozen_bytes(std::mem::take(&mut self.memory)),
+            );
+        }
         if !self.disk_chunks.is_empty() {
             if !self.memory.is_empty() && !self.disk_write_failed {
                 let _ = self.flush_memory_to_disk();
@@ -1705,8 +1834,15 @@ impl SubresourceResponseBody {
         }
     }
 
-    /// Builds a response body that shares the encoded image backing.
-    /// Cloning this body does not clone bytes.
+    /// Returns shared image storage without materializing its bytes.
+    pub fn parkable_image(&self) -> Option<&ParkableImage> {
+        match self.inner.as_ref() {
+            SubresourceResponseBodyInner::ParkableImage(image) => Some(image),
+            _ => None,
+        }
+    }
+
+    /// Builds a body sharing the encoded image backing without copying bytes.
     pub fn from_parkable_image(image: ParkableImage) -> Self {
         Self {
             inner: Arc::new(SubresourceResponseBodyInner::ParkableImage(image)),
@@ -2073,7 +2209,10 @@ impl SubresourceNetworkRecord {
                     request.request_headers.clone(),
                     request.request_body.clone(),
                     request.resource_type,
-                    request.request_cookie_report.clone(),
+                    response
+                        .request_cookie_report
+                        .clone()
+                        .or_else(|| request.request_cookie_report.clone()),
                     response.redirect_chain.clone(),
                     response.final_url.clone(),
                     response.status,
@@ -2107,7 +2246,9 @@ impl SubresourceNetworkRecord {
                         request_body_bytes: request.request_body_bytes.clone(),
                         resource_type: request.resource_type,
                         request_initiator_type: request.request_initiator_type,
-                        request_cookie_report: request.request_cookie_report.clone(),
+                        request_cookie_report: response
+                            .and_then(|response| response.request_cookie_report.clone())
+                            .or_else(|| request.request_cookie_report.clone()),
                         outcome: SubresourceNetworkOutcome::Failure {
                             error_text: error_text.clone(),
                         },
@@ -2419,9 +2560,8 @@ pub struct PendingSubresourceResponseInfo {
     pub network_request_headers: Option<Vec<(String, String)>>,
     pub response_status: u16,
     pub response_headers: Vec<(String, Vec<u8>)>,
-    /// Exact response bytes plus the lossy compatibility text view needed while
-    /// a response-stage Fetch pause is held.
-    pub response_body: SubresourceResponseBody,
+    /// Read access to the actual body, which may still be arriving while paused.
+    pub response_body: SubresourceResponseBodySource,
     pub from_cache: bool,
 }
 
@@ -2437,11 +2577,6 @@ pub struct PendingSubresourceAuthInfo {
     pub network_request_headers: Option<Vec<(String, String)>>,
     pub challenge: SubresourceAuthChallenge,
     pub intercept_response: bool,
-    pub response_final_url: Url,
-    pub response_status: u16,
-    pub response_headers: Vec<(String, Vec<u8>)>,
-    pub response_body: SubresourceResponseBody,
-    pub response_from_cache: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2594,6 +2729,7 @@ pub enum PendingSubresourceContinueEvent {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SubresourceResourceType {
+    Document,
     Script,
     Stylesheet,
     Image,
@@ -2646,7 +2782,8 @@ impl OptionalResourceFetchMask {
             SubresourceResourceType::Video => Some(Self::VIDEO),
             SubresourceResourceType::Media => Some(Self::MEDIA),
             SubresourceResourceType::TextTrack => Some(Self::TEXT_TRACK),
-            SubresourceResourceType::Script
+            SubresourceResourceType::Document
+            | SubresourceResourceType::Script
             | SubresourceResourceType::Stylesheet
             | SubresourceResourceType::Fetch
             | SubresourceResourceType::EventSource
@@ -2696,6 +2833,7 @@ impl SubresourceRequestInitiatorType {
 impl SubresourceResourceType {
     pub fn as_cdp_type(self) -> &'static str {
         match self {
+            Self::Document => "Document",
             Self::Script => "Script",
             Self::Stylesheet => "Stylesheet",
             Self::Image => "Image",
@@ -3277,46 +3415,6 @@ pub struct ChildFrameNavigationSnapshot {
     pub security_origin_inherited: bool,
     #[serde(default)]
     pub security_origin_opaque: bool,
-    #[serde(default)]
-    pub document_network: Option<ChildFrameDocumentNetworkSnapshot>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ChildFrameDocumentNetworkSnapshot {
-    pub request_url: String,
-    pub request_method: String,
-    #[serde(default)]
-    pub request_headers: Vec<(String, String)>,
-    pub final_url: String,
-    pub status: u16,
-    #[serde(default)]
-    pub response_headers: Vec<(String, Vec<u8>)>,
-    #[serde(default)]
-    pub encoded_data_length: usize,
-    /// Exact in-process response body source for protocol consumers.
-    ///
-    /// Renderer/protocol transport shares this carrier without copying the
-    /// complete payload. Serialized snapshots retain their historical wire
-    /// shape and therefore deserialize without a body source.
-    #[serde(skip)]
-    pub response_body: Option<SubresourceResponseBody>,
-    #[serde(default)]
-    pub from_cache: bool,
-}
-
-/// A completed child main-resource request whose Network facts remain
-/// observable even though its navigation no longer owns the current child
-/// Document.
-///
-/// Keeping this separate from `ChildFrameNavigationSnapshot` prevents a stale
-/// response from synthesizing a navigation commit or lifecycle terminal.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ChildFrameDocumentNetworkActivitySnapshot {
-    pub frame_id: String,
-    #[serde(default)]
-    pub parent_frame_id: Option<String>,
-    pub loader_id: String,
-    pub snapshot: ChildFrameDocumentNetworkSnapshot,
 }
 
 #[derive(Debug, Clone)]
@@ -3883,14 +3981,18 @@ mod tests {
         );
         let mut report = ScriptExecutionReport::default();
         report.extend_network_output(ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request.clone())),
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
+                request.clone(),
+            )),
         ]));
         report.extend_network_output(ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response.clone())),
+            ScriptNetworkOutputItem::SubresourceResponseStarted(std::sync::Arc::new(
+                response.clone(),
+            )),
         ]));
         assert!(report.subresource_network_records().is_empty());
         report.extend_network_output(ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body.clone())),
+            ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(body.clone())),
         ]));
 
         let [record] = report.subresource_network_records() else {
@@ -3952,6 +4054,39 @@ mod tests {
                 ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event),
             ],
             "script network output iteration should preserve explicit producer append order"
+        );
+    }
+
+    #[test]
+    fn script_report_retention_evicts_derived_views_and_keeps_revision() {
+        let mut report = ScriptExecutionReport::default();
+        for index in 0..1100 {
+            let item = if index % 2 == 0 {
+                ScriptObservableOutputItem::ConsoleMessage(index.to_string())
+            } else {
+                ScriptObservableOutputItem::LifecycleError(index.to_string())
+            };
+            report.extend_observable_output(ScriptObservableOutput::from_items([item]));
+        }
+        assert_eq!(report.observable_output_end(), 1100);
+        assert_eq!(report.observable_output_items().len(), 1000);
+        assert_eq!(
+            report.console_messages(),
+            (100..1100)
+                .step_by(2)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            report.lifecycle_errors(),
+            (101..1100)
+                .step_by(2)
+                .map(|i| i.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            report.observable_output_items().first(),
+            Some(&ScriptObservableOutputItem::ConsoleMessage("100".into()))
         );
     }
 
@@ -4114,7 +4249,11 @@ mod tests {
         let pool = DiskPool::new(None).unwrap();
         let mut writer = pooled_body_writer(4, &pool);
         writer.append(b"hello");
+        assert_eq!(writer.read_range(3, 5).unwrap(), b"lo");
         writer.append(b" world");
+        assert_eq!(writer.read_range(3, 7).unwrap(), b"lo worl");
+        assert_eq!(writer.read_range(6, usize::MAX).unwrap(), b"world");
+        assert!(writer.read_range(usize::MAX, 2).unwrap().is_empty());
         let pooled = writer.finish();
         assert_eq!(pooled.read_chunk(3, 5).unwrap(), b"lo wo");
         assert_eq!(pooled.read_chunk(6, 3).unwrap(), b"wor");

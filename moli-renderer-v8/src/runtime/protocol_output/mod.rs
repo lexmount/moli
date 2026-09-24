@@ -3,6 +3,7 @@ mod identity;
 mod item;
 mod transport;
 mod transport_memory;
+pub(crate) use transport_memory::console_payload_bytes;
 mod turn_journal;
 
 pub use fence::RendererOutputFence;
@@ -25,12 +26,12 @@ pub use transport::{
 pub(in crate::runtime) use transport::{
     RendererOutputTransportTestLimits, renderer_output_transport_channel_with_test_limits,
 };
-pub(crate) use turn_journal::RendererTurnOutputJournal;
+pub(crate) use turn_journal::{RendererSettledOutput, RendererTurnOutputJournal};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RendererOutputPublicationAdmission {
     Observation,
-    EssentialOwnerProgress,
+    EssentialOrderedOutput,
     EssentialTerminalResponse,
 }
 
@@ -47,15 +48,13 @@ pub struct RendererOutputPublication {
 /// after its renderer turn has ended.
 ///
 /// This grants no capture capability and does not name an HTML task source.
-/// It only preserves the observable rule that post-load Page effects cannot
-/// overtake an exact pending `Page.loadEventFired` observation.
+/// Timer and load-handler Page effects yield to a pending client command
+/// before publication. Network facts retain their immediate ingress ordering.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum RendererOutputPublicationOrdering {
     #[default]
     Unconstrained,
-    AfterPendingPageLoad {
-        source_document: crate::runtime::RendererDocumentLifecycleIdentity,
-    },
+    AfterClientTurn,
 }
 
 impl RendererOutputPublication {
@@ -64,8 +63,11 @@ impl RendererOutputPublication {
             !records.is_empty(),
             "renderer output publications must be non-empty"
         );
-        let admission = if records.iter().any(RendererOutputRecord::is_owner_action) {
-            RendererOutputPublicationAdmission::EssentialOwnerProgress
+        let admission = if records
+            .iter()
+            .any(RendererOutputRecord::requires_essential_transport_admission)
+        {
+            RendererOutputPublicationAdmission::EssentialOrderedOutput
         } else {
             RendererOutputPublicationAdmission::Observation
         };

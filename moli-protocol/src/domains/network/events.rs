@@ -248,7 +248,7 @@ pub(crate) fn emit_request_will_be_sent_extra_info(
     out.push_request_will_be_sent_extra_info(
         session_id,
         request_id,
-        request_headers_as_json_object(request_headers, Some(cookie_access_report)),
+        request_headers_as_json_object(request_headers, None),
         cookie_query_report_to_json(cookie_access_report),
         associated_cookies_to_json(cookie_access_report),
         request_time,
@@ -343,16 +343,6 @@ pub(crate) fn emit_request_will_be_sent(
         }),
         session_id,
     );
-    if let Some(cookie_access_report) = cookie_access_report {
-        emit_request_will_be_sent_extra_info(
-            out,
-            session_id,
-            request_id,
-            request_headers,
-            cookie_access_report,
-            timestamp,
-        );
-    }
 }
 
 pub(crate) fn fetch_subresource_initial_request_network_events(
@@ -430,24 +420,31 @@ pub(crate) fn emit_response_received_extra_info(
     );
 }
 
-pub(crate) fn emit_redirect_response_received_extra_info(
+pub(crate) fn emit_redirect_extra_info(
     out: &mut impl CdpNetworkAutomationEventSink,
     session_id: Option<&str>,
     request_id: &str,
-    response_headers: &[(String, Vec<u8>)],
-    status: u16,
-    cookie_set_reports: &[StoredCookieSetReport],
+    redirect: &moli_core::page::NavigationRedirect,
+    timestamp: f64,
 ) {
-    if cookie_set_reports.is_empty() {
+    let Some(response) = &redirect.response_extra_info else {
         return;
-    }
+    };
+    emit_request_will_be_sent_extra_info(
+        out,
+        session_id,
+        request_id,
+        &response.request_extra_info.headers,
+        &response.request_extra_info.cookie_report,
+        timestamp,
+    );
     emit_response_received_extra_info(
         out,
         session_id,
         request_id,
-        response_headers,
-        status,
-        cookie_set_reports,
+        &response.headers,
+        response.status,
+        &response.cookie_set_reports,
     );
 }
 

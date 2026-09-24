@@ -162,12 +162,15 @@ pub(super) fn loading_host(
         ),
     );
     Arc::new(RendererSharedWorkerHost::new_loading(
-        instance_id,
+        network_source(instance_id),
         crate::runtime::RendererOwnerLocalHostId::new_for_testing(0),
         WeakSharedWorkerRuntimeService::default(),
         key.script_url().to_owned(),
         "loader".to_owned(),
         target_output,
+        crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+        ),
     ))
 }
 
@@ -178,7 +181,7 @@ pub(super) fn loading_host_with_runtime_service(
 ) -> Arc<RendererSharedWorkerHost> {
     runtime_service.ensure_target_output_streams_for_test();
     Arc::new(RendererSharedWorkerHost::new_loading(
-        instance_id,
+        network_source(instance_id),
         runtime_service
             .owner_local_host_id()
             .unwrap_or_else(|| crate::runtime::RendererOwnerLocalHostId::new_for_testing(0)),
@@ -186,6 +189,7 @@ pub(super) fn loading_host_with_runtime_service(
         key.script_url().to_owned(),
         "loader".to_owned(),
         runtime_service.open_target_output_stream(instance_id),
+        runtime_service.worker_lifecycle(),
     ))
 }
 
@@ -219,7 +223,7 @@ pub(super) fn connect_matching(
     key: SharedWorkerKey,
     descriptor: SharedWorkerDescriptor,
 ) -> SharedWorkerConnectAction<SharedRendererSharedWorkerHost> {
-    runtime_service.connect_matching(key, descriptor, runtime_service.next_client_owner_id())
+    runtime_service.connect_matching(key, descriptor)
 }
 
 pub(super) fn finish_loading_matching(
@@ -248,21 +252,21 @@ pub(super) fn matching_is_empty(runtime_service: &SharedWorkerRuntimeService) ->
     runtime_service.matching_is_empty()
 }
 
-pub(super) fn active_owner_ids_for_instance(
-    runtime_service: &SharedWorkerRuntimeService,
-    instance_id: SharedWorkerInstanceId,
-) -> Vec<moli_shared_worker::SharedWorkerClientOwnerId> {
-    runtime_service.active_owner_ids_for_instance(instance_id)
-}
-
-pub(super) fn owner_lifecycle_is_empty(runtime_service: &SharedWorkerRuntimeService) -> bool {
-    runtime_service.owner_lifecycle_is_empty()
-}
-
 pub(super) fn install_owner_wake_sender(
     runtime_service: &SharedWorkerRuntimeService,
 ) -> tokio::sync::mpsc::UnboundedReceiver<SharedWorkerRuntimeOwnerWake> {
     let (sender, receiver) = shared_worker_owner_wake_channel();
     runtime_service.add_owner_wake_sender(sender);
     receiver
+}
+
+pub(super) fn network_source(
+    instance_id: SharedWorkerInstanceId,
+) -> crate::runtime::RendererWorkerNetworkReporter {
+    crate::runtime::RendererWorkerNetworkReporter::new(
+        crate::runtime::RendererNetworkReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(0),
+        ),
+        crate::runtime::RendererWorkerIdentity::Shared(instance_id),
+    )
 }

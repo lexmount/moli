@@ -2,6 +2,26 @@ use super::*;
 
 pub(super) fn build_router() -> Router {
     routes_wait::add_wait_routes(Router::new())
+        .route("/native-worker-network/", get(|| async {
+            Html("<!doctype html><script>navigator.serviceWorker.register('worker.js')</script>")
+        }))
+        .route("/native-worker-network/worker.js", get(|| async {
+            ([(CONTENT_TYPE, "text/javascript")],
+                "console.log('before worker network'); const probe = fetch('probe').then(r => r.text()).then(() => console.log('after worker network')); oninstall = e => e.waitUntil(Promise.all([probe, skipWaiting()])); onactivate = e => e.waitUntil(clients.claim());"
+            )
+        }))
+        .route("/native-worker-network/probe", get(|| async { "native worker network body" }))
+        .route("/native-service-worker/", get(|| async {
+            Html("<!doctype html><script>navigator.serviceWorker.register('worker.js')</script>")
+        }))
+        .route("/native-service-worker/failed-install", get(|| async {
+            Html("<!doctype html><script>navigator.serviceWorker.register('missing.js').catch(() => {})</script>")
+        }))
+        .route("/native-service-worker/worker.js", get(|| async {
+            ([(CONTENT_TYPE, "text/javascript")],
+                "console.log('before native Started'); oninstall = event => event.waitUntil(skipWaiting()); onactivate = event => event.waitUntil(clients.claim()); onfetch = event => event.respondWith(new Response('native worker'));"
+            )
+        }))
         .route("/static", get(static_page))
         .route(
             "/compat/child-dynamic-markup-document",
@@ -1123,6 +1143,10 @@ pub(super) fn build_router() -> Router {
         .route(
             "/compat/parse-time-async-classic-chunked",
             get(parse_time_async_classic_chunked_page),
+        )
+        .route(
+            "/compat/parse-time-async-classic-chunked/release-tail",
+            get(release_parse_time_async_chunked_tail),
         )
         .route(
             "/compat/parse-time-async-classic-slow-chunked-tail",

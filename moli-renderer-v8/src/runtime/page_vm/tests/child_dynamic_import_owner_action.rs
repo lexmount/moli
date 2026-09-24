@@ -92,8 +92,6 @@ async fn current_dynamic_import_owner_action_is_applied_by_one_typed_turn() {
 #[tokio::test(flavor = "current_thread")]
 async fn current_owner_action_checkpoint_is_owned_by_selected_dispatcher() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         let target =
             install_dynamic_import_action_target(&mut page_vm, "dynamic-action-checkpoint")?;
@@ -118,8 +116,7 @@ Promise.resolve().then(() => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DynamicImportOwnerAction,
-                    &loader
+                    PageSelectedTaskTestSelector::DynamicImportOwnerAction
                 )
                 .await?,
             "one exact DynamicImportOwnerAction task should run"
@@ -246,8 +243,6 @@ async fn owner_action_rejects_replaced_realm_without_legacy_fallback() {
 #[tokio::test(flavor = "current_thread")]
 async fn root_document_namespace_rejects_reused_local_owner_identity() {
     run_page_vm_async_test(async move {
-        let loader =
-            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
         let mut page_vm = test_page_vm();
         let target =
             install_dynamic_import_action_target(&mut page_vm, "dynamic-action-root-namespace")?;
@@ -273,8 +268,7 @@ Promise.resolve().then(() => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DynamicImportOwnerAction,
-                    &loader,
+                    PageSelectedTaskTestSelector::DynamicImportOwnerAction
                 )
                 .await?,
             "the production dispatcher should consume the old-root owner action"

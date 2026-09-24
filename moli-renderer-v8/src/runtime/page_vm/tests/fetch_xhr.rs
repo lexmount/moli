@@ -1216,6 +1216,47 @@ async fn window_fetch_emits_browser_style_subresource_headers_on_wire() {
     .await;
 }
 
+async fn completed_ping_network_output(
+    page_vm: &mut PageVm,
+) -> anyhow::Result<Vec<ScriptNetworkOutputItem>> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let mut items = Vec::new();
+        loop {
+            drain_page_work_until_no_pending_subresources(page_vm, "ping network completion")
+                .await?;
+            items.extend(page_vm.vm_mut().take_network_output().into_items());
+            if items
+                .iter()
+                .any(|item| matches!(item, ScriptNetworkOutputItem::SubresourceBodyFinished(_)))
+            {
+                return Ok(items);
+            }
+            page_vm
+                .wait_for_page_work_arrival_without_timeout(false)
+                .await;
+        }
+    })
+    .await
+    .expect("ping must publish its actual terminal")
+}
+
+fn assert_completed_ping(items: &[ScriptNetworkOutputItem], expected_body: &str) {
+    let [
+        ScriptNetworkOutputItem::SubresourceRequestStarted(request),
+        ScriptNetworkOutputItem::SubresourceResponseStarted(response),
+        ScriptNetworkOutputItem::SubresourceBodyFinished(body),
+    ] = items
+    else {
+        panic!("one native request, response and terminal: {items:?}")
+    };
+    assert_eq!(request.resource_type(), SubresourceResourceType::Ping);
+    assert_eq!(request.request_body(), Some(expected_body));
+    assert_eq!(response.handle(), request.handle());
+    assert_eq!(response.status(), 204);
+    assert_eq!(body.handle(), request.handle());
+    assert!(matches!(body.result(), SubresourceBodyFinishedResult::Ready(body) if body.is_empty()));
+}
+
 #[tokio::test]
 async fn navigator_send_beacon_posts_no_cors_ping_subresource() {
     run_page_vm_async_test(async move {
@@ -1235,12 +1276,8 @@ async fn navigator_send_beacon_posts_no_cors_ping_subresource() {
                     .await
                     .expect("sendBeacon request should reach fixture")
                     .expect("sendBeacon fixture should capture request");
-                drain_page_work_until_no_pending_subresources(
-                    &mut page_vm,
-                    "sendBeacon network completion should be observed",
-                )
-                .await?;
-                Ok::<_, anyhow::Error>((returned, request, page_vm.vm_mut().take_network_output()))
+                let network_output = completed_ping_network_output(&mut page_vm).await?;
+                Ok::<_, anyhow::Error>((returned, request, network_output))
             })
             .await
             .expect("sendBeacon test should run on owner lane");
@@ -1254,18 +1291,7 @@ async fn navigator_send_beacon_posts_no_cors_ping_subresource() {
         assert!(request_lower.contains("sec-fetch-mode: no-cors\r\n"));
         assert!(request_lower.ends_with("\r\n\r\npayload"));
 
-        let (records, _, _) = split_network_output_items(network_output);
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.resource_type(), SubresourceResourceType::Ping);
-        assert_eq!(record.request_body(), Some("payload"));
-        let SubresourceNetworkOutcome::Success { status, .. } = record.outcome() else {
-            panic!(
-                "expected sendBeacon network success, got {:?}",
-                record.outcome()
-            );
-        };
-        assert_eq!(*status, 204);
+        assert_completed_ping(&network_output, "payload");
     })
     .await;
 }
@@ -1709,12 +1735,8 @@ async fn anchor_ping_click_posts_ping_subresource_before_navigation() {
                     .await
                     .expect("anchor ping request should reach fixture")
                     .expect("anchor ping fixture should capture request");
-                drain_page_work_until_no_pending_subresources(
-                    &mut page_vm,
-                    "anchor ping network completion should be observed",
-                )
-                .await?;
-                Ok::<_, anyhow::Error>((request, page_vm.vm_mut().take_network_output()))
+                let network_output = completed_ping_network_output(&mut page_vm).await?;
+                Ok::<_, anyhow::Error>((request, network_output))
             })
             .await
             .expect("anchor ping test should run on owner lane");
@@ -1730,11 +1752,7 @@ async fn anchor_ping_click_posts_ping_subresource_before_navigation() {
         assert!(request_lower.contains("sec-fetch-mode: no-cors\r\n"));
         assert!(request.ends_with("\r\n\r\nPING"));
 
-        let (records, _, _) = split_network_output_items(network_output);
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.resource_type(), SubresourceResourceType::Ping);
-        assert_eq!(record.request_body(), Some("PING"));
+        assert_completed_ping(&network_output, "PING");
     })
     .await;
 }
@@ -2640,7 +2658,7 @@ async fn xhr_load_commits_child_navigation_before_document_script_ready() {
                         .expect("xhr completion should arrive before timeout");
                     }
                     let completion =
-                        run_next_resource_completion_as_typed_page_turn(&mut page_vm)?;
+                        run_next_resource_result_as_typed_page_turn(&mut page_vm).await?;
                     completion_sources.push(completion.action.source());
                     let events = page_vm.vm_mut().eval("__xhrReadyEvents.join('|')")?;
                     if events == "xhr-load:xhr-ok" {
@@ -3895,10 +3913,7 @@ async fn xhr_abort_cancels_inflight_network_request_and_suppresses_late_failure(
                         .await?
                         .is_some()
                     {}
-                    let loader = page_vm.main_document_resource_loader();
-                    page_vm
-                        .advance_timers_until_deadline_for_test(loader.request_client())
-                        .await?;
+                    page_vm.advance_timers_until_deadline_for_test().await?;
                     if Instant::now() >= request_seen_deadline {
                         panic!("timed out waiting for xhr abort server to observe the request");
                     }
@@ -4001,8 +4016,7 @@ async fn xhr_timeout_cancels_inflight_network_request_and_dispatches_timeout() {
                             .run_exact_page_websocket_selected_task_for_test().await?
                             .is_some()
                         {}
-                        let loader = page_vm.main_document_resource_loader();
-                        page_vm.advance_timers_until_deadline_for_test(loader.request_client()).await?;
+                        page_vm.advance_timers_until_deadline_for_test().await?;
                         if Instant::now() >= request_seen_deadline {
                             panic!("timed out waiting for xhr timeout server to observe the request");
                         }
@@ -4208,6 +4222,21 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
         for worker in [false, true] {
             let mut page_vm = test_page_vm();
             let local_executor = page_vm.local_executor.clone();
+            let worker_output = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+            let observed = worker_output.clone();
+            page_vm
+                .runtime_hooks
+                .browser_context_runtime
+                .install_network_handler(move |input| {
+                    if let crate::runtime::RendererNetworkInput::Observation(input) = input
+                        && matches!(
+                            input.occurrence.source,
+                            crate::runtime::RendererNetworkSource::Worker(_)
+                        )
+                    {
+                        observed.lock().push(input.occurrence.item.clone());
+                    }
+                });
             let probe = r#"(async () => {
                 const check = (value, message) => { if (!value) throw new Error(message); };
                 const blob = URL.createObjectURL(new Blob(['payload'], {type: 'text/plain'}));
@@ -4298,7 +4327,7 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
                     "globalThis.__blobMethodResult = 'pending'; {probe}.then(() => {{ globalThis.__blobMethodResult = 'ok'; }}, error => {{ globalThis.__blobMethodResult = String(error); }})"
                 )
             };
-            let (result, pending_count, network_output) = local_executor
+            let (result, pending_count, mut network_output) = local_executor
                 .run(async move {
                     page_vm
                         .vm_mut()
@@ -4328,12 +4357,35 @@ fn check_blob_fetch_and_xhr_methods_in_window_and_worker(
                 pending_count, 0,
                 "local fetch and XHR must bypass interception; worker={worker}"
             );
-            let (records, _, _) = split_network_output_items(network_output);
-            let failures = records
-                .iter()
-                .filter(|record| {
-                    matches!(record.outcome(), SubresourceNetworkOutcome::Failure { error_text }
-                    if error_text.contains("blob URL fetch requires GET"))
+            for item in worker_output.lock().drain(..) {
+                let crate::runtime::RendererNetworkOutputItem::Resource(item) = item else {
+                    panic!(
+                        "local Worker requests must produce resource facts without interception"
+                    );
+                };
+                network_output.push_item(item.as_ref().clone());
+            }
+            let failures = network_output
+                .into_items()
+                .filter(|item| {
+                    let error_text = match item {
+                        ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
+                            match record.outcome() {
+                                SubresourceNetworkOutcome::Failure { error_text } => error_text,
+                                _ => return false,
+                            }
+                        }
+                        ScriptNetworkOutputItem::SubresourceBodyFinished(body) => {
+                            match body.result() {
+                                moli_page_types::SubresourceBodyFinishedResult::Failed(
+                                    error_text,
+                                ) => error_text,
+                                _ => return false,
+                            }
+                        }
+                        _ => return false,
+                    };
+                    error_text.contains("blob URL fetch requires GET")
                 })
                 .count();
             assert_eq!(

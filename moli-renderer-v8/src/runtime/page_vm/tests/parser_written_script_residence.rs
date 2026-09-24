@@ -46,21 +46,21 @@ async fn document_write_async_classic_waits_in_its_exact_main_runtime_source() {
 
         tokio::time::timeout(Duration::from_secs(2), async {
             loop {
-                owner_wake_rx
-                    .recv()
-                    .await
-                    .expect("owner wake route should remain open");
+                while page_vm.run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::ResourceCompletion,
+                ).await? {}
                 if page_vm
-                    .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::MainDocumentRuntime(
+                    .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                             PageMainDocumentRuntimeActionKind::PostParseWork,
-                        ),
-                        &loader,
-                    )
+                        ))
                     .await?
                 {
                     return Ok::<(), anyhow::Error>(());
                 }
+                owner_wake_rx
+                    .recv()
+                    .await
+                    .expect("owner wake route should remain open");
             }
         })
         .await
@@ -72,12 +72,9 @@ async fn document_write_async_classic_waits_in_its_exact_main_runtime_source() {
             "1"
         );
 
-        run_main_async_script_load_delay_settlement_for_test(
-            &mut page_vm,
-            &loader,
-            owner,
-            "document.write async classic",
-        )
+        run_main_async_script_load_delay_settlement_for_test(&mut page_vm,
+owner,
+"document.write async classic")
         .await;
         assert_eq!(
             page_vm
@@ -127,12 +124,9 @@ document.write("<script type='module' async>globalThis.__writtenAsyncModuleExecu
         );
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::ParserAsyncModuleAdmission,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the exact admission must be consumed by the production selected dispatcher"
         );
@@ -141,7 +135,7 @@ document.write("<script type='module' async>globalThis.__writtenAsyncModuleExecu
             "an immediately-ready inline graph must notify the installed PendingScript watch"
         );
         assert!(
-            run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm, &loader)
+            run_one_parser_owned_main_document_runtime_turn_for_test(&mut page_vm)
                 .await?,
             "the ready parser-owned module must receive its own selected continuation"
         );
@@ -152,12 +146,9 @@ document.write("<script type='module' async>globalThis.__writtenAsyncModuleExecu
             "1"
         );
 
-        run_main_async_script_load_delay_settlement_for_test(
-            &mut page_vm,
-            &loader,
-            owner,
-            "document.write async module",
-        )
+        run_main_async_script_load_delay_settlement_for_test(&mut page_vm,
+owner,
+"document.write async module")
         .await;
         assert_eq!(
             page_vm
@@ -229,7 +220,7 @@ async fn retired_parser_async_module_admission_cannot_enter_the_replacement_docu
         )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(

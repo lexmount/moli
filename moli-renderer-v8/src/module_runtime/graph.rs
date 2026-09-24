@@ -8,9 +8,7 @@ use moli_module_script_tree as module_tree;
 use url::Url;
 
 use crate::module_script_continuation::ModuleScriptCompletionOwner;
-use crate::network::ResourceRequestClient;
 use crate::planning::ScriptFetchMetadata;
-use crate::protocol_types::NavigationResponse;
 use crate::script_vm::ScriptVm;
 use crate::types::SharedNavigationResponseResult;
 use crate::types::{ScriptErrorConstructorKind, ScriptKind};
@@ -233,13 +231,9 @@ impl NativeModuleGraphFetchRequest {
         &self.source_url
     }
 
-    pub(crate) fn initiator_url(&self) -> &Url {
-        &self.initiator_url
-    }
-
     #[cfg(test)]
     pub(crate) fn initiator_url_for_test(&self) -> &Url {
-        self.initiator_url()
+        &self.initiator_url
     }
 
     pub(crate) fn nonce(&self) -> Option<&str> {
@@ -369,26 +363,10 @@ impl NativeModuleGraphFetchRequest {
         })
     }
 
-    pub(crate) fn fetch_source_callback_with_load<F>(
-        &self,
-        loader: &ResourceRequestClient,
-        load: crate::network::loads::ResourceLoadLease,
-        request_origin: moli_url::WebOrigin,
-        callback: F,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce(
-                std::result::Result<ModuleGraphFetchedSource, String>,
-                Option<SharedNavigationResponseResult>,
-            ) + Send
-            + 'static,
-    {
-        self.fetch_source_callback_inner(loader, load, request_origin, callback)
-    }
-
     pub(crate) fn fetch_source_for_document<F>(
         &self,
         loader: &crate::network::context::DocumentResourceLoader,
+        initiator: crate::types::SubresourceRequestInitiatorType,
         callback: F,
     ) -> anyhow::Result<()>
     where
@@ -398,43 +376,31 @@ impl NativeModuleGraphFetchRequest {
             ) + Send
             + 'static,
     {
-        let load = loader
-            .register_load(
-                crate::network::loads::ResourceLoadKind::Script,
-                crate::network::loads::ResourceLoadDisposition::Ordinary,
-                None,
-            )
-            .ok_or_else(|| anyhow::anyhow!("Document detached before module fetch registration"))?;
-        let request_client = load.request_client();
-        self.fetch_source_callback_with_load(
-            &request_client,
-            load,
-            loader.fetch_context().request_origin(),
-            callback,
-        )
-    }
-
-    fn fetch_source_callback_inner<F>(
-        &self,
-        loader: &ResourceRequestClient,
-        load: crate::network::loads::ResourceLoadLease,
-        request_origin: moli_url::WebOrigin,
-        callback: F,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce(
-                std::result::Result<ModuleGraphFetchedSource, String>,
-                Option<SharedNavigationResponseResult>,
-            ) + Send
-            + 'static,
-    {
-        let source_url = self.source_url.clone();
-        let kind = self.kind;
-        let integrity = self.fetch_metadata.request_metadata.integrity.clone();
+        let request_origin = loader.fetch_context().request_origin();
         let request = self.request(&request_origin)?;
         let request_mode = request.request_mode;
         let credentials_mode = request.credentials_mode;
-        let completion = move |response: anyhow::Result<moli_fetch::Response>| {
+        let (load, network, started) = loader
+            .prepare_resource_request(
+                &request,
+                crate::types::SubresourceResourceType::Script,
+                initiator,
+            )
+            .ok_or_else(|| anyhow::anyhow!("Document detached before module fetch registration"))?;
+        network.observe(started);
+        let source_url = self.source_url.clone();
+        let kind = self.kind;
+        let integrity = self.fetch_metadata.request_metadata.integrity.clone();
+        let task_loader = loader.clone();
+        loader.spawn_resource_task(async move {
+            let response = task_loader
+                .fetch_started_resource(
+                    request,
+                    crate::types::SubresourceResourceType::Script,
+                    load,
+                    network,
+                )
+                .await;
             let mut network_result: Option<SharedNavigationResponseResult> = None;
             let result = response
                 .map_err(|error| {
@@ -445,8 +411,7 @@ impl NativeModuleGraphFetchRequest {
                     .message()
                     .to_owned()
                 })
-                .and_then(|response| {
-                    let response = NavigationResponse::from(response);
+                .and_then(|(response, provenance)| {
                     network_result = Some(std::sync::Arc::new(Ok(response.clone())));
                     if !(200..=299).contains(&response.status) {
                         return Err(ModuleLoadError::new(
@@ -475,16 +440,19 @@ impl NativeModuleGraphFetchRequest {
                             &response.headers,
                         );
                     let (head, body_bytes) = response.into_byte_parts();
-                    crate::network_host::validate_cors_response_chain(
-                        &request_origin,
-                        &head,
-                        credentials_mode,
-                    ).map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error).message().to_owned())?;
-                    let response_is_eligible = crate::network_host::network_response_filter(
-                        &request_origin,
-                        &head,
-                        request_mode,
-                    ).is_none();
+                    let response_is_eligible = match provenance {
+                        crate::network::context::ResourceResponseProvenance::Network => {
+                            crate::network_host::validate_cors_response_chain(
+                                &request_origin, &head, credentials_mode,
+                            ).map_err(|error| ModuleLoadError::new(ModuleLoadStage::Fetch, error).message().to_owned())?;
+                            crate::network_host::network_response_filter(
+                                &request_origin, &head, request_mode,
+                            ).is_none()
+                        }
+                        crate::network::context::ResourceResponseProvenance::ServiceWorker { filter } => {
+                            filter.is_none_or(|filter| filter.is_readable())
+                        }
+                    };
                     if !crate::subresource_integrity::response_matches_subresource_integrity_metadata(
                         &body_bytes,
                         integrity.as_deref(),
@@ -523,8 +491,8 @@ impl NativeModuleGraphFetchRequest {
                 network_result = Some(std::sync::Arc::new(Err(error.clone())));
             }
             callback(result, network_result);
-        };
-        loader.fetch_cacheable_script_text_callback_with_load(request, load, completion)
+        });
+        Ok(())
     }
 }
 
@@ -2646,12 +2614,8 @@ mod tests {
     use crate::{
         dom::native::{DomHost, NativeDom},
         module_runtime::NativeModuleSingleFetchRequest,
-        network::{
-            RendererResourceTaskRunner, ResourceRequestClient,
-            loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadRegistry},
-        },
+        network::{RendererResourceTaskRunner, ResourceRequestClient},
         script_vm::{ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness},
-        types::{ModuleGraphFetchCompletion, ModuleGraphFetchOrdering, ModuleGraphFetchRequester},
     };
     use moli_fetch::FetchConfig;
     use tokio::sync::oneshot;
@@ -3991,22 +3955,15 @@ import "./c.mjs";
             dependency: None,
         };
         let (tx, rx) = oneshot::channel();
-        let registry = ResourceLoadRegistry::new(
+        let document = crate::network::context::DocumentResourceLoader::for_test(
+            loader.clone(),
             RendererResourceTaskRunner::from_current_tokio()
                 .expect("module fetch test must own a Tokio runtime"),
+            request.initiator_url.clone(),
         );
-        let load = registry
-            .register(
-                ResourceLoadKind::Script,
-                ResourceLoadDisposition::Ordinary,
-                loader.frozen_request_client(),
-                None,
-            )
-            .expect("module fetch test load should register");
-        request.fetch_source_callback_with_load(
-            loader,
-            load,
-            moli_url::WebOrigin::from_url(request.initiator_url()),
+        request.fetch_source_for_document(
+            &document,
+            crate::types::SubresourceRequestInitiatorType::Parser,
             move |result, network_result| {
                 let _ = tx.send((result, network_result));
             },
@@ -4608,9 +4565,13 @@ import "./shared.mjs";
         );
     }
 
-    #[test]
-    fn modulepreload_completion_fetches_single_module_without_descendants() {
-        let mut vm = new_test_vm("https://app.example.test/page");
+    #[tokio::test(flavor = "current_thread")]
+    async fn modulepreload_completion_fetches_single_module_without_descendants() {
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+            url("https://app.example.test/page"),
+            &loader,
+        );
         let root_url = url("https://app.example.test/root.mjs");
         let dep_url = url("https://app.example.test/dep.mjs");
         let root_key = ModuleMapKey::java_script(root_url.clone());
@@ -4620,19 +4581,29 @@ import "./shared.mjs";
             modulepreload_single_fetch_request(root_url.clone()),
         );
 
-        vm.complete_native_module_graph_fetch(crate::types::ModuleGraphFetchCompletion {
-            load_id,
-            requester: ModuleGraphFetchRequester::ModulePreload,
-            ordering: ModuleGraphFetchOrdering::BackgroundPreload,
-            request_url: root_url.clone(),
-            result: Ok(ModuleGraphFetchedSource::new(
-                root_url,
+        let target = vm.current_main_modulepreload_fetch_target(load_id).unwrap();
+        let completion = crate::page_resource_completion::MainModulepreloadFetchCompletion::new(
+            target,
+            Ok(ModuleGraphFetchedSource::new(
+                root_url.clone(),
                 false,
                 ModuleSource::text("import './dep.mjs'; export const root = 1;".to_owned()),
             )),
-            network_result: None,
-        })
-        .expect("modulepreload completion should be accepted");
+            None,
+            root_url.clone(),
+        );
+        vm.context_host_weak_for_test()
+            .upgrade()
+            .unwrap()
+            .borrow()
+            .resource_completion_sender()
+            .send_main_modulepreload_fetch(completion)
+            .unwrap();
+        assert!(
+            vm.run_one_page_resource_completion_selected_task_executor_turn()
+                .await
+                .unwrap()
+        );
 
         let root_entry = vm
             .document_runtime
@@ -4720,9 +4691,13 @@ import "./shared.mjs";
         );
     }
 
-    #[test]
-    fn parser_graph_reuses_modulepreload_single_fetch_then_fetches_dependencies() {
-        let mut vm = new_test_vm("https://app.example.test/page");
+    #[tokio::test(flavor = "current_thread")]
+    async fn parser_graph_reuses_modulepreload_single_fetch_then_fetches_dependencies() {
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+            url("https://app.example.test/page"),
+            &loader,
+        );
         let root_url = url("https://app.example.test/root.mjs");
         let dep_url = url("https://app.example.test/dep.mjs");
         let root_source = "import './dep.mjs'; export const root = 1;";
@@ -4732,19 +4707,29 @@ import "./shared.mjs";
             &mut vm,
             modulepreload_single_fetch_request(root_url.clone()),
         );
-        vm.complete_native_module_graph_fetch(crate::types::ModuleGraphFetchCompletion {
-            load_id,
-            requester: ModuleGraphFetchRequester::ModulePreload,
-            ordering: ModuleGraphFetchOrdering::BackgroundPreload,
-            request_url: root_url.clone(),
-            result: Ok(ModuleGraphFetchedSource::new(
+        let target = vm.current_main_modulepreload_fetch_target(load_id).unwrap();
+        let completion = crate::page_resource_completion::MainModulepreloadFetchCompletion::new(
+            target,
+            Ok(ModuleGraphFetchedSource::new(
                 root_url.clone(),
                 false,
                 ModuleSource::text(root_source.to_owned()),
             )),
-            network_result: None,
-        })
-        .expect("modulepreload completion should be accepted");
+            None,
+            root_url.clone(),
+        );
+        vm.context_host_weak_for_test()
+            .upgrade()
+            .unwrap()
+            .borrow()
+            .resource_completion_sender()
+            .send_main_modulepreload_fetch(completion)
+            .unwrap();
+        assert!(
+            vm.run_one_page_resource_completion_selected_task_executor_turn()
+                .await
+                .unwrap()
+        );
 
         let parser_job = module_script_graph_job(
             &mut vm,
@@ -4910,9 +4895,13 @@ import "./shared.mjs";
         assert!(modulepreload_link_clients.is_empty());
     }
 
-    #[test]
-    fn parser_graph_observes_sticky_modulepreload_failure_without_refetching() {
-        let mut vm = new_test_vm("https://app.example.test/page");
+    #[tokio::test(flavor = "current_thread")]
+    async fn parser_graph_observes_sticky_modulepreload_failure_without_refetching() {
+        let loader = ResourceRequestClient::new(&FetchConfig::default()).unwrap();
+        let mut vm = crate::runtime::PageVmTaskExecutorTestHarness::new(
+            url("https://app.example.test/page"),
+            &loader,
+        );
         let root_url = url("https://app.example.test/root.mjs");
         let root_key = ModuleMapKey::java_script(root_url.clone());
         let load_id = suspend_registered_modulepreload_fetch(
@@ -4920,15 +4909,25 @@ import "./shared.mjs";
             modulepreload_single_fetch_request(root_url.clone()),
         );
 
-        vm.complete_native_module_graph_fetch(ModuleGraphFetchCompletion {
-            load_id,
-            requester: ModuleGraphFetchRequester::ModulePreload,
-            ordering: ModuleGraphFetchOrdering::BackgroundPreload,
-            request_url: root_url.clone(),
-            result: Err("network failure".to_owned()),
-            network_result: None,
-        })
-        .expect("modulepreload failure completion should be accepted");
+        let target = vm.current_main_modulepreload_fetch_target(load_id).unwrap();
+        let completion = crate::page_resource_completion::MainModulepreloadFetchCompletion::new(
+            target,
+            Err("network failure".to_owned()),
+            None,
+            root_url.clone(),
+        );
+        vm.context_host_weak_for_test()
+            .upgrade()
+            .unwrap()
+            .borrow()
+            .resource_completion_sender()
+            .send_main_modulepreload_fetch(completion)
+            .unwrap();
+        assert!(
+            vm.run_one_page_resource_completion_selected_task_executor_turn()
+                .await
+                .unwrap()
+        );
         let entry_id = vm
             .document_runtime
             .native_module_entry_id(&root_key)

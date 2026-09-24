@@ -18,9 +18,7 @@ use super::{
     },
     page_task_queue::MainDocumentRuntimeContinuationSender,
     planning::{
-        PreparedScript, PreparedScriptSourceLoadOutcome,
-        load_prepared_script_source_outcome_with_document_character_set,
-        load_service_worker_aware_external_script_source_outcome,
+        PreparedScript, PreparedScriptSourceLoadOutcome, load_script_source,
         prepared_script_with_loaded_source,
     },
     types::{
@@ -33,9 +31,8 @@ use crate::module_script_continuation::{
     ModuleScriptContinuation, ModuleScriptEvaluationContinuation,
     ModuleScriptEvaluationReactionState, ModuleScriptEvaluationUpdate,
 };
-use crate::network::{RendererResourceTaskRunner, ResourceRequestClient};
+use crate::network::context::DocumentResourceLoader;
 use moli_owner_queue::{OwnerTaskSource, OwnerWakeQueue};
-use url::Url;
 
 mod script_lanes;
 
@@ -378,7 +375,6 @@ pub(super) enum DynamicScriptOwnerPoll {
 pub(crate) struct DynamicScriptServiceWorkerContext {
     pub(crate) browser_context_runtime: crate::runtime::RendererBrowserContextRuntime,
     pub(crate) client_id: crate::service_worker_runtime::ServiceWorkerClientId,
-    pub(crate) document_url: Url,
 }
 
 impl DynamicScriptOwner {
@@ -462,9 +458,7 @@ impl DynamicScriptOwner {
 
     pub(super) fn enqueue_admission(
         &mut self,
-        loader: &ResourceRequestClient,
-        request_origin: moli_url::WebOrigin,
-        task_runner: RendererResourceTaskRunner,
+        loader: &DocumentResourceLoader,
         admission: RuntimeScriptAdmission,
         document_character_set: Option<&str>,
         service_worker_context: Option<&DynamicScriptServiceWorkerContext>,
@@ -476,8 +470,6 @@ impl DynamicScriptOwner {
                 let queue_kind = DynamicScriptQueueKind::for_mode(script.mode);
                 self.enqueue_script_with_id(
                     loader,
-                    request_origin,
-                    task_runner,
                     id,
                     queue_kind,
                     script,
@@ -1469,9 +1461,7 @@ impl DynamicScriptOwner {
 
     fn enqueue_script_with_id(
         &mut self,
-        loader: &ResourceRequestClient,
-        request_origin: moli_url::WebOrigin,
-        task_runner: RendererResourceTaskRunner,
+        loader: &DocumentResourceLoader,
         id: DynamicScriptOwnerId,
         queue_kind: DynamicScriptQueueKind,
         script: PreparedScript,
@@ -1482,36 +1472,26 @@ impl DynamicScriptOwner {
         let ready_state = match script.source_kind {
             ScriptSourceKind::External => {
                 let tx = self.owner_event_sender();
-                let loader = loader.clone();
+                let mut loader = loader.clone();
+                if let Some(context) = service_worker_context {
+                    loader.bind_service_worker(
+                        context.browser_context_runtime.clone(),
+                        context.client_id,
+                    );
+                }
                 let script_for_load = script.clone();
                 let document_character_set = document_character_set.map(str::to_owned);
-                let service_worker_context = service_worker_context.cloned();
-                let fetch_task_runner = task_runner.clone();
+                let task_runner = loader.task_runner();
                 self.in_flight_loads += 1;
                 task_runner.spawn(async move {
-                    let outcome = if let Some(context) = service_worker_context {
-                        load_service_worker_aware_external_script_source_outcome(
-                            &script_for_load,
-                            &request_origin,
-                            &loader,
-                            fetch_task_runner,
-                            document_character_set.as_deref(),
-                            None,
-                            context.browser_context_runtime,
-                            context.client_id,
-                            context.document_url,
-                        )
-                        .await
-                    } else {
-                        load_prepared_script_source_outcome_with_document_character_set(
-                            &script_for_load,
-                            &request_origin,
-                            &loader,
-                            document_character_set.as_deref(),
-                            None,
-                        )
-                        .await
-                    };
+                    let outcome = load_script_source(
+                        &script_for_load,
+                        &loader,
+                        document_character_set.as_deref(),
+                        None,
+                        crate::types::SubresourceRequestInitiatorType::Script,
+                    )
+                    .await;
                     let _ = tx.send(DynamicScriptOwnerEvent::Completion(
                         DynamicScriptLoadCompletion { id, outcome },
                     ));
@@ -3166,9 +3146,11 @@ mod tests {
             .enable_all()
             .build()
             .expect("resource runner runtime");
-        let task_runner = RendererResourceTaskRunner::from_tokio_handle(runtime.handle().clone());
-        let request_client = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
-            .expect("request client");
+        let task_runner =
+            crate::network::RendererResourceTaskRunner::from_tokio_handle(runtime.handle().clone());
+        let request_client =
+            crate::network::ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
+                .expect("request client");
         let mut events = DynamicScriptOwnerEventSource::default();
         let mut owner = DynamicScriptOwner::with_event_sender(events.sender());
         let mut script = prepared_script(0, ScriptMode::Async);
@@ -3181,9 +3163,11 @@ mod tests {
         // valid because its committed Document authority supplied the runner;
         // reverting to ambient `tokio::spawn()` would panic here.
         owner.enqueue_script_with_id(
-            &request_client,
-            moli_url::WebOrigin::from_url(&script.initiator_url),
-            task_runner,
+            &DocumentResourceLoader::for_test(
+                request_client.handle(),
+                task_runner,
+                script.initiator_url.clone(),
+            ),
             owner_id(7),
             DynamicScriptQueueKind::Async,
             script,

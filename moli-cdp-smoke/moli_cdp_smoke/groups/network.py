@@ -923,18 +923,16 @@ async def _verify_response_stage_fetch_body_stream(state: SmokeState) -> None:
         stream_handle = stream.get("stream")
         if not isinstance(stream_handle, str) or not stream_handle:
             raise SmokeError(f"missing Fetch.takeResponseBodyAsStream handle: {stream}")
-        offset_chunk = await state.cdp.send(
-            "IO.read", {"handle": stream_handle, "offset": 9, "size": 5}
-        )
-        assert_equal(
-            offset_chunk.get("base64Encoded"),
-            False,
-            "Fetch response-stage stream offset chunk encoding",
-        )
-        assert_equal(offset_chunk.get("data"), "stage", "Fetch response-stage stream offset chunk")
-        assert_equal(offset_chunk.get("eof"), False, "Fetch response-stage stream offset chunk eof")
+        # Chromium rejects every explicit offset for Fetch response streams,
+        # including zero; a rejected read must leave the sequential cursor alone.
+        for offset in (9, 0):
+            await _expect_cdp_error(
+                state.cdp.send("IO.read", {"handle": stream_handle, "offset": offset, "size": 5}),
+                "OffsetNotSupportedForStream",
+                "Fetch response-stage stream rejects random access",
+            )
         first_chunk = await state.cdp.send(
-            "IO.read", {"handle": stream_handle, "offset": 0, "size": 8}
+            "IO.read", {"handle": stream_handle, "size": 8}
         )
         assert_equal(first_chunk.get("base64Encoded"), False, "Fetch response-stage stream first chunk encoding")
         assert_equal(first_chunk.get("data"), "response", "Fetch response-stage stream first chunk")

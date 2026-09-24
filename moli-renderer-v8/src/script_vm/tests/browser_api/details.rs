@@ -2,7 +2,6 @@ use super::*;
 
 #[tokio::test]
 async fn details_toggle_events_are_queued_coalesced_and_include_parser_changes() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm("https://details-toggle-events.test/");
 
     let before = vm
@@ -53,8 +52,7 @@ async fn details_toggle_events_are_queued_coalesced_and_include_parser_changes()
     for expected in 1..=4 {
         assert!(
             vm.run_one_dom_manipulation_task_executor_turn(
-                PageDomManipulationTestFamily::ElementToggle,
-                &loader,
+                PageDomManipulationTestFamily::ElementToggle
             )
             .await
             .expect("queued details toggle task should run"),
@@ -69,8 +67,7 @@ async fn details_toggle_events_are_queued_coalesced_and_include_parser_changes()
     }
     assert!(
         !vm.run_one_dom_manipulation_task_executor_turn(
-            PageDomManipulationTestFamily::ElementToggle,
-            &loader,
+            PageDomManipulationTestFamily::ElementToggle
         )
         .await
         .expect("drained details toggle source should be observable")

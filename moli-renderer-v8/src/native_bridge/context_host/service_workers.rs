@@ -1315,6 +1315,7 @@ impl JsContextHost {
         let _ = self
             .frame_owner_store
             .set_current_child_service_worker_client_id(handle, client_id);
+        self.bind_child_document_resource_context(handle);
     }
 
     pub(crate) fn unregister_service_worker_child_client(

@@ -46,15 +46,13 @@ async fn tls_credentials_reach_worker(kind: WorkerGlobalKind) {
 
 #[tokio::test]
 async fn websocket_tls_credentials_reach_dedicated_worker() {
-    tls_credentials_reach_worker(WorkerGlobalKind::Dedicated {
-        name: "tls-worker".to_owned(),
-    })
-    .await;
+    tls_credentials_reach_worker(WorkerGlobalKind::unobserved_dedicated("tls-worker")).await;
 }
 
 #[tokio::test]
 async fn websocket_tls_credentials_reach_shared_worker() {
     tls_credentials_reach_worker(WorkerGlobalKind::Shared {
+        network: crate::runtime::RendererWorkerNetworkReporter::unobserved_for_test(),
         name: "tls-shared-worker".to_owned(),
         storage_key: moli_storage_key::MoliStorageKey::new(
             "https://example.com".to_owned(),

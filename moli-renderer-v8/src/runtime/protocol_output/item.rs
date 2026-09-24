@@ -1,21 +1,19 @@
 use crate::protocol_types::{
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
-    ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
+    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot,
 };
 use crate::runtime::{
-    DetachedParserScriptFetchContinuation, RendererDedicatedWorkerTargetEvent,
+    DetachedParserScriptFetchContinuation, RendererDedicatedWorkerObservation,
     RendererDocumentLifecycleEvent, RendererDocumentLifecycleIdentity,
     RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererDomMutationEventBatch,
-    RendererMainDocumentCommit, RendererPendingDownloadActivation,
-    RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
-    RendererPendingPopupActivation, RendererPendingTopLevelHistoryTraversal,
-    RendererRuntimeCommandCausalIdentity, RendererRuntimeInspectorMessageBatch,
-    RendererServiceWorkerTargetEvent, RendererSharedWorkerTargetEvent,
+    RendererJavaScriptDialogOpening, RendererMainDocumentCommit, RendererPendingDownloadActivation,
+    RendererPendingFileChooserActivation, RendererPendingTopLevelHistoryTraversal,
+    RendererPopupOpening, RendererRuntimeCommandCausalIdentity,
+    RendererRuntimeInspectorMessageBatch, RendererServiceWorkerObservation,
+    RendererSharedWorkerObservation,
 };
 use moli_page_types::{
     PendingRuntimeBindingCall, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    ScriptNetworkOutputItem,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -33,8 +31,6 @@ pub struct RendererDocumentTitleChanged {
 pub enum RendererOwnerAction {
     FileChooser(RendererPendingFileChooserActivation),
     Download(RendererPendingDownloadActivation),
-    JavaScriptDialog(RendererPendingJavaScriptDialog),
-    Popup(RendererPendingPopupActivation),
     ChildFrameTree {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameTreeEventSnapshot,
@@ -43,13 +39,15 @@ pub enum RendererOwnerAction {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameDocumentOpenedSnapshot,
     },
-    ChildFrameDocumentNetwork {
-        source_document: RendererDocumentLifecycleIdentity,
-        event: ChildFrameDocumentNetworkActivitySnapshot,
-    },
     ChildFrameLoad {
         source_document: RendererDocumentLifecycleIdentity,
         event: ChildFrameNavigationSnapshot,
+    },
+    ChildFrameNavigationStarted {
+        source_document: RendererDocumentLifecycleIdentity,
+        frame_id: String,
+        loader_id: String,
+        url: String,
     },
     SameDocumentNavigation(RendererDocumentSourcedSameDocumentNavigation),
     SessionHistoryUpdate {
@@ -71,9 +69,6 @@ pub enum RendererOwnerAction {
         info: Box<PendingSubresourceFetchInfo>,
         continuation: DetachedParserScriptFetchContinuation,
     },
-    SharedWorkerTargetLifecycle(RendererSharedWorkerTargetEvent),
-    ServiceWorkerTargetLifecycle(RendererServiceWorkerTargetEvent),
-    DedicatedWorkerTargetLifecycle(RendererDedicatedWorkerTargetEvent),
 }
 
 /// A concrete renderer fact that protocol may project to interested sessions.
@@ -83,13 +78,16 @@ pub enum RendererOwnerAction {
 /// protocol-boundary responsibility.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RendererProtocolObservation {
+    WorkerLifecycle(crate::runtime::RendererWorkerLifecycleObservation),
+    SharedWorker(RendererSharedWorkerObservation),
+    ServiceWorker(RendererServiceWorkerObservation),
+    DedicatedWorker(RendererDedicatedWorkerObservation),
+    Popup(std::sync::Arc<RendererPopupOpening>),
+    JavaScriptDialog(std::sync::Arc<RendererJavaScriptDialogOpening>),
     MainDocumentCommit(RendererMainDocumentCommit),
     DocumentTitleChanged(RendererDocumentTitleChanged),
     DocumentLifecycle(RendererDocumentLifecycleEvent),
-    Network {
-        source_document: RendererDocumentLifecycleIdentity,
-        item: ScriptNetworkOutputItem,
-    },
+    Network(crate::runtime::RendererNetworkObservation),
     RuntimeBinding(PendingRuntimeBindingCall),
     DomMutations(RendererDomMutationEventBatch),
     RuntimeInspector(RendererRuntimeInspectorMessageBatch),
@@ -175,8 +173,8 @@ impl PendingRendererOutputRecord {
                 batch,
             )) => (!batch.has_resolved_source_identities())
                 .then_some(RendererOutputResolutionError::RuntimeInspector),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::SharedWorkerTargetLifecycle(
-                crate::runtime::RendererSharedWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererOutputItem::Observation(RendererProtocolObservation::SharedWorker(
+                crate::runtime::RendererSharedWorkerObservation::RuntimeInspectorMessages {
                     messages,
                     ..
                 },
@@ -184,8 +182,8 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::SharedWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(RendererOwnerAction::ServiceWorkerTargetLifecycle(
-                crate::runtime::RendererServiceWorkerTargetEvent::RuntimeInspectorMessages {
+            RendererOutputItem::Observation(RendererProtocolObservation::ServiceWorker(
+                crate::runtime::RendererServiceWorkerObservation::RuntimeInspectorMessages {
                     messages,
                     ..
                 },
@@ -193,14 +191,12 @@ impl PendingRendererOutputRecord {
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::ServiceWorkerRuntimeInspector),
-            RendererOutputItem::OwnerAction(
-                RendererOwnerAction::DedicatedWorkerTargetLifecycle(
-                    crate::runtime::RendererDedicatedWorkerTargetEvent::RuntimeInspectorMessages {
-                        messages,
-                        ..
-                    },
-                ),
-            ) => (!messages.iter().all(
+            RendererOutputItem::Observation(RendererProtocolObservation::DedicatedWorker(
+                crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
+                    messages,
+                    ..
+                },
+            )) => (!messages.iter().all(
                 crate::runtime::RendererRuntimeInspectorMessage::has_resolved_source_identity,
             ))
             .then_some(RendererOutputResolutionError::DedicatedWorkerRuntimeInspector),
@@ -254,8 +250,17 @@ impl RendererOutputRecord {
         &self.item
     }
 
-    pub(crate) fn is_owner_action(&self) -> bool {
-        matches!(self.item, RendererOutputItem::OwnerAction(_))
+    pub(crate) fn requires_essential_transport_admission(&self) -> bool {
+        matches!(
+            self.item,
+            RendererOutputItem::OwnerAction(_)
+                | RendererOutputItem::Observation(
+                    RendererProtocolObservation::WorkerLifecycle(_)
+                        | RendererProtocolObservation::SharedWorker(_)
+                        | RendererProtocolObservation::ServiceWorker(_)
+                        | RendererProtocolObservation::DedicatedWorker(_)
+                )
+        )
     }
 
     pub fn into_parts(

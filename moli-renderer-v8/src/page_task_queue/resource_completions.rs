@@ -1,21 +1,23 @@
 use crate::module_script_continuation::MainParserDeferredClassicSourceLoadCompletion;
 use crate::page_resource_completion::{
     MainDynamicImportGraphFetchCompletion, MainModulepreloadFetchCompletion,
-    MainParserDeferredClassicSourceNetworkAttribution, MainParserModuleGraphFetchCompletion,
-    MainRuntimeModuleGraphFetchCompletion, RendererPageResourceCompletion,
-    RendererPageResourceCompletionSender, RendererResourceCompletionRouteClosed,
+    MainParserModuleGraphFetchCompletion, MainRuntimeModuleGraphFetchCompletion,
+    RendererPageResourceCompletion, RendererPageResourceCompletionSender,
+    RendererResourceCompletionRouteClosed,
 };
 use crate::runtime::{
     RendererDocumentLifecycleIdentity, RendererDocumentToken, RendererOwnerRuntimeActivitySource,
     RendererPageToken, RendererRuntimeInspectorResponsePublication,
 };
+#[cfg(test)]
+use crate::types::AsyncSubresourceFetchCompletion;
 use crate::types::{
-    AsyncSubresourceFetchCompletion, AsyncSubresourceFetchEvent,
-    ChildBlockingStylesheetLoadCompletion, ChildClassicScriptLoadCompletion,
-    ChildDocumentLoadCompletion, ChildDynamicImportFetchCompletion,
-    ChildModuleDependencyFetchCompletion, ChildModulepreloadFetchCompletion,
-    ChildParserModuleRootFetchCompletion, DocumentWriteExternalScriptLoadCompletion,
-    PopupClassicScriptLoadCompletion, PopupDocumentLoadCompletion,
+    AsyncSubresourceFetchEvent, ChildBlockingStylesheetLoadCompletion,
+    ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion,
+    ChildDynamicImportFetchCompletion, ChildModuleDependencyFetchCompletion,
+    ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
+    DocumentWriteExternalScriptLoadCompletion, PopupClassicScriptLoadCompletion,
+    PopupDocumentLoadCompletion,
 };
 
 #[derive(Debug, Clone)]
@@ -326,37 +328,40 @@ impl RendererOwnerWakeSender {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RendererResourceCompletionSender {
-    page_completion_route: Option<RendererPageResourceCompletionRoute>,
-}
-
-#[derive(Debug, Clone)]
-struct RendererPageResourceCompletionRoute {
     sender: RendererPageResourceCompletionSender,
     root_document: RendererDocumentToken,
 }
 
 impl RendererResourceCompletionSender {
+    pub(crate) fn send_shared_script_source(
+        &self,
+        owner: crate::native_bridge::WindowDocumentOwner,
+        completion: crate::planning::SharedScriptSourceLoadCompleter,
+        outcome: crate::planning::PreparedScriptSourceLoadOutcome,
+    ) -> Result<(), RendererResourceCompletionRouteClosed> {
+        self.send_page_completion(|root_document| {
+            RendererPageResourceCompletion::shared_script_source(
+                root_document,
+                owner,
+                completion,
+                outcome,
+            )
+        })
+    }
+
     pub(crate) fn for_page_scheduler(
         page_completion_sender: RendererPageResourceCompletionSender,
         root_document: RendererDocumentToken,
     ) -> Self {
         Self {
-            page_completion_route: Some(RendererPageResourceCompletionRoute {
-                sender: page_completion_sender,
-                root_document,
-            }),
+            sender: page_completion_sender,
+            root_document,
         }
     }
 
-    /// Capability used by ServiceWorker interception paths whose actual
-    /// result travels through a dedicated oneshot channel.
-    ///
-    /// It deliberately owns no Page route. If an error path accidentally
-    /// attempts a Page completion, the typed send returns `RouteClosed`.
-    pub(crate) fn direct_completion_only() -> Self {
-        Self {
-            page_completion_route: None,
-        }
+    #[cfg(test)]
+    pub(crate) fn closed_for_test() -> Self {
+        RendererResourceCompletionTestHarness::new().sender()
     }
 
     /// Narrow constructor for tests that exercise one production Networking
@@ -371,10 +376,8 @@ impl RendererResourceCompletionSender {
         root_document: RendererDocumentToken,
     ) -> Self {
         Self {
-            page_completion_route: Some(RendererPageResourceCompletionRoute {
-                sender: page_completion_sender,
-                root_document,
-            }),
+            sender: page_completion_sender,
+            root_document,
         }
     }
 
@@ -382,13 +385,20 @@ impl RendererResourceCompletionSender {
         &self,
         make_completion: impl FnOnce(RendererDocumentToken) -> RendererPageResourceCompletion,
     ) -> Result<(), RendererResourceCompletionRouteClosed> {
-        let route = self
-            .page_completion_route
-            .as_ref()
-            .ok_or(RendererResourceCompletionRouteClosed)?;
-        route.sender.send(make_completion(route.root_document))
+        self.sender.send(make_completion(self.root_document))
     }
 
+    pub(crate) fn network_observer(
+        &self,
+    ) -> std::sync::Arc<dyn Fn(crate::runtime::RendererNetworkObservation) + Send + Sync> {
+        let completion = self.clone();
+        std::sync::Arc::new(move |event| {
+            let _ = completion
+                .send_async_subresource_event(AsyncSubresourceFetchEvent::NativeNetwork(event));
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn send_async_subresource(
         &self,
         completion: AsyncSubresourceFetchCompletion,
@@ -422,13 +432,11 @@ impl RendererResourceCompletionSender {
     pub(crate) fn send_main_parser_deferred_classic_source_load(
         &self,
         completion: MainParserDeferredClassicSourceLoadCompletion,
-        network_attribution: MainParserDeferredClassicSourceNetworkAttribution,
     ) -> Result<(), RendererResourceCompletionRouteClosed> {
         self.send_page_completion(|root_document| {
             RendererPageResourceCompletion::main_parser_deferred_classic_source(
                 root_document,
                 completion,
-                network_attribution,
             )
         })
     }
@@ -738,8 +746,7 @@ mod tests {
     };
     use crate::page_resource_completion::{
         MainDynamicImportGraphFetchCompletion, MainDynamicImportGraphFetchTarget,
-        MainModuleFetchNetworkAttribution, MainModulepreloadFetchCompletion,
-        MainModulepreloadFetchTarget, MainParserDeferredClassicSourceNetworkAttribution,
+        MainModulepreloadFetchCompletion, MainModulepreloadFetchTarget,
         MainParserModuleGraphFetchCompletion, MainParserModuleGraphFetchTarget,
         MainRuntimeModuleGraphFetchCompletion, MainRuntimeModuleGraphFetchTarget,
         RendererPageResourceCompletionOwner, RendererPageResourceTerminal,
@@ -749,9 +756,8 @@ mod tests {
     use crate::runtime::{RendererDocumentToken, RendererPageToken};
     use crate::types::{
         AsyncSubresourceFetchCompletion, ChildBlockingStylesheetLoadCompletion,
-        ChildClassicScriptLoadCompletion, ChildClassicScriptNetworkAttribution,
-        ChildDocumentLoadCompletion, ChildDocumentLoadOutcome, ChildDynamicImportFetchCompletion,
-        ChildModuleDependencyFetchCompletion, ChildModuleFetchNetworkAttribution,
+        ChildClassicScriptLoadCompletion, ChildDocumentLoadCompletion, ChildDocumentLoadOutcome,
+        ChildDynamicImportFetchCompletion, ChildModuleDependencyFetchCompletion,
         ChildModulepreloadFetchCompletion, ChildParserModuleRootFetchCompletion,
         DocumentWriteExternalScriptLoadCompletion, LoadedChildDocument,
         PopupDocumentLoadCompletion, PopupDocumentLoadOutcome,
@@ -812,30 +818,27 @@ mod tests {
     }
 
     #[test]
-    fn direct_completion_capability_rejects_page_routes_without_panicking() {
-        let sender = RendererResourceCompletionSender::direct_completion_only();
+    fn closed_page_route_rejects_script_completion_without_panicking() {
+        let sender = RendererResourceCompletionSender::closed_for_test();
         assert!(
             sender
                 .send_document_write_external_script(
                     DocumentWriteExternalScriptLoadCompletion::for_test(91),
                 )
                 .is_err(),
-            "direct-result ServiceWorker paths must not silently acquire a Page terminal route"
+            "a closed Page must reject script completion"
         );
     }
 
     fn async_subresource_completion(internal_id: u64) -> AsyncSubresourceFetchCompletion {
         AsyncSubresourceFetchCompletion {
+            network_request_headers: None,
             internal_id,
-            request_url: Url::parse("https://example.test/api").unwrap(),
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new().into(),
-            request_body: None,
             response_status_text: None,
             skip_fetch_security_validation: false,
             response_filter: None,
             network_error_text: None,
-            result: Err("test".to_owned()).into(),
+            result: Err("test".to_owned().into()),
         }
     }
 
@@ -861,15 +864,6 @@ mod tests {
                 source_bytes: None,
                 network_result: None,
             },
-        )
-    }
-
-    fn main_parser_deferred_network_attribution(
-        parser_position: usize,
-    ) -> MainParserDeferredClassicSourceNetworkAttribution {
-        MainParserDeferredClassicSourceNetworkAttribution::new(
-            Url::parse("https://example.test/document").unwrap(),
-            Url::parse(&format!("https://example.test/defer-{parser_position}.js")).unwrap(),
         )
     }
 
@@ -906,10 +900,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -941,10 +932,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -971,10 +959,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -1001,10 +986,7 @@ mod tests {
                 ModuleSource::text("export default 1;".to_owned()),
             )),
             None,
-            MainModuleFetchNetworkAttribution::new(
-                Url::parse("https://example.test/document").unwrap(),
-                request_url,
-            ),
+            request_url,
         )
     }
 
@@ -1040,34 +1022,17 @@ mod tests {
             handle: child_handle,
             script_handle: moli_dom::native::NativeNodeId::new(19),
             result: Ok("globalThis.childClassic = true".to_owned()),
-            network_result: None,
-            network_attribution: ChildClassicScriptNetworkAttribution {
-                frame_id: Some("child-frame".to_owned()),
-                document_url: Url::parse("https://example.test/child").unwrap(),
-                request_url: Url::parse("https://example.test/child.js").unwrap(),
-            },
         }
-    }
-
-    fn child_module_network_attribution(request_url: Url) -> ChildModuleFetchNetworkAttribution {
-        ChildModuleFetchNetworkAttribution::parser(
-            Some("child-module-frame".to_owned()),
-            Url::parse("https://example.test/child-module-document").unwrap(),
-            request_url,
-        )
     }
 
     fn child_modulepreload_completion(
         child_handle: moli_dom::native::NativeNodeId,
         owner: FrameDocumentTaskOwner,
     ) -> ChildModulepreloadFetchCompletion {
-        let request_url = Url::parse("https://example.test/child-modulepreload.js").unwrap();
         ChildModulepreloadFetchCompletion::new(
             ChildDocumentModuleFetchTarget::new(child_handle, owner, FrameRealmId(59)),
             83,
             Err("modulepreload fetch failed for route test".to_owned()),
-            None,
-            child_module_network_attribution(request_url),
         )
     }
 
@@ -1075,17 +1040,10 @@ mod tests {
         child_handle: moli_dom::native::NativeNodeId,
         owner: FrameDocumentTaskOwner,
     ) -> ChildDynamicImportFetchCompletion {
-        let request_url = Url::parse("https://example.test/child-dynamic-import.js").unwrap();
         ChildDynamicImportFetchCompletion::new(
             ChildDocumentModuleFetchTarget::new(child_handle, owner, FrameRealmId(59)),
             89,
             Err("dynamic import fetch failed for route test".to_owned()),
-            None,
-            ChildModuleFetchNetworkAttribution::dynamic_import(
-                Some("child-module-frame".to_owned()),
-                Url::parse("https://example.test/child-module-document").unwrap(),
-                request_url,
-            ),
         )
     }
 
@@ -1099,8 +1057,6 @@ mod tests {
             FrameRequestId(61),
             ModuleMapKey::java_script(request_url.clone()),
             Err("root fetch failed for route test".to_owned()),
-            None,
-            child_module_network_attribution(request_url),
         )
     }
 
@@ -1158,8 +1114,6 @@ mod tests {
             FrameRequestId(89),
             task,
             Err("dependency fetch failed for route test".to_owned()),
-            None,
-            child_module_network_attribution(dependency_url),
         )
     }
 
@@ -1173,7 +1127,7 @@ mod tests {
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),
                     character_set: "UTF-8".to_owned(),
-                    document_network: None,
+                    resource_timing: None,
                     markup: "<!doctype html><main>child</main>".to_owned(),
                 },
             ))),
@@ -1198,7 +1152,7 @@ mod tests {
                     policy_container: crate::document_runtime::DocumentPolicyContainer::default(),
                     content_type: Some("text/html".to_owned()),
                     character_set: "UTF-8".to_owned(),
-                    document_network: None,
+                    resource_timing: None,
                     markup: "<!doctype html><main>popup</main>".to_owned(),
                 },
             ))),
@@ -1219,10 +1173,9 @@ mod tests {
         let owner = frame_document_task_owner(7);
 
         sender
-            .send_main_parser_deferred_classic_source_load(
-                main_parser_deferred_completion(owner, 11),
-                main_parser_deferred_network_attribution(11),
-            )
+            .send_main_parser_deferred_classic_source_load(main_parser_deferred_completion(
+                owner, 11,
+            ))
             .expect("typed parser-deferred completion should enqueue");
         let (_, completion) = page_queue
             .pop_front()
@@ -1592,16 +1545,16 @@ mod tests {
         let colliding_local_owner = frame_document_task_owner(0);
 
         replacement_document_sender
-            .send_main_parser_deferred_classic_source_load(
-                main_parser_deferred_completion(colliding_local_owner, 2),
-                main_parser_deferred_network_attribution(2),
-            )
+            .send_main_parser_deferred_classic_source_load(main_parser_deferred_completion(
+                colliding_local_owner,
+                2,
+            ))
             .unwrap();
         old_document_sender
-            .send_main_parser_deferred_classic_source_load(
-                main_parser_deferred_completion(colliding_local_owner, 1),
-                main_parser_deferred_network_attribution(1),
-            )
+            .send_main_parser_deferred_classic_source_load(main_parser_deferred_completion(
+                colliding_local_owner,
+                1,
+            ))
             .unwrap();
 
         let first = page_queue.pop_front().unwrap().1;
@@ -2006,14 +1959,14 @@ mod tests {
     }
 
     #[test]
-    fn async_subresource_rejects_a_sender_without_a_page_route() {
-        let sender = RendererResourceCompletionSender::direct_completion_only();
+    fn closed_page_route_rejects_async_subresource_completion() {
+        let sender = RendererResourceCompletionSender::closed_for_test();
 
         assert!(
             sender
                 .send_async_subresource(async_subresource_completion(11))
                 .is_err(),
-            "typed async-subresource completion requires a stable Page route"
+            "a closed Page must reject async-subresource completion"
         );
     }
 }

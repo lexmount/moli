@@ -1,6 +1,6 @@
 use crate::devtools_runtime::DevToolsNetworkResourceType;
 use moli_cookie_jar::new_shared_browser_cookie_store;
-use moli_core::page::{SessionHistoryUpdateKind, SubresourceResourceType};
+use moli_core::page::SubresourceResourceType;
 
 use super::super::fetch_support::{
     FetchAuthChallenge, PendingFetchAuthNavigation, PendingFetchNavigation,
@@ -12,12 +12,10 @@ use super::fetch::{
     FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, TargetFetchOwner,
     TargetFetchState,
 };
-use super::navigation::{PageNavigationHistoryEntry, TargetNavigationHistoryState};
 use super::navigation_outcome::{NavigationDispatchState, NavigationResultProjection};
 use super::page_slot::DocumentStartScript;
-use super::runtime_slot::TargetRuntimeSlot;
 use super::session::TargetPageSessionState;
-use super::{PageTargetHost, target_state::TargetOwnerState};
+use super::target_state::TargetOwnerState;
 
 use serde_json::json;
 use std::collections::HashMap;
@@ -29,6 +27,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         redirect_headers: None,
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
         result_projection: NavigationResultProjection::Cdp(
             json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
         ),
@@ -44,13 +43,14 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         request_headers: Vec::new().into(),
         request_load_policy: crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
         timestamp: 0.0,
-        source_document_security: Default::default(),
     }
 }
 
 #[test]
-fn page_target_host_owns_session_state_directly() {
-    let mut target = PageTargetHost::empty("TID-state-test".to_owned());
+fn page_agent_host_owns_session_state_directly() {
+    let mut context = BrowserContext::new("CTX-session-state".into());
+    context.set_active_target_id("TID-state-test");
+    let target = context.active_page_target_mut();
     target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] = DevToolsSessionState {
         page_session_state: TargetPageSessionState {
             log_enabled: true,
@@ -805,7 +805,7 @@ fn pending_navigation_rejects_generic_request_action_without_consuming_id() {
     state.register_pending_fetch_navigation_request(PendingFetchNavigation {
         fetch_request_id: "FETCH-NAV".to_owned(),
         interception_session_id: Some("SID-fetch".to_owned()),
-        document_navigation_token: None,
+        navigation_permit: PendingFetchNavigation::test_navigation_permit(),
         navigation: test_navigation_dispatch_state("FETCH-NAV"),
         request_cookie_report: None,
         intercept_response: false,
@@ -850,7 +850,6 @@ fn pending_auth_navigation_rejects_generic_request_action_without_consuming_id()
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: "FETCH-AUTH".to_owned(),
             response_stage_request_id: "FETCH-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("FETCH-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -859,9 +858,7 @@ fn pending_auth_navigation_rejects_generic_request_action_without_consuming_id()
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -900,7 +897,6 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: "FETCH-AUTH".to_owned(),
             response_stage_request_id: "FETCH-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("FETCH-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -909,9 +905,7 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -934,7 +928,6 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
             owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
             fetch_request_id: "NETWORK-AUTH".to_owned(),
             response_stage_request_id: "NETWORK-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("NETWORK-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -943,9 +936,7 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -970,7 +961,7 @@ fn active_target_state_groups_runtime_fetch_and_owner_state() {
     let mut context =
         BrowserContext::new_with_page_for_test("BID-active-owner", "TID-active-owner");
 
-    assert!(!context.active_page_target().runtime_slot.has_loaded_page());
+    assert!(!context.has_loaded_page());
     assert!(!context.active_page_target().fetch_owner.is_enabled());
     assert!(context.active_page_target().owner_state.is_default());
 
@@ -1015,17 +1006,10 @@ fn active_target_state_groups_runtime_fetch_and_owner_state() {
 }
 
 #[test]
-#[should_panic(
-    expected = "replace_loaded_page(None) is not a valid production transition; use clear_loaded_page_with_reason"
-)]
-fn replace_loaded_page_rejects_implicit_no_page_transition() {
-    let mut slot = TargetRuntimeSlot::default();
-    let _ = slot.replace_loaded_page(None);
-}
-
-#[test]
 fn background_target_owns_fetch_state() {
-    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
+    let mut context = BrowserContext::new("CTX-projection-state".into());
+    assert!(context.register_page_target_url_fixture("TID-A".into(), None, "about:blank".into()));
+    let target = context.page_target_mut("TID-A").unwrap();
     assert!(target.fetch_owner.pending_state().is_empty());
 
     target
@@ -1042,172 +1026,10 @@ fn background_target_owns_fetch_state() {
 }
 
 #[test]
-fn navigation_history_seed_entry_preserves_pending_update() {
-    let mut history = TargetNavigationHistoryState::default();
-    history.mark_replace_current();
-
-    let seed_id = history.allocate_entry_id();
-    history.seed_entry(PageNavigationHistoryEntry {
-        id: seed_id,
-        url: "https://example.test/seed".to_owned(),
-        user_typed_url: "https://example.test/seed".to_owned(),
-        title: "seed".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-
-    let reloaded_id = history.allocate_entry_id();
-    history.record_loaded_entry(PageNavigationHistoryEntry {
-        id: reloaded_id,
-        url: "https://example.test/reloaded".to_owned(),
-        user_typed_url: "https://example.test/reloaded".to_owned(),
-        title: "reloaded".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.test/reloaded");
-    assert_eq!(entries[0].user_typed_url, "https://example.test/seed");
-    assert_eq!(entries[0].transition_type, "reload");
-}
-
-#[test]
-fn initial_empty_document_seeds_browser_navigation_history_metadata() {
-    let mut owner = TargetOwnerState::default();
-
-    owner.begin_initial_empty_document(
-        "TID-initial".to_owned(),
-        "about:blank".to_owned(),
-        None,
-        None,
-    );
-
-    let (current_index, entries) = owner.navigation_history_snapshot(None);
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "about:blank");
-    assert_eq!(entries[0].user_typed_url, "about:blank");
-    assert_eq!(entries[0].transition_type, "auto_toplevel");
-}
-
-#[test]
-fn direct_target_initial_url_replaces_empty_document_history_entry() {
-    let mut owner = TargetOwnerState::default();
-
-    owner.begin_initial_empty_document(
-        "TID-direct".to_owned(),
-        "about:blank".to_owned(),
-        None,
-        None,
-    );
-    owner.mark_next_navigation_history_replace_initial_empty_document();
-    owner.record_loaded_page_navigation_history((
-        "https://example.test/direct".to_owned(),
-        "direct".to_owned(),
-    ));
-
-    let (current_index, entries) = owner.navigation_history_snapshot(None);
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.test/direct");
-    assert_eq!(entries[0].user_typed_url, "https://example.test/direct");
-    assert_eq!(entries[0].title, "direct");
-    assert_eq!(entries[0].transition_type, "auto_toplevel");
-}
-
-#[test]
-fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
-    let mut history = TargetNavigationHistoryState::default();
-    let initial_id = history.allocate_entry_id();
-    history.seed_entry(PageNavigationHistoryEntry {
-        id: initial_id,
-        url: "https://example.test/initial".to_owned(),
-        user_typed_url: "https://example.test/initial".to_owned(),
-        title: "initial".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-    assert!(history.record_session_history_update(
-        "https://example.test/pushed".to_owned(),
-        "pushed".to_owned(),
-        SessionHistoryUpdateKind::Push,
-    ));
-    let pushed_id = history.snapshot().1[1].id;
-
-    history.mark_replace_current();
-    assert!(
-        history.can_prune_all_but_current(),
-        "a new pending reload/replace entry must survive pruning"
-    );
-    assert!(history.prune_all_but_current());
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].id, pushed_id);
-
-    history.mark_traverse_to_entry(pushed_id);
-    assert!(
-        !history.can_prune_all_but_current(),
-        "pending traversal to an existing history index cannot be pruned"
-    );
-    assert!(!history.prune_all_but_current());
-}
-
-#[test]
-fn navigation_history_traversal_reuses_same_document_entries() {
-    let mut history = TargetNavigationHistoryState::default();
-    let initial_id = history.allocate_entry_id();
-    history.seed_entry(PageNavigationHistoryEntry {
-        id: initial_id,
-        url: "https://example.test/page".to_owned(),
-        user_typed_url: "https://example.test/page".to_owned(),
-        title: "page".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-    assert!(history.record_session_history_update(
-        "https://example.test/page?state=pushed".to_owned(),
-        "page".to_owned(),
-        SessionHistoryUpdateKind::Push,
-    ));
-
-    let (_, entries) = history.snapshot();
-    let pushed_id = entries[1].id;
-    assert_eq!(
-        entries[0].document_sequence_number, entries[1].document_sequence_number,
-        "pushState entries must retain the current document sequence"
-    );
-    assert_eq!(entries[1].user_typed_url, "https://example.test/page");
-    assert_eq!(entries[1].transition_type, "link");
-
-    assert!(history.record_session_history_update(
-        "https://example.test/page".to_owned(),
-        "page".to_owned(),
-        SessionHistoryUpdateKind::Traverse { delta: -1 },
-    ));
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].id, initial_id);
-    assert_eq!(entries[1].id, pushed_id);
-
-    assert!(history.record_session_history_update(
-        "https://example.test/page?state=pushed".to_owned(),
-        "page".to_owned(),
-        SessionHistoryUpdateKind::Traverse { delta: 1 },
-    ));
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 1);
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[1].id, pushed_id);
-}
-
-#[test]
 fn background_target_keeps_owner_state_independent_from_network_artifacts() {
-    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
+    let mut context = BrowserContext::new("CTX-projection-state".into());
+    assert!(context.register_page_target_url_fixture("TID-A".into(), None, "about:blank".into()));
+    let target = context.page_target_mut("TID-A").unwrap();
 
     let mut owner_state = TargetOwnerState {
         next_document_start_script_id: 9,
@@ -1235,7 +1057,7 @@ fn background_target_keeps_owner_state_independent_from_network_artifacts() {
     assert_eq!(
         restored
             .runtime_observable_state
-            .emitted_console_entries_for_context(42, None),
+            .emitted_console_entries_for_context(42),
         3
     );
     assert_eq!(
@@ -1317,7 +1139,9 @@ fn devtools_session_runtime_context_clear_resets_child_default_emission_cursor()
 
 #[test]
 fn background_target_mutates_owner_state_in_place() {
-    let mut target = PageTargetHost::with_url("TID-A".to_owned(), None, "about:blank".to_owned());
+    let mut context = BrowserContext::new("CTX-projection-state".into());
+    assert!(context.register_page_target_url_fixture("TID-A".into(), None, "about:blank".into()));
+    let target = context.page_target_mut("TID-A").unwrap();
 
     let identifier = {
         let owner_state = &mut target.owner_state;
@@ -1393,7 +1217,7 @@ fn seed_initial_cookies_keeps_store_available_after_lock_holder_panic() {
         panic!("panic while holding cookie store lock");
     }));
 
-    super::browser_context::seed_initial_cookies(
+    moli_core::browser::seed_initial_cookies_for_test(
         &cookie_store,
         vec![stored_cookie("sid", "seeded")],
     );
@@ -1430,7 +1254,8 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
     );
     assert_eq!(context.snapshot_cookies().len(), 2);
     {
-        let mut store = context.web_storage_store_for_test().lock();
+        let store_handle = context.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "1"));
         assert!(store.set_item(&sibling_storage_key, "local", "2"));
     }
@@ -1451,7 +1276,8 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
     let cookies = context.snapshot_cookies();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sibling");
-    let mut store = context.web_storage_store_for_test().lock();
+    let store_handle = context.web_storage_store_for_test();
+    let mut store = store_handle.lock();
     assert_eq!(store.get_item(&storage_key, "local"), None);
     assert_eq!(
         store.get_item(&sibling_storage_key, "local"),
@@ -1460,7 +1286,7 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
 }
 
 #[test]
-fn navigation_request_identity_rejects_stale_tokens_without_ordering() {
+fn browser_navigation_identity_rejects_stale_tokens_without_ordering() {
     let mut context = BrowserContext::new("CTX-nav".to_owned());
     context.set_active_target_id("TID-nav");
     context.attach_active_session("SID-nav");
@@ -1471,16 +1297,21 @@ fn navigation_request_identity_rejects_stale_tokens_without_ordering() {
     assert!(context.accepts_pending_document_navigation_event(&first));
 
     let second = context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
+        .start_document_navigation_for_active_target("LOADER-1".to_owned())
         .expect("active target should create second navigation token");
     assert!(context.accepts_pending_document_navigation_event(&second));
     assert!(
         !context.accepts_pending_document_navigation_event(&first),
         "a new navigation request identity must make previous events stale"
     );
-    assert_ne!(second.request_id, first.request_id);
-    assert_eq!(second.target_id, "TID-nav");
-    assert_eq!(second.loader_id, "LOADER-2");
+    assert_ne!(
+        second, first,
+        "even reusing a frontend loader must allocate a distinct navigation"
+    );
+    assert_eq!(
+        context.current_document_loader_id_for_target(context.active_target_id().unwrap()),
+        Some("LOADER-1")
+    );
 }
 
 #[test]
@@ -1507,10 +1338,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     context.begin_active_target_initial_empty_document("about:blank#active".to_owned());
 
     assert_eq!(
-        context
-            .active_page_target()
-            .runtime_slot
-            .moli_memory_diagnostics()["loadedPageAbsenceReason"],
+        context.runtime_slot_diagnostics_for_target(context.active_target_id().unwrap())["loadedPageAbsenceReason"],
         json!("initial-document-page-build-pending"),
         "active initial document target should make the missing Page reason explicit"
     );
@@ -1521,22 +1349,25 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     );
 
     let initial = context
-        .active_page_target()
-        .owner_state
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(context.active_target_id().unwrap())
         .expect("active target should record initial empty document");
-    assert_eq!(initial.target_id(), "TID-initial-active");
+    assert_eq!(
+        context.moli_memory_diagnostics()["activeOwnerState"]["initialEmptyDocument"]["targetId"],
+        "TID-initial-active"
+    );
     assert_eq!(initial.initial_url(), "about:blank#active");
     assert!(initial.is_on_initial_empty_document());
     assert!(!initial.materialized());
-    assert!(!initial.pending_cross_document_navigation());
+    assert!(
+        !context.target_initial_empty_document_has_pending_cross_document_navigation(
+            context.active_target_id().unwrap()
+        )
+    );
 
     context.mark_target_initial_empty_document_materialized("TID-initial-active");
     assert!(
         context
-            .active_page_target()
-            .owner_state
-            .initial_empty_document_state()
+            .target_initial_empty_document_state(context.active_target_id().unwrap())
             .expect("initial empty document state")
             .materialized()
     );
@@ -1545,41 +1376,85 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         .start_document_navigation_for_active_target("LOADER-initial-active".to_owned())
         .expect("active target should start document navigation");
     let pending = context
-        .active_page_target()
-        .owner_state
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(context.active_target_id().unwrap())
         .expect("initial empty document state");
     assert!(pending.is_on_initial_empty_document());
-    assert!(pending.pending_cross_document_navigation());
+    assert!(
+        context.target_initial_empty_document_has_pending_cross_document_navigation(
+            context.active_target_id().unwrap()
+        )
+    );
 
-    context.clear_pending_document_navigation_for_target_if_loader_matches(
+    context.clear_pending_document_navigation_for_target_if_matches(
         Some("TID-initial-active"),
-        "LOADER-initial-active",
+        &token,
     );
     let cleared = context
-        .active_page_target()
-        .owner_state
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(context.active_target_id().unwrap())
         .expect("initial empty document state");
     assert!(cleared.is_on_initial_empty_document());
-    assert!(!cleared.pending_cross_document_navigation());
+    assert!(
+        !context.target_initial_empty_document_has_pending_cross_document_navigation(
+            context.active_target_id().unwrap()
+        )
+    );
 
     let committed = context
         .start_document_navigation_for_active_target("LOADER-initial-active-2".to_owned())
         .expect("active target should restart document navigation");
     context.commit_document_navigation_if_matches(&committed);
     let exited = context
-        .active_page_target()
-        .owner_state
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(context.active_target_id().unwrap())
         .expect("initial empty document state");
     assert!(exited.exited());
-    assert!(!exited.pending_cross_document_navigation());
+    assert!(
+        !context.target_initial_empty_document_has_pending_cross_document_navigation(
+            context.active_target_id().unwrap()
+        )
+    );
     assert!(!exited.is_on_initial_empty_document());
     assert!(
         !context.accepts_pending_document_navigation_event(&token),
         "cleared navigation must stay rejected"
     );
+}
+
+#[test]
+fn initial_document_admission_tracks_navigation_owner_without_a_pending_mirror() {
+    let mut context = BrowserContext::new("CTX-initial-navigation-owner".into());
+    context.set_active_target_id("TID-initial-navigation-owner");
+    context.begin_active_target_initial_empty_document("about:blank".into());
+    assert!(
+        context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner")
+    );
+
+    let navigation = context
+        .begin_target_document_navigation("TID-initial-navigation-owner", "LOADER-reused".into());
+    assert!(
+        !context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner"),
+        "the navigation owner alone must close initial Document admission"
+    );
+    let cancellation = context
+        .document_navigation_cancellation_handle_for_target(
+            "TID-initial-navigation-owner",
+            &navigation,
+        )
+        .unwrap();
+    context.clear_document_navigation_state_for_active_target();
+    assert!(cancellation.is_cancelled());
+    assert!(
+        context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner")
+    );
+
+    let navigation = context
+        .start_document_navigation_for_active_target("LOADER-reused".into())
+        .unwrap();
+    context.clear_document_navigation_state_for_active_target();
+    assert!(
+        context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner"),
+        "clearing the exact navigation state must not leave an initial Document pending flag"
+    );
+    assert!(!context.accepts_pending_document_navigation_event(&navigation));
 }
 
 #[test]
@@ -1621,11 +1496,7 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     );
 
     assert_eq!(
-        context
-            .background_target_at(0)
-            .unwrap()
-            .runtime_slot()
-            .moli_memory_diagnostics()["loadedPageAbsenceReason"],
+        context.runtime_slot_diagnostics_for_target("TID-initial-bg")["loadedPageAbsenceReason"],
         json!("initial-document-page-build-pending"),
         "background initial document target should make the missing Page reason explicit"
     );
@@ -1636,12 +1507,15 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     );
 
     let initial = context
-        .background_target("TID-initial-bg")
-        .expect("background target must exist")
-        .owner_state
-        .initial_empty_document_state()
+        .target_initial_empty_document_state("TID-initial-bg")
         .expect("background target should record initial empty document");
-    assert_eq!(initial.target_id(), "TID-initial-bg");
+    assert_eq!(
+        context
+            .background_target("TID-initial-bg")
+            .unwrap()
+            .target_id(),
+        "TID-initial-bg"
+    );
     assert_eq!(initial.initial_url(), "about:blank#background");
     assert!(initial.is_on_initial_empty_document());
     assert!(!initial.materialized());
@@ -1649,10 +1523,7 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     context.mark_target_initial_empty_document_materialized("TID-initial-bg");
     assert!(
         context
-            .background_target("TID-initial-bg")
-            .expect("background target must exist")
-            .owner_state
-            .initial_empty_document_state()
+            .target_initial_empty_document_state("TID-initial-bg")
             .expect("initial empty document state")
             .materialized()
     );
@@ -1662,23 +1533,18 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
         .expect("background target should start document navigation");
     assert!(
         context
-            .background_target("TID-initial-bg")
-            .expect("background target must exist")
-            .owner_state
-            .initial_empty_document_state()
-            .expect("initial empty document state")
-            .pending_cross_document_navigation()
+            .target_initial_empty_document_has_pending_cross_document_navigation("TID-initial-bg")
     );
 
     context.commit_document_navigation_if_matches(&token);
     let exited = context
-        .background_target("TID-initial-bg")
-        .expect("background target must exist")
-        .owner_state
-        .initial_empty_document_state()
+        .target_initial_empty_document_state("TID-initial-bg")
         .expect("initial empty document state");
     assert!(exited.exited());
-    assert!(!exited.pending_cross_document_navigation());
+    assert!(
+        !context
+            .target_initial_empty_document_has_pending_cross_document_navigation("TID-initial-bg")
+    );
     assert!(!exited.is_on_initial_empty_document());
 }
 

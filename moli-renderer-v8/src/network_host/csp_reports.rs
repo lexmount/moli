@@ -1,11 +1,12 @@
 use super::*;
+use crate::content_security_policy::ContentSecurityPolicyRedirectStatus;
 use crate::content_security_policy::{
     ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
 };
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::WorkerOwnerScope;
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchResultSender, ServiceWorkerRequestDestination,
     service_worker_fetch_request_metadata,
 };
 use moli_fetch::{
@@ -94,10 +95,89 @@ impl ContentSecurityPolicyReportOwner {
     }
 }
 
+/// Frozen at fetch admission and retained with the physical response, so a
+/// retired Window cannot discard or replace its response policy.
+pub(crate) struct WindowFetchResponsePolicy {
+    connect: crate::document_runtime::DocumentConnectPolicySnapshot,
+    reports: WindowCspReportRequestContext,
+    redirect_failure: std::sync::OnceLock<Option<String>>,
+}
+
+impl WindowFetchResponsePolicy {
+    pub(crate) fn new(
+        connect: crate::document_runtime::DocumentConnectPolicySnapshot,
+        reports: WindowCspReportRequestContext,
+    ) -> Self {
+        Self {
+            connect,
+            reports,
+            redirect_failure: Default::default(),
+        }
+    }
+
+    pub(crate) fn check_redirect(
+        &self,
+        final_url: &url::Url,
+        mut report: impl FnMut(
+            &WindowCspReportRequestContext,
+            &crate::document_runtime::DocumentContentSecurityPolicyViolation,
+        ),
+    ) -> Option<String> {
+        self.redirect_failure
+            .get_or_init(|| {
+                let redirect = ContentSecurityPolicyRedirectStatus::FollowedRedirect;
+                if let Some(violation) = self.connect.report_only_violation(
+                    &self.reports.document_url,
+                    final_url,
+                    redirect,
+                ) {
+                    report(&self.reports, &violation);
+                }
+                let violation = self.connect.enforce_violation(
+                    &self.reports.document_url,
+                    final_url,
+                    redirect,
+                )?;
+                report(&self.reports, &violation);
+                Some(
+                    crate::document_runtime::document_content_security_policy_error_message(
+                        &violation, "fetch",
+                    ),
+                )
+            })
+            .clone()
+    }
+
+    pub(crate) fn check_unclaimed_response(
+        &self,
+        request: &crate::runtime::RendererNetworkRequest,
+        final_url: &url::Url,
+    ) -> Option<String> {
+        self.check_redirect(final_url, |context, violation| {
+            let fields = ContentSecurityPolicyViolationEventFields::from(violation);
+            for report in content_security_policy_report_requests(
+                &fields,
+                &violation.report_uri_endpoints,
+                &violation.report_to_endpoints,
+            ) {
+                send_content_security_policy_report_request(
+                    None,
+                    context,
+                    request.dependent_request(),
+                    report,
+                );
+            }
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct WindowCspReportRequestContext {
     identity: crate::native_bridge::WindowDocumentNetworkRequestIdentity,
+    network: crate::runtime::RendererDocumentNetworkReporter,
+    completion_tx: crate::page_task_queue::RendererResourceCompletionSender,
     resource_loader: crate::network::context::DocumentResourceLoader,
+    browser_context: crate::runtime::RendererBrowserContextRuntime,
     request_client: ResourceRequestClient,
     frame_id: Option<String>,
     document_url: url::Url,
@@ -183,13 +263,17 @@ fn send_content_security_policy_reports_from_window_context(
     for request in
         content_security_policy_report_requests(fields, report_uri_endpoints, report_to_endpoints)
     {
-        send_content_security_policy_report_request(host, request_context, request);
+        let Some(network) = request_context.network.start_request() else {
+            return;
+        };
+        send_content_security_policy_report_request(Some(host), request_context, network, request);
     }
 }
 
 fn send_content_security_policy_report_request(
-    host: &mut JsContextHost,
+    mut host: Option<&mut JsContextHost>,
     request_context: &WindowCspReportRequestContext,
+    request_network: crate::runtime::RendererNetworkRequest,
     request: Request,
 ) {
     if !matches!(request.url.scheme(), "http" | "https") {
@@ -201,42 +285,58 @@ fn send_content_security_policy_report_request(
         .with_request_origin(request_context.request_origin.clone())
         .with_network_partition_key(request_context.network_partition_key.clone())
         .with_subframe_context(request_context.frame_id.is_some());
-    let info = report_subresource_fetch_info(
+    let mut info = report_subresource_fetch_info(
         &request_context.request_client,
         request_context.frame_id.clone(),
         &request_context.document_url,
         &request,
     );
 
+    info.network_request_handle = Some(request_network.handle());
+    let completion_tx = request_context.completion_tx.clone();
+    let (network, started) = crate::network::ResourceTransfer::start(
+        request_network,
+        move |observation| {
+            let _ = completion_tx.send_async_subresource_event(
+                AsyncSubresourceFetchEvent::NativeNetwork(observation),
+            );
+        },
+        |network| keepalive_request_started(network, &info),
+    );
+    if let Some(host) = host.as_deref_mut() {
+        host.record_native_resource_observation(started);
+    } else {
+        network.observe(started);
+    }
     if request_context
         .request_client
         .page_network_policy()
         .snapshot()
         .blocks_url(&request.url)
     {
-        record_content_security_policy_report_failure(
-            host,
-            info,
+        network.failed(&crate::network::ResourceResponseFailure::Request(
             BLOCKED_BY_CLIENT_ERROR_TEXT.to_owned(),
-        );
+        ));
         return;
     }
     if should_request_be_blocked_due_to_bad_port(&request.url) {
-        record_content_security_policy_report_failure(
-            host,
-            info,
-            format!("csp report: blocked bad port for `{}`", request.url),
-        );
+        network.failed(&crate::network::ResourceResponseFailure::Request(format!(
+            "csp report: blocked bad port for `{}`",
+            request.url
+        )));
         return;
     }
 
-    if host.should_intercept_subresource(SubresourceResourceType::CspReport) {
+    if let Some(host) = host.as_deref_mut()
+        && host.should_intercept_subresource(SubresourceResourceType::CspReport)
+    {
         let load = request_context.register_report_load(None);
         host.record_pending_subresource_csp_report(
             request_context.identity,
             request_context.request_origin.clone(),
             request_context.client_id,
             load,
+            network,
             request_context.network_partition_key.clone(),
             request_context.policy_context,
             info,
@@ -250,147 +350,74 @@ fn send_content_security_policy_report_request(
         .snapshot()
         .network_offline()
     {
-        record_content_security_policy_report_failure(
-            host,
-            info,
+        network.failed(&crate::network::ResourceResponseFailure::Request(
             "Network emulation offline".to_owned(),
-        );
+        ));
         return;
     }
 
-    if dispatch_service_worker_content_security_policy_report(
-        host,
-        request_context,
-        info.clone(),
-        request.clone(),
-    ) {
-        return;
-    }
-
-    let loader = request_context.request_client.clone();
-    spawn_content_security_policy_report_fetch(host, loader, request_context, info, request);
-}
-
-fn dispatch_service_worker_content_security_policy_report(
-    host: &mut JsContextHost,
-    request_context: &WindowCspReportRequestContext,
-    info: PendingSubresourceFetchInfo,
-    request: Request,
-) -> bool {
-    if host
-        .service_worker_controller_for_fetch(
+    let cancel_handle = FetchCancelHandle::new();
+    let load = request_context.register_report_load(Some(cancel_handle.clone()));
+    let resource = KeepaliveResource::new(network, load);
+    let controller = match host {
+        Some(host) => host.service_worker_controller_for_fetch(
             request_context.client_id,
             &info.document_url,
             &request.url,
-        )
-        .is_none()
-    {
-        return false;
-    }
-
-    let cancel_handle = FetchCancelHandle::new();
-    let load = request_context.register_report_load(Some(cancel_handle.clone()));
-    let internal_id = host.record_async_subresource_csp_report(
-        request_context.identity,
-        request_context.request_origin.clone(),
-        request_context.client_id,
-        load,
-        request_context.network_partition_key.clone(),
-        request_context.policy_context,
-        info.clone(),
-    );
-    let request_body_text = report_request_body_text(&request);
-    let dispatch = ServiceWorkerFetchDispatch {
-        internal_id,
-        request: host.service_worker_fetch_request(
-            request_context.client_id,
-            request.url.clone(),
-            request.method.clone(),
-            request.request_headers.clone(),
-            request.body.clone(),
-            ServiceWorkerRequestDestination::Report,
-            request.request_mode,
-            request.credentials_mode,
-            request.redirect_mode,
-            request.priority_hints.fetch_priority,
-            service_worker_fetch_request_metadata(&request),
         ),
-        cors_preflight_request_headers: Vec::new(),
-        request_cookie_report: info.request_cookie_report.clone(),
-        network_context: AsyncSubresourceNetworkContext {
-            frame_id: info.frame_id.clone(),
-            request_origin: request_context.request_origin.clone(),
-            document_url: info.document_url.clone(),
-            resource_type: SubresourceResourceType::CspReport,
-            policy_context: request_context.policy_context,
-        },
-        completion_tx: host.resource_completion_sender(),
-        request_client: request_context.request_client.clone(),
-        resource_task_runner: request_context.resource_loader.task_runner(),
-        cancel_handle,
-        direct_completion_tx: None,
+        None if !request_context.request_client.bypass_service_worker() => request_context
+            .browser_context
+            .service_worker_controller_for_fetch(request_context.client_id, &request.url),
+        None => None,
     };
-    if host.dispatch_service_worker_fetch(dispatch) {
-        return true;
+    if controller.is_some() {
+        let dispatch = ServiceWorkerFetchDispatch {
+            internal_id: 0,
+            request: crate::service_worker_runtime::ServiceWorkerFetchRequest {
+                client_id: request_context.client_id,
+                resulting_client_id: None,
+                url: request.url.clone(),
+                method: request.method.clone(),
+                headers: request.request_headers.to_byte_strings(),
+                body: request.body.clone(),
+                destination: ServiceWorkerRequestDestination::Report,
+                request_mode: request.request_mode,
+                credentials_mode: request.credentials_mode,
+                redirect_mode: request.redirect_mode,
+                priority: request.priority_hints.fetch_priority,
+                is_reload: false,
+                metadata: service_worker_fetch_request_metadata(&request),
+            },
+            cors_preflight_request_headers: Vec::new(),
+            request_cookie_report: info.request_cookie_report,
+            network_context: AsyncSubresourceNetworkContext {
+                frame_id: info.frame_id,
+                request_origin: request_context.request_origin.clone(),
+                document_url: info.document_url,
+                resource_type: SubresourceResourceType::CspReport,
+                policy_context: request_context.policy_context,
+            },
+            result_tx: ServiceWorkerFetchResultSender::CspReport {
+                resource: resource.clone(),
+                request: Box::new(request),
+            },
+            request_client: request_context.request_client.clone(),
+            resource_task_runner: request_context.resource_loader.task_runner(),
+            cancel_handle,
+        };
+        if !request_context
+            .browser_context
+            .dispatch_service_worker_fetch(dispatch)
+        {
+            resource.fail("service worker csp report fetch dispatch failed".into());
+        }
+    } else {
+        resource.fetch(
+            request_context.request_client.clone(),
+            request,
+            cancel_handle,
+        );
     }
-
-    let _ =
-        host.resource_completion_sender()
-            .send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url: request.url,
-                request_method: request.method,
-                request_headers: request.request_headers.clone(),
-                request_body: request_body_text,
-                response_status_text: None,
-                skip_fetch_security_validation: true,
-                response_filter: Default::default(),
-                network_error_text: None,
-                result: Err("service worker csp report fetch dispatch failed".to_owned()).into(),
-            });
-    true
-}
-
-fn spawn_content_security_policy_report_fetch(
-    host: &mut JsContextHost,
-    request_client: ResourceRequestClient,
-    request_context: &WindowCspReportRequestContext,
-    info: PendingSubresourceFetchInfo,
-    request: Request,
-) {
-    let cancel_handle = FetchCancelHandle::new();
-    let load = request_context.register_report_load(Some(cancel_handle.clone()));
-    let task_runner = load.task_runner();
-    let internal_id = host.record_async_subresource_csp_report(
-        request_context.identity,
-        request_context.request_origin.clone(),
-        request_context.client_id,
-        load,
-        request_context.network_partition_key.clone(),
-        request_context.policy_context,
-        info.clone(),
-    );
-    let request_body_text = report_request_body_text(&request);
-    spawn_async_subresource_fetch(
-        task_runner,
-        host.resource_completion_sender(),
-        request_client,
-        request.clone(),
-        Some(cancel_handle),
-        Vec::new(),
-        internal_id,
-        AsyncSubresourceNetworkContext {
-            frame_id: info.frame_id,
-            request_origin: request_context.request_origin.clone(),
-            document_url: info.document_url,
-            resource_type: SubresourceResourceType::CspReport,
-            policy_context: request_context.policy_context,
-        },
-        request.url,
-        request.method,
-        request.request_headers.clone(),
-        request_body_text,
-    );
 }
 
 fn report_subresource_fetch_info(
@@ -465,6 +492,9 @@ fn window_csp_report_request_context_for_identity(
     };
     Some(WindowCspReportRequestContext {
         identity,
+        network: host.document_network_reporter()?,
+        completion_tx: host.resource_completion_sender(),
+        browser_context: host.browser_context_runtime(),
         request_client: resource_loader.frozen_request_client(),
         resource_loader,
         frame_id,
@@ -488,21 +518,4 @@ fn report_request_body_text(request: &Request) -> Option<String> {
         .body
         .as_ref()
         .map(|body| String::from_utf8_lossy(body).into_owned())
-}
-
-fn record_content_security_policy_report_failure(
-    host: &mut JsContextHost,
-    info: PendingSubresourceFetchInfo,
-    message: String,
-) {
-    host.record_subresource_network(SubresourceNetworkRecord::failure(
-        info.frame_id,
-        info.document_url,
-        info.url,
-        info.method,
-        info.request_headers,
-        info.request_body,
-        SubresourceResourceType::CspReport,
-        message,
-    ));
 }

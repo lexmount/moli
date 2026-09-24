@@ -37,9 +37,8 @@ use crate::{
         style_engine::MoliStyleEngine,
         text_codec::TextCodecStore,
         types::{
-            BroadcastChannelId, DedicatedWorkerId, ImageRequestKey,
-            InFlightWorkerSubresourceFetchState, MessagePortId, NetworkBodySourceId,
-            PendingSubresourceAuthState, PendingSubresourceFetchState,
+            BroadcastChannelId, DedicatedWorkerId, ImageRequestKey, MessagePortId,
+            NetworkBodySourceId, PendingSubresourceAuthState, PendingSubresourceFetchState,
             PendingSubresourceResponseState, PendingWebSocketResponseState,
             RunningSubresourceFetchState, ScriptErrorConstructorKind, ScriptNetworkOutputItem,
             StreamingSubresourceFetchState, SubresourceResourceType,
@@ -51,14 +50,10 @@ use crate::{
 };
 #[cfg(test)]
 use crate::{
-    runtime::{
-        RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-        RendererPendingPopupActivation,
-    },
+    runtime::{RendererPendingDownloadActivation, RendererPendingFileChooserActivation},
     types::{PendingSubresourceContinueEvent, PendingSubresourceFetchInfo},
 };
 use indexmap::IndexMap;
-use moli_shared_worker::SharedWorkerClientOwnerId;
 use std::{
     cell::{Cell, OnceCell, RefCell},
     collections::{HashMap, HashSet, VecDeque},
@@ -857,7 +852,6 @@ pub(crate) struct JsContextHost {
     force_child_default_context_preflight_failure: bool,
     child_browsing_context_document_handles: HashMap<DomHandle, DomHandle>,
     document_domain_override: Option<String>,
-    next_child_browsing_context_id: u64,
     next_child_document_load_id: u64,
     next_child_classic_script_load_id: u64,
     pending_child_document_navigations: HashMap<u64, PendingChildDocumentNavigation>,
@@ -967,9 +961,6 @@ pub(crate) struct JsContextHost {
     internal_inspector_value_references: HashMap<u64, v8::Global<v8::Value>>,
     #[cfg(test)]
     completed_child_browsing_context_loads: Vec<ChildFrameNavigationSnapshot>,
-    #[cfg(test)]
-    completed_child_document_networks:
-        Vec<crate::protocol_types::ChildFrameDocumentNetworkActivitySnapshot>,
     active_child_subresource_request_scopes: Vec<DomHandle>,
     child_window_event_listeners:
         HashMap<DomHandle, IndexMap<String, Vec<ChildWindowEventListenerEntry>>>,
@@ -982,8 +973,6 @@ pub(crate) struct JsContextHost {
     message_port_registry: SharedMessagePortRegistry,
     message_port_wrappers: HashMap<MessagePortId, MessagePortWrapperEntry>,
     broadcast_channel_registry: SharedBroadcastChannelRegistry,
-    shared_worker_client_owner_id: SharedWorkerClientOwnerId,
-    child_shared_worker_client_owner_ids: HashMap<DomHandle, SharedWorkerClientOwnerId>,
     shared_worker_clients: SharedWorkerClientEndpointOwner,
     top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     web_storage_opaque_context_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
@@ -1018,13 +1007,12 @@ pub(crate) struct JsContextHost {
     pending_runtime_binding_calls: Vec<PendingRuntimeBindingCall>,
     next_runtime_observable_context_token: RuntimeObservableContextToken,
     pending_runtime_observable_console_source_events:
-        Vec<PendingRuntimeObservableConsoleSourceEvent>,
+        moli_page_types::OutputHistory<PendingRuntimeObservableConsoleSourceEvent>,
     #[cfg(test)]
     pending_file_chooser_activations: Vec<RendererPendingFileChooserActivation>,
     #[cfg(test)]
     pending_download_activations: Vec<RendererPendingDownloadActivation>,
-    #[cfg(test)]
-    pending_popup_activations: Vec<RendererPendingPopupActivation>,
+    pub(crate) popup_broker: crate::runtime::RendererPopupBroker,
     next_lightweight_popup_id: u64,
     next_lightweight_popup_local_window_id: u64,
     next_lightweight_popup_document_id: u64,
@@ -1047,7 +1035,6 @@ pub(crate) struct JsContextHost {
     javascript_dialog_handler_enabled: bool,
     pending_network_output: Vec<ScriptNetworkOutputItem>,
     focus_change_epoch: u64,
-    next_subresource_network_request_handle: u64,
     subresource_activity_epoch: u64,
     subresource_last_activity_at: std::time::Instant,
     fetch_subresource_interception_enabled: bool,
@@ -1062,7 +1049,6 @@ pub(crate) struct JsContextHost {
     pending_subresource_fetch_infos: Vec<PendingSubresourceFetchInfo>,
     running_subresource_fetches: HashMap<u64, RunningSubresourceFetchState>,
     streaming_subresource_fetches: HashMap<u64, StreamingSubresourceFetchState>,
-    in_flight_worker_subresource_fetches: HashMap<u64, InFlightWorkerSubresourceFetchState>,
     #[cfg(test)]
     pending_subresource_continue_events: Vec<PendingSubresourceContinueEvent>,
     pub(crate) pending_network_body_sources:
@@ -1247,6 +1233,7 @@ impl JsContextHost {
         }
         self.page_context_resources_closed = true;
         self.pending_history_traversal_admissions.clear();
+        self.pending_child_document_navigations.clear();
         self.retire_all_document_resource_loaders();
         self.page_default_context = None;
         self.v8_finalizers.clear_for_context_teardown();
@@ -1259,6 +1246,19 @@ impl JsContextHost {
         self.close_owned_broadcast_channels();
         self.close_owned_message_ports();
         self.shutdown_workers();
+        // This shares the native reporter FIFO with the last teardown outputs.
+        // Closing an observation source does not claim that detached keepalive
+        // transports have completed or failed.
+        if let Some(document) = self.root_document_lifecycle_identity()
+            && let Some(journal) = self.output_journal.as_ref()
+            && let crate::runtime::RendererOutputResidenceIdentity::Page {
+                owner_local_host_id,
+                ..
+            } = journal.stream().residence()
+        {
+            self.browser_context_runtime
+                .close_network_source(owner_local_host_id, document.document.page_id);
+        }
     }
 }
 

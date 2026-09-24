@@ -844,16 +844,13 @@ mod tests {
 
     fn async_subresource_completion(internal_id: u64) -> AsyncSubresourceFetchCompletion {
         AsyncSubresourceFetchCompletion {
+            network_request_headers: None,
             internal_id,
-            request_url: Url::parse("https://example.com/api").unwrap(),
-            request_method: "GET".to_owned(),
-            request_headers: Vec::new().into(),
-            request_body: None,
             response_status_text: None,
             skip_fetch_security_validation: false,
             response_filter: None,
             network_error_text: None,
-            result: Err("test failure".to_owned()).into(),
+            result: Err("test failure".to_owned().into()),
         }
     }
 

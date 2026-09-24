@@ -11,6 +11,7 @@
 //! - `requestAnimationFrame` / `cancelAnimationFrame`
 //! - `globalThis`
 
+use crate::network::ResourceBodyResponse;
 use crate::web_api_interfaces;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -37,8 +38,7 @@ use http::HeaderName;
 use moli_cookie_jar::StoredCookieSetReport;
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, Request, RequestCredentialsMode, RequestMode,
-    RequestRedirectMode, Response, ResponseBody, ResponseHead,
-    should_request_be_blocked_due_to_bad_port,
+    RequestRedirectMode, Response, ResponseHead, should_request_be_blocked_due_to_bad_port,
 };
 use moli_storage_key::MoliStorageKey;
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
@@ -53,8 +53,8 @@ use super::{
     decode_data_url_script_source,
     handle::{
         WorkerConsoleMessage, WorkerFetchHandlerType, WorkerPendingFetchContinue,
-        WorkerPendingSubresourceFetch, WorkerPendingXhrContinue, WorkerToParentMessage,
-        WorkerWebSocketFrameEvent, WorkerWebSocketLifecycleEvent,
+        WorkerPendingXhrContinue, WorkerToParentMessage, WorkerWebSocketFrameEvent,
+        WorkerWebSocketLifecycleEvent,
     },
 };
 use crate::context_bootstrap::WebCryptoTaskResult;
@@ -64,6 +64,7 @@ use crate::context_bootstrap::{
     simple_object_event_set_ordered_handler,
 };
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
+use crate::network::{ResourceResponseFailure, ResourceResponseStream, ResourceTransfer};
 use crate::network_host::{
     ABORTED_ERROR_TEXT, BLOCKED_BY_CLIENT_ERROR_TEXT, FAILED_ERROR_TEXT,
     FetchResponseSecurityViolation, HeadersGuard, PreparedXhrSendBody, XHR_ABORTED_SLOT,
@@ -72,16 +73,13 @@ use crate::network_host::{
     XHR_TIMEOUT_TIMER_SLOT, XHR_URL_SLOT, XHR_WITH_CREDENTIALS_SLOT,
     append_default_body_content_type, apply_xhr_failure, apply_xhr_response,
     apply_xhr_response_body_source, apply_xhr_timeout,
-    browser_request_needs_manual_preflight_redirects,
-    build_fetch_response_object_from_body_source_for_request_mode,
     build_fetch_response_object_from_stream_for_request_mode,
     build_fetch_response_object_from_subresource_body_for_request_mode,
     close_pending_network_body_stream, convert_xhr_send_body_from_args,
     dispatch_xhr_upload_abort_if_in_progress, dispatch_xhr_upload_complete,
     enqueue_pending_network_body_chunk, error_pending_network_body_stream_with_reason,
     extract_subresource_auth_challenge,
-    fetch_browser_subresource_raw_stream_with_preflight_headers_and_network_metadata,
-    fetch_browser_subresource_with_preflight_headers_and_network_metadata,
+    fetch_browser_subresource_raw_stream_with_preflight_headers_and_observer,
     filter_cors_exposed_response_headers, filter_headers_for_guard, is_cors_policy_failure_message,
     local_url_response_result, parse_fetch_init, request_input_snapshot,
     request_object_credentials_mode, reset_xhr_response_for_request_error, resolve_context_url,
@@ -93,10 +91,9 @@ use crate::network_host::{
 };
 use crate::opfs_task_result::OpfsTaskResult;
 use crate::protocol_types::{
-    PendingSubresourceAuthInfo, PendingSubresourceContinueEvent, PendingSubresourceFetchInfo,
-    PendingSubresourceResponseInfo, SubresourceNetworkRecord, SubresourceNetworkRequestHandle,
-    SubresourceResourceType, SubresourceResponseBody, SubresourceResponseBodyWriter,
-    WebSocketFrameDirection, WebSocketFrameOpcode,
+    PendingSubresourceAuthInfo, PendingSubresourceFetchInfo, PendingSubresourceResponseInfo,
+    SubresourceNetworkRecord, SubresourceNetworkRequestHandle, SubresourceResourceType,
+    SubresourceResponseBody, WebSocketFrameDirection, WebSocketFrameOpcode,
 };
 use crate::queue_microtask::worker_queue_microtask_callback;
 use crate::runtime::{
@@ -127,28 +124,23 @@ use crate::worker::abort::{
 mod content_security_policy;
 mod fetch;
 mod import_scripts;
+mod interception;
 mod timers;
 mod xhr;
 
 use content_security_policy::*;
 pub(in crate::worker) use content_security_policy::{
-    continue_pending_worker_csp_report, fail_pending_worker_csp_report,
-    fulfill_pending_worker_csp_report,
+    continue_pending_worker_csp_report,
+    dispatch_worker_content_security_policy_violation_event_for_state,
+    fail_pending_worker_csp_report, fulfill_pending_worker_csp_report,
 };
 pub(crate) use fetch::*;
 use import_scripts::*;
+pub(in crate::worker) use interception::{
+    decide_intercepted_worker_request, publish_worker_fetch_pause,
+};
 use timers::*;
 pub(crate) use xhr::*;
-
-pub(super) fn dispatch_worker_csp_violation_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    loader: &crate::network::context::WorkerResourceLoader,
-    violation: &crate::content_security_policy::ContentSecurityPolicyUrlViolation,
-) {
-    content_security_policy::dispatch_worker_content_security_policy_violation_event(
-        scope, loader, violation,
-    );
-}
 
 pub(super) const WORKER_GLOBAL_LISTENERS_SLOT: &str = "__moliWorkerGlobalListeners";
 pub(crate) const WORKER_STATE_SLOT: &str = "__workerState";
@@ -1075,31 +1067,76 @@ pub(super) struct PendingWorkerFetch {
     pub(super) request_url: Url,
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
-    pub(super) network_request_handle: Option<SubresourceNetworkRequestHandle>,
-    pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
-    pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
+    pub(super) request_body: Option<Vec<u8>>,
+    pub(super) response: Arc<ResourceResponseStream>,
+    pub(super) request_override: Option<WorkerRequestOverride>,
+    pub(super) paused_response: Option<crate::network::PausedResourceResponse>,
     pub(super) streaming_body_source_id: Option<NetworkBodySourceId>,
 }
 
 pub(super) enum WorkerFetchEvent {
-    Completion(Box<WorkerFetchCompletion>),
-    StreamingStarted(WorkerFetchStreamingStarted),
+    Completion(Box<WorkerRequestCompletion>),
+    TransportCompletion(WorkerRequestDelivery),
+    ResponsePaused {
+        fetch_id: u32,
+        response: Box<crate::network::PausedResourceResponse>,
+    },
+    StreamingStarted(Box<WorkerFetchStreamingStarted>),
     StreamingChunk(WorkerFetchStreamingChunk),
     StreamingFinished(WorkerFetchStreamingFinished),
 }
 
-pub(super) struct WorkerFetchCompletion {
-    fetch_id: u32,
+pub(super) struct WorkerRequestCompletion {
+    id: u32,
     network_request_headers: Option<Vec<(String, String)>>,
-    result: Result<WorkerFetchResponse, String>,
+    result: Result<ResourceBodyResponse, ResourceResponseFailure>,
+}
+
+impl WorkerRequestCompletion {
+    fn publish(&self, resource: &ResourceResponseStream) {
+        match &self.result {
+            Ok(response) => response.publish(
+                &resource.network,
+                resource.record_request_headers(self.network_request_headers.clone()),
+            ),
+            Err(error) => fetch::publish_worker_request_failure(resource, error.clone()),
+        }
+    }
+}
+
+/// The VM claims delivery before applying policy/interception. If it is gone,
+/// dropping the packet still settles the original native transport request.
+pub(super) struct WorkerRequestDelivery {
+    response: Arc<ResourceResponseStream>,
+    completion: Option<Box<WorkerRequestCompletion>>,
+}
+
+impl WorkerRequestDelivery {
+    fn new(response: Arc<ResourceResponseStream>, mut completion: WorkerRequestCompletion) -> Self {
+        completion.network_request_headers =
+            response.record_request_headers(completion.network_request_headers.take());
+        Self {
+            response,
+            completion: Some(Box::new(completion)),
+        }
+    }
+
+    fn request_id(&self) -> u32 {
+        self.completion.as_ref().expect("unclaimed delivery").id
+    }
+
+    fn claim(mut self, response: &Arc<ResourceResponseStream>) -> Option<WorkerRequestCompletion> {
+        if !Arc::ptr_eq(response, &self.response) {
+            return None;
+        }
+        Some(*self.completion.take().expect("VM delivery is claimed once"))
+    }
 }
 
 pub(super) struct WorkerFetchStreamingStarted {
     fetch_id: u32,
     body_source_id: NetworkBodySourceId,
     head: ResponseHead,
-    network_request_headers: Option<Vec<(String, String)>>,
 }
 
 pub(super) struct WorkerFetchStreamingChunk {
@@ -1108,76 +1145,21 @@ pub(super) struct WorkerFetchStreamingChunk {
 }
 
 pub(super) struct WorkerFetchStreamingFinished {
-    fetch_id: u32,
     body_source_id: NetworkBodySourceId,
-    head: ResponseHead,
-    result: Result<SubresourceResponseBody, String>,
+    delivery: WorkerRequestDelivery,
 }
 
-pub(super) enum WorkerFetchResponse {
-    Materialized(Box<Response>),
-    Streamed {
-        head: Box<ResponseHead>,
-        body: SubresourceResponseBody,
-    },
-}
-
-impl WorkerFetchResponse {
-    fn head(&self) -> ResponseHead {
-        match self {
-            Self::Materialized(response) => response.head(),
-            Self::Streamed { head, .. } => head.as_ref().clone(),
-        }
-    }
-
-    fn subresource_response_body(&self) -> SubresourceResponseBody {
-        match self {
-            Self::Materialized(response) => SubresourceResponseBody::from_fetch_response(response),
-            Self::Streamed { body, .. } => body.clone(),
-        }
-    }
-
-    fn into_fetch_parts(self) -> WorkerFetchResponseParts {
-        match self {
-            Self::Materialized(response) => {
-                let (head, body) = response.into_body();
-                WorkerFetchResponseParts::Materialized {
-                    head,
-                    body: Box::new(body),
-                }
-            }
-            Self::Streamed { head, body } => {
-                WorkerFetchResponseParts::Subresource { head: *head, body }
-            }
-        }
-    }
-}
-
-enum WorkerFetchResponseParts {
-    Materialized {
-        head: ResponseHead,
-        body: Box<ResponseBody>,
-    },
-    Subresource {
-        head: ResponseHead,
-        body: SubresourceResponseBody,
-    },
-}
-
+/// Interception may replace the wire request; policy still uses the original JS request.
 #[derive(Clone)]
-pub(super) struct PendingWorkerFetchNetworkRecord {
+pub(super) struct WorkerRequestOverride {
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
-    pub(super) internal_id: u64,
     pub(super) url: Url,
     pub(super) method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
-    pub(super) initial_network_request_headers: Option<Vec<(String, String)>>,
-    pub(super) intercept_response: bool,
-    pub(super) handle_auth_requests: bool,
+    pub(super) request_body: Option<Vec<u8>>,
 }
 
-impl PendingWorkerFetchNetworkRecord {
+impl WorkerRequestOverride {
     fn follow_redirects(&mut self, head: &ResponseHead) {
         if head.redirect_chain.is_empty() {
             return;
@@ -1185,7 +1167,7 @@ impl PendingWorkerFetchNetworkRecord {
         let mut request = Request::get_with_url(self.url.clone())
             .with_redirect_headers(self.redirect_headers.take());
         request.method = std::mem::take(&mut self.method);
-        request.body = self.request_body.clone().map(String::into_bytes);
+        request.body = self.request_body.clone();
         request.request_headers = std::mem::take(&mut self.request_headers);
         for redirect in &head.redirect_chain {
             request.apply_redirect_status(redirect.status);
@@ -1204,21 +1186,20 @@ pub(super) struct PendingWorkerXhr {
     pub(super) document_url: Url,
     pub(super) credentials_mode: RequestCredentialsMode,
     pub(super) load: ResourceLoadLease,
-    pub(super) request_paused: bool,
     pub(super) request_url: Url,
     pub(super) request_method: String,
     pub(super) request_headers: moli_fetch::RequestHeaders,
-    pub(super) request_body: Option<String>,
-    pub(super) network_request_handle: Option<SubresourceNetworkRequestHandle>,
-    pub(super) network_record: Option<PendingWorkerFetchNetworkRecord>,
-    pub(super) paused_response: Option<PausedWorkerSubresourceResponse>,
+    pub(super) request_body: Option<Vec<u8>>,
+    pub(super) response: Arc<ResourceResponseStream>,
+    pub(super) request_override: Option<WorkerRequestOverride>,
+    pub(super) paused_response: Option<crate::network::PausedResourceResponse>,
 }
 
-pub(super) struct PendingWorkerCspReport {
+pub(super) struct WorkerCspReport {
+    network: Arc<crate::network::ResourceTransfer>,
     pub(super) load: ResourceLoadLease,
     pub(super) document_url: Url,
     pub(super) request: Request,
-    pub(super) request_body: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
     pub(super) service_worker_runtime:
         Option<crate::service_worker_runtime::ServiceWorkerRuntimeService>,
@@ -1226,48 +1207,22 @@ pub(super) struct PendingWorkerCspReport {
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
 }
 
-pub(super) struct PausedWorkerSubresourceResponse {
-    pub(super) head: ResponseHead,
-    pub(super) body: SubresourceResponseBody,
-}
-
-pub(super) struct WorkerXhrCompletion {
-    pub(super) xhr_id: u32,
-    pub(super) network_request_headers: Option<Vec<(String, String)>>,
-    pub(super) result: Result<WorkerXhrResponse, String>,
-}
-
-pub(super) enum WorkerXhrResponse {
-    Materialized(Box<Response>),
-    Streamed {
-        head: Box<ResponseHead>,
-        body: SubresourceResponseBody,
+pub(super) enum WorkerXhrCompletion {
+    Completion(Box<WorkerRequestCompletion>),
+    TransportCompletion(WorkerRequestDelivery),
+    ResponsePaused {
+        xhr_id: u32,
+        response: Box<crate::network::PausedResourceResponse>,
     },
 }
 
-impl WorkerXhrResponse {
-    fn head(&self) -> ResponseHead {
-        match self {
-            Self::Materialized(response) => response.head(),
-            Self::Streamed { head, .. } => head.as_ref().clone(),
-        }
-    }
-
-    fn subresource_response_body(&self) -> SubresourceResponseBody {
-        match self {
-            Self::Materialized(response) => SubresourceResponseBody::from_fetch_response(response),
-            Self::Streamed { body, .. } => body.clone(),
-        }
-    }
-
-    fn into_body_source(self) -> Result<(ResponseHead, ResponseBody), String> {
-        match self {
-            Self::Materialized(response) => Ok(response.into_body()),
-            Self::Streamed { head, body } => body
-                .materialize_bytes()
-                .map(|bytes| (*head, ResponseBody::materialized_bytes(bytes)))
-                .map_err(|error| format!("failed to materialize worker XHR body: {error}")),
-        }
+impl WorkerXhrCompletion {
+    fn decision(id: u32, result: Result<ResourceBodyResponse, ResourceResponseFailure>) -> Self {
+        Self::Completion(Box::new(WorkerRequestCompletion {
+            id,
+            network_request_headers: None,
+            result,
+        }))
     }
 }
 
@@ -1279,7 +1234,7 @@ pub(super) struct WorkerWebSocketState {
     pub(super) loader: crate::network::context::WorkerResourceLoader,
     pub(super) load: Option<ResourceLoadLease>,
     pub(super) opened: bool,
-    pub(super) network_recorded: bool,
+    pub(super) request_overrideed: bool,
 }
 
 pub(super) struct PendingServiceWorkerLifecycleEvent {
@@ -1480,7 +1435,7 @@ pub(crate) struct WorkerGlobalState {
     /// teardown clears this registry before `OwnedIsolate` is destroyed.
     pub(crate) v8_finalizers: crate::v8_finalizer::V8FinalizerRegistry,
     /// Channel to send messages back to the parent.
-    pub(super) parent_tx: mpsc::UnboundedSender<WorkerToParentMessage>,
+    pub(super) parent_tx: crate::worker::WorkerParentSender,
     /// Internal wake channel used by worker-owned async runtime surfaces.
     pub(crate) worker_wake_tx: mpsc::UnboundedSender<super::handle::WorkerMessage>,
     /// Shared lifecycle bit published by `Worker.terminate()` before V8 is
@@ -1545,7 +1500,7 @@ pub(crate) struct WorkerGlobalState {
     /// Worker XHR id counter.
     pub(super) next_xhr_id: u32,
     /// Worker-owned CSP report requests paused for Fetch domain request-stage interception.
-    pub(super) pending_csp_reports: HashMap<u32, PendingWorkerCspReport>,
+    pub(super) pending_csp_reports: HashMap<u32, WorkerCspReport>,
     /// Worker-local TextDecoder state. TextEncoder is stateless, but TextDecoder
     /// can stream and needs decoder state tied to this worker's isolate.
     pub(crate) text_codecs: TextCodecStore,
@@ -1582,7 +1537,7 @@ pub(crate) struct WorkerGlobalState {
     pub(super) next_websocket_id: u64,
     /// Worker-local dedicated workers created through `new Worker(...)`.
     pub(super) next_nested_worker_id: u64,
-    pub(super) nested_worker_wrappers: HashMap<DedicatedWorkerId, v8::Global<v8::Object>>,
+    pub(super) nested_worker_wrappers: HashMap<DedicatedWorkerId, NestedWorkerConnection>,
     /// Heavyweight WebCrypto completions routed back onto the worker event loop.
     pub(super) webcrypto_completion_tx: mpsc::UnboundedSender<WorkerWebCryptoCompletion>,
     /// In-flight worker WebCrypto blocking tasks keyed by task id.
@@ -2796,6 +2751,7 @@ pub(super) fn drain_service_worker_push_unsubscribe_result(
 }
 
 pub(crate) struct NestedWorkerContext {
+    pub(crate) owner: crate::runtime::RendererWorkerIdentity,
     pub(crate) worker_id: DedicatedWorkerId,
     pub(crate) base_url: Url,
     pub(crate) loader: crate::network::context::WorkerResourceLoader,
@@ -2815,6 +2771,56 @@ pub(crate) struct NestedWorkerContext {
     pub(crate) wake_tx: mpsc::UnboundedSender<super::handle::WorkerMessage>,
 }
 
+pub(super) struct NestedWorkerConnection {
+    wrapper: v8::Global<v8::Object>,
+    handle: Option<super::WorkerHandle>,
+}
+
+impl Drop for NestedWorkerConnection {
+    fn drop(&mut self) {
+        if let Some(handle) = &self.handle {
+            handle.terminate();
+        }
+    }
+}
+
+pub(crate) fn install_nested_worker_handle(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    handle: super::WorkerHandle,
+) -> bool {
+    let Some(state) = get_worker_state(scope) else {
+        handle.terminate();
+        return false;
+    };
+    let mut state = state.borrow_mut();
+    let Some(worker) = state.nested_worker_wrappers.get_mut(&worker_id) else {
+        handle.terminate();
+        return false;
+    };
+    assert!(
+        worker.handle.replace(handle).is_none(),
+        "one nested wrapper binds one execution"
+    );
+    true
+}
+
+pub(crate) fn post_nested_worker_message(
+    scope: &mut v8::PinScope<'_, '_>,
+    worker_id: DedicatedWorkerId,
+    payload: crate::structured_clone::V8StructuredClonePayload,
+) {
+    if let Some(state) = get_worker_state(scope)
+        && let Some(handle) = state
+            .borrow()
+            .nested_worker_wrappers
+            .get(&worker_id)
+            .and_then(|worker| worker.handle.as_ref())
+    {
+        handle.post_message(payload);
+    }
+}
+
 pub(crate) fn reserve_nested_worker_context(
     scope: &mut v8::PinScope<'_, '_>,
     worker: v8::Local<'_, v8::Object>,
@@ -2827,10 +2833,15 @@ pub(crate) fn reserve_nested_worker_context(
         .next_nested_worker_id
         .checked_add(1)
         .expect("nested worker id space exhausted");
-    state
-        .nested_worker_wrappers
-        .insert(worker_id, v8::Global::new(scope, worker));
+    state.nested_worker_wrappers.insert(
+        worker_id,
+        NestedWorkerConnection {
+            wrapper: v8::Global::new(scope, worker),
+            handle: None,
+        },
+    );
     Some(NestedWorkerContext {
+        owner: state.global_kind.network().identity().clone(),
         worker_id,
         base_url,
         loader: state.loader.clone(),
@@ -2906,7 +2917,7 @@ pub(super) fn dispatch_nested_worker_event(
         .borrow()
         .nested_worker_wrappers
         .get(&worker_id)
-        .map(|worker| v8::Local::new(scope, worker))
+        .map(|worker| v8::Local::new(scope, &worker.wrapper))
     else {
         return NestedWorkerDispatchResult {
             dispatched: false,
@@ -3057,13 +3068,16 @@ pub(super) fn install_worker_global_scope<'s>(
         )?;
     }
 
+    if let Some(name) = global_kind.dedicated_name() {
+        set_worker_global_name_prop(scope, global, name)?;
+        DedicatedWorkerGlobalPostMessageDeclaration::default()
+            .initialize(scope, global)
+            .map_err(|error| anyhow!("failed to initialize worker postMessage: {error}"))?;
+    }
     match &global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { name } => {
-            set_worker_global_name_prop(scope, global, name)?;
-            DedicatedWorkerGlobalPostMessageDeclaration::default()
-                .initialize(scope, global)
-                .map_err(|error| anyhow!("failed to initialize worker postMessage: {error}"))?;
-        }
+        super::thread::WorkerGlobalKind::Dedicated(_) => {}
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => {}
         super::thread::WorkerGlobalKind::Shared { name, .. } => {
             set_worker_global_name_prop(scope, global, name)?;
         }
@@ -3071,6 +3085,7 @@ pub(super) fn install_worker_global_scope<'s>(
             registration_id,
             version_id,
             scope_url,
+            ..
         } => {
             set_worker_global_name_prop(scope, global, "")?;
             install_service_worker_global_runtime(
@@ -3391,7 +3406,7 @@ fn service_worker_registration_show_notification_callback<'s>(
     };
     if parent_tx
         .send(WorkerToParentMessage::ServiceWorkerShowNotification(
-            crate::runtime::ServiceWorkerShowNotification {
+            Box::new(crate::runtime::ServiceWorkerShowNotification {
                 request_id,
                 registration_id,
                 version_id,
@@ -3400,7 +3415,7 @@ fn service_worker_registration_show_notification_callback<'s>(
                 metadata: options.metadata,
                 actions: options.actions,
                 data: options.data,
-            },
+            }),
         ))
         .is_err()
     {
@@ -4532,7 +4547,7 @@ pub(crate) fn service_worker_runtime_identity<'s>(
 ) -> Option<(
     ServiceWorkerRegistrationId,
     ServiceWorkerVersionId,
-    mpsc::UnboundedSender<WorkerToParentMessage>,
+    crate::worker::WorkerParentSender,
 )> {
     let state = get_worker_state(scope)?;
     let state = state.borrow();
@@ -4741,7 +4756,7 @@ fn service_worker_runtime_message_identity<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<(
     crate::runtime::ServiceWorkerVersionId,
-    mpsc::UnboundedSender<WorkerToParentMessage>,
+    crate::worker::WorkerParentSender,
 )> {
     let state = get_worker_state(scope)?;
     let state = state.borrow();
@@ -4948,10 +4963,7 @@ fn install_worker_global_event_handler_accessors<'s>(
     global: v8::Local<'s, v8::Object>,
     global_kind: &super::thread::WorkerGlobalKind,
 ) -> Result<()> {
-    if matches!(
-        global_kind,
-        super::thread::WorkerGlobalKind::Dedicated { .. }
-    ) {
+    if global_kind.dedicated_name().is_some() {
         DedicatedWorkerGlobalEventHandlersDeclaration::default().initialize(scope, global)?;
         DedicatedWorkerGlobalEventHandlerStateDeclaration::default().initialize(scope, global)?;
     }
@@ -5469,7 +5481,11 @@ fn worker_global_scope_interface(
 ) {
     use crate::context_bootstrap::exposed_interfaces::RealmKind;
     match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+        super::thread::WorkerGlobalKind::Dedicated(_) => {
+            ("DedicatedWorkerGlobalScope", RealmKind::DedicatedWorker)
+        }
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => {
             ("DedicatedWorkerGlobalScope", RealmKind::DedicatedWorker)
         }
         super::thread::WorkerGlobalKind::Shared { .. } => {
@@ -5560,7 +5576,13 @@ fn install_worker_global_scope_constructors<'s>(
     let specific_proto = constructor_prototype(scope, specific_ctor, interface)?;
     set_worker_to_string_tag(scope, specific_proto, interface);
     match global_kind {
-        super::thread::WorkerGlobalKind::Dedicated { .. } => {
+        super::thread::WorkerGlobalKind::Dedicated(_) => {
+            DedicatedWorkerGlobalMethodsDeclaration::default().initialize(scope, specific_proto)?;
+            DedicatedWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
+                .initialize(scope, global)?;
+        }
+        #[cfg(test)]
+        super::thread::WorkerGlobalKind::UnobservedDedicated { .. } => {
             DedicatedWorkerGlobalMethodsDeclaration::default().initialize(scope, specific_proto)?;
             DedicatedWorkerGlobalScopeConstructorGlobalDeclaration::new(specific_ctor)
                 .initialize(scope, global)?;
@@ -6224,7 +6246,7 @@ pub(crate) fn dispatch_worker_trusted_types_sink_violation_event(
 
 pub(crate) fn worker_exception_report_target(
     scope: &mut v8::PinScope<'_, '_>,
-) -> Option<(mpsc::UnboundedSender<WorkerToParentMessage>, String)> {
+) -> Option<(crate::worker::WorkerParentSender, String)> {
     let state = get_worker_state(scope)?;
     let state = state.borrow();
     let script_url = state

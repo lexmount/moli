@@ -1,5 +1,3 @@
-use super::*;
-
 // Some fixtures intentionally poll up to 50 zero-delay timer turns for each
 // of several child navigations. Keep the bound well above that authored work
 // while still failing a genuinely non-settling scheduler deterministically.
@@ -17,7 +15,6 @@ const MAX_SERVICE_WORKER_TEST_CONSECUTIVE_IDLE_TURNS: usize = 64;
 /// that their action ran through its stable domain effect.
 async fn publish_and_run_service_worker_internal_test_task<E>(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     context: &str,
     publish: impl FnOnce(&crate::page_task_queue::RendererPageServiceWorkerTaskSender) -> Result<(), E>,
 ) {
@@ -27,32 +24,19 @@ async fn publish_and_run_service_worker_internal_test_task<E>(
         "{context}: typed ServiceWorker Page route closed"
     );
     assert!(
-        page.run_one_service_worker_internal_task_executor_turn(loader)
+        page.run_one_service_worker_internal_task_executor_turn()
             .await
             .unwrap_or_else(|error| panic!("{context}: selected task failed: {error}")),
         "{context}: expected one ServiceWorker internal FIFO task"
     );
 }
 
-pub(super) async fn run_service_worker_client_navigate_request_task_for_test(
-    page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
-    context: &str,
-    completion: crate::types::ServiceWorkerClientNavigateRequestCompletion,
-) {
-    publish_and_run_service_worker_internal_test_task(page, loader, context, |sender| {
-        sender.send_service_worker_client_navigate_request(completion)
-    })
-    .await;
-}
-
 pub(super) async fn run_service_worker_client_focus_request_task_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     context: &str,
     completion: crate::types::ServiceWorkerClientFocusRequestCompletion,
 ) {
-    publish_and_run_service_worker_internal_test_task(page, loader, context, |sender| {
+    publish_and_run_service_worker_internal_test_task(page, context, |sender| {
         sender.send_service_worker_client_focus_request(completion)
     })
     .await;
@@ -60,11 +44,10 @@ pub(super) async fn run_service_worker_client_focus_request_task_for_test(
 
 pub(super) async fn run_service_worker_clients_open_window_request_task_for_test(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
-    loader: &ResourceRequestClient,
     context: &str,
     completion: crate::types::ServiceWorkerClientsOpenWindowRequestCompletion,
 ) {
-    publish_and_run_service_worker_internal_test_task(page, loader, context, |sender| {
+    publish_and_run_service_worker_internal_test_task(page, context, |sender| {
         sender.send_service_worker_clients_open_window_request(completion)
     })
     .await;
@@ -73,7 +56,6 @@ pub(super) async fn run_service_worker_clients_open_window_request_task_for_test
 pub(super) async fn drain_service_worker_test_until_eval_equals(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     browser_context_runtime: &crate::runtime::RendererBrowserContextRuntime,
-    loader: &ResourceRequestClient,
     expression: &str,
     expected: &str,
 ) {
@@ -98,7 +80,7 @@ pub(super) async fn drain_service_worker_test_until_eval_equals(
             );
         }
 
-        if drain_service_worker_test_turn(page, browser_context_runtime, loader).await {
+        if drain_service_worker_test_turn(page, browser_context_runtime).await {
             consecutive_idle_turns = 0;
         } else {
             consecutive_idle_turns += 1;
@@ -126,12 +108,11 @@ pub(super) async fn drain_service_worker_test_until_eval_equals(
 pub(super) async fn drain_service_worker_test_turn(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     browser_context_runtime: &crate::runtime::RendererBrowserContextRuntime,
-    loader: &ResourceRequestClient,
 ) -> bool {
     browser_context_runtime.drain_service_worker_service_lane();
 
     let applied_page_task = page
-        .run_one_oldest_ready_page_task_executor_turn(loader)
+        .run_one_oldest_ready_page_task_executor_turn()
         .await
         .expect("typed ServiceWorker fixture Page task should apply");
     if !applied_page_task {
@@ -141,7 +122,7 @@ pub(super) async fn drain_service_worker_test_turn(
         )
         .await;
         return page
-            .run_one_oldest_ready_page_task_executor_turn(loader)
+            .run_one_oldest_ready_page_task_executor_turn()
             .await
             .expect("woken ServiceWorker fixture Page task should apply");
     }
@@ -151,7 +132,6 @@ pub(super) async fn drain_service_worker_test_turn(
 pub(super) async fn drain_service_worker_test_until_popup_loads_settle(
     page: &mut crate::runtime::PageVmTaskExecutorTestHarness,
     browser_context_runtime: &crate::runtime::RendererBrowserContextRuntime,
-    loader: &ResourceRequestClient,
     context: &str,
 ) {
     let mut consecutive_idle_turns = 0;
@@ -165,7 +145,7 @@ pub(super) async fn drain_service_worker_test_until_popup_loads_settle(
                  {completed_turns} task turns"
             );
         }
-        if drain_service_worker_test_turn(page, browser_context_runtime, loader).await {
+        if drain_service_worker_test_turn(page, browser_context_runtime).await {
             consecutive_idle_turns = 0;
         } else {
             consecutive_idle_turns += 1;

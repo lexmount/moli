@@ -11,7 +11,6 @@ use crate::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_named_iframe_target,
         },
-        entered_child_window_handle,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -344,10 +343,13 @@ fn window_open_entered_document_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope) {
+    if let crate::native_bridge::OwnerDispatchScope::Child(handle) =
+        host.entered_owner_dispatch_scope(scope)
+    {
         return host.document_url_for_child_context(handle);
     }
-    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope)
+    if let crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) =
+        host.entered_owner_dispatch_scope(scope)
         && let Some(url) = host.lightweight_popup_document_url(popup_id)
     {
         return url;
@@ -362,13 +364,17 @@ fn window_open_entered_policy_container(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> DocumentPolicyContainer {
-    if let Some(handle) = entered_child_window_handle(scope)
+    if let crate::native_bridge::OwnerDispatchScope::Child(handle) =
+        host.entered_owner_dispatch_scope(scope)
         && let Some(policy_container) =
             host.child_browsing_context_policy_container_snapshot(handle)
     {
         return policy_container;
     }
-    if let Some(policy_container) = host.active_lightweight_popup_policy_container(scope) {
+    if let crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) =
+        host.entered_owner_dispatch_scope(scope)
+        && let Some(policy_container) = host.lightweight_popup_policy_container(popup_id)
+    {
         return policy_container.clone();
     }
     host.document_policy_container().clone()
@@ -380,7 +386,7 @@ fn window_open_entered_window<'s>(
 ) -> Option<v8::Local<'s, v8::Object>> {
     match host.entered_owner_dispatch_scope(scope) {
         crate::native_bridge::OwnerDispatchScope::Top => {
-            Some(scope.get_current_context().global(scope))
+            Some(scope.get_entered_or_microtask_context().global(scope))
         }
         crate::native_bridge::OwnerDispatchScope::Child(handle) => {
             host.existing_child_browsing_context_window_wrapper(scope, handle)

@@ -1,7 +1,6 @@
 use anyhow::Result;
 
 use crate::frame_owner_model::FrameDocumentTaskOwner;
-use crate::network::ResourceRequestClient;
 use crate::page_task_queue::PostParsePageOwnedWork;
 
 use super::PageVm;
@@ -30,9 +29,8 @@ impl PageVm {
 
     pub(super) async fn run_next_ready_parser_owned_document_script_action(
         &mut self,
-        loader: &ResourceRequestClient,
     ) -> Result<MainParserContinuationTaskEffect> {
-        MainParserOwnedDocumentScriptOwner::new(self, loader)
+        MainParserOwnedDocumentScriptOwner::new(self)
             .run_next_ready_work()
             .await
     }

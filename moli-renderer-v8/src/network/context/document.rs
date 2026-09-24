@@ -53,6 +53,20 @@ struct DocumentResourceLoaderAuthority {
     loads: ResourceLoadRegistry,
 }
 
+struct DocumentResourceNetwork {
+    reporter: crate::runtime::RendererDocumentNetworkReporter,
+    observer: Arc<dyn Fn(crate::runtime::RendererNetworkObservation) + Send + Sync>,
+    script_completion: Arc<ScriptSourceCompletion>,
+    frame_id: Option<String>,
+}
+
+type ScriptSourceCompletion = dyn Fn(
+        crate::native_bridge::WindowDocumentOwner,
+        crate::planning::SharedScriptSourceLoadCompleter,
+        crate::planning::PreparedScriptSourceLoadOutcome,
+    ) + Send
+    + Sync;
+
 struct DocumentResourceLoaderLifecycle {
     state: DocumentResourceLoaderState,
     context: DocumentFetchContext,
@@ -76,38 +90,8 @@ impl Drop for DocumentResourceLoaderAuthority {
 pub struct DocumentResourceLoader {
     request_client: ResourceRequestClient,
     authority: Arc<DocumentResourceLoaderAuthority>,
-}
-
-/// Inputs that exist before the initial committed Document owner is known.
-///
-/// This is deliberately not a resource authority: it cannot register loads,
-/// carry lifecycle state, or escape as a `DocumentResourceLoader`. The
-/// bootstrap path consumes it only after constructing the exact Document
-/// owner, at which point [`Self::commit`] creates an already-active authority.
-#[derive(Clone)]
-pub(crate) struct DocumentResourceLoaderBootstrap {
-    request_client: ResourceRequestClient,
-    task_runner: RendererResourceTaskRunner,
-}
-
-impl DocumentResourceLoaderBootstrap {
-    pub(crate) fn new(
-        request_client: ResourceRequestClient,
-        task_runner: RendererResourceTaskRunner,
-    ) -> Self {
-        Self {
-            request_client,
-            task_runner,
-        }
-    }
-
-    pub(crate) fn commit(self, context: DocumentFetchContext) -> DocumentResourceLoader {
-        DocumentResourceLoader::new(self.request_client, self.task_runner, context)
-    }
-
-    pub(crate) fn author_styles_disabled(&self) -> bool {
-        self.request_client.author_styles_disabled()
-    }
+    network: Option<Arc<DocumentResourceNetwork>>,
+    pub(super) service_worker: Option<Arc<super::resource::ServiceWorkerResourceFetcher>>,
 }
 
 /// Exact backend source selected when a new Document commits.
@@ -124,6 +108,21 @@ pub(crate) enum DocumentResourceAuthoritySource {
 }
 
 impl DocumentResourceLoader {
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        request_client: ResourceRequestClient,
+        task_runner: RendererResourceTaskRunner,
+        document_url: url::Url,
+    ) -> Self {
+        let context = DocumentFetchContext::new(
+            crate::native_bridge::WindowDocumentOwner::for_test(1),
+            document_url.clone(),
+            document_url.clone(),
+            moli_url::origin_ascii_serialization(&document_url),
+        );
+        Self::new(request_client, task_runner, context)
+    }
+
     pub(crate) fn identity(&self) -> DocumentResourceLoaderIdentity {
         DocumentResourceLoaderIdentity(self.authority.id)
     }
@@ -141,7 +140,9 @@ impl DocumentResourceLoader {
         }
         let loads = ResourceLoadRegistry::new(task_runner);
         Self {
-            request_client,
+            request_client: request_client.with_load_context(&loads),
+            network: None,
+            service_worker: None,
             authority: Arc::new(DocumentResourceLoaderAuthority {
                 id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)
@@ -205,17 +206,13 @@ impl DocumentResourceLoader {
     }
 
     pub(crate) fn with_replacement_transport(&self, transport: ResourceRequestClient) -> Self {
-        let mut request_client =
-            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
-                transport.browser_resource_runtime(),
-                self.request_client.page_network_policy(),
-            );
-        if let Some(browser_site_context) = self.request_client.shared_browser_site_context() {
-            request_client = request_client.with_shared_browser_site_context(browser_site_context);
-        }
+        let mut request_client = self.request_client.clone();
+        request_client.replace_browser_resource_runtime(transport.browser_resource_runtime());
         Self {
             request_client,
             authority: Arc::clone(&self.authority),
+            network: self.network.clone(),
+            service_worker: self.service_worker.clone(),
         }
     }
 
@@ -260,9 +257,17 @@ impl DocumentResourceLoader {
         self.authority.lifecycle.lock().context.clone()
     }
 
-    #[cfg(test)]
     pub(crate) fn owner(&self) -> crate::native_bridge::WindowDocumentOwner {
         self.authority.lifecycle.lock().context.owner()
+    }
+
+    pub(super) fn document_url(&self) -> url::Url {
+        self.authority
+            .lifecycle
+            .lock()
+            .context
+            .document_url()
+            .clone()
     }
 
     pub(crate) fn task_runner(&self) -> RendererResourceTaskRunner {
@@ -278,6 +283,117 @@ impl DocumentResourceLoader {
 
     pub(crate) fn frozen_request_client(&self) -> ResourceRequestClient {
         self.request_client.frozen_request_client()
+    }
+
+    pub(crate) fn bind_network(
+        &mut self,
+        reporter: crate::runtime::RendererDocumentNetworkReporter,
+        completion: crate::page_task_queue::RendererResourceCompletionSender,
+        frame_id: Option<String>,
+    ) {
+        self.network = Some(Arc::new(DocumentResourceNetwork {
+            reporter,
+            observer: completion.network_observer(),
+            script_completion: Arc::new(move |owner, result, outcome| {
+                let _ = completion.send_shared_script_source(owner, result, outcome);
+            }),
+            frame_id,
+        }));
+    }
+
+    pub(crate) fn script_source_completion(
+        &self,
+    ) -> impl FnOnce(
+        crate::planning::SharedScriptSourceLoadCompleter,
+        crate::planning::PreparedScriptSourceLoadOutcome,
+    ) + Send
+    + 'static {
+        #[cfg(not(test))]
+        assert!(
+            self.network.is_some(),
+            "Document resource output must be bound before loading scripts"
+        );
+        let sender = self
+            .network
+            .as_ref()
+            .map(|network| network.script_completion.clone());
+        let owner = self.owner();
+        move |completion, outcome| {
+            if let Some(sender) = sender {
+                sender(owner, completion, outcome);
+            } else {
+                #[cfg(test)]
+                completion.finish(outcome);
+                #[cfg(not(test))]
+                unreachable!("Document script load must retain its completion route");
+            }
+        }
+    }
+
+    pub(crate) fn prepare_resource_request(
+        &self,
+        request: &moli_fetch::Request,
+        resource_type: crate::types::SubresourceResourceType,
+        initiator: crate::types::SubresourceRequestInitiatorType,
+    ) -> Option<(
+        ResourceLoadLease,
+        Arc<super::super::ResourceTransfer>,
+        crate::runtime::RendererNetworkObservation,
+    )> {
+        let load = self.register_load(
+            resource_type.into(),
+            ResourceLoadDisposition::Ordinary,
+            None,
+        )?;
+        let binding = self.network.as_deref();
+        #[cfg(not(test))]
+        let binding = Some(
+            binding
+                .expect("committed Document resource authority must have its native output route"),
+        );
+        #[cfg(test)]
+        let test_request = binding
+            .is_none()
+            .then(crate::runtime::RendererNetworkRequest::unobserved_for_test);
+        let request_network = binding.and_then(|binding| binding.reporter.start_request());
+        #[cfg(test)]
+        let request_network = request_network.or(test_request);
+        let request_network = request_network?;
+        let observer = binding.map(|binding| binding.observer.clone());
+        let (network, started) = super::super::ResourceTransfer::start(
+            request_network,
+            move |event| {
+                if let Some(observer) = &observer {
+                    observer(event);
+                }
+            },
+            |network| self.resource_request_started(network, request, resource_type, initiator),
+        );
+        Some((load, network, started))
+    }
+
+    pub(crate) fn resource_request_started(
+        &self,
+        network: &crate::runtime::RendererNetworkRequest,
+        request: &moli_fetch::Request,
+        resource_type: crate::types::SubresourceResourceType,
+        initiator: crate::types::SubresourceRequestInitiatorType,
+    ) -> crate::types::SubresourceRequestStarted {
+        crate::types::SubresourceRequestStarted::new(
+            network.handle(),
+            self.network
+                .as_ref()
+                .and_then(|binding| binding.frame_id.clone()),
+            self.document_url(),
+            request.url.clone(),
+            request.method.clone(),
+            request.request_headers.clone(),
+            None,
+            resource_type,
+            initiator,
+            None,
+        )
+        .with_request_body_bytes(request.body.clone())
     }
 
     pub(crate) fn register_load(

@@ -1,12 +1,12 @@
 use crate::conn::{
-    CdpConnection, CdpRendererCommandAccess, Cmd, CommandOwnerScope, PerformanceTimeDomain,
-    RendererCommandCorrelation, RendererCommandDescriptor, monotonic_timestamp_seconds,
+    CdpConnection, Cmd, CommandOwnerScope, PerformanceTimeDomain, RendererCommandCorrelation,
+    RendererCommandDescriptor, monotonic_timestamp_seconds,
 };
 use crate::domains::actions::PerformanceAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
-    CompletedDevToolsIoCommandDispatch, CompletedPageCommand, Page,
-    PendingDevToolsIoCommandDispatch, PendingPageCommand, RendererPerformanceMetricSnapshot,
+    CompletedDevToolsIoCommandDispatch, PendingDevToolsIoCommandDispatch,
+    RendererAgentAttachmentId, RendererPerformanceMetricSnapshot,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -26,23 +26,19 @@ struct PerformanceSetTimeDomainParams {
 pub(crate) struct PendingPerformanceCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    renderer_access: CdpRendererCommandAccess,
-    renderer_page: crate::conn::RendererPageResidenceIdentity,
     pending: Box<PendingPerformanceRendererCommand>,
 }
 
 pub(crate) struct CompletedPerformanceCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
-    renderer_access: CdpRendererCommandAccess,
-    renderer_page: crate::conn::RendererPageResidenceIdentity,
     completed: Result<CompletedPerformanceRendererCommand, String>,
 }
 
 enum PendingPerformanceRendererCommand {
-    Main(PendingPageCommand),
     IoAdapterReply {
         pending: PendingDevToolsIoCommandDispatch,
+        attachment_id: RendererAgentAttachmentId,
         snapshot: RendererPerformanceMetricSnapshot,
     },
     IoSessionOutput {
@@ -52,8 +48,10 @@ enum PendingPerformanceRendererCommand {
 }
 
 enum CompletedPerformanceRendererCommand {
-    Main(CompletedPageCommand),
-    IoAdapterReply(RendererPerformanceMetricSnapshot),
+    IoAdapterReply {
+        attachment_id: RendererAgentAttachmentId,
+        snapshot: RendererPerformanceMetricSnapshot,
+    },
     IoSessionOutput {
         completed: Result<CompletedDevToolsIoCommandDispatch, String>,
         correlation: RendererCommandCorrelation,
@@ -66,23 +64,28 @@ pub(crate) enum PerformanceCommandTaskStep {
 }
 
 impl PendingPerformanceCommandDispatch {
+    pub(crate) const fn renderer_dispatch_lane(&self) -> Option<crate::conn::RendererDispatchLane> {
+        Some(crate::conn::RendererDispatchLane::Io)
+    }
+
     pub async fn wait(self) -> CompletedPerformanceCommandDispatch {
         let completed = match *self.pending {
-            PendingPerformanceRendererCommand::Main(pending) => pending
-                .wait()
-                .await
-                .map(CompletedPerformanceRendererCommand::Main),
-            PendingPerformanceRendererCommand::IoAdapterReply { pending, snapshot } => {
-                match pending.wait().await {
-                    Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => Ok(
-                        CompletedPerformanceRendererCommand::IoAdapterReply(snapshot),
-                    ),
-                    Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => Err(
-                        anyhow::anyhow!("adapter-reply Performance dispatch used session output"),
-                    ),
-                    Err(error) => Err(error),
+            PendingPerformanceRendererCommand::IoAdapterReply {
+                pending,
+                attachment_id,
+                snapshot,
+            } => match pending.wait().await {
+                Ok(CompletedDevToolsIoCommandDispatch::Dispatched) => {
+                    Ok(CompletedPerformanceRendererCommand::IoAdapterReply {
+                        attachment_id,
+                        snapshot,
+                    })
                 }
-            }
+                Ok(CompletedDevToolsIoCommandDispatch::SessionResponse { .. }) => Err(
+                    anyhow::anyhow!("adapter-reply Performance dispatch used session output"),
+                ),
+                Err(error) => Err(error),
+            },
             PendingPerformanceRendererCommand::IoSessionOutput {
                 pending,
                 correlation,
@@ -94,8 +97,6 @@ impl PendingPerformanceCommandDispatch {
         CompletedPerformanceCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
-            renderer_access: self.renderer_access,
-            renderer_page: self.renderer_page,
             completed: completed.map_err(|error| error.to_string()),
         }
     }
@@ -108,24 +109,6 @@ impl CompletedPerformanceCommandDispatch {
 
     pub(crate) fn session_id(&self) -> Option<&str> {
         self.owner_scope.session_id()
-    }
-}
-
-fn loaded_page_mut_for_renderer_access<'a>(
-    conn: &'a mut CdpConnection,
-    renderer_access: CdpRendererCommandAccess,
-    owner: &CommandOwnerScope,
-) -> Result<&'a mut Page, String> {
-    match renderer_access {
-        CdpRendererCommandAccess::MainThread => {
-            conn.loaded_page_mut_for_protocol_access_for_owner(owner)
-        }
-        CdpRendererCommandAccess::Io => {
-            conn.loaded_page_mut_for_interruptible_protocol_access_for_owner(owner)
-        }
-        CdpRendererCommandAccess::OwnerIndependent => {
-            Err("Performance.getMetrics requires a renderer Page".to_owned())
-        }
     }
 }
 
@@ -204,7 +187,6 @@ fn parse_performance_time_domain(value: Option<&str>) -> Option<PerformanceTimeD
 pub(crate) fn try_start_performance_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-    renderer_access: CdpRendererCommandAccess,
 ) -> PerformanceCommandTaskStep {
     match cmd.parse_action::<PerformanceAction>() {
         Some(
@@ -225,139 +207,105 @@ pub(crate) fn try_start_performance_command_dispatch(
     if !conn.performance_enabled_for_session_owner(cmd.session_id) {
         return PerformanceCommandTaskStep::Complete(empty_metrics_command_output_plan());
     }
-    if !conn
-        .runtime_session_owner_slot(cmd.session_id)
-        .ok()
-        .is_some_and(|slot| slot.has_loaded_page())
-    {
-        return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
-    }
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    if renderer_access == CdpRendererCommandAccess::Io {
-        let (renderer_page, attachment_id, snapshot) = {
-            let page =
-                match loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope) {
-                    Ok(page) => page,
-                    Err(_) => {
-                        return PerformanceCommandTaskStep::Complete(
-                            default_metrics_command_output_plan(),
-                        );
-                    }
-                };
-            (
-                crate::conn::RendererPageResidenceIdentity::from_page(page),
-                page.renderer_agent_attachment_id(),
-                page.cached_performance_metric_snapshot(),
-            )
-        };
-        let response_delivery = cmd.terminal_response_delivery();
-        if cmd.id.is_none()
-            || response_delivery == moli_page_types::RendererInspectorResponseDelivery::AdapterReply
-        {
-            let page = loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
-                .expect("the captured Performance Page must remain loaded synchronously");
-            let (pending, snapshot) = page.start_performance_metric_snapshot_from_io();
-            return PerformanceCommandTaskStep::Pending(PendingPerformanceCommandDispatch {
-                command_id: cmd.id,
-                owner_scope,
-                renderer_access,
-                renderer_page,
-                pending: Box::new(PendingPerformanceRendererCommand::IoAdapterReply {
-                    pending,
-                    snapshot,
-                }),
-            });
-        }
-        let command_id = cmd
-            .id
-            .expect("session output requires a frontend command id");
-        let Some(attachment_id) = attachment_id else {
-            return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
-        };
-        let renderer_inspector_session_id =
-            conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-        let result = performance_metrics_result(&snapshot);
-        let descriptor = RendererCommandDescriptor::performance_get_metrics(
-            cmd.json.to_owned(),
-            cmd.renderer_policy(),
-            response_delivery,
-        );
-        let prepared = match conn.try_register_renderer_call_for_session_owner(
-            cmd.session_id,
-            command_id,
-            Some(attachment_id),
-            descriptor,
+    let Some((binding, snapshot)) = conn
+        .runtime_session_owner_slot_for_owner(&owner_scope)
+        .ok()
+        .and_then(|slot| {
+            Some((
+                slot.current_renderer_inspection_binding()?,
+                conn.performance_metric_snapshot_for_owner(&owner_scope)?,
+            ))
+        })
+    else {
+        return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
+    };
+    // The Browser supplies its latest published metric snapshot; inspection
+    // ingress owns the IO turn and terminal response, never the physical Page.
+    let attachment_id = binding.attachment().id();
+    let renderer_inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
+    let response_delivery = cmd.terminal_response_delivery();
+    if cmd.id.is_none()
+        || response_delivery == moli_page_types::RendererInspectorResponseDelivery::AdapterReply
+    {
+        let pending = match binding.start_performance_get_metrics(
+            renderer_inspector_session_id,
+            Value::Null,
+            None,
         ) {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                return PerformanceCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000, error,
-                ));
-            }
-        };
-        let (correlation, response, response_rx) = prepared.into_parts();
-        debug_assert!(
-            response_rx.is_none(),
-            "Performance session output must not allocate an adapter-reply receiver",
-        );
-        let pending = loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
-            .ok()
-            .filter(|page| {
-                crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
-                    && page.renderer_agent_attachment_id() == Some(attachment_id)
-            })
-            .ok_or_else(|| "Performance renderer attachment changed before IO dispatch".to_owned())
-            .and_then(|page| {
-                page.start_performance_get_metrics_from_io_with_response(
-                    renderer_inspector_session_id,
-                    result,
-                    response,
-                )
-                .map_err(|error| error.to_string())
-            });
-        let pending = match pending {
             Ok(pending) => pending,
-            Err(error) => {
-                let removed = conn.take_renderer_call_if_correlation_matches_for_session_owner(
-                    cmd.session_id,
-                    correlation,
-                );
-                debug_assert!(removed);
-                return PerformanceCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000, error,
-                ));
+            Err(_) => {
+                return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
             }
         };
         return PerformanceCommandTaskStep::Pending(PendingPerformanceCommandDispatch {
             command_id: cmd.id,
             owner_scope,
-            renderer_access,
-            renderer_page,
-            pending: Box::new(PendingPerformanceRendererCommand::IoSessionOutput {
+            pending: Box::new(PendingPerformanceRendererCommand::IoAdapterReply {
                 pending,
-                correlation,
+                attachment_id,
+                snapshot,
             }),
         });
     }
-    let page = match loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope) {
-        Ok(page) => page,
-        Err(_) => {
-            return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
+    let command_id = cmd
+        .id
+        .expect("session output requires a frontend command id");
+    let descriptor = RendererCommandDescriptor::performance_get_metrics(
+        cmd.json.to_owned(),
+        cmd.renderer_policy(),
+        response_delivery,
+    );
+    let prepared = match conn.try_register_renderer_call_for_session_owner(
+        cmd.session_id,
+        command_id,
+        Some(attachment_id),
+        descriptor,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            return PerformanceCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
         }
     };
-    let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(page);
-    let pending = match page.start_performance_metric_snapshot() {
+    let (correlation, response, response_rx) = prepared.into_parts();
+    debug_assert!(
+        response_rx.is_none(),
+        "Performance session output must not allocate an adapter-reply receiver",
+    );
+    let pending = conn
+        .runtime_session_owner_slot_for_owner(&owner_scope)
+        .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
+        .filter(|binding| binding.attachment().id() == attachment_id)
+        .ok_or_else(|| "Performance renderer attachment changed before IO dispatch".to_owned())
+        .and_then(|binding| {
+            binding
+                .start_performance_get_metrics(
+                    renderer_inspector_session_id,
+                    performance_metrics_result(&snapshot),
+                    Some(response),
+                )
+                .map_err(|error| error.to_string())
+        });
+    let pending = match pending {
         Ok(pending) => pending,
-        Err(_) => {
-            return PerformanceCommandTaskStep::Complete(default_metrics_command_output_plan());
+        Err(error) => {
+            let removed = conn.take_renderer_call_if_correlation_matches_for_session_owner(
+                cmd.session_id,
+                correlation,
+            );
+            debug_assert!(removed);
+            return PerformanceCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
         }
     };
     PerformanceCommandTaskStep::Pending(PendingPerformanceCommandDispatch {
         command_id: cmd.id,
         owner_scope,
-        renderer_access,
-        renderer_page,
-        pending: Box::new(PendingPerformanceRendererCommand::Main(pending)),
+        pending: Box::new(PendingPerformanceRendererCommand::IoSessionOutput {
+            pending,
+            correlation,
+        }),
     })
 }
 
@@ -386,27 +334,18 @@ pub(crate) async fn complete_pending_performance_command(
     let CompletedPerformanceCommandDispatch {
         command_id: _,
         owner_scope,
-        renderer_access,
-        renderer_page,
         completed,
     } = completed;
     let snapshot = match completed {
-        Ok(CompletedPerformanceRendererCommand::Main(completed_page)) => {
-            loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
+        Ok(CompletedPerformanceRendererCommand::IoAdapterReply {
+            attachment_id,
+            snapshot,
+        }) => {
+            let remains_current = conn
+                .runtime_session_owner_slot_for_owner(&owner_scope)
                 .ok()
-                .filter(|page| {
-                    crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
-                })
-                .and_then(|page| page.finish_performance_metric_snapshot(completed_page).ok())
-                .unwrap_or_default()
-        }
-        Ok(CompletedPerformanceRendererCommand::IoAdapterReply(snapshot)) => {
-            let remains_current =
-                loaded_page_mut_for_renderer_access(conn, renderer_access, &owner_scope)
-                    .ok()
-                    .is_some_and(|page| {
-                        crate::conn::RendererPageResidenceIdentity::from_page(page) == renderer_page
-                    });
+                .and_then(|slot| slot.current_renderer_inspection_binding())
+                .is_some_and(|binding| binding.attachment().id() == attachment_id);
             if remains_current {
                 snapshot
             } else {
@@ -511,7 +450,7 @@ fn build_performance_metrics(snapshot: &RendererPerformanceMetricSnapshot) -> Ve
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, CdpCommandTaskStep};
+    use crate::conn::CdpCommandTaskStep;
     use crate::testing::TestContext;
     use serde_json::json;
     use std::collections::HashMap;
@@ -669,7 +608,7 @@ mod tests {
     }
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,performance-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
@@ -926,7 +865,9 @@ mod tests {
         let mut ctx = TestContext::new();
         let active_url = "data:text/html,<body>active</body>";
         let background_url = "data:text/html,<body><main><section></section><section></section><section></section><section></section></main></body>";
-        let mut browser_context = BrowserContext::new("BID-performance-owner".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-performance-owner".to_owned());
         browser_context.set_active_target_id("TID-performance-active");
         browser_context.attach_active_session("SID-performance-active");
         browser_context.set_target_url(active_url.to_owned());
@@ -1032,7 +973,7 @@ mod tests {
     async fn performance_get_metrics_targets_loaded_background_owner_without_activation() {
         let mut ctx = TestContext::new();
         let background_url = "data:text/html,<!doctype html><body><main><section></section><section></section></main></body>";
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.set_target_url("data:text/html,<body>active</body>".to_owned());
@@ -1069,9 +1010,7 @@ mod tests {
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(browser_context.active_target_id(), Some("TID-active"));
         assert!(
-            browser_context
-                .background_target("TID-background")
-                .is_some_and(|target| target.has_loaded_page()),
+            browser_context.target_has_loaded_page("TID-background"),
             "Performance.getMetrics should not activate the loaded background owner"
         );
     }
@@ -1079,7 +1018,7 @@ mod tests {
     #[tokio::test]
     async fn performance_get_metrics_on_unloaded_background_owner_does_not_activate() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.stage_background_target(
@@ -1122,7 +1061,7 @@ mod tests {
         assert!(
             browser_context
                 .background_target("TID-background")
-                .is_some_and(|target| !target.has_loaded_page()),
+                .is_some_and(|target| !browser_context.target_has_loaded_page(target.target_id())),
             "unloaded Performance owner fallback should not activate the background target"
         );
     }
@@ -1130,7 +1069,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn performance_enable_stages_background_target_session_state() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.stage_background_target(
@@ -1161,7 +1100,7 @@ mod tests {
         assert!(
             active
                 .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| active.has_non_default_session_state_for_target(target.target_id()))
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state

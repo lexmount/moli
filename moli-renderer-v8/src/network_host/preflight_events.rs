@@ -1,84 +1,65 @@
-use moli_fetch::ResponseHead;
+use moli_fetch::{FetchCancelHandle, Request, ResponseHead};
+use std::sync::Arc;
 
 use crate::{
-    page_task_queue::RendererResourceCompletionSender,
-    types::{
-        AsyncSubresourceFetchEvent, AsyncSubresourceNetworkContext, SubresourceNetworkRecord,
-        SubresourceResponseBody,
-    },
+    network::{ResourceRequestClient, ResourceTransfer},
+    runtime::{RendererNetworkObservation, RendererNetworkRequest},
+    types::SubresourceResourceType,
 };
 
+/// Physical OPTIONS requests inherit the source of the accepted request.
+/// The observer delivers receipts on that request's existing execution route.
 #[derive(Clone)]
-pub(in crate::network_host) struct CorsPreflightNetworkObserver {
-    completion_tx: RendererResourceCompletionSender,
-    context: AsyncSubresourceNetworkContext,
+pub(crate) struct CorsPreflightNetworkObserver {
+    pub(crate) request: RendererNetworkRequest,
+    pub(crate) observer: Arc<dyn Fn(RendererNetworkObservation) + Send + Sync>,
+    pub(crate) frame_id: Option<String>,
+    pub(crate) resource_type: SubresourceResourceType,
+    pub(crate) keepalive: bool,
 }
 
 impl CorsPreflightNetworkObserver {
-    pub(in crate::network_host) fn new(
-        completion_tx: RendererResourceCompletionSender,
-        context: AsyncSubresourceNetworkContext,
-    ) -> Self {
-        Self {
-            completion_tx,
-            context,
-        }
-    }
-
-    pub(in crate::network_host) fn send_preflight_success(
+    pub(in crate::network_host) async fn fetch(
         &self,
-        request_url: url::Url,
-        request_headers: moli_fetch::RequestHeaders,
-        response: &ResponseHead,
-    ) {
-        self.send_record(
-            SubresourceNetworkRecord::success_with_body(
-                self.context.frame_id.clone(),
-                self.context.document_url.clone(),
-                request_url,
-                "OPTIONS".to_owned(),
-                request_headers,
-                None,
-                self.context.resource_type,
-                response.request_cookie_report.clone(),
-                response
-                    .redirect_chain
-                    .clone()
-                    .into_iter()
-                    .map(Into::into)
-                    .collect(),
-                response.final_url.clone(),
-                response.status,
-                response.headers.clone(),
-                SubresourceResponseBody::from_bytes(Vec::new()),
-                response.cookie_set_reports.clone(),
+        loader: &ResourceRequestClient,
+        request: Request,
+        cancel: Option<FetchCancelHandle>,
+    ) -> Result<ResponseHead, String> {
+        let observer = self.observer.clone();
+        let (network, started) = ResourceTransfer::start(
+            self.request.dependent_request(),
+            move |event| observer(event),
+            |network| {
+                moli_page_types::SubresourceRequestStarted::new(
+                    network.handle(),
+                    self.frame_id.clone(),
+                    request
+                        .cookie_context
+                        .initiator_url
+                        .clone()
+                        .expect("a CORS preflight has an initiator"),
+                    request.url.clone(),
+                    request.method.clone(),
+                    request.request_headers.clone(),
+                    None,
+                    self.resource_type,
+                    moli_page_types::SubresourceRequestInitiatorType::Script,
+                    None,
+                )
+                .with_keepalive(self.keepalive)
+            },
+        );
+        (self.observer)(started);
+        let result = loader
+            .fetch_observed_script_text_with_cancel(
+                request,
+                cancel.unwrap_or_default(),
+                network.as_ref(),
             )
-            .with_from_cache(response.from_cache)
-            .with_negotiated_http_version(response.negotiated_http_version),
-        );
-    }
-
-    pub(in crate::network_host) fn send_preflight_failure(
-        &self,
-        request_url: url::Url,
-        request_headers: moli_fetch::RequestHeaders,
-        error_text: String,
-    ) {
-        self.send_record(SubresourceNetworkRecord::failure(
-            self.context.frame_id.clone(),
-            self.context.document_url.clone(),
-            request_url,
-            "OPTIONS".to_owned(),
-            request_headers,
-            None,
-            self.context.resource_type,
-            error_text,
-        ));
-    }
-
-    fn send_record(&self, record: SubresourceNetworkRecord) {
-        let _ = self.completion_tx.send_async_subresource_event(
-            AsyncSubresourceFetchEvent::ObservedNetworkRecord(Box::new(record)),
-        );
+            .await;
+        network.complete(&result);
+        result
+            .map(|response| response.head())
+            .map_err(|error| error.to_string())
     }
 }

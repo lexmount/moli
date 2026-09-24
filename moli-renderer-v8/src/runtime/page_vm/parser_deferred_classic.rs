@@ -16,7 +16,6 @@ use crate::{
     },
     frame_owner_model::{DocumentLoadDelayTokenId, FrameDocumentTaskOwner},
     host::ScriptEventKind,
-    network::ResourceRequestClient,
     parser_script::action::{ParserClassicScriptExecutionStart, ParserClassicScriptScheduling},
     planning::PreparedScript,
     script_vm::{
@@ -125,18 +124,16 @@ pub(super) struct MainParserDeferredClassicSourceFailureFollowup {
     owner_replaced: bool,
 }
 
-pub(super) struct MainParserDeferredClassicDocumentScriptOwner<'page, 'loader> {
+pub(super) struct MainParserDeferredClassicDocumentScriptOwner<'page> {
     page_vm: &'page mut PageVm,
-    loader: &'loader ResourceRequestClient,
     completed_run: Option<ScriptRun>,
     task_effect: MainParserContinuationTaskEffect,
 }
 
-impl<'page, 'loader> MainParserDeferredClassicDocumentScriptOwner<'page, 'loader> {
-    pub(super) fn new(page_vm: &'page mut PageVm, loader: &'loader ResourceRequestClient) -> Self {
+impl<'page> MainParserDeferredClassicDocumentScriptOwner<'page> {
+    pub(super) fn new(page_vm: &'page mut PageVm) -> Self {
         Self {
             page_vm,
-            loader,
             completed_run: None,
             task_effect: MainParserContinuationTaskEffect::NotApplied,
         }
@@ -213,11 +210,7 @@ impl<'page, 'loader> MainParserDeferredClassicDocumentScriptOwner<'page, 'loader
         if let Some(network_result) = source_network_result.map(AsRef::as_ref) {
             self.page_vm
                 .vm_mut()
-                .record_script_subresource_network_result(
-                    script.initiator_url.clone(),
-                    script.url.clone(),
-                    network_result,
-                );
+                .record_script_resource_timing(script.url.clone(), network_result);
         }
     }
 
@@ -234,7 +227,7 @@ impl<'page, 'loader> MainParserDeferredClassicDocumentScriptOwner<'page, 'loader
 }
 
 impl ParserClassicDocumentScriptExecutionHooks
-    for &mut MainParserDeferredClassicDocumentScriptOwner<'_, '_>
+    for &mut MainParserDeferredClassicDocumentScriptOwner<'_>
 {
     type Ready = MainParserDeferredClassicReady;
     type SourceFailure = MainParserDeferredClassicSourceFailure;
@@ -306,10 +299,7 @@ impl ParserClassicDocumentScriptExecutionHooks
             let expected_owner = action.owner;
             let execution = owner
                 .page_vm
-                .execute_main_parser_deferred_classic_script_body_on_current_lane(
-                    owner.loader,
-                    action.script,
-                )
+                .execute_main_parser_deferred_classic_script_body_on_current_lane(action.script)
                 .await;
             let (run, navigation_triggered, completion, prepared_activity) = execution.into_parts();
             let owner_replaced = !owner.owner_is_current(expected_owner);

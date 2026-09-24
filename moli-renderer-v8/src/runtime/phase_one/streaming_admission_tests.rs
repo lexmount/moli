@@ -8,6 +8,7 @@ use tokio::sync::{mpsc, oneshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AppliedStreamingNetworkingTask {
+    ResourceProgress,
     /// The exact parser-resume carrier ran through the production selected
     /// dispatcher. Phase-one resume consumes its admission fact.
     MainParserContinuation,
@@ -15,6 +16,18 @@ enum AppliedStreamingNetworkingTask {
     /// production selected-task dispatcher. Its action stays opaque so the
     /// fixture cannot reproduce or bypass task completion.
     StylesheetCompletion,
+}
+
+fn has_ready_native_resource_progress(residence: &PendingPhaseOneResidence) -> bool {
+    matches!(residence.page_vm().page_resource_completion_queue().next_ready_owner().map(|owner| owner.local_owner()),
+        Some(crate::page_resource_completion::RendererPageResourceCompletionLocalOwner::AsyncSubresource(
+            crate::types::AsyncSubresourceFetchEventTarget::NativeNetwork)))
+}
+
+fn has_ready_document_networking(residence: &PendingPhaseOneResidence) -> bool {
+    has_ready_main_parser_continuation(residence)
+        || has_ready_stylesheet_completion(residence)
+        || has_ready_native_resource_progress(residence)
 }
 
 fn has_ready_main_parser_continuation(residence: &PendingPhaseOneResidence) -> bool {
@@ -117,21 +130,20 @@ async fn apply_next_networking_task(
     mut residence: PendingPhaseOneResidence,
 ) -> (PendingPhaseOneResidence, AppliedStreamingNetworkingTask) {
     let executor = residence.page_vm().local_executor.clone();
-    let request_client = residence
-        .page_vm()
-        .main_document_resource_loader()
-        .request_client()
-        .clone();
     let (residence, outcome) = super::access::run_named_owner_local_task(
         executor,
         "open-stream stylesheet-networking executor channel closed",
         async move {
+            if has_ready_native_resource_progress(&residence) {
+                assert!(residence.page_vm_mut().run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::ResourceCompletion).await?);
+                return Ok((
+                    residence,
+                    Some(AppliedStreamingNetworkingTask::ResourceProgress),
+                ));
+            }
             if residence
                 .page_vm_mut()
-                .run_exact_selected_page_task_for_test(
-                    crate::runtime::page_vm::PageSelectedTaskTestSelector::StylesheetCompletion,
-                    &request_client,
-                )
+                .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::StylesheetCompletion)
                 .await?
             {
                 return Ok::<_, anyhow::Error>((
@@ -141,10 +153,7 @@ async fn apply_next_networking_task(
             }
             if residence
                 .page_vm_mut()
-                .run_exact_selected_page_task_for_test(
-                    crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation,
-                    &request_client,
-                )
+                .run_exact_selected_page_task_for_test(crate::runtime::page_vm::PageSelectedTaskTestSelector::MainParserContinuation)
                 .await?
             {
                 return Ok::<_, anyhow::Error>((
@@ -181,18 +190,13 @@ async fn apply_oldest_ready_page_task(
     mut residence: PendingPhaseOneResidence,
 ) -> (PendingPhaseOneResidence, bool) {
     let executor = residence.page_vm().local_executor.clone();
-    let request_client = residence
-        .page_vm()
-        .main_document_resource_loader()
-        .request_client()
-        .clone();
     super::access::run_named_owner_local_task(
         executor,
         "open-stream production selected-task executor channel closed",
         async move {
             let applied = residence
                 .page_vm_mut()
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&request_client)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?;
             Ok::<_, anyhow::Error>((residence, applied))
         },
@@ -453,9 +457,7 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                 // Parser budget and stylesheet completion share one FIFO.
                 // Dequeue by the actual action rather than guessing that a
                 // particular wake must name the stylesheet terminal.
-                if !has_ready_main_parser_continuation(&residence)
-                    && !has_ready_stylesheet_completion(&residence)
-                {
+                while !has_ready_document_networking(&residence) {
                     wait_for_owner_wake_source(
                         &mut wake_rx,
                         RendererOwnerWakeSource::NetworkingTask,
@@ -468,46 +470,32 @@ fn open_streaming_residence_does_not_treat_link_event_as_parser_obstruction() {
                     .await;
                 }
                 assert!(
-                    has_ready_main_parser_continuation(&residence)
-                        || has_ready_stylesheet_completion(&residence),
+                    has_ready_document_networking(&residence),
                     "a concrete Networking descriptor, not phase-one state, must retain the work"
                 );
                 let mut saw_stylesheet_completion = false;
                 for _ in 0..8 {
+                    while !has_ready_document_networking(&residence) {
+                        wait_for_owner_wake_source(&mut wake_rx, RendererOwnerWakeSource::NetworkingTask).await;
+                        residence = resume_open_stream(residence,
+                            "open-stream resource-progress observation channel closed").await;
+                    }
                     let (next, action) = apply_next_networking_task(residence).await;
                     residence = next;
                     match action {
+                        AppliedStreamingNetworkingTask::ResourceProgress => {}
                         AppliedStreamingNetworkingTask::MainParserContinuation => {
                             residence = resume_open_stream(
                                 residence,
                                 "open-stream parser-budget continuation channel closed",
                             )
                             .await;
-                            if !has_ready_main_parser_continuation(&residence)
-                                && !has_ready_stylesheet_completion(&residence)
-                            {
-                                wait_for_owner_wake_source(
-                                    &mut wake_rx,
-                                    RendererOwnerWakeSource::NetworkingTask,
-                                )
-                                .await;
-                                residence = resume_open_stream(
-                                    residence,
-                                    "open-stream stylesheet-terminal observation channel closed",
-                                )
-                                .await;
-                            }
                         }
                         AppliedStreamingNetworkingTask::StylesheetCompletion => {
                             saw_stylesheet_completion = true;
                             break;
                         }
                     }
-                    assert!(
-                        has_ready_main_parser_continuation(&residence)
-                            || has_ready_stylesheet_completion(&residence),
-                        "the shared Networking FIFO should retain a concrete descriptor"
-                    );
                 }
                 assert!(
                     saw_stylesheet_completion,
@@ -630,7 +618,7 @@ fn streaming_stylesheet_and_json_ld_reach_tail_and_post_parse_boundary() {
                             turns += 1;
                             assert!(
                                 turns <= 32,
-                                "phase one exceeded its bounded continuation budget"
+                                "phase one exceeded its bounded continuation budget: {:?}", residence.page_vm().page_resource_completion_queue().next_ready_owner()
                             );
                             residence = apply_oldest_ready_page_task(residence).await.0;
                             match resume_phase_one_once(

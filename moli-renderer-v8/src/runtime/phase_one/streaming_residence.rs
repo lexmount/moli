@@ -70,10 +70,6 @@ impl PendingStreamingPhaseOneContinuation {
         self.runtime.owner_wake_token()
     }
 
-    pub(in crate::runtime) fn has_ready_input(&mut self) -> bool {
-        self.input.has_ready_input()
-    }
-
     pub(in crate::runtime) async fn resume(self) -> Result<PendingPhaseOneResumeOutcome> {
         self.runtime.publish_processing_main_document_phase();
         let Self {

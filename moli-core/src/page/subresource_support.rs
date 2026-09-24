@@ -1,27 +1,40 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use url::Url;
 
 use super::protocol_support::{PendingSubresourceContinueOutcome, SubresourceAuthCredentials};
-use super::{CompletedPageCommand, Page, PendingPageCommand};
+use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
 use super::{RendererPendingJavaScriptDialog, RendererSyntheticResponseBody};
 use crate::RendererOutputFence;
 use crate::renderer::{RendererPageCommand, RendererPageReply};
 
 impl Page {
-    pub fn take_pending_modal_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
-        self.handle.take_pending_modal_javascript_dialogs()
+    pub(crate) fn observe_popup_inputs(&self) -> moli_renderer_v8::RendererPopupInputReceiver {
+        self.handle.observe_popup_inputs()
     }
 
-    pub async fn stop_document_lifecycle_async(&mut self) -> Result<()> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::StopDocumentLifecycle)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "stop document lifecycle page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
+    pub(crate) fn take_pending_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
+        self.handle.take_pending_javascript_dialogs()
+    }
+
+    pub(crate) fn observe_javascript_dialogs(
+        &self,
+    ) -> moli_renderer_v8::RendererJavaScriptDialogObservation {
+        self.handle.observe_javascript_dialogs()
+    }
+
+    pub fn start_stop_document_lifecycle(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::StopDocumentLifecycle)
+    }
+
+    pub fn finish_stop_document_lifecycle(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<RendererCommandTurnOutput> {
+        let output = self.finish_page_command_turn(completion);
+        if !matches!(output.completion().reply(), RendererPageReply::Unit) {
+            bail!("stop document lifecycle page command expected a unit reply");
+        }
+        Ok(output)
     }
 
     pub async fn continue_pending_subresource_fetch_async(

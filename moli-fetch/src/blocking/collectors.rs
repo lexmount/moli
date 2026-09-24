@@ -251,6 +251,9 @@ pub struct RawStreamingResponseCollector {
     cancel_handle: FetchCancelHandle,
     negotiated_http_version: Option<NegotiatedHttpVersion>,
     network_request_extra_info: Option<NetworkRequestExtraInfo>,
+    follow_redirects: bool,
+    auth_challenge_status: Option<u16>,
+    deferred_auth_body: Option<Vec<u8>>,
 }
 
 impl StreamingResponseCollector {
@@ -614,9 +617,11 @@ impl RawStreamingResponseCollector {
         start_tx: oneshot::Sender<Result<StreamingHtmlResponseStart>>,
         body_tx: mpsc::UnboundedSender<Vec<u8>>,
         cancel_handle: FetchCancelHandle,
+        follow_redirects: bool,
     ) -> Self {
         Self {
             cookie_store,
+            follow_redirects,
             headers: Vec::new(),
             current_url: None,
             current_cookie_context: None,
@@ -642,6 +647,8 @@ impl RawStreamingResponseCollector {
             cancel_handle,
             negotiated_http_version: None,
             network_request_extra_info: None,
+            auth_challenge_status: None,
+            deferred_auth_body: None,
         }
     }
 
@@ -677,6 +684,32 @@ impl RawStreamingResponseCollector {
         self.client_hint_response_policy = None;
         self.client_hint_restart_requested = false;
         self.negotiated_http_version = None;
+        self.auth_challenge_status = None;
+        self.deferred_auth_body = None;
+    }
+
+    pub(crate) fn set_authentication(&mut self, auth: Option<&crate::RequestAuth>) {
+        self.auth_challenge_status = auth.and_then(|auth| match auth.target {
+            crate::RequestAuthTarget::Server => Some(401),
+            crate::RequestAuthTarget::Proxy => Some(407),
+            crate::RequestAuthTarget::ProxyHeader => None,
+        });
+    }
+
+    pub(crate) fn authentication_retry_started(&mut self) {
+        // An outgoing retry makes the previous challenge intermediate, even
+        // if that retry fails before receiving any response headers.
+        self.deferred_auth_body = None;
+    }
+
+    pub(crate) fn finish_authentication_response(&mut self) {
+        if let Some(body) = self.deferred_auth_body.take() {
+            // No later request superseded this challenge. Preserve a final
+            // rejection's actual headers and body, including a failed prefix.
+            self.cancel_handle.mark_response_terminal();
+            self.maybe_emit_start();
+            self.send_chunk(&body);
+        }
     }
 
     pub(crate) fn begin_request_with_cache_plan(
@@ -788,6 +821,10 @@ impl RawStreamingResponseCollector {
         } else {
             self.cookie_set_reports.clear();
         }
+        if self.auth_challenge_status == Some(self.status) {
+            self.deferred_auth_body.get_or_insert_with(Vec::new);
+            return true;
+        }
         if self
             .client_hint_response_policy
             .as_ref()
@@ -839,10 +876,11 @@ impl RawStreamingResponseCollector {
         let Some(current_url) = self.current_url.clone() else {
             return;
         };
-        if next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
-            .ok()
-            .flatten()
-            .is_some()
+        if self.follow_redirects
+            && next_redirect_url_from_parts(&current_url, self.status, &self.headers, 0)
+                .ok()
+                .flatten()
+                .is_some()
         {
             return;
         }
@@ -1073,11 +1111,15 @@ impl Handler for RawStreamingResponseCollector {
         }
 
         self.response_bytes_received += data.len();
-        if self.declared_identity_body_length == Some(self.response_bytes_received) {
-            self.cancel_handle.mark_declared_response_body_complete();
+        if let Some(body) = &mut self.deferred_auth_body {
+            body.extend_from_slice(data);
+        } else {
+            if self.declared_identity_body_length == Some(self.response_bytes_received) {
+                self.cancel_handle.mark_declared_response_body_complete();
+            }
+            self.write_cache_body_bytes(data);
+            self.send_chunk(data);
         }
-        self.write_cache_body_bytes(data);
-        self.send_chunk(data);
         if self.cancel_handle.is_cancelled() {
             return Ok(0);
         }
@@ -1103,6 +1145,9 @@ impl Handler for RawStreamingResponseCollector {
             self.response_bytes_received = 0;
             self.response_too_large = false;
             self.cookie_set_reports.clear();
+            self.deferred_auth_body = None;
+            self.declared_identity_body_length = None;
+            self.cancel_handle.reset_response_progress();
             return true;
         }
 
@@ -1175,6 +1220,7 @@ mod tests {
             start_tx,
             body_tx,
             cancel_handle,
+            true,
         );
         collector.begin_request(
             None,

@@ -42,7 +42,6 @@ struct RendererOutputBoundary {
 #[derive(Debug)]
 enum CommandOutput {
     Command(CommandResponseOutput),
-    CommandWithoutSession(CommandResponseOutput),
     OwnerEvent(CommandOwnerEvent),
     BackgroundEvent(BackgroundProtocolEvent),
 }
@@ -85,12 +84,6 @@ impl CommandOutputPlan {
     pub(crate) fn error(code: i32, message: impl Into<String>) -> Self {
         let mut plan = Self::default();
         plan.push_error(code, message);
-        plan
-    }
-
-    pub(crate) fn error_without_session(code: i32, message: impl Into<String>) -> Self {
-        let mut plan = Self::default();
-        plan.push_error_without_session(code, message);
         plan
     }
 
@@ -142,16 +135,6 @@ impl CommandOutputPlan {
                 message: message.into(),
                 data,
             }));
-    }
-
-    pub(crate) fn push_error_without_session(&mut self, code: i32, message: impl Into<String>) {
-        self.outputs.push(CommandOutput::CommandWithoutSession(
-            CommandResponseOutput::Error {
-                code,
-                message: message.into(),
-                data: None,
-            },
-        ));
     }
 
     pub(crate) fn extend(&mut self, other: CommandOutputPlan) {
@@ -325,7 +308,7 @@ impl CommandOutputPlan {
         let mut status = None;
         for output in &self.outputs {
             match output {
-                CommandOutput::Command(command) | CommandOutput::CommandWithoutSession(command) => {
+                CommandOutput::Command(command) => {
                     record_command_status(&mut status, command.status());
                 }
                 CommandOutput::OwnerEvent(_) | CommandOutput::BackgroundEvent(_) => {}
@@ -358,7 +341,7 @@ impl CommandOutputPlan {
         out.extend(
             self.into_background_events(command_id, session_id)
                 .into_iter()
-                .map(BackgroundProtocolEvent::into_protocol_message),
+                .filter_map(crate::testing::protocol_event_into_wire_message),
         );
     }
 
@@ -373,9 +356,6 @@ impl CommandOutputPlan {
         for output in self.outputs {
             match output {
                 CommandOutput::Command(command) => {
-                    record_command_status(&mut status, command.status());
-                }
-                CommandOutput::CommandWithoutSession(command) => {
                     record_command_status(&mut status, command.status());
                 }
                 CommandOutput::OwnerEvent(event) => out.push(event.into_background_event()),
@@ -428,9 +408,6 @@ impl CommandOutputPlan {
                 CommandOutput::Command(command) => {
                     out.push(command.into_background_event(command_id, session_id));
                 }
-                CommandOutput::CommandWithoutSession(command) => {
-                    out.push(command.into_background_event(command_id, None));
-                }
                 CommandOutput::OwnerEvent(event) => out.push(event.into_background_event()),
                 CommandOutput::BackgroundEvent(event) => out.push(event),
             }
@@ -442,35 +419,6 @@ impl CommandOutputPlan {
             after_boundary,
             self.post_response_events,
         )
-    }
-
-    pub(crate) fn into_background_event_plan(
-        self,
-        command_id: Option<u64>,
-        session_id: Option<&str>,
-    ) -> Self {
-        Self {
-            outputs: self
-                .outputs
-                .into_iter()
-                .map(|output| {
-                    let event = match output {
-                        CommandOutput::Command(command) => {
-                            command.into_background_event(command_id, session_id)
-                        }
-                        CommandOutput::CommandWithoutSession(command) => {
-                            command.into_background_event(command_id, None)
-                        }
-                        CommandOutput::OwnerEvent(event) => event.into_background_event(),
-                        CommandOutput::BackgroundEvent(event) => event,
-                    };
-                    CommandOutput::BackgroundEvent(event)
-                })
-                .collect(),
-            post_response_events: self.post_response_events,
-            renderer_output_predecessor: self.renderer_output_predecessor,
-            renderer_output_boundary: self.renderer_output_boundary,
-        }
     }
 
     pub(crate) fn into_runtime_inspector_response_and_background_events(
@@ -486,10 +434,6 @@ impl CommandOutputPlan {
                     &mut response,
                     command.into_protocol_message(Some(command_id), session_id),
                 ),
-                CommandOutput::CommandWithoutSession(command) => record_runtime_inspector_response(
-                    &mut response,
-                    command.into_protocol_message(Some(command_id), None),
-                ),
                 CommandOutput::OwnerEvent(event) => out.push(event.into_background_event()),
                 CommandOutput::BackgroundEvent(event) => out.push(event),
             }
@@ -504,19 +448,7 @@ pub(crate) struct CommandOutputBuffer {
     plan: CommandOutputPlan,
 }
 
-#[derive(Default)]
-pub(crate) struct BackgroundProtocolEventBuffer {
-    events: Vec<BackgroundProtocolEvent>,
-}
-
 impl CommandOutputBuffer {
-    pub(crate) fn set_renderer_output_predecessor(
-        &mut self,
-        predecessor: moli_core::RendererOutputFence,
-    ) {
-        self.plan.set_renderer_output_predecessor(predecessor);
-    }
-
     pub(crate) fn extend_background_events_after_messages(
         &mut self,
         events: impl IntoIterator<Item = BackgroundProtocolEvent>,
@@ -534,28 +466,8 @@ impl CommandOutputBuffer {
         self.plan.push_error(code, message);
     }
 
-    pub(crate) fn insert_renderer_output_boundary_after_messages(
-        &mut self,
-        cursor: moli_core::RendererOutputFence,
-    ) {
-        self.plan.insert_renderer_output_boundary(cursor);
-    }
-
     pub(crate) fn into_plan(self) -> CommandOutputPlan {
         self.plan
-    }
-}
-
-impl BackgroundProtocolEventBuffer {
-    pub(crate) fn extend_background_events(
-        &mut self,
-        events: impl IntoIterator<Item = BackgroundProtocolEvent>,
-    ) {
-        self.events.extend(events);
-    }
-
-    pub(crate) fn into_events(self) -> Vec<BackgroundProtocolEvent> {
-        self.events
     }
 }
 
@@ -2700,24 +2612,6 @@ mod tests {
                 "id": 15,
                 "error": {"code": -32001, "message": "Unknown sessionId"},
                 "sessionId": "SID-missing"
-            })]
-        );
-    }
-
-    #[test]
-    fn command_output_plan_can_emit_error_without_session_route() {
-        let mut out = Vec::new();
-        CommandOutputPlan::error_without_session(-31998, "TargetNotLoaded").emit_into(
-            &mut out,
-            Some(16),
-            Some("SID-current"),
-        );
-
-        assert_eq!(
-            out,
-            vec![json!({
-                "id": 16,
-                "error": {"code": -31998, "message": "TargetNotLoaded"}
             })]
         );
     }

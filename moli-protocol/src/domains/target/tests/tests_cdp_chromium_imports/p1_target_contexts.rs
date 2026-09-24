@@ -165,10 +165,13 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_server_is_recorde
         .expect("browserContextId")
         .to_owned();
 
+    let policy = ctx
+        .conn
+        .browser_context_by_id(&browser_context_id)
+        .map(BrowserContext::network_policy)
+        .expect("created BrowserContext");
     assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_http_proxy_override.as_deref()),
+        policy.http_proxy.as_deref(),
         Some("http://proxy.example:8080")
     );
 }
@@ -193,10 +196,13 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_bypass_normalizes
         .expect("browserContextId")
         .to_owned();
 
+    let policy = ctx
+        .conn
+        .browser_context_by_id(&browser_context_id)
+        .map(BrowserContext::network_policy)
+        .expect("created BrowserContext");
     assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_http_no_proxy_override.as_deref()),
+        policy.http_no_proxy.as_deref(),
         Some("localhost,.example.com")
     );
 }
@@ -282,12 +288,16 @@ async fn rust_cdp_chromium_target_dispose_active_context_activates_remaining_con
 async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download_behavior() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     let browser_context_id = create_browser_context(&mut ctx, 261_016).await;
-    ctx.conn.download_behavior.set_browser_context(
-        browser_context_id.clone(),
-        "allow".into(),
-        Some("/tmp/moli-target-contexts".into()),
-        true,
-    );
+    ctx.conn
+        .configure_download_policy(
+            Some(&browser_context_id),
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Allow,
+                download_path: Some("/tmp/moli-target-contexts".into()),
+            },
+            Some(true),
+        )
+        .unwrap();
 
     ctx.process_async(json!({
         "id": 261_017,
@@ -298,9 +308,15 @@ async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download
 
     ctx.expect_result(261_017, json!({}), None);
     assert_eq!(
-        ctx.conn.download_behavior,
-        crate::conn::BrowserDownloadBehavior::default()
+        ctx.conn
+            .download_policy_for_browser_context(Some(&browser_context_id)),
+        moli_core::browser::DownloadPolicy::default()
     );
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some(&browser_context_id))
+    );
+    assert!(ctx.conn.browser_download_event_session_ids().is_empty());
 }
 
 // Chromium source:
@@ -547,7 +563,7 @@ async fn rust_cdp_chromium_target_popup_target_keeps_opener_browser_context_id()
     // loading. Use the production scheduler boundary here: leaving this test
     // on TestContext's legacy inline-navigation mode makes an unrelated
     // example.com response part of the renderer-output cursor fence.
-    ctx.enable_background_navigation_scheduler_for_test();
+    ctx.enable_background_event_ingress_for_test();
     tokio::task::LocalSet::new()
         .run_until(async {
             load_bc_with_titled_page_async(
@@ -599,7 +615,7 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
         "id": 261_054,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/first', 'report') !== null",
+            "expression": "window.open('about:blank', 'report') !== null",
             "returnByValue": true
         }
     }))
@@ -609,10 +625,19 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
         "id": 261_055,
         "method": "Runtime.evaluate",
         "params": {
-            "expression": "window.open('https://example.com/second', 'report') !== null",
+            "expression": "window.open('data:text/html,second', 'report') !== null",
             "returnByValue": true
         }
     }))
+    .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "named popup context URL commit",
+        |message| {
+            message["method"] == "Target.targetInfoChanged"
+                && message["params"]["targetInfo"]["url"] == "data:text/html,second"
+        },
+    )
     .await;
     let messages = ctx.take_all();
 
@@ -623,6 +648,6 @@ async fn rust_cdp_chromium_target_named_popup_reuse_keeps_browser_context_id() {
     );
     assert_eq!(
         changed["params"]["targetInfo"]["url"],
-        "https://example.com/second"
+        "data:text/html,second"
     );
 }

@@ -78,6 +78,7 @@ pub(crate) use self::{
         merge_cached_not_modified_streaming_response_lookup,
         validation_headers_for_cached_streaming_response_lookup,
     },
+    vary::{vary_headers_for_response, vary_headers_match},
 };
 
 #[derive(Debug)]

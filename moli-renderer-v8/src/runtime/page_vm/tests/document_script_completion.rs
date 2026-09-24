@@ -2,7 +2,6 @@ use super::*;
 
 async fn run_main_document_runtime_action_after_wake_for_test(
     page_vm: &mut PageVm,
-    loader: &crate::network::ResourceRequestClient,
     owner_wake_rx: &mut tokio::sync::mpsc::UnboundedReceiver<
         crate::page_task_queue::RendererOwnerWake,
     >,
@@ -14,7 +13,6 @@ async fn run_main_document_runtime_action_after_wake_for_test(
             if page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(kind),
-                    loader,
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{label} should execute: {error}"))
@@ -111,34 +109,24 @@ async fn selected_runtime_classic_document_script_owns_terminal_task_completion(
             .vm_mut()
             .document_runtime
             .note_dom_content_loaded_dispatched();
-        let task_runner = page_vm.resource_task_runner();
-        page_vm.vm_mut().admit_main_document_runtime_script_task(
-            &loader,
-            task_runner,
-            crate::host::RuntimeScriptAdmission::new(
+
+        page_vm.vm_mut().admit_main_document_runtime_script_task(crate::host::RuntimeScriptAdmission::new(
                 crate::host::RuntimeScriptAdmissionPayload::Script(script),
                 lease,
-            ),
-        );
-        run_main_document_runtime_action_after_wake_for_test(
-            &mut page_vm,
-            &loader,
-            &mut owner_wake_rx,
-            crate::page_task_queue::PageMainDocumentRuntimeActionKind::RuntimeScriptContinuation,
-            "runtime classic completion",
-        )
+            ));
+        run_main_document_runtime_action_after_wake_for_test(&mut page_vm,
+&mut owner_wake_rx,
+crate::page_task_queue::PageMainDocumentRuntimeActionKind::RuntimeScriptContinuation,
+"runtime classic completion")
         .await;
         server
             .await
             .expect("runtime classic script server should finish");
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         crate::page_task_queue::PageMainDocumentRuntimeActionKind::PostParseWork,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await
                 .expect("runtime classic DocumentScript should execute")
         );
@@ -243,10 +231,8 @@ async fn selected_runtime_classic_source_failure_owns_error_task_completion() {
             .vm_mut()
             .document_runtime
             .note_dom_content_loaded_dispatched();
-        let task_runner = page_vm.resource_task_runner();
+
         page_vm.vm_mut().admit_main_document_runtime_script_task(
-            &loader,
-            task_runner,
             crate::host::RuntimeScriptAdmission::new(
                 crate::host::RuntimeScriptAdmissionPayload::Script(script),
                 lease,
@@ -255,7 +241,6 @@ async fn selected_runtime_classic_source_failure_owns_error_task_completion() {
 
         run_main_document_runtime_action_after_wake_for_test(
             &mut page_vm,
-            &loader,
             &mut owner_wake_rx,
             crate::page_task_queue::PageMainDocumentRuntimeActionKind::RuntimeScriptContinuation,
             "runtime classic source failure",
@@ -269,8 +254,7 @@ async fn selected_runtime_classic_source_failure_owns_error_task_completion() {
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         crate::page_task_queue::PageMainDocumentRuntimeActionKind::PostParseWork,
-                    ),
-                    &loader,
+                    )
                 )
                 .await
                 .expect("runtime classic source-failure task should execute")
@@ -323,10 +307,7 @@ async fn selected_document_script_replacement_preserves_entered_body_completion(
         );
 
         page_vm
-            .execute_post_parse_page_owned_task_on_named_owner_lane(
-                &loader,
-                classic_defer_work(script),
-            )
+            .execute_post_parse_page_owned_task_on_named_owner_lane(classic_defer_work(script))
             .await
             .expect("replacement DocumentScript task should complete");
 
@@ -373,10 +354,7 @@ async fn selected_disabled_document_script_does_not_flush_unrelated_runtime_work
         );
 
         page_vm
-            .execute_post_parse_page_owned_task_on_named_owner_lane(
-                &loader,
-                classic_defer_work(script),
-            )
+            .execute_post_parse_page_owned_task_on_named_owner_lane(classic_defer_work(script))
             .await
             .expect("disabled DocumentScript task should still complete");
 

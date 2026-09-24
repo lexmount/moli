@@ -155,7 +155,7 @@ async fn shared_worker_error_body_leaves_reactions_for_selected_completion() {
             "terminal application should forget exactly the authorized wrapper"
         );
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -246,7 +246,6 @@ globalThis.__bootstrapEventWorker = new SharedWorker(url, {
                 page_vm
                     .run_exact_selected_page_task_for_test(
                         PageSelectedTaskTestSelector::SharedWorkerClientEvent,
-                        &loader,
                     )
                     .await?
             );
@@ -297,8 +296,7 @@ __sharedWorkerNonterminal.port.start();
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::SharedWorkerClientEvent,
-                    &loader
+                    PageSelectedTaskTestSelector::SharedWorkerClientEvent
                 )
                 .await?,
             "one SharedWorker event should run through the production selected dispatcher"
@@ -366,7 +364,7 @@ __sharedWorkerWithoutListener.port.start();
         let completion = body.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -435,7 +433,7 @@ __closedSharedWorker.port.start();
         let completion = body.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -544,7 +542,7 @@ Promise.resolve().then(() => {
                         )
                         .expect("retired SharedWorker event should consume one stale discard turn");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm.vm().shared_worker_client_count_for_test(),
@@ -650,7 +648,7 @@ async fn shared_worker_error_rejects_a_replaced_child_realm() {
             )
             .expect("retired child-realm event should consume one stale discard turn");
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale)
             .await?;
         assert_eq!(
             page_vm

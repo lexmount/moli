@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicBool},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use moli_shared_worker::{SharedWorkerClientId, SharedWorkerInstanceId};
 use parking_lot::Mutex;
@@ -14,7 +11,7 @@ use super::{
     service::WeakSharedWorkerRuntimeService,
 };
 
-pub(super) enum SharedWorkerRuntimeResponsePublicationState {
+pub(super) enum SharedWorkerOutputPublicationState {
     Active,
     Closing(Vec<crate::runtime::RendererRuntimeInspectorResponsePublication>),
     Retired {
@@ -31,8 +28,9 @@ pub(super) struct RendererSharedWorkerHost {
     pub(super) state: Mutex<RendererSharedWorkerHostState>,
     pub(super) clients: Mutex<HashMap<SharedWorkerClientId, RendererSharedWorkerClient>>,
     target_output: crate::runtime::RendererTurnOutputJournal,
-    target_output_retired: AtomicBool,
-    pub(super) runtime_response_publications: Mutex<SharedWorkerRuntimeResponsePublicationState>,
+    pub(super) worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
+    pub(super) network: crate::runtime::RendererWorkerNetworkReporter,
+    pub(super) output_publications: Mutex<SharedWorkerOutputPublicationState>,
 }
 
 pub(super) enum RendererSharedWorkerHostState {
@@ -51,13 +49,18 @@ pub(super) type SharedRendererSharedWorkerHost = Arc<RendererSharedWorkerHost>;
 
 impl RendererSharedWorkerHost {
     pub(super) fn new_loading(
-        instance_id: SharedWorkerInstanceId,
+        network: crate::runtime::RendererWorkerNetworkReporter,
         owner_local_host_id: crate::runtime::RendererOwnerLocalHostId,
         runtime_service: WeakSharedWorkerRuntimeService,
         initial_script_url: String,
         name: String,
         target_output: crate::runtime::RendererTurnOutputJournal,
+        worker_lifecycle: crate::runtime::RendererWorkerLifecycleReporter,
     ) -> Self {
+        let crate::runtime::RendererWorkerIdentity::Shared(instance_id) = *network.identity()
+        else {
+            panic!("SharedWorker host requires its exact network source")
+        };
         Self {
             instance_id,
             owner_local_host_id,
@@ -67,10 +70,9 @@ impl RendererSharedWorkerHost {
             state: Mutex::new(RendererSharedWorkerHostState::Loading { task: None }),
             clients: Mutex::new(HashMap::new()),
             target_output,
-            target_output_retired: AtomicBool::new(false),
-            runtime_response_publications: Mutex::new(
-                SharedWorkerRuntimeResponsePublicationState::Active,
-            ),
+            worker_lifecycle,
+            network,
+            output_publications: Mutex::new(SharedWorkerOutputPublicationState::Active),
         }
     }
 
@@ -102,7 +104,39 @@ impl RendererSharedWorkerHost {
         &self.target_output
     }
 
-    pub(super) fn target_output_retired(&self) -> &AtomicBool {
-        &self.target_output_retired
+    #[cfg(test)]
+    pub(super) fn target_output_retired(&self) -> bool {
+        matches!(
+            *self.output_publications.lock(),
+            SharedWorkerOutputPublicationState::Retired { .. }
+        )
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct RendererSharedWorkerNetworkObserver(std::sync::Weak<RendererSharedWorkerHost>);
+
+impl std::fmt::Debug for RendererSharedWorkerNetworkObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RendererSharedWorkerNetworkObserver")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RendererSharedWorkerNetworkObserver {
+    pub(crate) fn publish(&self, observation: crate::runtime::RendererNetworkObservation) {
+        if let Some(host) = self.0.upgrade() {
+            host.publish_observation(crate::runtime::RendererProtocolObservation::Network(
+                observation,
+            ));
+        }
+    }
+}
+
+impl RendererSharedWorkerHost {
+    pub(super) fn network_observer(self: &Arc<Self>) -> crate::worker::WorkerNetworkObserver {
+        crate::worker::WorkerNetworkObserver::Shared(RendererSharedWorkerNetworkObserver(
+            Arc::downgrade(self),
+        ))
     }
 }

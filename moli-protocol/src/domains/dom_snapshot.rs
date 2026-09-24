@@ -5,11 +5,11 @@
 //! include resolved computed styles plus lightweight geometry for automation clients.
 
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererDomSnapshotCaptureOptions,
+    CompletedPageCommand, PendingPageCommand, RendererDomSnapshotCaptureOptions,
 };
 use serde::Deserialize;
 
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::DomSnapshotAction;
 use crate::domains::command_output::CommandOutputPlan;
 
@@ -30,7 +30,17 @@ pub(crate) enum DomSnapshotCommandDispatchStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<DomSnapshotAction>() == Some(DomSnapshotAction::CaptureSnapshot)
+}
+
 impl PendingDomSnapshotCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     pub async fn wait(self) -> CompletedDomSnapshotCommandDispatch {
         CompletedDomSnapshotCommandDispatch {
             command_id: self.command_id,
@@ -121,13 +131,17 @@ fn start_capture_snapshot_command_with_params(
     params: CaptureSnapshotParams,
 ) -> DomSnapshotCommandDispatchStep {
     let frame_id = top_frame_id_for_session(conn, session_id).unwrap_or_default();
-    let Some(page) = loaded_page_mut_for_session(conn, session_id) else {
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner_scope) else {
         return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
         ));
     };
-    let pending = match page.start_dom_snapshot_capture(frame_id, params.into()) {
+    let pending = match inspection
+        .start_dom_snapshot_capture(frame_id, params.into())
+        .map(PendingPageCommand::from_inspector_main_route)
+    {
         Ok(pending) => pending,
         Err(error) => {
             return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -139,7 +153,7 @@ fn start_capture_snapshot_command_with_params(
 
     DomSnapshotCommandDispatchStep::Pending(PendingDomSnapshotCommandDispatch {
         command_id,
-        owner_scope: CommandOwnerScope::capture(conn, session_id),
+        owner_scope,
         pending,
     })
 }
@@ -148,15 +162,6 @@ pub(crate) fn complete_pending_dom_snapshot_command(
     conn: &mut CdpConnection,
     completed: CompletedDomSnapshotCommandDispatch,
 ) -> DomSnapshotCommandDispatchStep {
-    let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-        .ok()
-    else {
-        return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "NoDocumentLoaded",
-        ));
-    };
     let completion = match completed.completed {
         Ok(completion) => completion,
         Err(error) => {
@@ -165,7 +170,12 @@ pub(crate) fn complete_pending_dom_snapshot_command(
             ));
         }
     };
-    let payload = match page.finish_dom_snapshot_capture(completion) {
+    if let Err(error) =
+        conn.observe_renderer_inspection_completion(&completed.owner_scope, &completion)
+    {
+        return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+    }
+    let payload = match completion.finish_dom_snapshot_capture() {
         Ok(Some(payload)) => payload,
         Ok(None) => {
             return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -185,13 +195,6 @@ pub(crate) fn complete_pending_dom_snapshot_command(
     ))
 }
 
-fn loaded_page_mut_for_session<'a>(
-    conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access(session_id).ok()
-}
-
 fn top_frame_id_for_session(conn: &CdpConnection, session_id: Option<&str>) -> Option<String> {
     conn.target_session_owner_frame_tree_identity(session_id)
         .map(|(frame_id, _, _, _)| frame_id)
@@ -202,13 +205,15 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost},
+        conn::{BrowserContext, CdpCommandTaskStep},
         domains::page::LOADER_ID,
         testing::{TestContext, wait_until_renderer_document_load, wait_until_scheduler_message},
     };
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-1".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
         ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
@@ -1018,26 +1023,22 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_targets_loaded_background_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let page = ctx
+        let mut bc = ctx
             .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><title>Background Snapshot</title></head><body><main>owner</main></body></html>",
-            )
-            .await
-            .expect("background page should load");
-
-        let mut background = PageTargetHost::with_url(
-            "TID-background".to_owned(),
-            Some("SID-background".to_owned()),
-            page.final_url().as_str().to_owned(),
-        );
-        background.replace_loaded_page(Some(page));
-
-        let mut bc = BrowserContext::new("BID-DS-BG".to_owned());
+            .new_browser_context_fixture_for_test("BID-DS-BG".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        bc.insert_page_target_host(background);
+        bc.register_page_target_url_fixture(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "about:blank".to_owned(),
+        );
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><title>Background Snapshot</title></head><body><main>owner</main></body></html>",
+            Some("SID-background"),
+        )
+        .await;
 
         ctx.process_async(json!({
             "id": 101,
@@ -1077,26 +1078,25 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_targets_inactive_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let page = ctx
+        let mut active = ctx
             .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><title>Inactive Snapshot</title></head><body><section>inactive</section></body></html>",
-            )
-            .await
-            .expect("inactive page should load");
-
-        let mut active = BrowserContext::new("BID-active".to_owned());
+            .new_browser_context_fixture_for_test("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
         ctx.conn.install_browser_context_fixture_for_test(active);
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
-        inactive.set_target_url(page.final_url().as_str().to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
-        inactive.replace_loaded_page(Some(page));
         ctx.conn
             .push_inactive_browser_context_fixture_for_test(inactive);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><title>Inactive Snapshot</title></head><body><section>inactive</section></body></html>",
+            Some("SID-inactive"),
+        )
+        .await;
 
         ctx.process_async(json!({
             "id": 111,
@@ -1128,7 +1128,10 @@ mod tests {
     #[tokio::test]
     async fn capture_snapshot_reports_no_document_without_loaded_page() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.conn.browser_context = Some(
+            ctx.conn
+                .new_browser_context_fixture_for_test("BID-1".to_owned()),
+        );
 
         ctx.process_async(json!({
             "id": 11,
@@ -1191,13 +1194,10 @@ mod tests {
                 .any(|name| name == "#document")
         );
         assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .runtime_slot
-                .has_loaded_page(),
+            {
+                let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+                context.target_has_loaded_page(context.active_target_id().unwrap())
+            },
             "Target.createTarget should install the initial about:blank page before DOMSnapshot"
         );
     }

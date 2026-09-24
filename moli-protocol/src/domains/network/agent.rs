@@ -81,9 +81,13 @@ impl<'a> NetworkBacklogRequestIdPlan<'a> {
         {
             return request_id.to_owned();
         }
-        let request_id = self
-            .preferred_request_id
-            .take_for_new_subresource(output.request_handle())
+        let request_id = output
+            .navigation_request_id()
+            .map(str::to_owned)
+            .or_else(|| {
+                self.preferred_request_id
+                    .take_for_new_subresource(output.request_handle())
+            })
             .unwrap_or_else(|| self.request_id_allocator.allocate_request_id());
         if let Some(handle) = output.request_handle() {
             self.subresource_artifacts
@@ -177,6 +181,16 @@ impl NetworkBacklogPreferredRequestIdBudget {
 }
 
 impl TargetNetworkAgentState {
+    pub(crate) fn has_observed_subresource_request(
+        &self,
+        handle: SubresourceNetworkRequestHandle,
+    ) -> bool {
+        self.output_queue.has_observed_subresource_request(handle)
+    }
+
+    pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
+        self.output_queue.has_observed_network_phase(item)
+    }
     /// Moves the Document-owned live queue and request correlations into a
     /// short-lived predecessor state while retaining target/session policy and
     /// target-scoped body/stream artifacts for the replacement Document.
@@ -496,10 +510,10 @@ impl TargetNetworkAgentState {
         &mut self,
         handle: SubresourceNetworkRequestHandle,
         request_id: String,
-    ) {
+    ) -> &str {
         self.artifacts
             .subresource_network_artifacts
-            .set_request_id_for_handle_if_absent(handle, request_id);
+            .set_request_id_for_handle_if_absent(handle, request_id)
     }
 
     pub(crate) fn record_fetch_pause_announced_request_id(&mut self, request_id: String) {
@@ -731,7 +745,7 @@ impl TargetNetworkAgentState {
     pub(crate) fn insert_io_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<IoStreamBody>,
         offset: usize,
     ) {
         self.artifacts
@@ -975,6 +989,9 @@ pub(crate) struct RetiringTargetNetworkAgentState {
 }
 
 impl RetiringTargetNetworkAgentState {
+    pub(crate) fn has_observed_network_phase(&self, item: &ScriptNetworkOutputItem) -> bool {
+        self.output_queue.has_observed_network_phase(item)
+    }
     pub(crate) fn ingest_renderer_output_item_and_prepare_live_delivery(
         &mut self,
         item: &ScriptNetworkOutputItem,
@@ -1075,7 +1092,8 @@ fn update_active_renderer_subresource_requests(
                 active_requests.remove(&handle);
             }
         }
-        ScriptNetworkOutputItem::SubresourceResponseStarted(_)
+        ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
+        | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
         | ScriptNetworkOutputItem::SubresourceDataReceived(_)
         | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
         | ScriptNetworkOutputItem::WebSocketNetworkEvent(_)
@@ -1757,7 +1775,7 @@ impl TargetNetworkBodyArtifacts {
     pub(crate) fn insert_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<IoStreamBody>,
         offset: usize,
     ) {
         self.io_stream_artifacts
@@ -1886,10 +1904,10 @@ impl SubresourceNetworkArtifacts {
         &mut self,
         handle: SubresourceNetworkRequestHandle,
         request_id: String,
-    ) {
+    ) -> &str {
         self.request_ids_by_handle
             .entry(handle)
-            .or_insert(request_id);
+            .or_insert(request_id)
     }
 
     fn record_fetch_pause_announced_request_id(&mut self, request_id: String) {
@@ -2133,7 +2151,7 @@ mod tests {
         let document_url = Url::parse("https://example.com/").expect("document URL should parse");
         let request_url =
             Url::parse("https://example.com/late-xhr").expect("request URL should parse");
-        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+        let started = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
             SubresourceRequestStarted::new(
                 handle,
                 None,
@@ -2167,7 +2185,7 @@ mod tests {
             handle: SubresourceNetworkRequestHandle,
             keepalive: bool,
         ) -> ScriptNetworkOutputItem {
-            ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(
+            ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
                 SubresourceRequestStarted::new(
                     handle,
                     None,
@@ -2399,14 +2417,20 @@ mod tests {
         let first = agent
             .read_io_stream("STREAM-1", None, Some(2))
             .expect("stream should exist");
-        assert_eq!(first.bytes, b"ab");
-        assert!(!first.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = first else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"ab");
+        assert!(!eof);
 
         let second = agent
             .read_io_stream("STREAM-1", Some(4), None)
             .expect("stream should exist");
-        assert_eq!(second.bytes, b"ef");
-        assert!(second.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = second else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"ef");
+        assert!(eof);
 
         assert!(agent.close_io_stream("STREAM-1"));
         assert!(agent.read_io_stream("STREAM-1", None, None).is_none());
@@ -2429,14 +2453,20 @@ mod tests {
         let first = agent
             .read_io_stream("STREAM-source", None, Some(8))
             .expect("source-backed stream should exist");
-        assert_eq!(first.bytes, b"captured");
-        assert!(!first.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = first else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b"captured");
+        assert!(!eof);
 
         let second = agent
             .read_io_stream("STREAM-source", None, None)
             .expect("source-backed stream should remain readable");
-        assert_eq!(second.bytes, b" body source");
-        assert!(second.eof);
+        let crate::domains::network::TargetIoStreamRead::Ready { bytes, eof } = second else {
+            panic!("expected a completed body read")
+        };
+        assert_eq!(bytes, b" body source");
+        assert!(eof);
     }
 
     #[test]
@@ -2592,6 +2622,63 @@ mod tests {
     }
 
     #[test]
+    fn document_subresources_do_not_claim_the_containing_navigation_request_id() {
+        let mut agent = TargetNetworkAgentState::default();
+        let mut allocator = ConnectionNetworkRequestIdAllocator::default();
+        agent.enable_primary_events();
+        let mut identities = Vec::new();
+        for raw_handle in [51, 52] {
+            let handle = SubresourceNetworkRequestHandle::new(raw_handle);
+            let url = url::Url::parse("https://example.test/popup").unwrap();
+            let request = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
+                moli_core::page::SubresourceRequestStarted::new(
+                    handle,
+                    None,
+                    url.clone(),
+                    url,
+                    "GET".into(),
+                    Vec::new().into(),
+                    None,
+                    moli_core::page::SubresourceResourceType::Document,
+                    moli_core::page::SubresourceRequestInitiatorType::Script,
+                    None,
+                ),
+            ));
+            let mut delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+                &request,
+                "LOADER-containing-document",
+                None,
+                None,
+                None,
+                &mut allocator,
+            );
+            let snapshot = agent
+                .pending_network_backlog_delivery_snapshot_from_backlog(&mut delivery)
+                .expect("admitted document request has its own delivery");
+            let id = agent.request_id_for_subresource_handle(handle, &mut allocator);
+            assert_ne!(id, "LOADER-containing-document");
+            agent.mark_network_backlog_delivery_snapshot_emitted(&snapshot);
+            agent.ingest_renderer_output_item_and_prepare_live_delivery(
+                &request,
+                "LOADER-containing-document",
+                None,
+                None,
+                None,
+                &mut allocator,
+            );
+            assert_eq!(
+                agent.request_id_for_subresource_handle(handle, &mut allocator),
+                id
+            );
+            identities.push(id);
+        }
+        assert_ne!(
+            identities[0], identities[1],
+            "two physical loads keep distinct request identities"
+        );
+    }
+
+    #[test]
     fn renderer_outputs_without_network_listeners_are_not_retained() {
         let mut agent = TargetNetworkAgentState::default();
         let mut request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
@@ -2611,6 +2698,67 @@ mod tests {
         assert!(!delivery.has_output());
         assert_eq!(agent.output_queue.subresource_record_count(), 1);
         assert_eq!(agent.output_queue.retained_delivery_output_count(), 0);
+
+        let url = url::Url::parse("https://example.test/child").unwrap();
+        let request = ScriptNetworkOutputItem::SubresourceRequestStarted(std::sync::Arc::new(
+            moli_core::page::SubresourceRequestStarted::new(
+                SubresourceNetworkRequestHandle::new(53),
+                Some("FRAME-child".into()),
+                url.clone(),
+                url,
+                "GET".into(),
+                Vec::new().into(),
+                None,
+                moli_core::page::SubresourceResourceType::Document,
+                moli_core::page::SubresourceRequestInitiatorType::Parser,
+                None,
+            )
+            .with_navigation_loader_id("LOADER-child".into()),
+        ));
+        let delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+            &request,
+            "LOADER-containing-document",
+            None,
+            None,
+            None,
+            &mut request_id_allocator,
+        );
+        assert!(!delivery.has_output());
+        assert_eq!(agent.output_queue.retained_delivery_output_count(), 0);
+        assert!(
+            agent
+                .artifacts
+                .subresource_network_artifacts
+                .request_ids_by_handle
+                .is_empty(),
+            "an unobserved native navigation must not allocate a protocol request identity"
+        );
+
+        agent.enable_primary_events();
+        let failed = ScriptNetworkOutputItem::SubresourceBodyFinished(std::sync::Arc::new(
+            moli_core::page::SubresourceBodyFinished::failed(
+                SubresourceNetworkRequestHandle::new(53),
+                "connection refused".into(),
+            ),
+        ));
+        let delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+            &failed,
+            "LOADER-containing-document",
+            None,
+            None,
+            None,
+            &mut request_id_allocator,
+        );
+        assert!(delivery.has_output());
+        assert_eq!(
+            agent
+                .artifacts
+                .subresource_network_artifacts
+                .request_id_for_handle(SubresourceNetworkRequestHandle::new(53)),
+            Some("LOADER-child"),
+            "enabling Network during a request must preserve its native navigation identity"
+        );
+        assert!(agent.renderer_subresources_are_idle());
     }
 
     #[test]
@@ -3461,35 +3609,95 @@ impl WebSocketRequestIdState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IoStreamState {
-    body: CapturedBody,
+    body: IoStreamBody,
     pub offset: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum IoStreamBody {
+    Captured(CapturedBody),
+    Response(std::sync::Arc<IoResponseBody>),
+}
+
+#[derive(Debug)]
+pub(crate) struct IoResponseBody {
+    body: moli_page_types::SubresourceResponseBodySource,
+    offset: tokio::sync::Mutex<usize>,
+}
+
+impl PartialEq for IoResponseBody {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self, other)
+    }
+}
+impl Eq for IoResponseBody {}
+
+impl IoResponseBody {
+    pub(crate) async fn read(&self, size: usize) -> Result<(Vec<u8>, bool), String> {
+        let mut offset = self.offset.lock().await;
+        let (bytes, eof) = self.body.read(*offset, size).await?;
+        *offset += bytes.len();
+        Ok((bytes, eof))
+    }
+}
+
+impl From<CapturedBody> for IoStreamBody {
+    fn from(body: CapturedBody) -> Self {
+        Self::Captured(body)
+    }
+}
+impl From<moli_page_types::SubresourceResponseBodySource> for IoStreamBody {
+    fn from(body: moli_page_types::SubresourceResponseBodySource) -> Self {
+        Self::Response(std::sync::Arc::new(IoResponseBody {
+            body,
+            offset: tokio::sync::Mutex::new(0),
+        }))
+    }
 }
 
 impl IoStreamState {
     pub(crate) fn from_bytes(bytes: Vec<u8>, offset: usize) -> Self {
+        Self::from_body_source(CapturedBody::from_bytes_spooled(bytes), offset)
+    }
+
+    pub(crate) fn from_body_source(body: impl Into<IoStreamBody>, offset: usize) -> Self {
         Self {
-            body: CapturedBody::from_bytes_spooled(bytes),
+            body: body.into(),
             offset,
         }
     }
 
-    pub(crate) fn from_body_source(body: CapturedBody, offset: usize) -> Self {
-        Self { body, offset }
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.body.len()
-    }
-
-    pub(crate) fn read_range(&self, offset: usize, len: usize) -> Vec<u8> {
-        self.body.read_range(offset, len).unwrap_or_default()
+    pub(crate) fn read(
+        &mut self,
+        offset: Option<usize>,
+        size: Option<usize>,
+    ) -> TargetIoStreamRead {
+        let body = match &self.body {
+            IoStreamBody::Captured(body) => body,
+            IoStreamBody::Response(body) => {
+                return if offset.is_some() {
+                    TargetIoStreamRead::OffsetNotSupported
+                } else {
+                    TargetIoStreamRead::Pending(body.clone())
+                };
+            }
+        };
+        let start = offset.unwrap_or(self.offset).min(body.len());
+        let size = size.unwrap_or_else(|| body.len().saturating_sub(start));
+        let bytes = body.read_range(start, size).unwrap_or_default();
+        self.offset = start.saturating_add(bytes.len()).min(body.len());
+        TargetIoStreamRead::Ready {
+            bytes,
+            eof: self.offset >= body.len(),
+        }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TargetIoStreamRead {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) eof: bool,
+pub(crate) enum TargetIoStreamRead {
+    Ready { bytes: Vec<u8>, eof: bool },
+    Pending(std::sync::Arc<IoResponseBody>),
+    OffsetNotSupported,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -3515,7 +3723,7 @@ impl TargetIoStreamArtifacts {
     pub(crate) fn insert_stream_body_source(
         &mut self,
         handle: String,
-        body: CapturedBody,
+        body: impl Into<IoStreamBody>,
         offset: usize,
     ) {
         self.streams
@@ -3532,18 +3740,7 @@ impl TargetIoStreamArtifacts {
         offset: Option<usize>,
         size: Option<usize>,
     ) -> Option<TargetIoStreamRead> {
-        let stream = self.streams.get_mut(handle)?;
-        let stream_len = stream.len();
-        let start = offset.unwrap_or(stream.offset).min(stream_len);
-        stream.offset = start;
-        let requested_len = size.unwrap_or_else(|| stream_len.saturating_sub(start));
-        let bytes = stream.read_range(start, requested_len);
-        let end = start.saturating_add(bytes.len()).min(stream_len);
-        stream.offset = end;
-        Some(TargetIoStreamRead {
-            bytes,
-            eof: end >= stream_len,
-        })
+        Some(self.streams.get_mut(handle)?.read(offset, size))
     }
 
     pub(crate) fn clear_streams(&mut self) {

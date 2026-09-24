@@ -3,12 +3,12 @@ use crate::native_bridge::{
     ImageLoadEventId, JsContextHost, OwnerDispatchScope, PendingImageLoadEventOwner,
 };
 use crate::service_worker_runtime::{
-    ServiceWorkerFetchDispatch, ServiceWorkerRequestDestination,
+    ServiceWorkerFetchDispatch, ServiceWorkerFetchResultSender, ServiceWorkerRequestDestination,
     service_worker_fetch_request_metadata,
 };
 use crate::types::{
-    AsyncSubresourceFetchCompletion, AsyncSubresourceFetchResult, AsyncSubresourceNetworkContext,
-    ImageRequestCorsMode, ImageRequestKey, PendingSubresourceFetchInfo, SubresourceResourceType,
+    AsyncSubresourceFetchCompletion, AsyncSubresourceNetworkContext, ImageRequestCorsMode,
+    ImageRequestKey, PendingSubresourceFetchInfo, SubresourceResourceType,
 };
 use moli_fetch::{
     BrowserRequestMetadata, FetchCancelHandle, FetchPriorityHint, RequestCredentialsMode,
@@ -225,17 +225,16 @@ pub(crate) fn start_image_element_resource_fetch(
         );
         let encoded = manager.from_frozen_bytes(response.take_body_bytes());
         let descriptor = image_response_descriptor_from_parkable(&response, &encoded);
-        let result = Ok(response);
-        host.record_get_subresource_network_result_with_body_and_initiator(
+        host.record_local_subresource_response(
             frame_id,
             document_url,
             request_url,
             SubresourceResourceType::Image,
             request_initiator_type,
-            &result,
-            crate::types::SubresourceResponseBody::from_parkable_image(encoded.clone()),
+            &response,
+            Some(moli_page_types::SubresourceResponseBody::from_parkable_image(encoded.clone())),
         );
-        return result.map(|_| ImageElementResourceFetchStart::Local {
+        return Ok(ImageElementResourceFetchStart::Local {
             descriptor,
             encoded,
         });
@@ -357,27 +356,28 @@ pub(crate) fn start_image_element_resource_fetch(
                 resource_type: SubresourceResourceType::Image,
                 policy_context,
             },
-            completion_tx: host.resource_completion_sender(),
+            result_tx: ServiceWorkerFetchResultSender::Page {
+                completion_tx: host.resource_completion_sender(),
+                network: host.pending_subresource_response_stream(internal_id),
+            },
             request_client: loader,
             resource_task_runner: resource_loader.task_runner(),
             cancel_handle,
-            direct_completion_tx: None,
         };
         if !host.dispatch_service_worker_fetch(dispatch) {
-            let _ = host.resource_completion_sender().send_async_subresource(
+            crate::network_host::send_resource_completion(
+                &host.resource_completion_sender(),
+                host.pending_subresource_response_stream(internal_id),
                 AsyncSubresourceFetchCompletion {
+                    network_request_headers: None,
                     internal_id,
-                    request_url,
-                    request_method: "GET".to_owned(),
-                    request_headers: request_headers.clone(),
-                    request_body: None,
                     response_status_text: None,
                     skip_fetch_security_validation: false,
                     response_filter: None,
                     network_error_text: None,
-                    result: AsyncSubresourceFetchResult::Failure(
-                        "service worker image fetch dispatch failed".to_owned(),
-                    ),
+                    result: Err("service worker image fetch dispatch failed"
+                        .to_owned()
+                        .into()),
                 },
             );
         }
@@ -387,23 +387,38 @@ pub(crate) fn start_image_element_resource_fetch(
     if let Some(scanned_preload) = scanned_preload {
         debug_assert_eq!(scanned_preload.request_key().url(), request_url.as_str());
         let completion_tx = host.resource_completion_sender();
+        let network = host.pending_subresource_response_stream(internal_id);
         resource_loader.task_runner().spawn(async move {
             let outcome = scanned_preload.wait_outcome().await;
-            let _ = completion_tx.send_async_subresource(AsyncSubresourceFetchCompletion {
-                internal_id,
-                request_url,
-                request_method: "GET".to_owned(),
-                request_headers,
-                request_body: None,
-                response_status_text: None,
-                skip_fetch_security_validation: false,
-                response_filter: None,
-                network_error_text: None,
-                result: AsyncSubresourceFetchResult::from_image_parts(
-                    outcome.network_result().as_ref().clone(),
-                    outcome.encoded(),
-                ),
-            });
+            crate::network_host::send_resource_completion(
+                &completion_tx,
+                network,
+                AsyncSubresourceFetchCompletion {
+                    internal_id,
+                    response_status_text: None,
+                    skip_fetch_security_validation: false,
+                    response_filter: None,
+                    network_error_text: None,
+                    network_request_headers: outcome
+                        .network_result()
+                        .as_ref()
+                        .as_ref()
+                        .ok()
+                        .and_then(|response| response.network_request_headers().map(<[_]>::to_vec)),
+                    result: outcome
+                        .network_result()
+                        .as_ref()
+                        .clone()
+                        .map(|response| crate::network::ResourceBodyResponse {
+                            head: response.head(),
+                            body: outcome.encoded().map_or_else(
+                                || moli_page_types::SubresourceResponseBody::from_navigation_response(&response),
+                                moli_page_types::SubresourceResponseBody::from_parkable_image,
+                            ),
+                        })
+                        .map_err(Into::into),
+                },
+            );
         });
         return Ok(ImageElementResourceFetchStart::Pending);
     }
@@ -416,17 +431,9 @@ pub(crate) fn start_image_element_resource_fetch(
         Some(cancel_handle),
         request_headers.to_byte_strings(),
         internal_id,
-        AsyncSubresourceNetworkContext {
-            frame_id,
-            request_origin: request_origin.clone(),
-            document_url,
-            resource_type: SubresourceResourceType::Image,
-            policy_context,
-        },
+        host.pending_subresource_response_stream(internal_id),
+        host.pending_subresource_preflight_observer(internal_id),
         request_url,
-        "GET".to_owned(),
-        Default::default(),
-        None,
     );
     Ok(ImageElementResourceFetchStart::Pending)
 }

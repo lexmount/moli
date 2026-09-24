@@ -16,7 +16,7 @@ impl SharedWorkerRuntimeService {
             SharedWorkerClientRemoval::Terminate { instance: host, .. } => {
                 host.remove_client_endpoint(client_id);
                 host.publish_destroyed_target_event();
-                host.terminate_and_join();
+                host.terminate();
             }
             SharedWorkerClientRemoval::CancelLoading { instance_id, .. } => {
                 if let Some(host) = self.take_loading_host_for_client_removal(instance_id) {
@@ -106,12 +106,13 @@ mod tests {
             _ => panic!("expected StartLoading"),
         };
         let host = test_support::loading_host(instance_id, &key);
-        let cancel_handle = host.begin_loading_task();
+        let (cancel_handle, mut cancelled) = host.begin_loading_task();
         test_support::store_loading_host(&service, instance_id, host);
 
         service.remove_client(client_id);
 
         assert!(cancel_handle.is_cancelled());
+        assert_eq!(cancelled.try_recv(), Ok(()));
         assert!(test_support::stored_loading_host(&service, instance_id).is_none());
     }
 
@@ -148,10 +149,14 @@ mod tests {
             &message_port_registry,
             &message_port_owner,
         );
-        let cancel_handle = host.begin_loading_task();
+        let (cancel_handle, mut cancelled) = host.begin_loading_task();
         test_support::store_loading_host(&service, instance_id, host.clone());
 
         service.remove_client(first_client_id);
+        assert_eq!(
+            cancelled.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        );
 
         assert!(
             !cancel_handle.is_cancelled(),

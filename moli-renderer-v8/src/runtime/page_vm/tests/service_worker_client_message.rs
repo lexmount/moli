@@ -94,7 +94,7 @@ navigator.serviceWorker.onmessage = event => {
             "the message body must not consume unrelated runtime residence"
         );
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -165,7 +165,7 @@ navigator.serviceWorker.onmessageerror = event => {
         );
 
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -221,7 +221,7 @@ Object.defineProperty(navigator, "serviceWorker", {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -276,7 +276,7 @@ async fn service_worker_client_message_without_listener_is_checkpoint_only() {
         let completion = outcome.action.into_page_task_completion();
         assert!(matches!(completion, PageTaskCompletion::CheckpointOnly));
         page_vm
-            .finish_selected_page_task_completion(completion, &loader)
+            .finish_selected_page_task_completion(completion)
             .await?;
         assert_eq!(
             page_vm
@@ -335,8 +335,7 @@ navigator.serviceWorker.onmessage = () => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ServiceWorkerClientMessage,
-                    &loader
+                    PageSelectedTaskTestSelector::ServiceWorkerClientMessage
                 )
                 .await?,
             "the message must return through the production selected dispatcher"
@@ -408,8 +407,7 @@ navigator.serviceWorker.onmessage = () => {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ServiceWorkerClientMessage,
-                    &loader
+                    PageSelectedTaskTestSelector::ServiceWorkerClientMessage
                 )
                 .await?,
             "listener-triggered replacement must return through selected completion"
@@ -512,7 +510,7 @@ child.navigator.serviceWorker.onmessage = child.Function(
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ServiceWorkerClientMessage, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::ServiceWorkerClientMessage)
                 .await?,
             "the exact child task should run through the production dispatcher"
         );
@@ -643,7 +641,7 @@ replacementChild.navigator.serviceWorker.onmessage = replacementChild.Function(
             )
             .expect("retired child task should remain a bounded stale turn");
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale)
             .await?;
         assert_eq!(
             page_vm
@@ -661,7 +659,7 @@ replacementChild.navigator.serviceWorker.onmessage = replacementChild.Function(
             )
             .expect("the current child task should remain behind the stale source head");
         page_vm
-            .run_claimed_selected_page_task_for_test(current, &loader)
+            .run_claimed_selected_page_task_for_test(current)
             .await?;
         assert_eq!(
             page_vm
@@ -776,7 +774,7 @@ navigator.serviceWorker.onmessage = event => {
                         )
                         .expect("retired-root task should remain a bounded stale turn");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(stale, &loader)
+                        .run_claimed_selected_page_task_for_test(stale)
                         .await?;
                     assert_eq!(
                         page_vm
@@ -792,7 +790,7 @@ navigator.serviceWorker.onmessage = event => {
                         )
                         .expect("the current-root message should remain behind the stale source head");
                     page_vm
-                        .run_claimed_selected_page_task_for_test(current, &loader)
+                        .run_claimed_selected_page_task_for_test(current)
                         .await?;
                     assert_eq!(
                         page_vm

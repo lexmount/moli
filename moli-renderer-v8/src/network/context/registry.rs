@@ -22,18 +22,14 @@ impl DocumentResourceLoaderRegistry {
         );
     }
 
-    /// Replaces only the request-client view of an already registered
+    /// Replaces the transport or native output view of an already registered
     /// authority.
     ///
     /// Browser backend adoption can rebuild the transport used by a live
     /// Document, but it must not manufacture a second lifecycle authority for
     /// the same owner. Updating the indexed wrapper keeps future child
     /// inheritance and request snapshots on the replacement backend.
-    pub(crate) fn replace_transport_view(
-        &self,
-        owner: WindowDocumentOwner,
-        loader: DocumentResourceLoader,
-    ) {
+    pub(crate) fn replace_view(&self, owner: WindowDocumentOwner, loader: DocumentResourceLoader) {
         let mut loaders = self.loaders.borrow_mut();
         let registered = loaders
             .get_mut(&owner)

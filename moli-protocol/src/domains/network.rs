@@ -48,6 +48,7 @@ mod response_body;
 pub(crate) mod settings;
 #[cfg(test)]
 mod tests;
+mod worker;
 
 /// Removes one session's Network contributions, then applies the newly
 /// aggregated target policy before the session disappears.
@@ -55,6 +56,9 @@ pub(in crate::domains) async fn dispose_session_policy_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<()> {
+    if !conn.network_listener_enabled_for_session_owner(session_id) {
+        return Ok(());
+    }
     conn.clear_devtools_network_session_policy_async(session_id)
         .await
 }
@@ -69,11 +73,11 @@ pub(in crate::domains) use activity::{
     project_subresource_fetch_interception_async,
 };
 pub use agent::IoStreamState;
-pub(crate) use agent::TargetIoStreamRead;
 pub(crate) use agent::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, RetiringTargetNetworkAgentState, TargetNetworkAgentState,
 };
+pub(crate) use agent::{IoResponseBody, IoStreamBody, TargetIoStreamRead};
 pub(crate) use backlog::{
     NetworkBacklogProjectionContext, emit_pending_network_backlog_activity_background_events,
     emit_prepared_renderer_network_live_background_events,
@@ -96,24 +100,13 @@ pub(crate) use events::{
 };
 pub use events::{fetch_auth_required_params, fetch_request_paused_params};
 #[cfg(test)]
-pub(crate) use main_document_progress::FailedNavigationDocumentPolicy;
-#[cfg(test)]
 pub(crate) use main_document_progress::empty_main_document_progress_gate_for_test;
 pub(crate) use main_document_progress::{
-    CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
-    CompletedMainDocumentNetworkEvents, FailedNavigationResponseMode,
-    MainDocumentBodyNetworkProgress, MainDocumentBodyProgressSource,
-    MainDocumentProgressBackgroundEventBarrier, MainDocumentProgressGate,
-    MaterializedDownloadDocumentProgress, MaterializedFailedDocumentProgress,
-    MaterializedLoadedDocumentProgress, MaterializedNavigationLoadOutcome,
-    emit_child_document_navigation_network_background_events,
-    emit_fetch_navigation_initial_request_for_pause_background_events,
-    materialize_loaded_navigation_progress,
-    materialize_navigation_failure_preserving_committed_document,
-    materialize_navigation_load_result, record_completed_main_document_response_body,
-    record_failed_main_document_response_body, record_main_document_request_body,
-    response_stage_main_document_navigation_network_progress,
-    start_observed_main_document_navigation_progress_background_events,
+    FailedNavigationResponseMode, MainDocumentProgressBackgroundEventBarrier,
+    MainDocumentProgressGate, emit_fetch_navigation_initial_request_for_pause_background_events,
+    failed_navigation_progress_gate, native_error_document_finished_events,
+    native_navigation_failure_events, native_navigation_response_events,
+    record_main_document_request_body, response_stage_main_document_navigation_network_progress,
 };
 pub(crate) use output::{
     TargetSubresourceFetchPauseNetworkOutput, TargetSubresourceFetchPauseOutput,
@@ -145,28 +138,17 @@ pub(crate) struct CompletedNetworkCommandDispatch {
 }
 
 enum PendingNetworkCommandWork {
-    Page {
-        attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
-        pending: moli_core::page::PendingPageCommand,
-    },
+    DocumentPolicy(crate::conn::PendingDocumentPolicyUpdate),
+    ResourceRuntime(crate::conn::PendingDocumentResourceRuntimeUpdate),
+    NetworkResourcePreparation(crate::conn::PendingNetworkResourceLoadPreparation),
     Resource(Box<moli_core::page::RendererPreparedNetworkResourceLoad>),
 }
 
 enum CompletedNetworkCommandWork {
-    Page {
-        attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
-        completed: Result<Box<moli_core::page::CompletedPageCommand>, String>,
-    },
+    DocumentPolicy(Box<crate::conn::CompletedDocumentPolicyUpdate>),
+    ResourceRuntime(Box<crate::conn::CompletedDocumentResourceRuntimeUpdate>),
+    NetworkResourcePreparation(Box<crate::conn::CompletedNetworkResourceLoadPreparation>),
     Resource(moli_core::page::RendererNetworkResourceLoadOutcome),
-}
-
-impl PendingNetworkCommandWork {
-    fn page(pending: moli_core::page::PendingPageCommand) -> Self {
-        Self::Page {
-            attachment_id: pending.renderer_agent_attachment_id(),
-            pending,
-        }
-    }
 }
 
 pub(crate) enum NetworkCommandTaskStep {
@@ -190,17 +172,17 @@ enum PendingNetworkCommandKind {
 impl PendingNetworkCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedNetworkCommandDispatch {
         let completed = match self.pending {
-            PendingNetworkCommandWork::Page {
-                attachment_id,
-                pending,
-            } => CompletedNetworkCommandWork::Page {
-                attachment_id,
-                completed: pending
-                    .wait()
-                    .await
-                    .map(Box::new)
-                    .map_err(|error| error.to_string()),
-            },
+            PendingNetworkCommandWork::DocumentPolicy(pending) => {
+                CompletedNetworkCommandWork::DocumentPolicy(Box::new(pending.wait().await))
+            }
+            PendingNetworkCommandWork::ResourceRuntime(pending) => {
+                CompletedNetworkCommandWork::ResourceRuntime(Box::new(pending.wait().await))
+            }
+            PendingNetworkCommandWork::NetworkResourcePreparation(pending) => {
+                CompletedNetworkCommandWork::NetworkResourcePreparation(Box::new(
+                    pending.wait().await,
+                ))
+            }
             PendingNetworkCommandWork::Resource(pending) => {
                 CompletedNetworkCommandWork::Resource((*pending).execute().await)
             }
@@ -421,8 +403,13 @@ fn set_cache_behavior_result(
     command: DevToolsSetCacheBehaviorCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let target_ids = if command.target_ids.is_empty() {
-        conn.set_global_cache_disabled(command.cache_disabled);
+        if !conn.set_webdriver_cache_disabled(&command.context, command.cache_disabled) {
+            conn.set_global_cache_disabled(command.cache_disabled);
+        }
         top_level_target_ids(conn)
+            .into_iter()
+            .filter(|id| conn.webdriver_target_is_visible(&command.context, id))
+            .collect()
     } else {
         validate_top_level_target_ids(conn, &command)?
     };
@@ -473,23 +460,48 @@ fn validate_top_level_target_ids(
     Ok(target_ids)
 }
 
-fn pending_network_page_command_step(
+fn pending_network_resource_runtime_step(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     session_id: Option<&str>,
     kind: PendingNetworkCommandKind,
     start: impl FnOnce(
         &mut CdpConnection,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String>,
+    ) -> Result<Option<crate::conn::PendingDocumentResourceRuntimeUpdate>, String>,
 ) -> NetworkCommandTaskStep {
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let result = start(conn);
     match result {
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id,
-            owner_scope,
             kind,
-            pending: PendingNetworkCommandWork::page(pending),
+            pending: PendingNetworkCommandWork::ResourceRuntime(pending),
+            owner_scope,
+        }),
+        Ok(None) => NetworkCommandTaskStep::Complete(CommandOutputPlan::success()),
+        Err(message) if message == "BrowserContextNotLoaded" => NetworkCommandTaskStep::Complete(
+            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded"),
+        ),
+        Err(message) => NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
+    }
+}
+
+fn pending_network_document_policy_step(
+    conn: &mut CdpConnection,
+    command_id: Option<u64>,
+    session_id: Option<&str>,
+    kind: PendingNetworkCommandKind,
+    start: impl FnOnce(
+        &mut CdpConnection,
+    ) -> Result<Option<crate::conn::PendingDocumentPolicyUpdate>, String>,
+) -> NetworkCommandTaskStep {
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    match start(conn) {
+        Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
+            command_id,
+            kind,
+            pending: PendingNetworkCommandWork::DocumentPolicy(pending),
+            owner_scope,
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(CommandOutputPlan::success()),
         Err(message) if message == "BrowserContextNotLoaded" => NetworkCommandTaskStep::Complete(
@@ -525,9 +537,9 @@ fn start_set_network_domain_enabled_command(
     match conn.start_replay_effective_network_request_policy_for_session_owner(cmd.session_id) {
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id: cmd.id,
-            owner_scope,
             kind,
-            pending: PendingNetworkCommandWork::page(pending),
+            pending: PendingNetworkCommandWork::DocumentPolicy(pending),
+            owner_scope,
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(if enabled {
             settings::enabled_command_output_plan(conn, cmd.session_id)
@@ -546,7 +558,7 @@ fn start_set_extra_http_headers_command(
         Ok(headers) => headers,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_document_policy_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -563,7 +575,7 @@ fn start_set_cache_disabled_command(
         Ok(cache_disabled) => cache_disabled,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_document_policy_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -580,7 +592,7 @@ fn start_set_blocked_urls_command(
         Ok(patterns) => patterns,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_document_policy_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -597,7 +609,7 @@ fn start_set_bypass_service_worker_command(
         Ok(bypass) => bypass,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_document_policy_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -614,7 +626,7 @@ fn start_emulate_network_conditions_command(
         Ok(offline) => offline,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_document_policy_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -632,7 +644,7 @@ fn start_set_user_agent_override_command(
         Ok(browser_identity) => browser_identity,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_resource_runtime_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -658,36 +670,20 @@ pub(crate) fn complete_pending_network_command(
             complete_network_policy_refresh(conn, completed, false),
         ),
         PendingNetworkCommandKind::SetCacheDisabled => NetworkCommandTaskStep::Complete(
-            complete_network_policy_refresh(conn, completed, false),
+            complete_document_policy_network_command(conn, completed),
         ),
-        PendingNetworkCommandKind::SetExtraHttpHeaders => {
-            NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
-                conn,
-                completed,
-                NetworkPageCommandFinish::ExtraHttpHeaders,
-            ))
-        }
-        PendingNetworkCommandKind::SetBlockedUrls => {
-            NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
-                conn,
-                completed,
-                NetworkPageCommandFinish::BlockedUrls,
-            ))
-        }
-        PendingNetworkCommandKind::SetBypassServiceWorker => {
-            NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
-                conn,
-                completed,
-                NetworkPageCommandFinish::BypassServiceWorker,
-            ))
-        }
-        PendingNetworkCommandKind::EmulateNetworkConditions => {
-            NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
-                conn,
-                completed,
-                NetworkPageCommandFinish::NetworkOffline,
-            ))
-        }
+        PendingNetworkCommandKind::SetExtraHttpHeaders => NetworkCommandTaskStep::Complete(
+            complete_document_policy_network_command(conn, completed),
+        ),
+        PendingNetworkCommandKind::SetBlockedUrls => NetworkCommandTaskStep::Complete(
+            complete_document_policy_network_command(conn, completed),
+        ),
+        PendingNetworkCommandKind::SetBypassServiceWorker => NetworkCommandTaskStep::Complete(
+            complete_document_policy_network_command(conn, completed),
+        ),
+        PendingNetworkCommandKind::EmulateNetworkConditions => NetworkCommandTaskStep::Complete(
+            complete_document_policy_network_command(conn, completed),
+        ),
         PendingNetworkCommandKind::SetUserAgentOverride => NetworkCommandTaskStep::Complete(
             complete_rebuild_loader_network_command(conn, completed),
         ),
@@ -700,13 +696,38 @@ pub(crate) fn complete_pending_network_command(
     }
 }
 
-#[derive(Clone, Copy)]
-enum NetworkPageCommandFinish {
-    RequestPolicy,
-    ExtraHttpHeaders,
-    BlockedUrls,
-    BypassServiceWorker,
-    NetworkOffline,
+fn complete_document_policy_network_command(
+    conn: &mut CdpConnection,
+    completed: CompletedNetworkCommandDispatch,
+) -> CommandOutputPlan {
+    match finish_document_policy_network_command(conn, completed) {
+        Ok(()) => CommandOutputPlan::success(),
+        Err(error) => CommandOutputPlan::error(-32000, error),
+    }
+}
+
+fn finish_document_policy_network_command(
+    conn: &mut CdpConnection,
+    completed: CompletedNetworkCommandDispatch,
+) -> Result<(), String> {
+    let owner_scope = completed.owner_scope;
+    let CompletedNetworkCommandWork::DocumentPolicy(completed) = completed.completed else {
+        return Err("InvalidNetworkCommandCompletion".to_owned());
+    };
+    let document = completed.document();
+    match conn.finish_document_policy_update(*completed) {
+        Ok(()) => Ok(()),
+        Err(error)
+            if error == "Document changed"
+                && conn
+                    .runtime_session_owner_slot_for_owner(&owner_scope)
+                    .is_ok()
+                && conn.loaded_browser_document_for_owner(&owner_scope).ok() != Some(document) =>
+        {
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn complete_network_policy_refresh(
@@ -714,116 +735,15 @@ fn complete_network_policy_refresh(
     completed: CompletedNetworkCommandDispatch,
     enabled: bool,
 ) -> CommandOutputPlan {
-    let owner_scope = completed.owner_scope.clone();
-    let session_id = owner_scope.session_id().map(str::to_owned);
-    let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page {
-            completed: Ok(completion),
-            ..
-        } => *completion,
-        CompletedNetworkCommandWork::Page {
-            attachment_id,
-            completed: Err(error),
-        } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
-                return if enabled {
-                    settings::enabled_command_output_plan(conn, session_id.as_deref())
-                } else {
-                    CommandOutputPlan::success()
-                };
-            }
-            return CommandOutputPlan::error(-32000, error);
-        }
-        CompletedNetworkCommandWork::Resource(_) => {
-            return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
-        }
-    };
-    if let Err(error) = finish_network_page_operation_on_current_attachment(
-        conn.loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
-            .ok(),
-        NetworkPageCommandFinish::RequestPolicy,
-        completion,
-    ) {
+    let session_id = completed.owner_scope.session_id().map(str::to_owned);
+    if let Err(error) = finish_document_policy_network_command(conn, completed) {
         return CommandOutputPlan::error(-32000, error);
     }
     if enabled {
-        settings::enabled_command_output_plan(conn, owner_scope.session_id())
+        settings::enabled_command_output_plan(conn, session_id.as_deref())
     } else {
         CommandOutputPlan::success()
     }
-}
-
-fn complete_unit_page_network_command(
-    conn: &mut CdpConnection,
-    completed: CompletedNetworkCommandDispatch,
-    finish: NetworkPageCommandFinish,
-) -> CommandOutputPlan {
-    let owner_scope = completed.owner_scope.clone();
-    let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page {
-            completed: Ok(completion),
-            ..
-        } => *completion,
-        CompletedNetworkCommandWork::Page {
-            attachment_id,
-            completed: Err(error),
-        } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
-                return CommandOutputPlan::success();
-            }
-            return CommandOutputPlan::error(-32000, error);
-        }
-        CompletedNetworkCommandWork::Resource(_) => {
-            return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
-        }
-    };
-    match finish_network_page_operation_on_current_attachment(
-        conn.loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
-            .ok(),
-        finish,
-        completion,
-    ) {
-        Ok(()) => CommandOutputPlan::success(),
-        Err(error) => CommandOutputPlan::error(-32000, error),
-    }
-}
-
-fn finish_network_page_operation_on_current_attachment(
-    page: Option<&mut moli_core::page::Page>,
-    finish: NetworkPageCommandFinish,
-    completion: moli_core::page::CompletedPageCommand,
-) -> Result<(), String> {
-    let completion_attachment = completion.renderer_agent_attachment_id();
-    if let Some(page) = page
-        && page.renderer_agent_attachment_id() == completion_attachment
-    {
-        let result = match finish {
-            NetworkPageCommandFinish::RequestPolicy => {
-                page.finish_set_network_request_policy(completion)
-            }
-            NetworkPageCommandFinish::ExtraHttpHeaders => {
-                page.finish_set_extra_http_headers(completion)
-            }
-            NetworkPageCommandFinish::BlockedUrls => {
-                page.finish_set_blocked_url_patterns(completion)
-            }
-            NetworkPageCommandFinish::BypassServiceWorker => {
-                page.finish_set_bypass_service_worker(completion)
-            }
-            NetworkPageCommandFinish::NetworkOffline => page.finish_set_network_offline(completion),
-        };
-        return result.map_err(|error| error.to_string());
-    }
-
-    // Target/session policy was committed before renderer dispatch. If a
-    // navigation installs another attachment before this frozen unit reply is
-    // decoded, consume the old turn without applying its PageState snapshot
-    // to the replacement. Prepared-document commit configuration carries the
-    // authoritative policy into that replacement.
-    completion
-        .into_unit_page_command_turn()
-        .map(drop)
-        .map_err(|error| format!("stale Network command returned an unexpected reply: {error}"))
 }
 
 fn complete_rebuild_loader_network_command(
@@ -831,44 +751,33 @@ fn complete_rebuild_loader_network_command(
     completed: CompletedNetworkCommandDispatch,
 ) -> CommandOutputPlan {
     let owner_scope = completed.owner_scope.clone();
-    let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page {
-            completed: Ok(completion),
-            ..
-        } => *completion,
-        CompletedNetworkCommandWork::Page {
-            attachment_id,
-            completed: Err(error),
-        } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
-                return CommandOutputPlan::success();
-            }
-            return CommandOutputPlan::error(-32000, error);
-        }
-        CompletedNetworkCommandWork::Resource(_) => {
+    let completed = match completed.completed {
+        CompletedNetworkCommandWork::ResourceRuntime(completed) => *completed,
+        CompletedNetworkCommandWork::DocumentPolicy(_)
+        | CompletedNetworkCommandWork::NetworkResourcePreparation(_)
+        | CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
-    match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
+    let document = completed.document();
+    match conn.finish_document_resource_runtime_update(completed) {
         Ok(()) => CommandOutputPlan::success(),
+        Err(_)
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, document.id()) =>
+        {
+            CommandOutputPlan::success()
+        }
         Err(error) => CommandOutputPlan::error(-32000, error),
     }
 }
 
 fn network_page_configuration_will_be_replayed(
-    conn: &mut CdpConnection,
+    conn: &CdpConnection,
     owner_scope: &CommandOwnerScope,
-    dispatched_attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+    dispatched_document: moli_core::browser::DocumentId,
 ) -> bool {
-    let Some(dispatched_attachment) = dispatched_attachment else {
-        return false;
-    };
-    let owner_still_exists = conn.target_owner_identity_for_owner(owner_scope).is_some();
-    let current_attachment = conn
-        .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
-        .ok()
-        .and_then(|page| page.renderer_agent_attachment_id());
-    owner_still_exists && current_attachment != Some(dispatched_attachment)
+    conn.runtime_session_owner_slot_for_owner(owner_scope)
+        .is_ok_and(|_| conn.current_document_id_for_owner(owner_scope) != Some(dispatched_document))
 }
 
 #[cfg(test)]

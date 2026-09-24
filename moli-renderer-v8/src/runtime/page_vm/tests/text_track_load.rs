@@ -36,8 +36,7 @@ globalThis.__startCompletionTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "automatic selection should publish the load-start task"
@@ -61,7 +60,7 @@ globalThis.__startCompletionTrack = track;
 
         assert!(
             page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?,
             "the load-start Networking task should be selected"
         );
@@ -125,21 +124,20 @@ document.body.append(video);
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "automatic selection should run first"
         );
         assert!(
             page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?,
             "load start should run second"
         );
         assert!(
             page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?,
             "successful terminal should run third"
         );
@@ -194,8 +192,7 @@ globalThis.__staleTextTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "automatic selection should publish one exact start task"
@@ -222,7 +219,7 @@ Promise.resolve().then(() => {
             )?;
         page_vm.vm_mut().enqueue_test_pending_runtime_source_load();
         page_vm
-            .run_claimed_selected_page_task_for_test(stale, &loader)
+            .run_claimed_selected_page_task_for_test(stale)
             .await?;
         assert_eq!(
             page_vm
@@ -298,8 +295,7 @@ globalThis.__typedTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "default mode should run through DOM manipulation"
@@ -317,7 +313,7 @@ globalThis.__typedTrack = track;
 
         assert!(
             page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?,
             "text-track start should be the Networking head"
         );
@@ -338,7 +334,7 @@ globalThis.__typedTrack = track;
 
         assert!(
             page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?,
             "successful text-track terminal should remain in Networking FIFO"
         );
@@ -388,8 +384,7 @@ globalThis.__failedTypedTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackDefaultMode
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "default-mode DOM turn"
@@ -398,7 +393,7 @@ globalThis.__failedTypedTrack = track;
 
         assert!(
             page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
+                .run_one_oldest_ready_page_task_on_owner_lane_for_test()
                 .await?,
             "empty-source load start should still be a Networking task"
         );
@@ -415,8 +410,7 @@ globalThis.__failedTypedTrack = track;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::TextTrackLoad
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "fetch failure should be an element task"

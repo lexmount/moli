@@ -1,4 +1,5 @@
 use super::*;
+use crate::testing::{enable_network_on_new_dedicated_worker, pause_new_dedicated_workers};
 
 async fn enable_network_domain(ctx: &mut TestContext, id: u64, session_id: Option<&str>) {
     let mut command = json!({"id": id, "method": "Network.enable"});
@@ -23,7 +24,7 @@ async fn set_blocked_urls_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     ctx.process_async(json!({
         "id": 2801,
         "method": "Network.setBlockedURLs",
@@ -35,7 +36,7 @@ async fn set_blocked_urls_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     enable_network_domain(&mut ctx, 28_020, None).await;
 
     ctx.process_async(json!({
@@ -46,13 +47,11 @@ async fn set_blocked_urls_updates_browser_context_state() {
     .await;
     ctx.expect_result(2802, json!({}), None);
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns(),
         vec![
             "http://example.test/*.png".to_owned(),
             "*://cdn.example.test/*".to_owned()
@@ -67,21 +66,19 @@ async fn set_blocked_urls_updates_browser_context_state() {
     .await;
     ctx.expect_result(2803, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns()
-            .is_empty()
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns()
+        .is_empty()
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_contribution_activates_with_network_handler() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 28_021,
@@ -91,26 +88,22 @@ async fn set_blocked_urls_contribution_activates_with_network_handler() {
     .await;
     ctx.expect_result(28_021, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns()
-            .is_empty(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns()
+        .is_empty(),
         "Chromium does not instrument blocked URLs until the Network handler is enabled"
     );
 
     enable_network_domain(&mut ctx, 28_022, None).await;
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns(),
         ["*without-enable*".to_owned()],
         "Network.enable activates the handler's retained blocked URL contribution"
     );
@@ -119,7 +112,7 @@ async fn set_blocked_urls_contribution_activates_with_network_handler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -161,7 +154,7 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -303,14 +296,15 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_activatio
     ctx.conn.browser_context = None;
     ctx.sent.clear();
 
-    let background = PageTargetHost::new(
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background".to_owned());
+    inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-    let mut inactive = BrowserContext::new("BID-background".to_owned());
-    inactive.insert_page_target_host(background);
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
@@ -405,7 +399,7 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_activatio
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -453,6 +447,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     .await;
     ctx.expect_result(2814, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2815,
@@ -487,6 +482,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
         .find(|message| message["id"] == json!(2815))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "Fetch", "blocked worker fetch failure").await;
     let failed = ctx
         .sent
@@ -494,7 +490,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
     let request_id = failed["params"]["requestId"]
@@ -549,7 +545,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -597,6 +593,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     .await;
     ctx.expect_result(2819, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2820,
@@ -632,6 +629,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
         .find(|message| message["id"] == json!(2820))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "XHR", "blocked worker xhr failure").await;
     let failed = ctx
         .sent
@@ -639,7 +637,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "net::ERR_BLOCKED_BY_CLIENT");
     let request_id = failed["params"]["requestId"]
@@ -689,7 +687,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -850,7 +848,7 @@ async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -889,6 +887,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
     .await;
     ctx.expect_result(2823, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2824,
@@ -923,6 +922,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
         .find(|message| message["id"] == json!(2824))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "Fetch", "offline worker fetch failure").await;
     let failed = ctx
         .sent
@@ -930,7 +930,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "Fetch");
     assert_eq!(failed["params"]["errorText"], "Network emulation offline");
     ctx.process_async(json!({
@@ -966,7 +966,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1005,6 +1005,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     .await;
     ctx.expect_result(2828, json!({}), Some("SID-1"));
     let _ = ctx.take_all();
+    pause_new_dedicated_workers(&mut ctx, "SID-1", 880_000).await;
 
     ctx.process_async(json!({
         "id": 2829,
@@ -1040,6 +1041,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
         .find(|message| message["id"] == json!(2829))
         .cloned()
         .expect("runtime evaluate result");
+    let worker_session = enable_network_on_new_dedicated_worker(&mut ctx, "SID-1", 880_001).await;
     flush_until_subresource_failed(&mut ctx, "XHR", "offline worker xhr failure").await;
     let failed = ctx
         .sent
@@ -1047,7 +1049,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
         .find(|message| message["method"] == json!("Network.loadingFailed"))
         .cloned()
         .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], "SID-1");
+    assert_eq!(failed["sessionId"], worker_session);
     assert_eq!(failed["params"]["type"], "XHR");
     assert_eq!(failed["params"]["errorText"], "Network emulation offline");
     ctx.process_async(json!({
@@ -1078,7 +1080,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1167,7 +1169,7 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1288,19 +1290,29 @@ async fn emulate_network_conditions_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
-    ctx.process_async(json!({
-        "id": 29,
-        "method": "Network.emulateNetworkConditions",
-        "params": { "offline": true }
-    }))
-    .await;
-    ctx.expect_error(29, -32602, "InvalidParams");
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
+    for params in [
+        json!({ "offline": true }),
+        json!({ "offline": true, "latency": "slow", "downloadThroughput": -1, "uploadThroughput": -1 }),
+        json!({ "offline": true, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1, "connectionType": "invalid" }),
+    ] {
+        ctx.process_async(json!({
+            "id": 29,
+            "method": "Network.emulateNetworkConditions",
+            "params": params,
+        }))
+        .await;
+        ctx.expect_error(29, -32602, "InvalidParams");
+        assert!(!{
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.network_offline_for_target(context.active_target_id().unwrap())
+        });
+    }
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn emulate_network_conditions_updates_browser_context_state() {
+async fn emulate_network_conditions_installs_only_the_supported_offline_value() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 30,
@@ -1316,12 +1328,12 @@ async fn emulate_network_conditions_updates_browser_context_state() {
     ctx.expect_result(30, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.active_page_target().network_policy.network_offline());
+    assert!(bc.network_offline_for_target(bc.active_target_id().unwrap()));
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_navigation_commits_error_document() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1441,7 +1453,7 @@ async fn emulate_network_conditions_offline_navigation_commits_error_document() 
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1535,12 +1547,14 @@ async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed()
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_blocks_parser_external_script_but_preserves_following_parse_work() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
             r#"<!doctype html>
 <html><body>
-<script src="http://example.test/blocked/parser-script.js"></script>
+<script src="/blocked/parser-script.js"></script>
 <script>
 globalThis.__lm_after_blocked_parser_script = true;
 </script>
@@ -1550,24 +1564,38 @@ globalThis.__lm_after_blocked_parser_script = true;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let script_requests = Arc::new(AtomicUsize::new(0));
+    let script_requests_for_server = Arc::clone(&script_requests);
     let server = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/page", get(page)))
-            .await
-            .unwrap();
+        let router = Router::new().route("/page", get(page)).route(
+            "/blocked/parser-script.js",
+            get(move || {
+                let requests = Arc::clone(&script_requests_for_server);
+                async move {
+                    requests.fetch_add(1, Ordering::Relaxed);
+                    (
+                        [(CONTENT_TYPE.as_str(), "text/javascript")],
+                        "globalThis.__lm_blocked_parser_script_loaded = true;",
+                    )
+                }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
     });
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
+    enable_network_domain(&mut ctx, 70_009, Some("SID-1")).await;
     ctx.process_async(json!({
         "id": 70_010,
         "method": "Network.setBlockedURLs",
         "sessionId": "SID-1",
-        "params": { "urls": ["http://example.test/blocked/*"] }
+        "params": { "urls": [format!("http://{addr}/blocked/*")] }
     }))
     .await;
     ctx.expect_result(70_010, json!({}), Some("SID-1"));
@@ -1579,19 +1607,19 @@ globalThis.__lm_after_blocked_parser_script = true;
         "params": { "url": page_url }
     }))
     .await;
-    let _ = ctx.take_response_by_id(70_011);
-
-    wait_until_messages(
+    let navigation = ctx.take_response_by_id(70_011);
+    wait_until_renderer_document_load(
         &mut ctx,
         Some("SID-1"),
-        "parser blocked external script load completion",
-        |messages| {
-            messages
-                .iter()
-                .any(|message| message["method"] == json!("Page.loadEventFired"))
-        },
+        "TID-1",
+        navigation["result"]["loaderId"].as_str().unwrap(),
     )
     .await;
+    assert_eq!(
+        script_requests.load(Ordering::Relaxed),
+        0,
+        "a blocked script must never reach the server"
+    );
 
     ctx.process_async(json!({
         "id": 70_012,

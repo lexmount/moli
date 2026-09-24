@@ -148,8 +148,6 @@ impl JsContextHost {
     ) -> Self {
         let message_port_registry = browser_context_runtime.message_port_registry();
         let broadcast_channel_registry = browser_context_runtime.broadcast_channel_registry();
-        let shared_worker_client_owner_id =
-            browser_context_runtime.next_shared_worker_client_owner_id();
         let javascript_dialog_handler_enabled =
             browser_context_runtime.javascript_dialog_handler_enabled();
         let document_url = runtime.document_url().clone();
@@ -251,7 +249,6 @@ impl JsContextHost {
             force_child_default_context_preflight_failure: false,
             child_browsing_context_document_handles: HashMap::new(),
             document_domain_override: None,
-            next_child_browsing_context_id: 1,
             next_child_document_load_id: 0,
             next_child_classic_script_load_id: 0,
             pending_child_document_navigations: HashMap::new(),
@@ -364,8 +361,6 @@ impl JsContextHost {
             internal_inspector_value_references: HashMap::new(),
             #[cfg(test)]
             completed_child_browsing_context_loads: Vec::new(),
-            #[cfg(test)]
-            completed_child_document_networks: Vec::new(),
             active_child_subresource_request_scopes: Vec::new(),
             child_window_event_listeners: HashMap::new(),
             next_child_window_event_registration_id: 0,
@@ -376,8 +371,6 @@ impl JsContextHost {
             message_port_registry,
             message_port_wrappers: HashMap::new(),
             broadcast_channel_registry,
-            shared_worker_client_owner_id,
-            child_shared_worker_client_owner_ids: HashMap::new(),
             shared_worker_clients: SharedWorkerClientEndpointOwner::default(),
             top_level_storage_key,
             web_storage_opaque_context_nonce: None,
@@ -403,13 +396,12 @@ impl JsContextHost {
             #[cfg(test)]
             pending_runtime_binding_calls: Vec::new(),
             next_runtime_observable_context_token: super::RuntimeObservableContextToken::first(),
-            pending_runtime_observable_console_source_events: Vec::new(),
+            pending_runtime_observable_console_source_events: Default::default(),
             #[cfg(test)]
             pending_file_chooser_activations: Vec::new(),
             #[cfg(test)]
             pending_download_activations: Vec::new(),
-            #[cfg(test)]
-            pending_popup_activations: Vec::new(),
+            popup_broker: crate::runtime::RendererPopupBroker::default(),
             next_lightweight_popup_id: 1,
             next_lightweight_popup_local_window_id: 1,
             next_lightweight_popup_document_id: 1,
@@ -427,7 +419,6 @@ impl JsContextHost {
             javascript_dialog_handler_enabled,
             pending_network_output: Vec::new(),
             focus_change_epoch: 0,
-            next_subresource_network_request_handle: 1,
             subresource_activity_epoch: 0,
             subresource_last_activity_at: std::time::Instant::now(),
             fetch_subresource_interception_enabled: false,
@@ -442,7 +433,6 @@ impl JsContextHost {
             pending_subresource_fetch_infos: Vec::new(),
             running_subresource_fetches: HashMap::new(),
             streaming_subresource_fetches: HashMap::new(),
-            in_flight_worker_subresource_fetches: HashMap::new(),
             #[cfg(test)]
             pending_subresource_continue_events: Vec::new(),
             pending_network_body_sources: HashMap::new(),
@@ -485,6 +475,7 @@ impl JsContextHost {
         lifecycle: RendererDocumentLifecycleJournalHandle,
     ) {
         self.root_document_lifecycle = Some(lifecycle);
+        self.bind_main_document_resource_network();
     }
 
     /// Returns the exact root Document that owns Page-scoped protocol
@@ -613,6 +604,7 @@ impl JsContextHost {
         if let Some(lifecycle) = &self.root_document_lifecycle {
             lifecycle.did_open_document();
         }
+        self.bind_main_document_resource_network();
     }
 
     pub(crate) fn install_page_task_capabilities(

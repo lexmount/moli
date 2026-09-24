@@ -68,7 +68,11 @@ impl ScriptVm {
                 wrapper,
                 top_level_site,
                 creator_storage_key,
-                String::new(),
+                host.prepare_dedicated_worker_host(
+                    "data:text/html,fixture".parse().unwrap(),
+                    "data:text/javascript,fixture".parse().unwrap(),
+                    String::new(),
+                ),
                 moli_fetch::RequestCredentialsMode::SameOrigin,
                 None,
                 outside_settings_load,

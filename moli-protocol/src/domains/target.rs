@@ -1,8 +1,8 @@
 use serde::Deserialize;
 
 use crate::conn::{
-    BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, CommandOwnerScope,
-    TargetAttachSessionCommit, TargetHandlerAccessMode,
+    BackgroundProtocolEvent, BrowserContext, CdpConnection, Cmd, TargetAttachSessionCommit,
+    TargetHandlerAccessMode,
 };
 use crate::devtools_runtime::{
     DevToolsActivateTargetCommand, DevToolsCloseTargetCommand, DevToolsCommand,
@@ -21,6 +21,7 @@ mod browser_context;
 mod browser_context_disposal;
 mod closing;
 mod creation;
+pub(crate) use creation::project_browser_created_target;
 mod events;
 mod info;
 mod popup;
@@ -36,41 +37,19 @@ mod worker_target;
 
 pub(in crate::domains) use browser_context::devtools_client_window_info_for_target;
 pub(crate) use popup::{
-    PopupTargetCreation, PopupTargetOpenerIdentity, complete_popup_target_activation_action_async,
-    complete_popup_target_navigation_owner_action_async,
-    create_popup_target_from_renderer_output_background_events_async,
-    emit_target_info_changed_for_owner_background_event,
-    schedule_initial_document_target_url_navigation_after_debugger_barrier_release_for_target,
-    schedule_initial_document_target_url_navigation_after_debugger_resume,
+    complete_target_startup_owner_action_async,
+    emit_target_info_changed_for_owner_background_event, project_browser_popup_target,
+    schedule_navigation_decision_after_debugger_barrier_release_for_target,
+    schedule_navigation_decision_after_debugger_resume,
 };
-pub(crate) fn popup_activation_creates_new_target_for_owner(
-    conn: &CdpConnection,
-    owner: &CommandOwnerScope,
-    target_name: &str,
-) -> bool {
-    if let Some((browser_context_id, _)) = conn.target_owner_identity_for_owner(owner) {
-        return conn
-            .browser_context_by_id(&browser_context_id)
-            .is_none_or(|browser_context| {
-                browser_context
-                    .target_id_for_window_name(target_name)
-                    .is_none()
-            });
-    }
-    conn.browser_context.as_ref().is_none_or(|browser_context| {
-        browser_context
-            .target_id_for_window_name(target_name)
-            .is_none()
-    })
-}
+pub(crate) use worker_target::retire_dedicated_worker_targets_for_replaced_page_async;
 pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
-    dedicated_worker_target_lifecycle_prepared_outputs_for_event,
-    project_worker_target_output_async,
+    dedicated_worker_observation_prepared_outputs, project_worker_target_output_async,
     release_failed_dedicated_worker_target_after_debugger_resume,
-    retire_dedicated_worker_targets_for_replaced_page_async,
-    service_worker_target_lifecycle_prepared_outputs_for_event,
-    shared_worker_target_lifecycle_prepared_outputs_for_event,
+    resume_worker_runtime_listener_for_session, service_worker_observation_prepared_outputs,
+    shared_worker_observation_prepared_outputs, worker_lifecycle_prepared_outputs,
+    worker_network_prepared_outputs,
 };
 
 /// Browser-owned auto-attach policies may observe browser-level targets.
@@ -164,12 +143,8 @@ pub(in crate::domains) fn set_service_worker_pause_on_start_owner(
 
 fn sync_dedicated_worker_pause_on_start_for_devtools(conn: &CdpConnection) {
     let pause = conn.dedicated_worker_pause_on_start_for_devtools();
-    let runtimes = conn
-        .browser_contexts()
-        .map(BrowserContext::renderer_runtime)
-        .collect::<Vec<_>>();
-    for runtime in runtimes {
-        runtime.set_dedicated_worker_pause_on_start_for_devtools(pause);
+    for context in conn.browser_contexts() {
+        context.set_dedicated_worker_pause_on_start(pause);
     }
 }
 
@@ -204,15 +179,26 @@ impl CdpConnection {
             None,
             "Inspector detached",
         );
-        if let Err(error) =
-            super::fetch::dispose_owner_async(self, side_effects.background_events_mut(), None)
-                .await
+        let renderer_policy_reconciled = match self
+            .detach_runtime_inspector_session_for_session_owner(None)
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, "failed to detach root renderer Inspector session");
+                false
+            }
+        };
+        if let Err(error) = super::fetch::dispose_owner_async(
+            self,
+            side_effects.background_events_mut(),
+            None,
+            renderer_policy_reconciled,
+        )
+        .await
         {
             tracing::warn!(%error, "failed to dispose root Fetch handler");
         }
-        let _ = self
-            .detach_runtime_inspector_session_for_session_owner_async(None)
-            .await;
         auto_attach::release_attached_sessions_for_root_frontend_async(
             self,
             &mut side_effects,
@@ -234,7 +220,7 @@ enum PendingTargetCommandKind {
     AttachToTarget {
         prepared_session: TargetAttachSessionCommit,
         target_info: DevToolsTargetInfo,
-        initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
+        initial_document: Option<Box<crate::conn::PendingInitialDocumentProjection>>,
     },
     ActivateTarget {
         command: DevToolsActivateTargetCommand,
@@ -246,7 +232,7 @@ enum PendingTargetCommandKind {
     CreateTarget {
         response_plan: CommandOutputPlan,
         creation_commit: creation::TargetCreationCommit,
-        initial_document: Option<Box<crate::conn::PendingInitialDocumentPageBuild>>,
+        initial_document: Option<Box<crate::conn::PendingInitialDocumentProjection>>,
     },
     DetachFromTarget {
         target_id: Option<String>,
@@ -256,7 +242,7 @@ enum PendingTargetCommandKind {
         command: DevToolsCloseTargetCommand,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     },
     SendMessageToTarget {
         message: String,
@@ -270,8 +256,8 @@ enum CompletedTargetCommandKind {
         target_info: DevToolsTargetInfo,
         initial_document: Option<
             Result<
-                Box<crate::conn::CompletedInitialDocumentPageBuild>,
-                crate::conn::FailedInitialDocumentPageBuild,
+                Box<moli_core::browser::BrowserCommittedInitialDocument>,
+                crate::conn::FailedInitialDocumentProjection,
             >,
         >,
     },
@@ -287,8 +273,8 @@ enum CompletedTargetCommandKind {
         creation_commit: creation::TargetCreationCommit,
         initial_document: Option<
             Result<
-                Box<crate::conn::CompletedInitialDocumentPageBuild>,
-                crate::conn::FailedInitialDocumentPageBuild,
+                Box<moli_core::browser::BrowserCommittedInitialDocument>,
+                crate::conn::FailedInitialDocumentProjection,
             >,
         >,
     },
@@ -300,7 +286,7 @@ enum CompletedTargetCommandKind {
         command: DevToolsCloseTargetCommand,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     },
     SendMessageToTarget {
         message: String,
@@ -319,7 +305,7 @@ impl PendingTargetCommandDispatch {
                 prepared_session,
                 target_info,
                 initial_document: match initial_document {
-                    Some(pending) => Some(pending.wait().await.map(Box::new)),
+                    Some(pending) => Some(pending.wait().await),
                     None => None,
                 },
             },
@@ -341,7 +327,7 @@ impl PendingTargetCommandDispatch {
                 response_plan,
                 creation_commit,
                 initial_document: match initial_document {
-                    Some(pending) => Some(pending.wait().await.map(Box::new)),
+                    Some(pending) => Some(pending.wait().await),
                     None => None,
                 },
             },
@@ -355,8 +341,8 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::CloseTarget { command } => {
                 CompletedTargetCommandKind::CloseTarget { command }
             }
-            PendingTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
-                CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id }
+            PendingTargetCommandKind::DisposeBrowserContext { disposal } => {
+                CompletedTargetCommandKind::DisposeBrowserContext { disposal }
             }
             PendingTargetCommandKind::SendMessageToTarget {
                 message,
@@ -430,9 +416,9 @@ pub(crate) fn try_start_target_command_dispatch(
             Some(attachment::start_detach_from_target_command(cmd))
         }
         Some(TargetAction::CloseTarget) => Some(closing::start_close_target_command(conn, cmd)),
-        Some(TargetAction::DisposeBrowserContext) => {
-            Some(browser_context::start_dispose_browser_context_command(cmd))
-        }
+        Some(TargetAction::DisposeBrowserContext) => Some(
+            browser_context::start_dispose_browser_context_command(conn, cmd),
+        ),
         Some(TargetAction::SendMessageToTarget) => {
             Some(attachment::start_send_message_to_target_command(cmd))
         }
@@ -510,11 +496,6 @@ pub(crate) fn execute_immediate_devtools_target_command_with_protocol_events(
     Vec<crate::conn::BackgroundProtocolEvent>,
 ) {
     match command {
-        DevToolsCommand::CreateTarget(command) => {
-            let result = creation::execute_devtools_create_target_command(conn, command)
-                .map(|execution| DevToolsCommandResult::CreateTarget(execution.result));
-            (result, Vec::new())
-        }
         DevToolsCommand::GetTargets(command) => (
             browser_context::execute_devtools_get_targets_command(conn, &command)
                 .map(DevToolsCommandResult::GetTargets),
@@ -556,6 +537,18 @@ pub(crate) fn execute_immediate_devtools_target_command_with_protocol_events(
     }
 }
 
+// Fixtures that specifically exercise the no-document state stop at the same
+// private admission as production. No production command may skip construction.
+#[cfg(test)]
+pub(crate) fn stage_initial_target_for_test(
+    conn: &mut CdpConnection,
+    command: DevToolsCreateTargetCommand,
+) -> crate::devtools_runtime::DevToolsCreateTargetResult {
+    creation::execute_devtools_create_target_command(conn, command)
+        .expect("initial target fixture admission")
+        .result
+}
+
 pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_events(
     conn: &mut CdpConnection,
     command: DevToolsCreateTargetCommand,
@@ -569,21 +562,21 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
         Err(error) => return (Err(error), Vec::new(), None),
     };
     let result = execution.result;
-    let creation_commit = execution.commit;
+    let mut creation_commit = execution.commit;
     let mut protocol_events = Vec::new();
     let (initial_document_events, renderer_output_predecessor) = conn
         .ensure_created_target_initial_document_page(&result.target_id)
         .await;
     protocol_events.extend(initial_document_events);
-    if let Some(activation) = creation_commit.activation() {
+    if let Some(activation) = creation_commit.take_activation() {
         protocol_events.extend(
-            conn.complete_staged_target_activation_async(activation)
+            conn.project_target_activation_async(activation)
                 .await
                 .into_protocol_events(),
         );
     }
     if let Err(error) =
-        creation::emit_target_creation_protocol_events(conn, creation_commit, &mut protocol_events)
+        creation::complete_target_creation(conn, creation_commit, &mut protocol_events)
     {
         return (Err(error), Vec::new(), renderer_output_predecessor);
     }
@@ -652,26 +645,17 @@ pub(crate) async fn execute_devtools_target_command_async_with_protocol_events(
     }
 }
 
-async fn target_creation_response_plan_after_initial_document(
+fn target_creation_response_plan_after_initial_document(
     conn: &mut CdpConnection,
     response_plan: CommandOutputPlan,
     creation_commit: creation::TargetCreationCommit,
     activation_events: Vec<BackgroundProtocolEvent>,
 ) -> CommandOutputPlan {
-    let target_id = creation_commit.page_target_id().to_owned();
     let mut plan = CommandOutputPlan::default();
     let mut events = activation_events;
-    if let Err(error) =
-        creation::emit_target_creation_protocol_events(conn, creation_commit, &mut events)
-    {
+    if let Err(error) = creation::complete_target_creation(conn, creation_commit, &mut events) {
         return CommandOutputPlan::from_devtools_error(error);
     }
-    popup::start_target_url_navigation_if_allowed_background_events_async(
-        conn,
-        &mut events,
-        &target_id,
-    )
-    .await;
     for event in events {
         plan.push_background_event(event);
     }
@@ -721,11 +705,11 @@ pub(crate) async fn complete_pending_target_command(
         }
         CompletedTargetCommandKind::CreateTarget {
             response_plan,
-            creation_commit,
+            mut creation_commit,
             initial_document,
         } => {
-            let activation_events = if let Some(activation) = creation_commit.activation() {
-                conn.complete_staged_target_activation_async(activation)
+            let activation_events = if let Some(activation) = creation_commit.take_activation() {
+                conn.project_target_activation_async(activation)
                     .await
                     .into_protocol_events()
             } else {
@@ -733,42 +717,26 @@ pub(crate) async fn complete_pending_target_command(
             };
             match initial_document {
                 Some(Ok(completed_initial_document)) => {
-                    let completed_initial_document = *completed_initial_document;
-                    let result = conn
-                        .complete_initial_document_page_build_for_owner_with_creation_diagnostics(
-                            completed_initial_document,
-                        )
-                        .await;
-                    match result {
-                        Ok(diagnostics) => {
-                            if let Some(predecessor) = diagnostics.renderer_output_predecessor {
-                                command_context.set_renderer_output_predecessor(predecessor);
-                            }
-                        }
-                        Err(message) => {
-                            return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
-                                -32000, message,
-                            ));
-                        }
+                    let diagnostics =
+                        conn.project_initial_document_completion(*completed_initial_document);
+                    if let Some(predecessor) = diagnostics.renderer_output_predecessor {
+                        command_context.set_renderer_output_predecessor(predecessor);
                     }
                 }
                 Some(Err(failed)) => {
-                    let message = conn.reset_failed_initial_document_page_build_for_owner(failed);
+                    let message = conn.retire_failed_initial_document_projection(failed);
                     return TargetCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000, message,
                     ));
                 }
                 None => {}
             }
-            TargetCommandTaskStep::Complete(
-                target_creation_response_plan_after_initial_document(
-                    conn,
-                    response_plan,
-                    creation_commit,
-                    activation_events,
-                )
-                .await,
-            )
+            TargetCommandTaskStep::Complete(target_creation_response_plan_after_initial_document(
+                conn,
+                response_plan,
+                creation_commit,
+                activation_events,
+            ))
         }
         CompletedTargetCommandKind::DetachFromTarget {
             target_id,
@@ -790,11 +758,11 @@ pub(crate) async fn complete_pending_target_command(
                 closing::complete_close_target_command_async(conn, command, command_context).await,
             );
         }
-        CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
+        CompletedTargetCommandKind::DisposeBrowserContext { disposal } => {
             return TargetCommandTaskStep::Complete(
                 browser_context::complete_dispose_browser_context_command_async(
                     conn,
-                    browser_context_id,
+                    disposal,
                     command_context,
                 )
                 .await,
@@ -876,12 +844,12 @@ fn pending_close_target_command(
 fn pending_dispose_browser_context_command(
     command_id: Option<u64>,
     session_id: Option<&str>,
-    browser_context_id: String,
+    disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
         command_id,
         session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { browser_context_id }),
+        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { disposal }),
     })
 }
 
@@ -920,7 +888,7 @@ fn set_discover_targets(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
     let params: SetDiscoverTargetsParams = match cmd.get_params() {
         Ok(Some(params)) => params,
         _ => {
-            return CommandOutputPlan::error_without_session(-32602, "InvalidParams");
+            return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
     if !params.discover
@@ -929,7 +897,7 @@ fn set_discover_targets(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
             .as_ref()
             .is_some_and(|filter| !filter.is_empty())
     {
-        return CommandOutputPlan::error_without_session(
+        return CommandOutputPlan::error(
             -32602,
             "Filter should not be present with `discover` is off",
         );
@@ -1067,7 +1035,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_create_target_to_initial_document_lifecycle_work() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(41),
@@ -1106,19 +1074,15 @@ mod devtools_runtime_entry_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["id"], json!(41));
         assert!(out[0]["result"]["targetId"].as_str().is_some());
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .runtime_slot
-                .has_loaded_page()
-        );
+        assert!({
+            let context = &conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        });
     }
 
     #[tokio::test]
     async fn attach_to_target_completion_plan_preserves_typed_attached_sidecar() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let plan = attachment::complete_attach_to_target_command_async(
             &mut conn,
             TargetAttachSessionCommit::direct(
@@ -1174,8 +1138,9 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_close_drains_runtime_ready_events_without_serializing_them() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-runtime-ready-close".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-runtime-ready-close".to_owned());
         browser_context.set_active_target_id("TID-runtime-ready-close");
         browser_context.attach_active_session("SID-runtime-ready-close");
         assert!(browser_context.assign_attached_session_to_target(
@@ -1183,16 +1148,11 @@ mod devtools_runtime_entry_tests {
             "SID-runtime-ready-close-attached".to_owned(),
         ));
         conn.install_browser_context_fixture_for_test(browser_context);
-        let page = conn
-            .load_page_via_runtime_async("data:text/html,<p>runtime ready close</p>")
-            .await
-            .expect("page should load");
-        conn.browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
+        conn.install_navigation_fixture_for_session_owner_for_test(
+            "data:text/html,<p>runtime ready close</p>",
+            None,
+        )
+        .await;
         conn.register_pending_inspector_await(7101, Some("SID-runtime-ready-close"));
         assert!(
             conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
@@ -1278,29 +1238,38 @@ mod devtools_runtime_entry_tests {
     }
 
     #[test]
-    fn immediate_create_target_staging_does_not_emit_target_created_before_initial_document() {
-        let mut conn = CdpConnection::new();
+    fn create_target_enters_pending_inspection_before_publishing_target_created() {
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        let (result, protocol_events) =
-            execute_immediate_devtools_target_command_with_protocol_events(
-                &mut conn,
-                DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
-                    context: cdp_context(),
-                    url: "about:blank".to_owned(),
-                    browser_context_id: None,
-                    activate: false,
-                }),
-            );
-
-        let DevToolsCommandResult::CreateTarget(result) =
-            result.expect("create target staging should succeed")
-        else {
-            panic!("expected create target result");
+        let step = start_devtools_target_command(
+            &mut conn,
+            Some(41),
+            None,
+            DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+                context: cdp_context(),
+                url: "about:blank".to_owned(),
+                browser_context_id: None,
+                activate: false,
+            }),
+        );
+        let TargetCommandTaskStep::Pending(pending) = step else {
+            panic!("native construction must wait for initial inspection");
         };
-        assert_eq!(result.target_id.as_str(), "TID-1");
-        assert!(
-            protocol_events.is_empty(),
-            "Target.targetCreated must be generated after initial document Page build"
+        let PendingTargetCommandKind::CreateTarget {
+            initial_document,
+            response_plan,
+            ..
+        } = *pending.kind
+        else {
+            panic!("expected create target projection");
+        };
+        assert!(initial_document.is_some());
+        let mut protocol_messages = Vec::new();
+        response_plan.emit_into(&mut protocol_messages, Some(41), None);
+        assert_eq!(
+            protocol_messages,
+            [json!({"id": 41, "result": {"targetId": "TID-1"}})],
+            "Target.targetCreated must not be included before native construction commits"
         );
         assert_eq!(
             conn.browser_context
@@ -1314,7 +1283,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn devtools_target_entry_routes_close_target_to_pending_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(42),
@@ -1340,7 +1309,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn devtools_target_entry_routes_activate_target_to_pending_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(43),
@@ -1366,7 +1335,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_get_targets_to_shared_result() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let create_step = start_devtools_target_command(
             &mut conn,
             Some(40),
@@ -1404,7 +1373,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_get_client_windows_to_shared_result() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let first_create_step = start_devtools_target_command(
             &mut conn,
             Some(46),
@@ -1461,7 +1430,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn devtools_target_entry_routes_get_target_info_to_shared_result() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(45),

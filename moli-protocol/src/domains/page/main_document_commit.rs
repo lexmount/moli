@@ -1,6 +1,6 @@
 use moli_core::page::RendererMainDocumentCommit;
 
-use crate::conn::{CdpConnection, CommandOwnerScope};
+use crate::conn::{CdpConnection, RendererPageResidenceIdentity};
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSink, ProtocolOutputSlot,
 };
@@ -13,17 +13,17 @@ use crate::domains::activity::{
 /// publication arrives, another navigation may already own the target.
 #[derive(Debug)]
 pub(in crate::domains) struct MainDocumentCommitPreparedOutput {
-    commits: Vec<RendererMainDocumentCommit>,
+    commits: Vec<(RendererPageResidenceIdentity, RendererMainDocumentCommit)>,
 }
 
 impl MainDocumentCommitPreparedOutput {
-    fn new(commit: RendererMainDocumentCommit) -> Self {
+    fn new(renderer: RendererPageResidenceIdentity, commit: RendererMainDocumentCommit) -> Self {
         Self {
-            commits: vec![commit],
+            commits: vec![(renderer, commit)],
         }
     }
 
-    fn take_commits(&mut self) -> Vec<RendererMainDocumentCommit> {
+    fn take_commits(&mut self) -> Vec<(RendererPageResidenceIdentity, RendererMainDocumentCommit)> {
         std::mem::take(&mut self.commits)
     }
 
@@ -44,8 +44,22 @@ pub(in crate::domains) async fn project_main_document_commit_async(
         return;
     };
 
-    for commit in commits {
+    for (renderer, commit) in commits {
         let owner = context.owner();
+        let RendererMainDocumentCommit::Frame {
+            frame_id,
+            loader_id,
+            url,
+            unreachable_url,
+            security_origin,
+            secure_context_type,
+            timestamp,
+        } = commit
+        else {
+            let events = conn.project_native_renderer_document_frame_commit(renderer);
+            context.command.protocol_events_mut().extend(events);
+            continue;
+        };
         let Some((current_frame_id, _, _, _)) =
             conn.target_session_owner_frame_tree_identity_for_owner(owner)
         else {
@@ -56,7 +70,7 @@ pub(in crate::domains) async fn project_main_document_commit_async(
         else {
             continue;
         };
-        if current_frame_id != commit.frame_id || current_loader_id != commit.loader_id {
+        if current_frame_id != frame_id || current_loader_id != loader_id {
             // Stream routing binds the publication to an exact Page
             // generation. This additional loader check prevents a queued
             // commit fact from being projected after replacement.
@@ -66,10 +80,7 @@ pub(in crate::domains) async fn project_main_document_commit_async(
         let session_ids = conn.page_event_session_ids_for_owner(owner);
         let mut events = Vec::new();
         for session_id in session_ids {
-            let event_owner = session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(conn, session_id.as_deref());
             let lifecycle_enabled = conn
                 .target_page_session_state_for_owner(&event_owner)
                 .is_some_and(|state| state.page_lifecycle_events);
@@ -77,9 +88,9 @@ pub(in crate::domains) async fn project_main_document_commit_async(
                 &mut events,
                 session_id.as_deref(),
                 lifecycle_enabled,
-                &commit.frame_id,
-                &commit.loader_id,
-                commit.timestamp,
+                &frame_id,
+                &loader_id,
+                timestamp,
             );
 
             let dom_enabled = crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner);
@@ -87,12 +98,12 @@ pub(in crate::domains) async fn project_main_document_commit_async(
                 &mut events,
                 session_id.as_deref(),
                 dom_enabled,
-                &commit.frame_id,
-                &commit.loader_id,
-                &commit.url,
-                commit.unreachable_url.as_deref(),
-                &commit.security_origin,
-                &commit.secure_context_type,
+                &frame_id,
+                &loader_id,
+                &url,
+                unreachable_url.as_deref(),
+                &security_origin,
+                &secure_context_type,
             );
         }
         context.command.protocol_events_mut().extend(events);
@@ -103,9 +114,10 @@ pub(in crate::domains) const SLOT_MAIN_DOCUMENT_COMMIT: ProtocolOutputSlot =
     ProtocolOutputSlot::MainDocumentCommit;
 
 pub(in crate::domains) fn append_renderer_main_document_commit_to_output_sink(
+    renderer: RendererPageResidenceIdentity,
     commit: RendererMainDocumentCommit,
     sink: &mut (impl ProtocolOutputSink + ?Sized),
 ) {
     sink.push_produced_slot(SLOT_MAIN_DOCUMENT_COMMIT);
-    sink.push_prepared_payload(MainDocumentCommitPreparedOutput::new(commit).into());
+    sink.push_prepared_payload(MainDocumentCommitPreparedOutput::new(renderer, commit).into());
 }

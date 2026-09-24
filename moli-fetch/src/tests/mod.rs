@@ -1,3 +1,4 @@
+mod auth_streaming;
 mod cookie_context;
 mod cookie_store;
 mod header_bytes;
@@ -1213,7 +1214,9 @@ async fn fetch_raw_stream_manual_redirect_returns_redirect_response() -> Result<
         body.extend_from_slice(&chunk);
     }
     response.finish().await?;
-    assert!(body.is_empty());
+    // Raw transport retains the physical redirect body. Browser response
+    // filtering is applied by its caller, after network observation.
+    assert_eq!(body, b"redirect-body");
     assert_eq!(
         server.requests().len(),
         1,

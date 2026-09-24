@@ -489,6 +489,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) network_partition_key: Option<String>,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -499,6 +500,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            network_partition_key: None,
         }
     }
 }
@@ -520,7 +522,8 @@ pub(crate) fn service_worker_fetch_request_metadata(
         integrity: subresource_metadata
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
-        keepalive: false,
+        keepalive: request.resource_type == moli_fetch::RequestResourceType::CspReport,
+        network_partition_key: request.network_partition_key().map(str::to_owned),
     }
 }
 
@@ -691,6 +694,7 @@ pub(crate) struct ServiceWorkerNavigationPreloadFailure {
 
 #[derive(Clone, Debug)]
 pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
+    pub(crate) status_text: Option<String>,
     pub(crate) final_url: Option<Url>,
     pub(crate) response_type: String,
     pub(crate) redirected: bool,
@@ -699,15 +703,15 @@ pub(crate) struct MaterializedServiceWorkerFetchResponseHead {
 }
 
 #[derive(Debug)]
-pub(crate) enum ServiceWorkerDirectFetchResult {
+pub(crate) enum ServiceWorkerResourceFetchResult {
     Fallback,
-    Response(ServiceWorkerDirectFetchResponse),
-    Failure(String),
+    Response(ServiceWorkerResourceResponse),
+    Failure(anyhow::Error),
 }
 
 #[derive(Debug)]
-pub(crate) struct ServiceWorkerDirectFetchResponse {
-    pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
+pub(crate) struct ServiceWorkerResourceResponse {
+    pub(crate) response: Box<moli_fetch::NetworkFetchResult<moli_fetch::StreamingRawResponse>>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
 }
 
@@ -724,10 +728,78 @@ pub(crate) struct ServiceWorkerFetchDispatch {
     pub(crate) cors_preflight_request_headers: Vec<(String, String)>,
     pub(crate) request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
     pub(crate) network_context: AsyncSubresourceNetworkContext,
-    pub(crate) completion_tx: RendererResourceCompletionSender,
+    pub(crate) result_tx: ServiceWorkerFetchResultSender,
     pub(crate) request_client: ResourceRequestClient,
     pub(crate) resource_task_runner: crate::network::RendererResourceTaskRunner,
     pub(crate) cancel_handle: moli_fetch::FetchCancelHandle,
-    pub(crate) direct_completion_tx:
-        Option<tokio::sync::oneshot::Sender<ServiceWorkerDirectFetchResult>>,
+}
+
+pub(crate) enum ServiceWorkerFetchResultSender {
+    Page {
+        completion_tx: RendererResourceCompletionSender,
+        network: std::sync::Arc<crate::network::ResourceResponseStream>,
+    },
+    Worker {
+        sender: Box<crate::worker::WorkerResponseSender>,
+    },
+    CspReport {
+        resource: std::sync::Arc<crate::network_host::KeepaliveResource>,
+        request: Box<Request>,
+    },
+    Body(std::sync::Arc<crate::network::ResourceResponseBody>),
+    Resource(tokio::sync::oneshot::Sender<ServiceWorkerResourceFetchResult>),
+    Stream {
+        body: tokio::sync::mpsc::UnboundedSender<Vec<u8>>,
+        completion: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
+}
+
+impl ServiceWorkerFetchResultSender {
+    pub(super) fn resource_response_started(
+        &mut self,
+        head: moli_fetch::ResponseHead,
+        response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+        cancel: moli_fetch::FetchCancelHandle,
+    ) {
+        if !matches!(self, Self::Resource(_)) {
+            return;
+        }
+        let (body, chunks) = tokio::sync::mpsc::unbounded_channel();
+        let (completion, finished) = tokio::sync::oneshot::channel();
+        let Self::Resource(recipient) = std::mem::replace(self, Self::Stream { body, completion })
+        else {
+            unreachable!("resource recipient checked before transferring the response")
+        };
+        let _ = recipient.send(ServiceWorkerResourceFetchResult::Response(
+            ServiceWorkerResourceResponse {
+                response: Box::new(moli_fetch::NetworkFetchResult::without_request_observation(
+                    moli_fetch::StreamingRawResponse::new_with_head(head, chunks, cancel, finished),
+                )),
+                response_filter,
+            },
+        ));
+    }
+
+    pub(super) fn response_started(&self, head: crate::network::ResourceResponseHead) {
+        match self {
+            Self::Page { network, .. } => network.response_started(head),
+            Self::Worker { sender, .. } => sender.response.response_started(head),
+            Self::CspReport { resource, .. } => resource.response_started(head),
+            Self::Body(_) => unreachable!("controlled body already owns its response head"),
+            Self::Resource(_) | Self::Stream { .. } => {}
+        }
+    }
+
+    pub(super) fn data_received(&self, bytes: Vec<u8>) {
+        match self {
+            Self::Page { network, .. } => network.data_received(&bytes),
+            Self::Worker { sender, .. } => sender.response.data_received(&bytes),
+            Self::CspReport { resource, .. } => resource.data_received(&bytes),
+            Self::Body(body) => body.data_received(bytes),
+            Self::Stream { body, .. } => {
+                let _ = body.send(bytes);
+            }
+            Self::Resource(_) => {}
+        }
+    }
 }

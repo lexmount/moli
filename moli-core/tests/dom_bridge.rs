@@ -11,10 +11,18 @@ use support::FixtureServer;
 use tokio::time::Duration;
 
 async fn live_document_snapshot(page: &mut Page) -> Result<DocumentNodeSnapshot> {
-    let pending = page.start_document_node_snapshot_for_document(None, true, -1, true)?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let route = endpoint
+        .dom_inspection(
+            moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+            None,
+        )
+        .start_document_node_snapshot_for_document(true, -1, true)?;
+    let pending = moli_core::page::PendingPageCommand::from_inspector_main_route(route);
     let completion = pending.wait().await?;
-    let snapshot = page
-        .finish_document_node_snapshot_for_document(completion)?
+    page.observe_renderer_page_state(completion.page_state());
+    let snapshot = completion
+        .finish_document_node_snapshot_for_document()?
         .context("renderer live document snapshot should exist")?;
     Ok(snapshot.snapshot)
 }

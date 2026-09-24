@@ -61,7 +61,6 @@ pub(crate) enum CurrentChildDocumentLoadApplication {
         body_activity: crate::native_bridge::ChildDocumentLoadBodyActivity,
     },
     SupersededDuringApplication {
-        historical_network_recorded: bool,
         body_activity: crate::native_bridge::ChildDocumentLoadBodyActivity,
     },
 }
@@ -75,10 +74,6 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            let output_effect = PageResourceCompletionOutputEffect::capture_if(
-                self.vm_mut()
-                    .record_historical_child_document_load_network(&completion),
-            );
             if owner.root_document() == self.document_lifecycle.identity().document {
                 self.vm_mut()
                     .discard_stale_child_document_load_completion(completion.target());
@@ -87,7 +82,7 @@ impl PageVm {
                 source,
                 owner,
                 current_owner,
-                output_effect,
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
@@ -112,7 +107,6 @@ impl PageVm {
                 }
             },
             CurrentChildDocumentLoadApplication::SupersededDuringApplication {
-                historical_network_recorded,
                 body_activity,
             } => match body_activity {
                 crate::native_bridge::ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch => {
@@ -120,7 +114,7 @@ impl PageVm {
                         source,
                         owner,
                         self.current_page_resource_completion_owner(owner),
-                        PageResourceCompletionOutputEffect::capture_if(historical_network_recorded),
+                        PageResourceCompletionOutputEffect::CaptureRequired,
                     )
                 }
                 crate::native_bridge::ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch => {
@@ -128,7 +122,7 @@ impl PageVm {
                         source,
                         owner,
                         self.current_page_resource_completion_owner(owner),
-                        PageResourceCompletionOutputEffect::capture_if(historical_network_recorded),
+                        PageResourceCompletionOutputEffect::CaptureRequired,
                     )
                 }
             },

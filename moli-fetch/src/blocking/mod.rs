@@ -26,7 +26,8 @@ pub(crate) use self::cache::{
     finish_streaming_cached_response, load_cached_streaming_response_lookup,
     merge_cached_not_modified_streaming_response_lookup, next_followed_redirect_url_from_parts,
     next_redirect_url_from_parts, remove_cached_response, response_headers_forbid_cache_storage,
-    validation_headers_for_cached_streaming_response_lookup,
+    validation_headers_for_cached_streaming_response_lookup, vary_headers_for_response,
+    vary_headers_match,
 };
 pub use self::cache::{
     clear_http_cache, clear_http_cache_for_origin, clear_http_cache_root,
@@ -221,9 +222,6 @@ fn outgoing_request_header_bytes_for_url(
         && let Some((username, password)) =
             request.preemptive_server_basic_auth_for_url(request_url)
     {
-        // Basic auth is just a deterministic request header. Sending it
-        // preemptively lets streaming transports avoid libcurl's intermediate
-        // 401 retry body while Digest/NTLM/Negotiate stay on the buffered path.
         outgoing.push((
             "Authorization".to_owned(),
             format!("Basic {}", encode_basic_auth(username, password)).into_bytes(),
@@ -231,12 +229,11 @@ fn outgoing_request_header_bytes_for_url(
     }
 
     if let Some(auth) = request.auth()
-        && auth.target == RequestAuthTarget::Server
-        && auth.scheme == RequestAuthScheme::Basic
-        && !header_present(&outgoing, "authorization")
+        && auth.target == RequestAuthTarget::ProxyHeader
+        && !header_present(&outgoing, "proxy-authorization")
     {
         outgoing.push((
-            "Authorization".to_owned(),
+            "Proxy-Authorization".to_owned(),
             format!(
                 "Basic {}",
                 encode_basic_auth(&auth.username, &auth.password)
@@ -718,9 +715,7 @@ pub(crate) fn configure_easy(
             .context("failed to suppress curl default content-type")?;
     }
 
-    if let Some(auth) = request.auth()
-        && request.auth_requires_buffered_transport()
-    {
+    if let Some(auth) = request.curl_auth_for_url(request_url) {
         let mut methods = Auth::new();
         match auth.scheme {
             RequestAuthScheme::Basic => {

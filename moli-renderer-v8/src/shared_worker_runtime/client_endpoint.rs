@@ -1,8 +1,12 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use moli_shared_worker::{SharedWorkerClientId, SharedWorkerClientOwnerId};
+use moli_shared_worker::SharedWorkerClientId;
 
-use crate::{document_runtime::DomHandle, runtime::RendererBrowserContextRuntime};
+use crate::{
+    document_runtime::DomHandle,
+    native_bridge::{OwnerDispatchScope, WindowExecutionContextIdentity},
+    runtime::RendererBrowserContextRuntime,
+};
 
 use super::client::SharedWorkerClientEndpointDisposition;
 
@@ -43,26 +47,13 @@ pub(crate) struct SharedWorkerClientEndpointOwner {
     endpoints: HashMap<SharedWorkerClientId, SharedWorkerClientEndpoint>,
 }
 
-/// Renderer-local identity for the frame/context that owns a SharedWorker
-/// client endpoint.
-///
-/// Chromium uses `GlobalRenderFrameHostId` when aggregating SharedWorker client
-/// observer state. Moli does not have RenderFrameHost, so this stores the
-/// matching page or child browsing-context identity next to the neutral owner
-/// id used by the shared registry.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SharedWorkerClientFrameIdentity {
-    owner_id: SharedWorkerClientOwnerId,
-    execution_context: crate::native_bridge::WindowExecutionContextIdentity,
-}
-
 /// Renderer-local equivalent of Chromium's per-window SharedWorker client
 /// receiver. Dropping or explicitly disconnecting it removes the runtime
 /// client; runtime-originated terminal events disarm it first because the
 /// runtime state transition has already consumed that client.
 pub(crate) struct SharedWorkerClientEndpointReceiver {
     client_id: SharedWorkerClientId,
-    frame_identity: SharedWorkerClientFrameIdentity,
+    execution_context: WindowExecutionContextIdentity,
     browser_context_runtime: Option<RendererBrowserContextRuntime>,
 }
 
@@ -74,22 +65,18 @@ struct SharedWorkerClientEndpoint {
 impl SharedWorkerClientEndpointReceiver {
     pub(crate) fn new(
         client_id: SharedWorkerClientId,
-        frame_identity: SharedWorkerClientFrameIdentity,
+        execution_context: WindowExecutionContextIdentity,
         browser_context_runtime: RendererBrowserContextRuntime,
     ) -> Self {
         Self {
             client_id,
-            frame_identity,
+            execution_context,
             browser_context_runtime: Some(browser_context_runtime),
         }
     }
 
     fn client_id(&self) -> SharedWorkerClientId {
         self.client_id
-    }
-
-    fn frame_identity(&self) -> SharedWorkerClientFrameIdentity {
-        self.frame_identity
     }
 
     fn disconnect(mut self) {
@@ -100,47 +87,6 @@ impl SharedWorkerClientEndpointReceiver {
 
     fn forget_after_runtime_terminal(mut self) {
         self.browser_context_runtime.take();
-    }
-}
-
-impl SharedWorkerClientFrameIdentity {
-    pub(crate) fn new(
-        owner_id: SharedWorkerClientOwnerId,
-        execution_context: crate::native_bridge::WindowExecutionContextIdentity,
-    ) -> Self {
-        Self {
-            owner_id,
-            execution_context,
-        }
-    }
-
-    pub(crate) fn owner_id(self) -> SharedWorkerClientOwnerId {
-        self.owner_id
-    }
-
-    pub(crate) fn owner_dispatch_scope(self) -> crate::native_bridge::OwnerDispatchScope {
-        self.execution_context.dispatch_scope()
-    }
-
-    pub(crate) fn execution_context(self) -> crate::native_bridge::WindowExecutionContextIdentity {
-        self.execution_context
-    }
-
-    pub(crate) fn is_child_context(self, handle: DomHandle) -> bool {
-        matches!(
-            self.execution_context.dispatch_scope(),
-            crate::native_bridge::OwnerDispatchScope::Child(child_handle)
-                if child_handle == handle
-        )
-    }
-
-    #[cfg(test)]
-    fn child_handle(self) -> Option<DomHandle> {
-        match self.execution_context.dispatch_scope() {
-            crate::native_bridge::OwnerDispatchScope::Child(handle) => Some(handle),
-            crate::native_bridge::OwnerDispatchScope::Top
-            | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => None,
-        }
     }
 }
 
@@ -178,7 +124,7 @@ impl SharedWorkerClientEndpointOwner {
     )> {
         self.endpoints.get(&client_id).map(|endpoint| {
             (
-                endpoint.receiver.frame_identity().owner_dispatch_scope(),
+                endpoint.receiver.execution_context.dispatch_scope(),
                 v8::Local::new(scope, &endpoint.wrapper),
             )
         })
@@ -190,7 +136,7 @@ impl SharedWorkerClientEndpointOwner {
     ) -> Option<crate::native_bridge::WindowExecutionContextIdentity> {
         self.endpoints
             .get(&client_id)
-            .map(|endpoint| endpoint.receiver.frame_identity().execution_context())
+            .map(|endpoint| endpoint.receiver.execution_context)
     }
 
     fn assert_authorized_identity(
@@ -256,88 +202,54 @@ impl SharedWorkerClientEndpointOwner {
         true
     }
 
-    fn disconnect_endpoint(&mut self, client_id: SharedWorkerClientId) -> bool {
-        let Some(endpoint) = self.endpoints.remove(&client_id) else {
-            return false;
-        };
-        endpoint.receiver.disconnect();
-        true
-    }
-
-    pub(crate) fn disconnect_all_for_context_teardown(&mut self) {
-        let client_ids = self.endpoints.keys().copied().collect::<Vec<_>>();
-        for client_id in client_ids {
-            self.disconnect_endpoint(client_id);
-        }
-    }
-
-    pub(crate) fn disconnect_all_for_child_context(&mut self, handle: DomHandle) -> usize {
-        let client_ids = self
+    fn disconnect_where(
+        &mut self,
+        matches: impl Fn(WindowExecutionContextIdentity) -> bool,
+    ) -> usize {
+        let clients = self
             .endpoints
             .iter()
-            .filter_map(|(client_id, endpoint)| {
-                endpoint
-                    .receiver
-                    .frame_identity()
-                    .is_child_context(handle)
-                    .then_some(*client_id)
+            .filter_map(|(id, endpoint)| {
+                matches(endpoint.receiver.execution_context).then_some(*id)
             })
             .collect::<Vec<_>>();
-        let mut disconnected = 0;
-        for client_id in client_ids {
-            if self.disconnect_endpoint(client_id) {
-                disconnected += 1;
+        let disconnected = clients.len();
+        for client in clients {
+            if let Some(endpoint) = self.endpoints.remove(&client) {
+                endpoint.receiver.disconnect();
             }
         }
         disconnected
+    }
+
+    pub(crate) fn disconnect_all_for_context_teardown(&mut self) {
+        self.disconnect_where(|_| true);
+    }
+
+    pub(crate) fn disconnect_all_for_child_context(&mut self, handle: DomHandle) -> usize {
+        self.disconnect_where(|identity| {
+            identity.dispatch_scope() == OwnerDispatchScope::Child(handle)
+        })
+    }
+
+    pub(crate) fn disconnect_inactive_child_contexts(&mut self, live_handles: &HashSet<DomHandle>) {
+        self.disconnect_where(|identity| {
+            matches!(identity.dispatch_scope(), OwnerDispatchScope::Child(handle) if !live_handles.contains(&handle))
+        });
     }
 
     pub(crate) fn disconnect_all_for_execution_context_owner(
         &mut self,
         owner: crate::native_bridge::WindowExecutionContextOwner,
     ) -> usize {
-        let client_ids = self
-            .endpoints
-            .iter()
-            .filter_map(|(client_id, endpoint)| {
-                (endpoint
-                    .receiver
-                    .frame_identity()
-                    .execution_context()
-                    .owner()
-                    == owner)
-                    .then_some(*client_id)
-            })
-            .collect::<Vec<_>>();
-        let disconnected = client_ids.len();
-        for client_id in client_ids {
-            self.disconnect_endpoint(client_id);
-        }
-        disconnected
+        self.disconnect_where(|identity| identity.owner() == owner)
     }
 
     pub(crate) fn disconnect_all_for_context_token(
         &mut self,
         context_token: crate::native_bridge::RuntimeObservableContextToken,
     ) -> usize {
-        let client_ids = self
-            .endpoints
-            .iter()
-            .filter_map(|(client_id, endpoint)| {
-                (endpoint
-                    .receiver
-                    .frame_identity()
-                    .execution_context()
-                    .realm_token()
-                    == context_token)
-                    .then_some(*client_id)
-            })
-            .collect::<Vec<_>>();
-        let disconnected = client_ids.len();
-        for client_id in client_ids {
-            self.disconnect_endpoint(client_id);
-        }
-        disconnected
+        self.disconnect_where(|identity| identity.realm_token() == context_token)
     }
 
     #[cfg(test)]
@@ -354,12 +266,7 @@ impl SharedWorkerClientEndpointOwner {
     )> {
         self.endpoints
             .iter()
-            .map(|(client_id, endpoint)| {
-                (
-                    *client_id,
-                    endpoint.receiver.frame_identity().execution_context(),
-                )
-            })
+            .map(|(client_id, endpoint)| (*client_id, endpoint.receiver.execution_context))
             .collect()
     }
 }
@@ -367,13 +274,11 @@ impl SharedWorkerClientEndpointOwner {
 #[cfg(test)]
 mod tests {
     use moli_shared_worker::{
-        SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerConnectAction,
-        SharedWorkerDescriptor,
+        SharedWorkerClientId, SharedWorkerConnectAction, SharedWorkerDescriptor,
     };
 
     use crate::{
         broadcast_channel_runtime::new_broadcast_channel_registry,
-        document_runtime::DomHandle,
         message_port_runtime::new_message_port_registry,
         native_bridge::{
             OwnerDispatchScope, RuntimeObservableContextToken, WindowExecutionContextAccessPolicy,
@@ -382,7 +287,7 @@ mod tests {
         runtime::{RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner},
     };
 
-    use super::{SharedWorkerClientEndpointReceiver, SharedWorkerClientFrameIdentity};
+    use super::SharedWorkerClientEndpointReceiver;
     use crate::shared_worker_runtime::{service::SharedWorkerRuntimeService, test_support};
 
     fn runtime_for_service(
@@ -392,6 +297,7 @@ mod tests {
             new_message_port_registry(),
             new_broadcast_channel_registry(),
             service,
+            crate::network::RendererResourceTaskRunner::for_test(),
         )
     }
 
@@ -407,21 +313,17 @@ mod tests {
         }
     }
 
-    fn frame_identity(
-        owner_id: SharedWorkerClientOwnerId,
+    fn execution_context(
         dispatch_scope: OwnerDispatchScope,
         realm_token: u64,
-    ) -> SharedWorkerClientFrameIdentity {
-        SharedWorkerClientFrameIdentity::new(
-            owner_id,
-            WindowExecutionContextIdentity::new(
-                WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(
-                    realm_token,
-                )),
-                dispatch_scope,
-                RuntimeObservableContextToken::from_raw(realm_token),
-                WindowExecutionContextAccessPolicy::EnforceWebOrigin,
-            ),
+    ) -> WindowExecutionContextIdentity {
+        WindowExecutionContextIdentity::new(
+            WindowExecutionContextOwner::Frame(crate::frame_owner_model::LocalWindowId(
+                realm_token,
+            )),
+            dispatch_scope,
+            RuntimeObservableContextToken::from_raw(realm_token),
+            WindowExecutionContextAccessPolicy::EnforceWebOrigin,
         )
     }
 
@@ -434,11 +336,7 @@ mod tests {
         {
             let _receiver = SharedWorkerClientEndpointReceiver::new(
                 client_id,
-                frame_identity(
-                    SharedWorkerClientOwnerId::from_u64(100),
-                    OwnerDispatchScope::Top,
-                    1,
-                ),
+                execution_context(OwnerDispatchScope::Top, 1),
                 runtime.clone(),
             );
         }
@@ -454,11 +352,7 @@ mod tests {
         let client_id = start_loading_client(&service);
         let receiver = SharedWorkerClientEndpointReceiver::new(
             client_id,
-            frame_identity(
-                SharedWorkerClientOwnerId::from_u64(100),
-                OwnerDispatchScope::Top,
-                1,
-            ),
+            execution_context(OwnerDispatchScope::Top, 1),
             runtime.clone(),
         );
 
@@ -466,20 +360,5 @@ mod tests {
 
         assert!(!test_support::matching_is_empty(&service));
         drop(runtime);
-    }
-
-    #[test]
-    fn frame_identity_tracks_child_context_handle_with_owner() {
-        let owner_id = SharedWorkerClientOwnerId::from_u64(100);
-        let handle = DomHandle::new(7);
-        let identity = frame_identity(owner_id, OwnerDispatchScope::Child(handle), 7);
-
-        assert_eq!(identity.owner_id(), owner_id);
-        assert_eq!(identity.child_handle(), Some(handle));
-        assert!(identity.is_child_context(handle));
-        assert_ne!(
-            identity,
-            frame_identity(owner_id, OwnerDispatchScope::Top, 8)
-        );
     }
 }

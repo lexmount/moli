@@ -1,12 +1,11 @@
 use std::ops::{Deref, DerefMut};
 
-use super::{ScriptVm, ScriptVmBootstrapError, ScriptVmDefaultWorldBootstrap};
+use super::{
+    MainDocumentBootstrap, ScriptVm, ScriptVmBootstrapError, ScriptVmDefaultWorldBootstrap,
+};
 use crate::{
     dom::native::DomHost,
-    network::{
-        RendererResourceTaskRunner, ResourceRequestClient, ResourceRequestClientOwner,
-        context::DocumentResourceLoaderBootstrap,
-    },
+    network::{RendererResourceTaskRunner, ResourceRequestClient, ResourceRequestClientOwner},
     page_task_queue::{PageTask, RendererResourceCompletionSender, RuntimePageTaskSender},
     runtime::{RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner},
 };
@@ -93,7 +92,7 @@ impl ScriptVmDefaultWorldBootstrap {
             bootstrap_dom_host,
             page_task_tx,
             page_task_parser_boundary_injection_tx,
-            RendererResourceCompletionSender::direct_completion_only(),
+            RendererResourceCompletionSender::closed_for_test(),
         )
     }
 
@@ -105,7 +104,7 @@ impl ScriptVmDefaultWorldBootstrap {
     ) -> Result<StandaloneScriptVmBootstrapHarness, ScriptVmBootstrapError> {
         let resource_loader_owner = ResourceRequestClient::new(&moli_fetch::FetchConfig::default())
             .expect("standalone test loader");
-        let browser_context_owner = RendererBrowserContextRuntime::new();
+        let browser_context_owner = RendererBrowserContextRuntime::new_for_test();
         Self::standalone_from_dom_host_with_resource_environment_for_test(
             bootstrap_dom_host,
             page_task_tx,
@@ -132,7 +131,7 @@ impl ScriptVmDefaultWorldBootstrap {
         resource_completion_tx: RendererResourceCompletionSender,
         resource_loader: ResourceRequestClient,
     ) -> Result<StandaloneScriptVmBootstrapHarness, ScriptVmBootstrapError> {
-        let browser_context_owner = RendererBrowserContextRuntime::new();
+        let browser_context_owner = RendererBrowserContextRuntime::new_for_test();
         Self::standalone_from_dom_host_with_resource_environment_for_test(
             bootstrap_dom_host,
             page_task_tx,
@@ -173,9 +172,11 @@ impl ScriptVmDefaultWorldBootstrap {
             }
         };
         let build_bootstrap = || {
-            let initial_document_loader_bootstrap = DocumentResourceLoaderBootstrap::new(
+            let initial_document_loader_bootstrap = MainDocumentBootstrap::new(
+                &bootstrap_dom_host,
                 resource_loader.clone(),
                 resource_task_runner.clone(),
+                &browser_context_runtime,
             );
             Self::standalone_from_dom_host_with_resource_completion_sender_and_browser_context_runtime_for_test_with_current_runtime(
                 bootstrap_dom_host,

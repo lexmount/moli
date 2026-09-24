@@ -9,14 +9,13 @@ use std::time::Duration;
 
 use super::conn::{
     BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition,
-    CdpSchedulerEvent, CommandDispatchContext, CommandResponseFlushPermit,
-    LoadedNavigationRendererAttachmentCommit, ParsedCdpCommand, PendingCdpCommandDispatch,
-    RuntimeInspectorResponseReady,
+    CdpSchedulerEvent, CommandDispatchContext, CommandResponseFlushPermit, ParsedCdpCommand,
+    PendingCdpCommandDispatch, RuntimeInspectorResponseReady,
 };
 use crate::devtools_runtime::{DevToolsCommand, DevToolsCommandResult, DevToolsError};
 use crate::domains::activity::{
-    ProtocolSchedulerWork, ProtocolSchedulerWorkKind, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    ProtocolSchedulerWork, RendererCommandResponseCompletion, RendererCommandResponseOrder,
+    RendererCommandResponsePermit,
 };
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputFence, RendererOutputStreamControl,
@@ -43,35 +42,72 @@ pub struct TestContext {
     pub sent: Vec<Value>,
     pending_runtime_deferred_replies: VecDeque<PendingTestRuntimeDeferredReply>,
     pending_protocol_scheduler_work: VecDeque<ProtocolSchedulerWork>,
-    runtime_command_output_barriers: RuntimeCommandOutputBarriers,
+    renderer_command_response_order: RendererCommandResponseOrder,
     runtime_inspector_response_ready_rx:
         tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
     renderer_publication_rx: moli_core::RendererOutputTransportReceiver,
     background_event_tx: tokio::sync::mpsc::UnboundedSender<BackgroundProtocolEvent>,
     background_event_rx: tokio::sync::mpsc::UnboundedReceiver<BackgroundProtocolEvent>,
-    background_navigation_completion_tx:
-        tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
-    background_navigation_completion_rx:
-        tokio::sync::mpsc::UnboundedReceiver<crate::domains::page::BackgroundNavigationCompletion>,
-    background_navigation_scheduler_enabled: bool,
+    background_events_enabled: bool,
+    browser_event_rx: Option<moli_core::browser::BrowserEventReceiver>,
 }
 
 struct PendingTestRuntimeDeferredReply {
     pending: PendingCdpCommandDispatch,
     command_context: CommandDispatchContext,
-    runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+    renderer_response_permit: Option<RendererCommandResponsePermit>,
+}
+
+impl CdpConnection {
+    /// Builds and commits a test document through the exact Browser owner
+    /// selected by `session_id`. The returned fence is the last renderer
+    /// publication that must cross protocol ingress before a later command.
+    pub(crate) async fn install_navigation_fixture_for_session_owner_for_test(
+        &mut self,
+        raw_url: &str,
+        session_id: Option<&str>,
+    ) -> Option<RendererOutputFence> {
+        self.commit_declared_session_fixtures_for_test();
+        let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
+        self.install_navigation_fixture_for_owner_for_test(raw_url, &owner)
+            .await
+    }
+
+    pub(crate) async fn install_navigation_fixture_for_owner_for_test(
+        &mut self,
+        raw_url: &str,
+        owner: &crate::conn::CommandOwnerScope,
+    ) -> Option<RendererOutputFence> {
+        let waiter = self
+            .start_native_navigation_fixture_for_test(
+                owner,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    url::Url::parse(raw_url).expect("fixture URL"),
+                    "GET".into(),
+                    None,
+                    Vec::new().into(),
+                    crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                ),
+                moli_core::browser::NavigationDecision::Continue,
+            )
+            .expect("navigation fixture must start on its exact Browser owner");
+        self.finish_native_navigation_fixture_for_test(waiter)
+            .await
+            .expect("native fixture navigation should load")
+            .1
+    }
 }
 
 impl PendingTestRuntimeDeferredReply {
     fn new(
         pending: PendingCdpCommandDispatch,
         command_context: CommandDispatchContext,
-        runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+        renderer_response_permit: Option<RendererCommandResponsePermit>,
     ) -> Self {
         Self {
             pending,
             command_context,
-            runtime_output_barrier,
+            renderer_response_permit,
         }
     }
 
@@ -84,17 +120,16 @@ enum TestSchedulerWork {
     ProtocolEvents(Vec<BackgroundProtocolEvent>),
     SchedulerEvents(Vec<CdpSchedulerEvent>),
     BackgroundEvent(BackgroundProtocolEvent),
-    BackgroundNavigationCompletion(crate::domains::page::BackgroundNavigationCompletion),
     RuntimeDeferredReplyReady(RuntimeInspectorResponseReady),
     RendererPublication(RendererOutputTransportMessage),
-    ReleaseRuntimeOutputBarrier(RuntimeCommandOutputBarrierPermit),
-    CancelRuntimeOutputBarrier(RuntimeCommandOutputBarrierPermit),
+    ReleaseRendererResponsePermit(RendererCommandResponsePermit),
+    CancelRendererResponsePermit(RendererCommandResponsePermit),
 }
 
 #[must_use = "the held test command response must be released exactly once"]
 pub(crate) struct TestCommandResponseFlushPermit {
     response_flush: CommandResponseFlushPermit,
-    runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+    renderer_response_permit: Option<RendererCommandResponsePermit>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,9 +141,39 @@ enum TestSchedulerTurnOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TestSchedulerInputKind {
     BackgroundEvent,
-    BackgroundNavigationCompletion,
     RuntimeDeferredReply,
     RendererPublication,
+    NativeDownload,
+}
+
+fn is_native_browser_input(event: &moli_core::browser::BrowserEvent) -> bool {
+    use moli_core::browser::BrowserEvent;
+    matches!(
+        event,
+        BrowserEvent::DownloadCreated(_)
+            | BrowserEvent::DownloadUpdated(_)
+            | BrowserEvent::NavigationAwaitingDecision(_)
+            | BrowserEvent::InitialDocumentAwaitingInspection { .. }
+            | BrowserEvent::InitialDocumentConstructionFailed { .. }
+            | BrowserEvent::NavigationResponseChanged(_)
+            | BrowserEvent::DocumentCommitted(_)
+            | BrowserEvent::NavigationStarted(_)
+            | BrowserEvent::NavigationFailed { .. }
+    )
+}
+
+async fn recv_native_browser_input(
+    receiver: &mut Option<moli_core::browser::BrowserEventReceiver>,
+) -> Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError> {
+    let Some(receiver) = receiver.as_mut() else {
+        return std::future::pending().await;
+    };
+    loop {
+        let event = receiver.recv().await?.event;
+        if is_native_browser_input(&event) {
+            return Ok(event);
+        }
+    }
 }
 
 impl Default for TestContext {
@@ -133,7 +198,7 @@ fn real_layout_test_runtime_config(
 }
 
 pub(crate) fn real_layout_test_connection() -> CdpConnection {
-    CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+    crate::test_support::connection_with_config(
         CdpInitialStoragePartition::memory(),
         real_layout_test_runtime_config(OptionalResourceFetchMask::NONE),
     )
@@ -145,7 +210,7 @@ impl TestContext {
     /// Historically those tests treated `Target.targetCreated` as a baseline
     /// event after `Target.createTarget`. Real CDP clients only receive target
     /// discovery events after enabling discovery, so keep that convenience in
-    /// `TestContext` instead of changing `CdpConnection::new()`.
+    /// `TestContext` instead of changing `crate::test_support::connection()`.
     pub fn new() -> Self {
         Self::new_with_target_discovery(true)
     }
@@ -163,7 +228,7 @@ impl TestContext {
     }
 
     pub fn new_with_layout_policy(layout_policy: LayoutPolicy) -> Self {
-        let conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        let conn = crate::test_support::connection_with_config(
             CdpInitialStoragePartition::memory(),
             NavigationRuntimeConfig::new(
                 FetchConfig::default(),
@@ -193,7 +258,7 @@ impl TestContext {
         target_discovery_enabled: bool,
         optional_resource_fetch_mask: OptionalResourceFetchMask,
     ) -> Self {
-        let mut conn = CdpConnection::new_with_initial_storage_partition_and_runtime_config(
+        let mut conn = crate::test_support::connection_with_config(
             CdpInitialStoragePartition::memory(),
             real_layout_test_runtime_config(optional_resource_fetch_mask),
         );
@@ -204,47 +269,37 @@ impl TestContext {
     pub fn from_conn(mut conn: CdpConnection) -> Self {
         let (renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
-        let (runtime_inspector_response_ready_tx, runtime_inspector_response_ready_rx) =
-            tokio::sync::mpsc::unbounded_channel();
+        let runtime_inspector_response_ready_rx = conn
+            .bind_runtime_inspector_response_ready()
+            .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (background_navigation_completion_tx, background_navigation_completion_rx) =
-            tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
-        conn.set_runtime_inspector_response_ready_sender(runtime_inspector_response_ready_tx);
+        let browser_event_rx = Some(conn.subscribe_browser_events().unwrap().1);
         Self {
             conn,
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
+            renderer_command_response_order: RendererCommandResponseOrder::default(),
             runtime_inspector_response_ready_rx,
             renderer_publication_rx,
             background_event_tx,
             background_event_rx,
-            background_navigation_completion_tx,
-            background_navigation_completion_rx,
-            background_navigation_scheduler_enabled: false,
+            background_events_enabled: false,
+            browser_event_rx,
         }
     }
 
-    /// Enables the same asynchronous navigation channels used by the socket
-    /// scheduler.
-    ///
-    /// Most protocol unit tests intentionally dispatch a domain command to
-    /// completion without owning an actor. Chromium-ordering and lifecycle
-    /// tests must opt into this production boundary: Page.navigate emits its
-    /// start/early response first, while the later renderer Page commit arrives
-    /// independently and is joined by its exact concrete-output cursor.
-    pub(crate) fn enable_background_navigation_scheduler_for_test(&mut self) {
-        if self.background_navigation_scheduler_enabled {
+    /// Routes asynchronous protocol events through the socket scheduler's FIFO.
+    /// Native Browser work and renderer publication are always observed; this
+    /// opt-in controls only the background event sender used by domain tests.
+    pub(crate) fn enable_background_event_ingress_for_test(&mut self) {
+        if self.background_events_enabled {
             return;
         }
         self.conn
             .set_background_event_sender(self.background_event_tx.clone());
-        self.conn.set_background_navigation_completion_sender(
-            self.background_navigation_completion_tx.clone(),
-        );
-        self.background_navigation_scheduler_enabled = true;
+        self.background_events_enabled = true;
     }
 
     /// Loads and installs one production-shaped navigation fixture for the
@@ -261,13 +316,27 @@ impl TestContext {
         raw_url: &str,
         session_id: Option<&str>,
     ) {
-        self.conn.commit_declared_session_fixtures_for_test();
-        let navigation = self
+        let predecessor = self
             .conn
-            .load_navigation_via_runtime_for_session_owner_async(session_id, raw_url)
-            .await
-            .expect("navigation fixture should load");
-        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
+            .install_navigation_fixture_for_session_owner_for_test(raw_url, session_id)
+            .await;
+        if let Some(predecessor) = predecessor {
+            self.route_renderer_output_predecessor_before_command_response(predecessor)
+                .await;
+        }
+    }
+
+    /// Installs a fully routed Document as test setup without exposing that
+    /// fixture's lifecycle as output of the next command under test.
+    pub(crate) async fn install_quiet_navigation_fixture_for_session_owner(
+        &mut self,
+        raw_url: &str,
+        session_id: Option<&str>,
+    ) {
+        let sent_start = self.sent.len();
+        self.install_navigation_fixture_for_session_owner(raw_url, session_id)
+            .await;
+        self.fence_and_discard_navigation_fixture_output(sent_start, session_id)
             .await;
     }
 
@@ -286,80 +355,32 @@ impl TestContext {
         session_id: Option<&str>,
     ) {
         self.conn.commit_declared_session_fixtures_for_test();
-        let navigation = self
-            .conn
-            .build_loaded_navigation_from_buffered_response_for_session_owner_async(
-                session_id,
-                requested_url,
-                "GET".into(),
-                Vec::new().into(),
-                200,
-                Vec::new(),
-                response_body,
-            )
-            .await
-            .expect("buffered navigation fixture should build");
-        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
-            .await;
-    }
-
-    async fn install_loaded_navigation_fixture_for_session_owner(
-        &mut self,
-        navigation: crate::conn::LoadedNavigation,
-        session_id: Option<&str>,
-    ) {
         let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
-        let (_, target_id) = self
+        let waiter = self
             .conn
-            .target_owner_identity_for_owner(&owner)
-            .expect("navigation fixture requires an installed browser context");
-        let target_id = target_id.expect("navigation fixture requires an exact target");
-        let renderer_output_predecessor = navigation.renderer_output_predecessor;
-        let page_creation_artifacts = navigation.page_creation_artifacts;
-        let final_url = navigation.final_url;
-        let main_document_commit = navigation
-            .main_document_commit
-            .expect("navigation fixture must retain its frozen Document commit identity");
-        let page_commit = self
-            .conn
-            .commit_loaded_navigation_page_for_owner_async(
+            .start_native_navigation_fixture_for_test(
                 &owner,
-                navigation.page,
-                LoadedNavigationRendererAttachmentCommit::Prepare(None),
-                &final_url,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    requested_url,
+                    "GET".into(),
+                    None,
+                    Vec::new().into(),
+                    crate::conn::NavigationRequestLoadPolicy::DocumentInitiated,
+                ),
+                moli_core::browser::NavigationDecision::Fulfill {
+                    status: 200,
+                    headers: Vec::new(),
+                    body: response_body.into_bytes(),
+                },
             )
-            .await
-            .expect("navigation fixture target must remain installed")
-            .expect("navigation fixture Page commit must succeed");
-        assert!(
-            page_commit
-                .committed_document_post_response_continuation
-                .is_none(),
-            "lifecycle-target fixture must not retain a DocumentCommit response gate"
-        );
-        let _ = self
+            .expect("buffered navigation fixture should start");
+        let predecessor = self
             .conn
-            .commit_loaded_navigation_target_identity_for_owner(
-                &owner,
-                &main_document_commit,
-                &final_url,
-            );
-        let (binding, _) = self.conn.bind_renderer_document_lifecycle_for_owner(
-            &owner,
-            page_creation_artifacts,
-            None,
-            target_id,
-            crate::domains::page::LOADER_ID.to_owned(),
-        );
-        let binding =
-            binding.expect("navigation fixture must install its exact renderer Document binding");
-        assert_eq!(
-            self.conn
-                .target_root_document_lifecycle_identity_for_owner(&owner,),
-            Some(binding.renderer_document_identity()),
-            "navigation fixture must retain its exact renderer Document binding"
-        );
-        if let Some(predecessor) = renderer_output_predecessor {
+            .finish_native_navigation_fixture_for_test(waiter)
+            .await
+            .expect("buffered navigation fixture should load")
+            .1;
+        if let Some(predecessor) = predecessor {
             // Production does not expose a completed navigation response until
             // the Page-creation cursor has crossed ordered protocol ingress.
             // Mirror that boundary here so a later enable command observes
@@ -368,6 +389,45 @@ impl TestContext {
             self.route_renderer_output_predecessor_before_command_response(predecessor)
                 .await;
         }
+    }
+
+    async fn fence_and_discard_navigation_fixture_output(
+        &mut self,
+        sent_start: usize,
+        session_id: Option<&str>,
+    ) {
+        // The build reply may precede the renderer's load continuation. First
+        // observe protocol-visible load on this exact Document, then fence its
+        // published tail; native progress alone does not drain protocol ingress.
+        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
+        let document = self
+            .conn
+            .resolve_browser_document_for_owner(&owner)
+            .expect("navigation fixture must retain its committed Document");
+        self.wait_until_scheduler_state("navigation fixture Document load", |conn| {
+            assert_eq!(
+                conn.resolve_browser_document_for_owner(&owner),
+                Ok(document)
+            );
+            conn.renderer_document_lifecycle_visible_state_for_session_owner(session_id)
+                .is_some_and(|(_, snapshot)| snapshot.load.is_some())
+        })
+        .await;
+        let completed = self
+            .conn
+            .start_document_diagnostics_snapshot(document)
+            .expect("navigation fixture Document must accept a diagnostics barrier")
+            .wait()
+            .await;
+        let predecessor = completed.renderer_output_predecessor();
+        self.conn
+            .finish_document_diagnostics_snapshot(completed)
+            .expect("navigation fixture diagnostics barrier must finish on the same Document");
+        if let Some(predecessor) = predecessor {
+            self.route_renderer_output_predecessor_before_command_response(predecessor)
+                .await;
+        }
+        self.sent.truncate(sent_start);
     }
 
     /// Feed a JSON-serialisable message through the async CDP entrypoint and
@@ -547,8 +607,9 @@ impl TestContext {
         let mut command_context = CommandDispatchContext::new(response_flush_context);
         let step = self
             .conn
-            .start_parsed_command_dispatch_with_context(&command, &mut command_context);
-        let mut runtime_output_barrier = self.admit_runtime_output_barrier(&command);
+            .start_parsed_command_dispatch_with_context(&command, &mut command_context)
+            .into();
+        let mut renderer_response_permit = self.admit_renderer_response_permit(&command);
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let completed = Box::pin(self.complete_command_step_like_scheduler(
@@ -556,7 +617,7 @@ impl TestContext {
             &mut command_context,
             &mut protocol_events,
             &mut scheduler_events,
-            &mut runtime_output_barrier,
+            &mut renderer_response_permit,
         ))
         .await;
         assert!(
@@ -570,7 +631,7 @@ impl TestContext {
         Box::pin(self.route_ready_test_command_response(command_id, response_start)).await;
         TestCommandResponseFlushPermit {
             response_flush: response_flush_permit,
-            runtime_output_barrier,
+            renderer_response_permit,
         }
     }
 
@@ -585,9 +646,12 @@ impl TestContext {
         permit: TestCommandResponseFlushPermit,
     ) {
         permit.response_flush.finish();
-        if let Some(runtime_output_barrier) = permit.runtime_output_barrier {
+        if let Some(renderer_response_permit) = permit.renderer_response_permit {
             Box::pin(
-                self.release_runtime_output_barrier_like_scheduler(runtime_output_barrier, true),
+                self.release_renderer_response_permit_like_scheduler(
+                    renderer_response_permit,
+                    true,
+                ),
             )
             .await;
         }
@@ -605,13 +669,13 @@ impl TestContext {
         };
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
-        let mut runtime_output_barrier = None;
+        let mut renderer_response_permit = None;
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
             &mut crate::conn::CommandDispatchContext::default(),
             &mut protocol_events,
             &mut scheduler_events,
-            &mut runtime_output_barrier,
+            &mut renderer_response_permit,
         ))
         .await;
         if completed {
@@ -715,14 +779,15 @@ impl TestContext {
         let mut command_context = crate::conn::CommandDispatchContext::default();
         let step = self
             .conn
-            .start_parsed_command_dispatch_with_context(command, &mut command_context);
-        let mut runtime_output_barrier = self.admit_runtime_output_barrier(command);
+            .start_parsed_command_dispatch_with_context(command, &mut command_context)
+            .into();
+        let mut renderer_response_permit = self.admit_renderer_response_permit(command);
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
             &mut command_context,
             &mut protocol_events,
             &mut scheduler_events,
-            &mut runtime_output_barrier,
+            &mut renderer_response_permit,
         ))
         .await;
 
@@ -742,17 +807,17 @@ impl TestContext {
             Box::pin(self.route_test_scheduler_causal_batch(protocol_events, scheduler_events))
                 .await;
             if completed {
-                if let Some(runtime_output_barrier) = runtime_output_barrier {
-                    Box::pin(self.release_runtime_output_barrier_like_scheduler(
-                        runtime_output_barrier,
+                if let Some(renderer_response_permit) = renderer_response_permit {
+                    Box::pin(self.release_renderer_response_permit_like_scheduler(
+                        renderer_response_permit,
                         true,
                     ))
                     .await;
                 }
             } else {
                 assert!(
-                    runtime_output_barrier.is_none(),
-                    "a pending Runtime command must transfer its output barrier to the pending reply"
+                    renderer_response_permit.is_none(),
+                    "a pending renderer command must transfer its response permit to the pending reply"
                 );
             }
             if !completed && !self.pending_runtime_deferred_replies.is_empty() {
@@ -762,10 +827,10 @@ impl TestContext {
         } else {
             Box::pin(self.route_test_scheduler_causal_batch(protocol_events, Vec::new())).await;
             if completed {
-                if let Some(runtime_output_barrier) = runtime_output_barrier {
+                if let Some(renderer_response_permit) = renderer_response_permit {
                     let mut release_scheduler_events =
-                        Box::pin(self.release_runtime_output_barrier_like_scheduler(
-                            runtime_output_barrier,
+                        Box::pin(self.release_renderer_response_permit_like_scheduler(
+                            renderer_response_permit,
                             false,
                         ))
                         .await;
@@ -773,8 +838,8 @@ impl TestContext {
                 }
             } else {
                 assert!(
-                    runtime_output_barrier.is_none(),
-                    "a pending Runtime command must transfer its output barrier to the pending reply"
+                    renderer_response_permit.is_none(),
+                    "a pending renderer command must transfer its response permit to the pending reply"
                 );
             }
             if !completed && !self.pending_runtime_deferred_replies.is_empty() {
@@ -784,14 +849,14 @@ impl TestContext {
         }
     }
 
-    fn admit_runtime_output_barrier(
+    fn admit_renderer_response_permit(
         &mut self,
         command: &ParsedCdpCommand,
-    ) -> Option<RuntimeCommandOutputBarrierPermit> {
+    ) -> Option<RendererCommandResponsePermit> {
         command
             .runtime_command_executes_page_javascript()
             .then(|| {
-                self.runtime_command_output_barriers.admit(
+                self.renderer_command_response_order.admit(
                     &self.conn,
                     command.request().id(),
                     command.command_output_session_id(),
@@ -806,7 +871,7 @@ impl TestContext {
         command_context: &mut CommandDispatchContext,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
         scheduler_events: &mut Vec<CdpSchedulerEvent>,
-        runtime_output_barrier: &mut Option<RuntimeCommandOutputBarrierPermit>,
+        renderer_response_permit: &mut Option<RendererCommandResponsePermit>,
     ) -> bool {
         loop {
             match step {
@@ -879,7 +944,7 @@ impl TestContext {
                     self.enqueue_pending_runtime_deferred_reply(
                         *pending,
                         std::mem::take(command_context),
-                        runtime_output_barrier.take(),
+                        renderer_response_permit.take(),
                     );
                     return false;
                 }
@@ -894,7 +959,8 @@ impl TestContext {
                         completed,
                         command_context,
                     ))
-                    .await;
+                    .await
+                    .into();
                 }
             }
         }
@@ -1012,15 +1078,15 @@ impl TestContext {
         (self.sent.drain(sent_start..).collect(), scheduler_events)
     }
 
-    async fn release_runtime_output_barrier_like_scheduler(
+    async fn release_renderer_response_permit_like_scheduler(
         &mut self,
-        permit: RuntimeCommandOutputBarrierPermit,
+        permit: RendererCommandResponsePermit,
         route_scheduler_events: bool,
     ) -> Vec<CdpSchedulerEvent> {
         let completion = self
             .conn
-            .release_runtime_command_output_barrier_turn_async(
-                &mut self.runtime_command_output_barriers,
+            .release_renderer_command_response_permit_turn_async(
+                &mut self.renderer_command_response_order,
                 permit,
             )
             .await;
@@ -1036,9 +1102,9 @@ impl TestContext {
         }
     }
 
-    fn enqueue_runtime_output_barrier_completion(
+    fn enqueue_renderer_response_permit_completion(
         &mut self,
-        completion: RuntimeCommandOutputBarrierCompletion,
+        completion: RendererCommandResponseCompletion,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
         let (protocol_events, scheduler_events) =
@@ -1088,7 +1154,7 @@ impl TestContext {
         &mut self,
         mut pending: PendingCdpCommandDispatch,
         command_context: CommandDispatchContext,
-        runtime_output_barrier: Option<RuntimeCommandOutputBarrierPermit>,
+        renderer_response_permit: Option<RendererCommandResponsePermit>,
     ) {
         if let Some(command_id) = pending.command_id()
             && let Some(response_rx) = pending.take_scheduler_deferred_inspector_reply_receiver()
@@ -1113,7 +1179,7 @@ impl TestContext {
             .push_back(PendingTestRuntimeDeferredReply::new(
                 pending,
                 command_context,
-                runtime_output_barrier,
+                renderer_response_permit,
             ));
     }
 
@@ -1132,14 +1198,6 @@ impl TestContext {
                 TestSchedulerWork::BackgroundEvent(event) => {
                     Box::pin(self.route_protocol_events_like_scheduler(vec![event], work)).await;
                 }
-                TestSchedulerWork::BackgroundNavigationCompletion(completion) => {
-                    Box::pin(
-                        self.route_background_navigation_completion_like_scheduler(
-                            completion, work,
-                        ),
-                    )
-                    .await;
-                }
                 TestSchedulerWork::RuntimeDeferredReplyReady(response) => {
                     Box::pin(self.complete_runtime_response_ready_like_scheduler(
                         response,
@@ -1152,25 +1210,25 @@ impl TestContext {
                     Box::pin(self.ingest_renderer_publication_like_scheduler(publication, work))
                         .await;
                 }
-                TestSchedulerWork::ReleaseRuntimeOutputBarrier(permit) => {
+                TestSchedulerWork::ReleaseRendererResponsePermit(permit) => {
                     let completion = self
                         .conn
-                        .release_runtime_command_output_barrier_turn_async(
-                            &mut self.runtime_command_output_barriers,
+                        .release_renderer_command_response_permit_turn_async(
+                            &mut self.renderer_command_response_order,
                             permit,
                         )
                         .await;
-                    self.enqueue_runtime_output_barrier_completion(completion, work);
+                    self.enqueue_renderer_response_permit_completion(completion, work);
                 }
-                TestSchedulerWork::CancelRuntimeOutputBarrier(permit) => {
+                TestSchedulerWork::CancelRendererResponsePermit(permit) => {
                     let completion = self
                         .conn
-                        .cancel_runtime_command_output_barrier_turn_async(
-                            &mut self.runtime_command_output_barriers,
+                        .cancel_renderer_command_response_permit_turn_async(
+                            &mut self.renderer_command_response_order,
                             permit,
                         )
                         .await;
-                    self.enqueue_runtime_output_barrier_completion(completion, work);
+                    self.enqueue_renderer_response_permit_completion(completion, work);
                 }
             }
             self.route_ready_protocol_scheduler_work_for_test_context(work)
@@ -1178,81 +1236,92 @@ impl TestContext {
         }
     }
 
-    async fn route_background_navigation_completion_like_scheduler(
+    async fn project_native_browser_input(
         &mut self,
-        completion: crate::domains::page::BackgroundNavigationCompletion,
-        work: &mut VecDeque<TestSchedulerWork>,
-    ) {
-        // Match the production actor's three-part boundary:
-        //
-        //   already-produced navigation output
-        //   -> exact renderer Page cursor
-        //   -> navigation commit output
-        //
-        // The event and renderer transports are independent, so flattening
-        // them after the fact would allow the commit cursor to move the new
-        // realm in front of frameStartedNavigating/Page.navigate's response.
-        let mut prefix = Vec::new();
-        while let Ok(event) = self.background_event_rx.try_recv() {
-            prefix.push(event);
+        event: Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError>,
+    ) -> Vec<BackgroundProtocolEvent> {
+        match event {
+            Ok(moli_core::browser::BrowserEvent::DownloadCreated(event)) => {
+                self.conn.project_created_browser_download(event)
+            }
+            Ok(moli_core::browser::BrowserEvent::DownloadUpdated(event)) => {
+                self.conn.project_browser_download(event)
+            }
+            Ok(moli_core::browser::BrowserEvent::NavigationAwaitingDecision(request)) => {
+                self.conn
+                    .project_browser_navigation_decision(request.web_contents, None)
+                    .await
+            }
+            Ok(moli_core::browser::BrowserEvent::InitialDocumentAwaitingInspection {
+                web_contents,
+                key,
+            })
+            | Ok(moli_core::browser::BrowserEvent::InitialDocumentConstructionFailed {
+                web_contents,
+                key,
+            }) => {
+                self.conn
+                    .project_browser_initial_document_inspection(web_contents, Some(key))
+                    .await
+            }
+            Ok(moli_core::browser::BrowserEvent::NavigationResponseChanged(request)) => {
+                self.conn
+                    .project_browser_navigation_responses(request.web_contents)
+                    .await
+            }
+            Ok(moli_core::browser::BrowserEvent::DocumentCommitted(document)) => {
+                self.conn.project_browser_document_commit(document).await
+            }
+            Ok(moli_core::browser::BrowserEvent::NavigationStarted(request))
+            | Ok(moli_core::browser::BrowserEvent::NavigationFailed { request, .. }) => {
+                self.conn
+                    .project_browser_navigation(request.web_contents)
+                    .await
+            }
+            Ok(_) => unreachable!("test Browser ingress filters renderer-FIFO observations"),
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                let (snapshot, receiver) = self.conn.subscribe_browser_events().unwrap();
+                self.browser_event_rx = Some(receiver);
+                self.conn.project_browser_snapshot(snapshot).await
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                self.browser_event_rx = None;
+                Vec::new()
+            }
         }
-        if !prefix.is_empty() {
-            Box::pin(self.route_protocol_events_like_scheduler(prefix, work)).await;
-        }
+    }
 
-        let outcome = self
-            .conn
-            .drain_background_navigation_completion_turn_async(completion)
-            .await;
-        let (
-            mut completion_prefix,
-            mut completion_suffix,
-            renderer_output_boundary,
-            mut post_response_events,
-            scheduler_events,
-            renderer_output_predecessor,
-        ) = outcome.into_renderer_owner_turn_parts();
-        assert!(
-            renderer_output_predecessor.is_none(),
-            "background navigation completion must use an insertion boundary"
-        );
-        if !completion_prefix.is_empty() {
-            Box::pin(self.route_protocol_events_like_scheduler(
-                std::mem::take(&mut completion_prefix),
-                work,
-            ))
-            .await;
-        }
-        if let Some(boundary) = renderer_output_boundary {
-            Box::pin(self.route_renderer_output_predecessor_before_command_response(boundary))
-                .await;
-        }
-        completion_suffix.append(&mut post_response_events);
-        while let Ok(event) = self.background_event_rx.try_recv() {
-            completion_suffix.push(event);
-        }
-        if !completion_suffix.is_empty() {
-            work.push_back(TestSchedulerWork::ProtocolEvents(completion_suffix));
-        }
-        if !scheduler_events.is_empty() {
-            work.push_back(TestSchedulerWork::SchedulerEvents(scheduler_events));
+    fn try_native_browser_input(
+        &mut self,
+    ) -> Option<Result<moli_core::browser::BrowserEvent, tokio::sync::broadcast::error::RecvError>>
+    {
+        use tokio::sync::broadcast::error::{RecvError, TryRecvError};
+        loop {
+            match self.browser_event_rx.as_mut()?.try_recv() {
+                Ok(record) => {
+                    if is_native_browser_input(&record.event) {
+                        return Some(Ok(record.event));
+                    }
+                }
+                Err(TryRecvError::Empty) => return None,
+                Err(TryRecvError::Lagged(count)) => return Some(Err(RecvError::Lagged(count))),
+                Err(TryRecvError::Closed) => return Some(Err(RecvError::Closed)),
+            }
         }
     }
 
     async fn run_one_ready_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
         let mut work = VecDeque::new();
-        let input_kind = if self.background_navigation_scheduler_enabled
-            && let Ok(completion) = self.background_navigation_completion_rx.try_recv()
-        {
-            work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(
-                completion,
-            ));
-            TestSchedulerInputKind::BackgroundNavigationCompletion
-        } else if self.background_navigation_scheduler_enabled
+        let input_kind = if self.background_events_enabled
             && let Ok(event) = self.background_event_rx.try_recv()
         {
             work.push_back(TestSchedulerWork::BackgroundEvent(event));
             TestSchedulerInputKind::BackgroundEvent
+        } else if let Some(event) = self.try_native_browser_input() {
+            work.push_back(TestSchedulerWork::ProtocolEvents(
+                self.project_native_browser_input(event).await,
+            ));
+            TestSchedulerInputKind::NativeDownload
         } else if !self.pending_runtime_deferred_replies.is_empty() {
             match self.runtime_inspector_response_ready_rx.try_recv() {
                 Ok(response) => {
@@ -1333,41 +1402,76 @@ impl TestContext {
         {}
     }
 
+    /// Wait for a real external acknowledgement while continuing to route
+    /// scheduler input. An acknowledgement can interrupt only an input wait,
+    /// never processing of an already received Browser/renderer publication.
+    #[cfg(test)]
+    pub(crate) async fn wait_for_external_input_with_scheduler<T>(
+        &mut self,
+        input: impl std::future::Future<Output = T>,
+    ) -> T {
+        tokio::pin!(input);
+        loop {
+            match self
+                .wait_for_one_test_scheduler_turn_or(input.as_mut())
+                .await
+            {
+                std::ops::ControlFlow::Break(result) => return result,
+                std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Processed(_)) => {}
+                std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle) => {
+                    panic!("test scheduler lost all input before the external acknowledgement");
+                }
+            }
+        }
+    }
+
     async fn wait_for_one_test_scheduler_turn(&mut self) -> TestSchedulerTurnOutcome {
+        let mut never = std::future::pending::<std::convert::Infallible>();
+        match self
+            .wait_for_one_test_scheduler_turn_or(std::pin::Pin::new(&mut never))
+            .await
+        {
+            std::ops::ControlFlow::Continue(outcome) => outcome,
+            std::ops::ControlFlow::Break(never) => match never {},
+        }
+    }
+
+    async fn wait_for_one_test_scheduler_turn_or<T>(
+        &mut self,
+        input: std::pin::Pin<&mut impl std::future::Future<Output = T>>,
+    ) -> std::ops::ControlFlow<T, TestSchedulerTurnOutcome> {
         let ready = Box::pin(self.run_one_ready_test_scheduler_turn()).await;
         if matches!(ready, TestSchedulerTurnOutcome::Processed(_)) {
-            return ready;
+            return std::ops::ControlFlow::Continue(ready);
         }
 
         let mut work = VecDeque::new();
-        let background_navigation_scheduler_enabled = self.background_navigation_scheduler_enabled;
+        let background_events_enabled = self.background_events_enabled;
         let input_kind = if !self.pending_runtime_deferred_replies.is_empty() {
             tokio::select! {
                 biased;
+                result = input => return std::ops::ControlFlow::Break(result),
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
                     let Some(response) = maybe_response else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
                     TestSchedulerInputKind::RuntimeDeferredReply
                 }
-                maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(completion) = maybe_completion else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
-                    TestSchedulerInputKind::BackgroundNavigationCompletion
-                }
-                maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
+                maybe_event = self.background_event_rx.recv(), if background_events_enabled => {
                     let Some(event) = maybe_event else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::BackgroundEvent(event));
                     TestSchedulerInputKind::BackgroundEvent
                 }
+                event = recv_native_browser_input(&mut self.browser_event_rx) => {
+                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_browser_input(event).await));
+                    TestSchedulerInputKind::NativeDownload
+                }
                 maybe_publication = self.renderer_publication_rx.recv() => {
                     let Some(publication) = maybe_publication else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RendererPublication(publication));
                     TestSchedulerInputKind::RendererPublication
@@ -1376,30 +1480,28 @@ impl TestContext {
         } else {
             tokio::select! {
                 biased;
-                maybe_completion = self.background_navigation_completion_rx.recv(), if background_navigation_scheduler_enabled => {
-                    let Some(completion) = maybe_completion else {
-                        return TestSchedulerTurnOutcome::Idle;
-                    };
-                    work.push_back(TestSchedulerWork::BackgroundNavigationCompletion(completion));
-                    TestSchedulerInputKind::BackgroundNavigationCompletion
-                }
-                maybe_event = self.background_event_rx.recv(), if background_navigation_scheduler_enabled => {
+                result = input => return std::ops::ControlFlow::Break(result),
+                maybe_event = self.background_event_rx.recv(), if background_events_enabled => {
                     let Some(event) = maybe_event else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::BackgroundEvent(event));
                     TestSchedulerInputKind::BackgroundEvent
                 }
+                event = recv_native_browser_input(&mut self.browser_event_rx) => {
+                    work.push_back(TestSchedulerWork::ProtocolEvents(self.project_native_browser_input(event).await));
+                    TestSchedulerInputKind::NativeDownload
+                }
                 maybe_publication = self.renderer_publication_rx.recv() => {
                     let Some(publication) = maybe_publication else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RendererPublication(publication));
                     TestSchedulerInputKind::RendererPublication
                 }
                 maybe_response = self.runtime_inspector_response_ready_rx.recv() => {
                     let Some(response) = maybe_response else {
-                        return TestSchedulerTurnOutcome::Idle;
+                        return std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Idle);
                     };
                     work.push_back(TestSchedulerWork::RuntimeDeferredReplyReady(response));
                     TestSchedulerInputKind::RuntimeDeferredReply
@@ -1407,7 +1509,7 @@ impl TestContext {
             }
         };
         Box::pin(self.route_test_scheduler_work_queue(&mut work)).await;
-        TestSchedulerTurnOutcome::Processed(input_kind)
+        std::ops::ControlFlow::Continue(TestSchedulerTurnOutcome::Processed(input_kind))
     }
 
     async fn route_protocol_events_like_scheduler(
@@ -1426,7 +1528,7 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .drain(..position)
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(protocol_event_into_wire_message),
                 );
                 let response = events
                     .remove(0)
@@ -1443,7 +1545,7 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(protocol_event_into_wire_message),
                 );
                 return;
             }
@@ -1457,14 +1559,14 @@ impl TestContext {
                 self.sent.extend(
                     events
                         .into_iter()
-                        .map(BackgroundProtocolEvent::into_protocol_message),
+                        .filter_map(protocol_event_into_wire_message),
                 );
                 return;
             };
             self.sent.extend(
                 events
                     .drain(..position)
-                    .map(BackgroundProtocolEvent::into_protocol_message),
+                    .filter_map(protocol_event_into_wire_message),
             );
             let message = events.remove(0).into_protocol_message();
             let Some(command_id) = message.get("id").and_then(Value::as_u64) else {
@@ -1493,9 +1595,9 @@ impl TestContext {
                     "message": "RuntimeDeferredReplyLooseProtocolResponse",
                 },
             }));
-            if let Some(runtime_output_barrier) = pending.runtime_output_barrier.take() {
-                work.push_front(TestSchedulerWork::CancelRuntimeOutputBarrier(
-                    runtime_output_barrier,
+            if let Some(renderer_response_permit) = pending.renderer_response_permit.take() {
+                work.push_front(TestSchedulerWork::CancelRendererResponsePermit(
+                    renderer_response_permit,
                 ));
             }
             if !events.is_empty() {
@@ -1526,51 +1628,7 @@ impl TestContext {
         &mut self,
         work: &mut VecDeque<TestSchedulerWork>,
     ) {
-        loop {
-            let selected_index = match self.pending_protocol_scheduler_work.front() {
-                Some(front) if front.is_ready() => 0,
-                Some(front)
-                    if front.kind() == ProtocolSchedulerWorkKind::MainDocumentLoadOwnerAction =>
-                {
-                    let Some(index) =
-                        self.pending_protocol_scheduler_work
-                            .iter()
-                            .position(|candidate| {
-                                candidate.is_ready()
-                                    && candidate.is_top_level_location_navigation_owner_action()
-                            })
-                    else {
-                        return;
-                    };
-                    // Production checks the pending load observer out of the
-                    // FIFO while it waits for the renderer. An unconstrained
-                    // location owner action may then run and replace that
-                    // exact source Document, which completes the observer as
-                    // Superseded. Keeping the pending observer at the front in
-                    // this protocol-only harness would deadlock the action
-                    // needed to make it terminal.
-                    index
-                }
-                Some(_) | None => return,
-            };
-            if !self.background_navigation_scheduler_enabled
-                && self
-                    .pending_protocol_scheduler_work
-                    .get(selected_index)
-                    .is_some_and(ProtocolSchedulerWork::requires_background_navigation_scheduler)
-            {
-                // The default protocol fixture has no owner task lane. Keep
-                // independent popup navigation resident rather than invoking
-                // the production function's synchronous fallback while the
-                // exact renderer cursor is still being projected. Tests that
-                // assert navigation progress opt into the production-shaped
-                // background scheduler and drive its typed completions.
-                return;
-            }
-            let protocol_work = self
-                .pending_protocol_scheduler_work
-                .remove(selected_index)
-                .expect("ready protocol work must remain resident");
+        while let Some(protocol_work) = self.pending_protocol_scheduler_work.pop_front() {
             let (events, scheduler_events) = self
                 .conn
                 .complete_ready_protocol_scheduler_work_turn(protocol_work)
@@ -1606,7 +1664,7 @@ impl TestContext {
             .conn
             .ingest_renderer_output_turn_async(
                 publication,
-                &mut self.runtime_command_output_barriers,
+                &mut self.renderer_command_response_order,
             )
             .await;
         let (protocol_events, scheduler_events) = outcome.into_protocol_event_parts();
@@ -1659,7 +1717,7 @@ impl TestContext {
             self.sent.extend(
                 response_events
                     .into_iter()
-                    .map(BackgroundProtocolEvent::into_protocol_message),
+                    .filter_map(protocol_event_into_wire_message),
             );
             if !suffix_events.is_empty() {
                 work.push_front(TestSchedulerWork::ProtocolEvents(suffix_events));
@@ -1712,7 +1770,8 @@ impl TestContext {
         let step = self
             .conn
             .complete_pending_command_dispatch_with_context(completed, &mut pending.command_context)
-            .await;
+            .await
+            .into();
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let completed = Box::pin(self.complete_command_step_like_scheduler(
@@ -1720,22 +1779,22 @@ impl TestContext {
             &mut pending.command_context,
             &mut protocol_events,
             &mut scheduler_events,
-            &mut pending.runtime_output_barrier,
+            &mut pending.renderer_response_permit,
         ))
         .await;
         if !suffix_events.is_empty() {
             work.push_front(TestSchedulerWork::ProtocolEvents(suffix_events));
         }
         if completed {
-            if let Some(runtime_output_barrier) = pending.runtime_output_barrier {
-                work.push_front(TestSchedulerWork::ReleaseRuntimeOutputBarrier(
-                    runtime_output_barrier,
+            if let Some(renderer_response_permit) = pending.renderer_response_permit {
+                work.push_front(TestSchedulerWork::ReleaseRendererResponsePermit(
+                    renderer_response_permit,
                 ));
             }
         } else {
             assert!(
-                pending.runtime_output_barrier.is_none(),
-                "a still-pending Runtime command must transfer its output barrier"
+                pending.renderer_response_permit.is_none(),
+                "a still-pending renderer command must transfer its response permit"
             );
         }
         if !scheduler_events.is_empty() {
@@ -1859,8 +1918,18 @@ impl TestContext {
 fn protocol_events_into_messages(events: Vec<BackgroundProtocolEvent>) -> Vec<Value> {
     events
         .into_iter()
-        .map(BackgroundProtocolEvent::into_protocol_message)
+        .filter_map(protocol_event_into_wire_message)
         .collect()
+}
+
+pub(crate) fn protocol_event_into_wire_message(event: BackgroundProtocolEvent) -> Option<Value> {
+    assert!(
+        event.as_runtime_inspector_response_ready().is_none(),
+        "route the typed renderer response before materializing test wire output"
+    );
+    event
+        .has_protocol_wire_message()
+        .then(|| event.into_protocol_message())
 }
 
 #[cfg(test)]
@@ -1883,7 +1952,7 @@ pub(crate) async fn drain_scheduler_events_like_scheduler(
         conn,
         out,
         scheduler_events,
-        BackgroundProtocolEvent::into_protocol_message,
+        protocol_event_into_wire_message,
     )
     .await;
 }
@@ -1908,28 +1977,24 @@ async fn drain_scheduler_events_like_scheduler_with_materializer(
     conn: &mut CdpConnection,
     out: &mut Vec<Value>,
     scheduler_events: Vec<CdpSchedulerEvent>,
-    materialize_event: fn(BackgroundProtocolEvent) -> Value,
+    materialize_event: fn(BackgroundProtocolEvent) -> Option<Value>,
 ) {
     let mut queue = VecDeque::new();
     enqueue_scheduler_events_like_scheduler(&mut queue, scheduler_events);
     while let Some(TestDeferredSchedulerWork(protocol_work)) = queue.pop_front() {
-        assert!(
-            protocol_work.is_ready(),
-            "the stateless compatibility materializer cannot own pending protocol work; use TestContext or the production CdpScheduler"
-        );
         let (events, nested_scheduler_events) = conn
             .complete_ready_protocol_scheduler_work_turn(protocol_work)
             .await
             .into_protocol_event_parts();
-        out.extend(events.into_iter().map(materialize_event));
+        out.extend(events.into_iter().filter_map(materialize_event));
         enqueue_scheduler_events_like_scheduler(&mut queue, nested_scheduler_events);
         enqueue_scheduler_events_like_scheduler(&mut queue, conn.take_scheduler_events());
     }
 }
 
 #[cfg(test)]
-fn protocol_event_into_internal_message(event: BackgroundProtocolEvent) -> Value {
-    event.into_parts().0
+fn protocol_event_into_internal_message(event: BackgroundProtocolEvent) -> Option<Value> {
+    Some(event.into_parts().0)
 }
 
 #[cfg(test)]
@@ -1965,6 +2030,18 @@ impl<'a> TestSessionId<'a> for Option<&'a str> {}
 impl<'a> TestSessionId<'a> for &'a str {}
 
 #[cfg(test)]
+pub(crate) async fn spawn_html_response_server(body: &'static str) -> (SocketAddr, JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let app = axum::Router::new().route(
+        "/document",
+        axum::routing::get(move || async move { ([("content-type", "text/html")], body) }),
+    );
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (addr, server)
+}
+
+#[cfg(test)]
 pub async fn spawn_connection_drop_server() -> (SocketAddr, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -1988,6 +2065,48 @@ pub(crate) async fn wait_until_message(
         messages.iter().any(&predicate)
     })
     .await;
+}
+
+#[cfg(test)]
+pub(crate) async fn pause_new_dedicated_workers(ctx: &mut TestContext, parent: &str, id: u64) {
+    ctx.process_async(json!({
+        "id": id, "method": "Target.setAutoAttach", "sessionId": parent,
+        "params": { "autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true,
+            "filter": [{ "type": "worker" }] }
+    }))
+    .await;
+    ctx.expect_result(id, json!({}), Some(parent));
+}
+
+/// Observe the actual Worker target before allowing its script to issue any
+/// requests. Page Network.enable does not subscribe to a Worker's output FIFO.
+#[cfg(test)]
+pub(crate) async fn enable_network_on_new_dedicated_worker(
+    ctx: &mut TestContext,
+    parent: &str,
+    id: u64,
+) -> String {
+    let matches_worker = |message: &Value| {
+        message["method"] == "Target.attachedToTarget"
+            && message["sessionId"] == parent
+            && message["params"]["targetInfo"]["type"] == "worker"
+    };
+    wait_until_scheduler_message(ctx, "paused DedicatedWorker attachment", matches_worker).await;
+    let attached = ctx.take_first_matching("DedicatedWorker attachment", matches_worker);
+    assert_eq!(attached["params"]["waitingForDebugger"], true);
+    let session = attached["params"]["sessionId"]
+        .as_str()
+        .expect("Worker session")
+        .to_owned();
+    ctx.process_async(json!({ "id": id, "method": "Network.enable", "sessionId": session }))
+        .await;
+    ctx.expect_result(id, json!({}), Some(session.as_str()));
+    ctx.process_async(
+        json!({ "id": id + 1, "method": "Runtime.runIfWaitingForDebugger", "sessionId": session }),
+    )
+    .await;
+    ctx.expect_result(id + 1, json!({}), Some(session.as_str()));
+    session
 }
 
 #[cfg(test)]
@@ -2068,11 +2187,11 @@ pub(crate) async fn wait_until_frame_stopped_loading(ctx: &mut TestContext, fram
     .await;
 }
 
-/// Wait for the renderer-owned load fact of one exact document generation.
+/// Wait for protocol-visible renderer load of one exact document generation.
 ///
-/// Unlike `Page.frameStoppedLoading`, the authoritative binding carries the
-/// loader id, so a test cannot accidentally accept a terminal event left by an
-/// older document in the same frame.
+/// The binding's loader id rejects earlier documents in the same frame. Native
+/// load can precede protocol ingress, so tests retaining frontend node or remote
+/// object ids must also wait for the new document's projection to catch up.
 #[cfg(test)]
 pub(crate) async fn wait_until_renderer_document_load(
     ctx: &mut TestContext,
@@ -2081,15 +2200,52 @@ pub(crate) async fn wait_until_renderer_document_load(
     loader_id: &str,
 ) {
     let description = format!("renderer load for {frame_id}/{loader_id}");
+    let document = ctx
+        .conn
+        .browser_context_id_for_target(frame_id)
+        .and_then(|id| ctx.conn.browser_context_by_id(id))
+        .and_then(|context| {
+            context
+                .target_pending_document_id(frame_id)
+                .or_else(|| context.target_document_id(frame_id))
+        })
+        .expect("load observation requires an admitted or committed Document");
     ctx.wait_until_scheduler_state(&description, |conn| {
-        conn.renderer_document_lifecycle_authoritative_state_for_session_owner(session_id)
+        conn.renderer_document_lifecycle_visible_state_for_session_owner(session_id)
             .is_some_and(|(binding, snapshot)| {
                 binding.frame_id == frame_id
                     && binding.loader_id == loader_id
+                    && binding.document_id == document
                     && snapshot.load.is_some()
             })
     })
     .await;
+}
+
+#[cfg(test)]
+pub(crate) async fn wait_until_navigation_document_load(
+    ctx: &mut TestContext,
+    command_id: u64,
+    session_id: Option<&str>,
+) {
+    wait_until_scheduler_message(ctx, "navigation reply before Document load", |message| {
+        message["id"] == json!(command_id) && message["sessionId"].as_str() == session_id
+    })
+    .await;
+    let response = ctx
+        .sent
+        .iter()
+        .find(|message| message["id"] == json!(command_id))
+        .unwrap();
+    let frame = response["result"]["frameId"]
+        .as_str()
+        .expect("successful cross-document navigation frame")
+        .to_owned();
+    let loader = response["result"]["loaderId"]
+        .as_str()
+        .expect("successful cross-document navigation loader")
+        .to_owned();
+    wait_until_renderer_document_load(ctx, session_id, &frame, &loader).await;
 }
 
 /// Build a result message, omitting sessionId when it is None.
@@ -2170,30 +2326,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_context_consumes_selected_task_output_publications_one_per_turn() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let (publication_tx, publication_rx) = moli_core::renderer_output_transport_channel();
-        let (runtime_response_tx, runtime_response_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime_response_rx = conn
+            .bind_runtime_inspector_response_ready()
+            .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
-        let (background_navigation_completion_tx, background_navigation_completion_rx) =
-            tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(publication_tx.clone());
-        conn.set_runtime_inspector_response_ready_sender(runtime_response_tx);
         let mut ctx = TestContext {
             conn,
             sent: Vec::new(),
             pending_runtime_deferred_replies: VecDeque::new(),
             pending_protocol_scheduler_work: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
+            renderer_command_response_order: RendererCommandResponseOrder::default(),
             runtime_inspector_response_ready_rx: runtime_response_rx,
             renderer_publication_rx: publication_rx,
             background_event_tx,
             background_event_rx,
-            background_navigation_completion_tx,
-            background_navigation_completion_rx,
-            background_navigation_scheduler_enabled: false,
+            background_events_enabled: false,
+            browser_event_rx: None,
         };
         let opened = |page_id| {
             RendererOutputTransportMessage::from(RendererOutputStreamControl::Opened {
+                first_sequence: std::num::NonZeroU64::MIN,
                 stream: RendererOutputStreamIdentity::new_page_for_protocol_test(
                     PageId::new_for_testing(page_id),
                 ),
@@ -2203,7 +2358,7 @@ mod tests {
         let second = opened(2);
         let second_stream = match &second {
             RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream },
+                RendererOutputStreamControl::Opened { stream, .. },
             ) => *stream,
             RendererOutputTransportMessage::StreamControl(
                 RendererOutputStreamControl::Closed { .. },
@@ -2229,7 +2384,7 @@ mod tests {
         assert!(matches!(
             queued,
             RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream }
+                RendererOutputStreamControl::Opened { stream, .. }
             ) if stream == second_stream
         ));
     }

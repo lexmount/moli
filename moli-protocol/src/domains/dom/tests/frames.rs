@@ -5013,7 +5013,10 @@ async fn get_frame_owner_invalid_params_error() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_frame_owner_without_selected_target_errors() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-A".to_owned()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-A".to_owned()),
+    );
 
     ctx.process_async(json!({
         "id": 1,

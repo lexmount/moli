@@ -35,10 +35,12 @@ mod javascript_dialog;
 mod popup_activation;
 mod window_document_source;
 pub use javascript_dialog::{
-    RendererJavaScriptDialogId, RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    RendererJavaScriptDialogId, RendererJavaScriptDialogOpening, RendererJavaScriptDialogSource,
+    RendererPendingJavaScriptDialog,
 };
 pub use popup_activation::{
     RendererPendingPopupActivation, RendererPopupActivationSource, RendererPopupDisposition,
+    RendererPopupOpening, RendererPopupOpeningId,
 };
 pub use window_document_source::RendererWindowDocumentSource;
 
@@ -495,6 +497,7 @@ pub struct RendererSharedWorkerTargetInfo {
     pub instance_id: SharedWorkerInstanceId,
     pub url: String,
     pub name: String,
+    pub execution_ready: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -505,11 +508,7 @@ pub struct RendererSharedWorkerConsoleMessage {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum RendererSharedWorkerTargetEvent {
-    Created(RendererSharedWorkerTargetInfo),
-    Destroyed {
-        instance_id: SharedWorkerInstanceId,
-    },
+pub enum RendererSharedWorkerObservation {
     Console {
         instance_id: SharedWorkerInstanceId,
         message: RendererSharedWorkerConsoleMessage,
@@ -522,36 +521,26 @@ pub enum RendererSharedWorkerTargetEvent {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererDedicatedWorkerOwner {
+    Document {
+        owner_local_host_id: super::RendererOwnerLocalHostId,
+        page_id: super::PageId,
+    },
+    Worker(super::RendererWorkerIdentity),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RendererDedicatedWorkerTargetInfo {
-    pub owner_local_host_id: super::RendererOwnerLocalHostId,
-    pub page_id: super::PageId,
+    pub owner: RendererDedicatedWorkerOwner,
     pub instance_id: u64,
     pub request_url: String,
     pub document_url: String,
     pub name: String,
 }
 
-/// Page-owned lifecycle facts for one DedicatedWorker target.
-///
-/// Chromium publishes the initial main-script request through the creator
-/// Page's Network agent, but publishes the response and terminal event through
-/// the Worker target's Network agent. Keeping the response on this target
-/// event stream lets protocol preserve that split without manufacturing a
-/// complete Page subresource record.
-#[derive(Debug, Clone)]
-pub enum RendererDedicatedWorkerTargetEvent {
-    Created(RendererDedicatedWorkerTargetInfo),
-    ScriptLoaded {
-        instance_id: u64,
-        script_url: String,
-        response: Box<crate::protocol_types::NavigationResponse>,
-    },
-    ScriptLoadFailed {
-        instance_id: u64,
-        script_url: String,
-        error_message: String,
-        response: Option<Box<crate::protocol_types::NavigationResponse>>,
-    },
+/// Read-only output from one physical DedicatedWorker's source FIFO.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RendererDedicatedWorkerObservation {
     Console {
         instance_id: u64,
         message: RendererSharedWorkerConsoleMessage,
@@ -561,110 +550,20 @@ pub enum RendererDedicatedWorkerTargetEvent {
         inspector_session_id: Option<String>,
         messages: Vec<RendererRuntimeInspectorMessage>,
     },
-    Destroyed {
-        instance_id: u64,
-    },
 }
 
-impl PartialEq for RendererDedicatedWorkerTargetEvent {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Created(left), Self::Created(right)) => left == right,
-            (
-                Self::ScriptLoaded {
-                    instance_id: left_instance,
-                    script_url: left_url,
-                    response: left_response,
-                },
-                Self::ScriptLoaded {
-                    instance_id: right_instance,
-                    script_url: right_url,
-                    response: right_response,
-                },
-            ) => {
-                left_instance == right_instance
-                    && left_url == right_url
-                    && dedicated_worker_navigation_response_eq(left_response, right_response)
-            }
-            (
-                Self::ScriptLoadFailed {
-                    instance_id: left_instance,
-                    script_url: left_url,
-                    error_message: left_error,
-                    response: left_response,
-                },
-                Self::ScriptLoadFailed {
-                    instance_id: right_instance,
-                    script_url: right_url,
-                    error_message: right_error,
-                    response: right_response,
-                },
-            ) => {
-                left_instance == right_instance
-                    && left_url == right_url
-                    && left_error == right_error
-                    && match (left_response, right_response) {
-                        (Some(left), Some(right)) => {
-                            dedicated_worker_navigation_response_eq(left, right)
-                        }
-                        (None, None) => true,
-                        _ => false,
-                    }
-            }
-            (
-                Self::Console {
-                    instance_id: left_instance,
-                    message: left_message,
-                },
-                Self::Console {
-                    instance_id: right_instance,
-                    message: right_message,
-                },
-            ) => left_instance == right_instance && left_message == right_message,
-            (
-                Self::RuntimeInspectorMessages {
-                    instance_id: left_instance,
-                    inspector_session_id: left_session,
-                    messages: left_messages,
-                },
-                Self::RuntimeInspectorMessages {
-                    instance_id: right_instance,
-                    inspector_session_id: right_session,
-                    messages: right_messages,
-                },
-            ) => {
-                left_instance == right_instance
-                    && left_session == right_session
-                    && left_messages == right_messages
-            }
-            (
-                Self::Destroyed {
-                    instance_id: left_instance,
-                },
-                Self::Destroyed {
-                    instance_id: right_instance,
-                },
-            ) => left_instance == right_instance,
-            _ => false,
-        }
-    }
+/// One immutable native main-script fact, shared by Browser snapshots and
+/// runtime readiness. Response phases and bodies belong to native Network.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RendererDedicatedWorkerMainScript {
+    pub script_url: String,
+    pub outcome: RendererDedicatedWorkerMainScriptOutcome,
 }
 
-fn dedicated_worker_navigation_response_eq(
-    left: &crate::protocol_types::NavigationResponse,
-    right: &crate::protocol_types::NavigationResponse,
-) -> bool {
-    left.final_url == right.final_url
-        && left.status == right.status
-        && left.headers == right.headers
-        && left.body_bytes() == right.body_bytes()
-        && left.request_cookie_report == right.request_cookie_report
-        && left.cookie_set_reports == right.cookie_set_reports
-        && left.redirected == right.redirected
-        && left.redirect_chain == right.redirect_chain
-        && left.from_cache == right.from_cache
-        && left.negotiated_http_version == right.negotiated_http_version
-        && left.network_request_headers() == right.network_request_headers()
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererDedicatedWorkerMainScriptOutcome {
+    Loaded,
+    Failed { error_message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -752,14 +651,24 @@ pub enum RendererServiceWorkerFetchDiagnosticResult {
 /// `VersionUpdated` never manufactures a run. `Destroyed` is a version-level
 /// terminal but snapshots the exact active run, when one exists, so a delayed
 /// terminal cannot retire a restarted worker beneath the same version id.
-#[derive(Debug, Clone, PartialEq)]
-pub enum RendererServiceWorkerTargetEvent {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RendererServiceWorkerLifecycle {
     Created {
         info: RendererServiceWorkerTargetInfo,
         /// Exact run already owned by a live worker host when this stable
         /// version target is first exposed. Restored stopped versions carry
         /// `None`; target creation alone must never manufacture a run.
         active_run: Option<super::RendererServiceWorkerRunIdentity>,
+    },
+    Starting {
+        version_id: u64,
+        run: super::RendererServiceWorkerRunIdentity,
+    },
+    /// The physical executor is installed, including while bootstrap is paused
+    /// for a debugger. Script completion is a separate, later fact.
+    ExecutionReady {
+        version_id: u64,
+        run: super::RendererServiceWorkerRunIdentity,
     },
     Started {
         version_id: u64,
@@ -778,6 +687,11 @@ pub enum RendererServiceWorkerTargetEvent {
         version_id: u64,
         status: RendererServiceWorkerVersionStatus,
     },
+}
+
+/// Run-scoped output can observe an existing host, never create a run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RendererServiceWorkerObservation {
     Console {
         version_id: u64,
         run: super::RendererServiceWorkerRunIdentity,
@@ -809,16 +723,19 @@ pub enum RendererServiceWorkerTargetEvent {
 /// protocol-neutral navigation identity needed to preserve the same boundary
 /// without making protocol splice events between two renderer cursors.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RendererMainDocumentCommit {
-    pub frame_id: String,
-    pub loader_id: String,
-    pub url: String,
-    pub unreachable_url: Option<String>,
-    pub security_origin: String,
-    pub secure_context_type: String,
-    pub timestamp: f64,
-    /// Browser-owned session-history cursor and length at this document's commit.
-    pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+pub enum RendererMainDocumentCommit {
+    /// The stream identifies the physical Document. Its committed facts belong
+    /// to Browser; this record only supplies their position in the output FIFO.
+    Browser,
+    Frame {
+        frame_id: String,
+        loader_id: String,
+        url: String,
+        unreachable_url: Option<String>,
+        security_origin: String,
+        secure_context_type: String,
+        timestamp: f64,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -1696,6 +1613,15 @@ pub struct RendererDocumentIsolateAccountingDiagnostics {
     pub reserved: u64,
 }
 
+impl RendererDocumentIsolateAccountingDiagnostics {
+    pub const MODEL: &str = "page-vm";
+
+    /// Process-wide accounting; observing it does not create a renderer owner.
+    pub fn snapshot() -> Self {
+        crate::script_vm::renderer_document_isolate_accounting_diagnostics()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RendererActivityDiagnostics {
     pub document_context_count: usize,
@@ -2051,147 +1977,81 @@ impl RendererRuntimeObservableSourceSummary {
     }
 }
 
-fn source_items_for_snapshot(
-    default_execution_context_id: Option<i64>,
-    source_items: &[RendererRuntimeObservableSourceItem],
-) -> Vec<RendererRuntimeObservableSourceItem> {
-    source_items
-        .iter()
-        .cloned()
-        .map(|item| match item {
-            RendererRuntimeObservableSourceItem::ConsoleMessage {
-                message,
-                context_count_end,
-            } => RendererRuntimeObservableSourceItem::console_message(message, context_count_end),
-            RendererRuntimeObservableSourceItem::LifecycleError {
-                text,
-                exception_index,
-                ..
-            } => RendererRuntimeObservableSourceItem::lifecycle_error(
-                text,
-                default_execution_context_id,
-                exception_index,
-            ),
-        })
-        .collect()
-}
-
-fn source_item_next_context_count(
-    source_items: &[RendererRuntimeObservableSourceItem],
-    execution_context_id: i64,
-) -> usize {
-    source_items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item,
-                RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. }
-                    if message.execution_context_id == execution_context_id
-            )
-        })
-        .count()
-        .checked_add(1)
-        .expect("runtime observable source item context count overflow")
-}
-
-fn source_item_next_lifecycle_error_index(
-    source_items: &[RendererRuntimeObservableSourceItem],
-) -> usize {
-    source_items
-        .iter()
-        .filter(|item| {
-            matches!(
-                item,
-                RendererRuntimeObservableSourceItem::LifecycleError { .. }
-            )
-        })
-        .count()
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RuntimeObservableSourceEvent {
+    Console {
+        event: PendingRuntimeObservableConsoleSourceEvent,
+        context_count_end: usize,
+    },
+    LifecycleError {
+        text: String,
+        exception_index: usize,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RendererRuntimeObservableSourceQueue {
-    source_items: Vec<RendererRuntimeObservableSourceItem>,
-    pending_console_events: Vec<PendingRuntimeObservableConsoleSourceEvent>,
-    report_default_console_message_count: usize,
+    source_items: moli_page_types::OutputHistory<RuntimeObservableSourceEvent>,
+    console_counts: BTreeMap<RuntimeObservableContextToken, usize>,
+    contexts: BTreeMap<RuntimeObservableContextToken, i64>,
+    report_end: usize,
+    exception_count: usize,
 }
 
 impl RendererRuntimeObservableSourceQueue {
-    pub(crate) fn record_lifecycle_error(&mut self, message: String) {
-        let exception_index = source_item_next_lifecycle_error_index(&self.source_items);
-        self.source_items
-            .push(RendererRuntimeObservableSourceItem::lifecycle_error(
-                message,
-                None,
+    pub(crate) fn record_lifecycle_error(&mut self, text: String) {
+        let bytes = text.capacity();
+        let exception_index = self.exception_count;
+        self.exception_count = self
+            .exception_count
+            .checked_add(1)
+            .expect("exception count overflow");
+        self.source_items.push(
+            RuntimeObservableSourceEvent::LifecycleError {
+                text,
                 exception_index,
-            ));
+            },
+            bytes,
+        );
     }
 
     pub(crate) fn record_pending_console_event(
         &mut self,
         event: PendingRuntimeObservableConsoleSourceEvent,
     ) {
-        self.pending_console_events.push(event);
-    }
-
-    pub(crate) fn record_console_message(&mut self, message: RuntimeConsoleMessageSnapshot) {
-        let context_count_end =
-            source_item_next_context_count(&self.source_items, message.execution_context_id);
-        self.source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                message,
-                context_count_end,
-            ));
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sync_console_events(
-        &mut self,
-        active_contexts: &BTreeSet<i64>,
-        active_tokens: &BTreeSet<RuntimeObservableContextToken>,
-        token_to_execution_context_id: &BTreeMap<RuntimeObservableContextToken, i64>,
-        pending_console_events: Vec<PendingRuntimeObservableConsoleSourceEvent>,
-    ) {
-        self.sync_source_events(
-            active_contexts,
-            active_tokens,
-            token_to_execution_context_id,
-            pending_console_events,
+        let count = self
+            .console_counts
+            .entry(event.context_token())
+            .or_default();
+        *count = count.checked_add(1).expect("console count overflow");
+        let bytes = event.retained_payload_bytes();
+        self.source_items.push(
+            RuntimeObservableSourceEvent::Console {
+                event,
+                context_count_end: *count,
+            },
+            bytes,
         );
     }
 
     pub(crate) fn sync_source_events(
         &mut self,
-        active_contexts: &BTreeSet<i64>,
         active_tokens: &BTreeSet<RuntimeObservableContextToken>,
-        token_to_execution_context_id: &BTreeMap<RuntimeObservableContextToken, i64>,
+        contexts: &BTreeMap<RuntimeObservableContextToken, i64>,
         pending_console_events: Vec<PendingRuntimeObservableConsoleSourceEvent>,
     ) {
         self.source_items.retain(|item| match item {
-            RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. } => {
-                active_contexts.contains(&message.execution_context_id)
+            RuntimeObservableSourceEvent::Console { event, .. } => {
+                active_tokens.contains(&event.context_token())
             }
-            RendererRuntimeObservableSourceItem::LifecycleError { .. } => true,
+            RuntimeObservableSourceEvent::LifecycleError { .. } => true,
         });
-
-        self.pending_console_events.extend(pending_console_events);
-        let pending_events = std::mem::take(&mut self.pending_console_events);
-        for event in pending_events {
-            if !active_tokens.contains(&event.context_token()) {
-                continue;
-            }
-            if let Some(execution_context_id) =
-                token_to_execution_context_id.get(&event.context_token())
-            {
-                let context_count_end =
-                    source_item_next_context_count(&self.source_items, *execution_context_id);
-                let message = event.into_runtime_console_message_snapshot(*execution_context_id);
-                self.source_items
-                    .push(RendererRuntimeObservableSourceItem::console_message(
-                        message,
-                        context_count_end,
-                    ));
-            } else {
-                self.pending_console_events.push(event);
+        self.console_counts
+            .retain(|token, _| active_tokens.contains(token));
+        self.contexts.clone_from(contexts);
+        for event in pending_console_events {
+            if active_tokens.contains(&event.context_token()) {
+                self.record_pending_console_event(event);
             }
         }
     }
@@ -2200,60 +2060,60 @@ impl RendererRuntimeObservableSourceQueue {
         &self,
         default_execution_context_id: Option<i64>,
     ) -> Option<RendererRuntimeObservableSourceSummary> {
+        let items = self
+            .source_items
+            .iter()
+            .filter_map(|item| match item {
+                RuntimeObservableSourceEvent::Console {
+                    event,
+                    context_count_end,
+                } => {
+                    let id = *self.contexts.get(&event.context_token())?;
+                    Some(RendererRuntimeObservableSourceItem::console_message(
+                        event.clone().into_runtime_console_message_snapshot(id),
+                        *context_count_end,
+                    ))
+                }
+                RuntimeObservableSourceEvent::LifecycleError {
+                    text,
+                    exception_index,
+                } => Some(RendererRuntimeObservableSourceItem::lifecycle_error(
+                    text.clone(),
+                    default_execution_context_id,
+                    *exception_index,
+                )),
+            })
+            .collect();
         let source = RendererRuntimeObservableSourceSummary::from_source_items(
             default_execution_context_id,
-            source_items_for_snapshot(default_execution_context_id, &self.source_items),
+            items,
         );
         (!source.is_empty()).then_some(source)
     }
 
     pub(crate) fn take_report_observable_output(
         &mut self,
-        default_execution_context_id: Option<i64>,
         default_context_token: RuntimeObservableContextToken,
     ) -> ScriptObservableOutput {
         let mut output = ScriptObservableOutput::default();
-        let mut default_console_message_count = 0usize;
-        for item in &self.source_items {
+        for item in self.source_items.iter_since(self.report_end) {
             match item {
-                RendererRuntimeObservableSourceItem::ConsoleMessage { message, .. }
-                    if Some(message.execution_context_id) == default_execution_context_id =>
+                RuntimeObservableSourceEvent::Console { event, .. }
+                    if event.context_token() == default_context_token =>
                 {
-                    if default_console_message_count >= self.report_default_console_message_count {
-                        output.push_item(ScriptObservableOutputItem::ConsoleMessage(
-                            message.message.clone(),
-                        ));
-                    }
-                    default_console_message_count = default_console_message_count
-                        .checked_add(1)
-                        .expect("report observable console message count overflow");
+                    output.push_item(ScriptObservableOutputItem::ConsoleMessage(
+                        event.message().to_owned(),
+                    ));
                 }
-                RendererRuntimeObservableSourceItem::LifecycleError { text, .. } => {
+                RuntimeObservableSourceEvent::LifecycleError { text, .. } => {
                     output.push_item(ScriptObservableOutputItem::LifecycleError(text.clone()));
                 }
-                RendererRuntimeObservableSourceItem::ConsoleMessage { .. } => {}
+                RuntimeObservableSourceEvent::Console { .. } => {}
             }
         }
-        for event in &self.pending_console_events {
-            if event.context_token() != default_context_token {
-                continue;
-            }
-            if default_console_message_count >= self.report_default_console_message_count {
-                output.push_item(ScriptObservableOutputItem::ConsoleMessage(
-                    event.message().to_owned(),
-                ));
-            }
-            default_console_message_count = default_console_message_count
-                .checked_add(1)
-                .expect("report observable pending console message count overflow");
-        }
-        self.report_default_console_message_count = default_console_message_count;
-        self.source_items.retain(|item| {
-            matches!(
-                item,
-                RendererRuntimeObservableSourceItem::ConsoleMessage { .. }
-            )
-        });
+        self.report_end = self.source_items.end();
+        self.source_items
+            .retain(|item| matches!(item, RuntimeObservableSourceEvent::Console { .. }));
         output
     }
 
@@ -2324,10 +2184,8 @@ impl RendererRuntimeObservableSourceQueue {
         self.source_items
             .iter()
             .filter_map(|item| match item {
-                RendererRuntimeObservableSourceItem::ConsoleMessage { .. } => None,
-                RendererRuntimeObservableSourceItem::LifecycleError { text, .. } => {
-                    Some(text.clone())
-                }
+                RuntimeObservableSourceEvent::LifecycleError { text, .. } => Some(text.clone()),
+                RuntimeObservableSourceEvent::Console { .. } => None,
             })
             .collect()
     }
@@ -2492,8 +2350,8 @@ mod page_diagnostics_snapshot_tests {
             ],
         );
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2510,23 +2368,23 @@ mod page_diagnostics_snapshot_tests {
 
     #[test]
     fn runtime_observable_source_queue_projects_report_output_by_producer_cursor() {
-        let mut queue = RendererRuntimeObservableSourceQueue::default();
-        queue
-            .source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                runtime_console_message(5, "log: first"),
-                1,
-            ));
-        queue
-            .source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                runtime_console_message(9, "log: isolated"),
-                1,
-            ));
+        let mut queue = RendererRuntimeObservableSourceQueue {
+            contexts: BTreeMap::from([
+                (RuntimeObservableContextToken::from_raw(50), 5),
+                (RuntimeObservableContextToken::from_raw(90), 9),
+            ]),
+            ..Default::default()
+        };
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "log: first"),
+        );
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(90, "log: isolated"),
+        );
         queue.record_lifecycle_error("first failure".to_owned());
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2544,16 +2402,13 @@ mod page_diagnostics_snapshot_tests {
             "projecting report output must not drain RuntimeObservable console source items"
         );
 
-        queue
-            .source_items
-            .push(RendererRuntimeObservableSourceItem::console_message(
-                runtime_console_message(5, "log: second"),
-                2,
-            ));
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "log: second"),
+        );
         queue.record_lifecycle_error("second failure".to_owned());
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2566,20 +2421,85 @@ mod page_diagnostics_snapshot_tests {
     }
 
     #[test]
+    fn runtime_observable_retention_preserves_pending_report_and_live_cursors() {
+        let mut queue = RendererRuntimeObservableSourceQueue::default();
+        let default = RuntimeObservableContextToken::from_raw(50);
+        let isolated = RuntimeObservableContextToken::from_raw(90);
+        for index in 0..1200 {
+            queue.record_pending_console_event(
+                PendingRuntimeObservableConsoleSourceEvent::new_for_testing(
+                    if index % 2 == 0 { 50 } else { 90 },
+                    index.to_string(),
+                ),
+            );
+        }
+        let items: Vec<_> = queue
+            .take_report_observable_output(default)
+            .into_items()
+            .collect();
+        assert_eq!(
+            items,
+            (200..1200)
+                .step_by(2)
+                .map(|i| ScriptObservableOutputItem::ConsoleMessage(i.to_string()))
+                .collect::<Vec<_>>()
+        );
+        queue.sync_source_events(
+            &BTreeSet::from([default, isolated]),
+            &BTreeMap::from([(default, 5), (isolated, 9)]),
+            Vec::new(),
+        );
+        assert!(queue.take_report_observable_output(default).is_empty());
+        queue.record_pending_console_event(
+            PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "next"),
+        );
+        queue.record_lifecycle_error("failure".into());
+        let source = queue.snapshot(Some(5)).unwrap();
+        assert!(
+            matches!(&source.source_items()[998], RendererRuntimeObservableSourceItem::ConsoleMessage { context_count_end: 601, message } if message.message == "next")
+        );
+        assert_eq!(
+            queue
+                .take_report_observable_output(default)
+                .into_items()
+                .collect::<Vec<_>>(),
+            vec![
+                ScriptObservableOutputItem::ConsoleMessage("next".into()),
+                ScriptObservableOutputItem::LifecycleError("failure".into()),
+            ]
+        );
+        // Retirement removes the isolated realm, without rewinding the report.
+        queue.sync_source_events(
+            &BTreeSet::from([default]),
+            &BTreeMap::from([(default, 5)]),
+            Vec::new(),
+        );
+        assert!(queue.take_report_observable_output(default).is_empty());
+        assert_eq!(
+            queue
+                .snapshot(Some(5))
+                .unwrap()
+                .console_messages_by_context()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
     fn runtime_observable_source_queue_projects_pending_default_console_to_report() {
         let mut queue = RendererRuntimeObservableSourceQueue::default();
-        queue.pending_console_events.push(
+        queue.record_pending_console_event(
             PendingRuntimeObservableConsoleSourceEvent::new_for_testing(50, "log: pending default"),
         );
-        queue.pending_console_events.push(
+        queue.record_pending_console_event(
             PendingRuntimeObservableConsoleSourceEvent::new_for_testing(
                 90,
                 "log: pending isolated",
             ),
         );
 
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         let report_items: Vec<_> = report_output.into_items().collect();
         assert_eq!(
             report_items,
@@ -2589,8 +2509,7 @@ mod page_diagnostics_snapshot_tests {
             "default-token console output should reach the page report before Runtime source resolution"
         );
 
-        queue.sync_console_events(
-            &BTreeSet::from([5, 9]),
+        queue.sync_source_events(
             &BTreeSet::from([
                 RuntimeObservableContextToken::from_raw(50),
                 RuntimeObservableContextToken::from_raw(90),
@@ -2601,8 +2520,8 @@ mod page_diagnostics_snapshot_tests {
             ]),
             Vec::new(),
         );
-        let report_output = queue
-            .take_report_observable_output(Some(5), RuntimeObservableContextToken::from_raw(50));
+        let report_output =
+            queue.take_report_observable_output(RuntimeObservableContextToken::from_raw(50));
         assert!(
             report_output.is_empty(),
             "pending default console output must not be reported again after it resolves into source items"
@@ -3044,10 +2963,17 @@ impl RendererRuntimeCommandOutputRecorder {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RendererRuntimeInspectorResponseTerminal {
+    Published,
+    Abandoned,
+    Canceled,
+}
+
 struct RendererRuntimeInspectorResponseChannelState {
     next_lease_id: u64,
     active_lease_id: Option<u64>,
-    open: bool,
+    terminal: Option<RendererRuntimeInspectorResponseTerminal>,
     tx: Option<oneshot::Sender<RendererRuntimeInspectorAsyncCompletion>>,
     session_response_settlement_tx:
         Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>,
@@ -3066,6 +2992,7 @@ impl std::fmt::Debug for RendererRuntimeInspectorResponseChannel {
             .debug_struct("RendererRuntimeInspectorResponseChannel")
             .field("delivery", &self.delivery)
             .field("active_lease_id", &state.active_lease_id)
+            .field("terminal", &state.terminal)
             .field("has_receiver", &state.tx.is_some())
             .finish()
     }
@@ -3091,7 +3018,7 @@ impl RendererRuntimeInspectorResponseChannel {
                 state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                     next_lease_id: 1,
                     active_lease_id: None,
-                    open: true,
+                    terminal: None,
                     tx: Some(tx),
                     session_response_settlement_tx: None,
                 })),
@@ -3117,7 +3044,7 @@ impl RendererRuntimeInspectorResponseChannel {
                     state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                         next_lease_id: 1,
                         active_lease_id: None,
-                        open: true,
+                        terminal: None,
                         tx: None,
                         session_response_settlement_tx: None,
                     })),
@@ -3143,7 +3070,7 @@ impl RendererRuntimeInspectorResponseChannel {
     ) -> Option<RendererRuntimeInspectorResponseSender> {
         let lease_id = {
             let mut state = self.state.lock();
-            if !state.open {
+            if state.terminal.is_some() {
                 return None;
             }
             let lease_id = state.next_lease_id;
@@ -3174,10 +3101,17 @@ impl RendererRuntimeInspectorResponseChannel {
     ///
     /// Attachment replacement uses this to prevent the retired renderer from
     /// publishing while the protocol session still owns terminal completion.
-    /// A response that already claimed the channel wins and returns `false`.
+    /// An already-published response wins and returns `false`; sender loss
+    /// without an admitted response still leaves terminal work to the session.
     pub fn try_revoke_active_lease(&self) -> bool {
         let mut state = self.state.lock();
-        if !state.open || state.active_lease_id.is_none() {
+        if state.terminal == Some(RendererRuntimeInspectorResponseTerminal::Abandoned) {
+            // Last-sender loss or rejected transport admission produced no
+            // frontend response. The protocol session still owes its terminal.
+            state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Canceled);
+            return true;
+        }
+        if state.terminal.is_some() || state.active_lease_id.is_none() {
             return false;
         }
         state.active_lease_id = None;
@@ -3186,7 +3120,7 @@ impl RendererRuntimeInspectorResponseChannel {
 
     pub fn cancel(&self) {
         let mut state = self.state.lock();
-        state.open = false;
+        state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Canceled);
         state.active_lease_id = None;
         state.tx.take();
         state.session_response_settlement_tx.take();
@@ -3202,7 +3136,7 @@ impl RendererRuntimeInspectorResponseChannel {
             if state.active_lease_id != Some(lease_id) {
                 return Err(completion);
             }
-            state.open = false;
+            state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Published);
             state.active_lease_id = None;
             state.tx.take()
         };
@@ -3217,7 +3151,7 @@ impl RendererRuntimeInspectorResponseChannel {
         lease_id: u64,
     ) -> Option<oneshot::Receiver<RendererRuntimeInspectorSessionResponseSettlement>> {
         let mut state = self.state.lock();
-        if !state.open
+        if state.terminal.is_some()
             || state.active_lease_id != Some(lease_id)
             || state.session_response_settlement_tx.is_some()
         {
@@ -3230,28 +3164,53 @@ impl RendererRuntimeInspectorResponseChannel {
 
     fn cancel_lease(&self, lease_id: u64) -> bool {
         let mut state = self.state.lock();
-        if !state.open || state.active_lease_id != Some(lease_id) {
+        if state.terminal.is_some() || state.active_lease_id != Some(lease_id) {
             return false;
         }
-        state.open = false;
+        state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Abandoned);
         state.active_lease_id = None;
         state.tx.take();
         state.session_response_settlement_tx.take();
         true
     }
 
-    fn claim_session_lease(
+    fn send_session_response(
         &self,
         lease_id: u64,
-    ) -> Result<Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>, ()>
-    {
+        host: &RendererDevToolsSessionOutputHost,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+        response_succeeded: bool,
+    ) -> Result<
+        RendererRuntimeInspectorSessionResponseSettlement,
+        RendererRuntimeInspectorAsyncCompletion,
+    > {
         let mut state = self.state.lock();
-        if !state.open || state.active_lease_id != Some(lease_id) {
-            return Err(());
+        if state.terminal.is_some() || state.active_lease_id != Some(lease_id) {
+            return Err(completion);
         }
-        state.open = false;
+        // Publication and replacement arbitrate the same lease. Claiming it
+        // before transport admission would lose the frontend terminal when
+        // the old Document's stream has already closed.
+        let published = host.publish(completion);
         state.active_lease_id = None;
-        Ok(state.session_response_settlement_tx.take())
+        let settlement_tx = state.session_response_settlement_tx.take();
+        match published {
+            Ok(fence) => {
+                state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Published);
+                let settlement = RendererRuntimeInspectorSessionResponseSettlement::new(
+                    fence,
+                    response_succeeded,
+                );
+                if let Some(settlement_tx) = settlement_tx {
+                    let _ = settlement_tx.send(settlement.clone());
+                }
+                Ok(settlement)
+            }
+            Err(completion) => {
+                state.terminal = Some(RendererRuntimeInspectorResponseTerminal::Abandoned);
+                Err(completion)
+            }
+        }
     }
 }
 
@@ -3296,13 +3255,21 @@ impl RendererRuntimeInspectorResponseLease {
             .take_session_response_settlement_receiver(self.lifetime.lease_id)
     }
 
-    fn claim_session(
+    fn send_session_response(
         &self,
-    ) -> Result<Option<oneshot::Sender<RendererRuntimeInspectorSessionResponseSettlement>>, ()>
-    {
-        self.lifetime
-            .channel
-            .claim_session_lease(self.lifetime.lease_id)
+        host: &RendererDevToolsSessionOutputHost,
+        completion: RendererRuntimeInspectorAsyncCompletion,
+        response_succeeded: bool,
+    ) -> Result<
+        RendererRuntimeInspectorSessionResponseSettlement,
+        RendererRuntimeInspectorAsyncCompletion,
+    > {
+        self.lifetime.channel.send_session_response(
+            self.lifetime.lease_id,
+            host,
+            completion,
+            response_succeeded,
+        )
     }
 }
 
@@ -3408,10 +3375,6 @@ impl RendererRuntimeInspectorResponseDestination {
             Self::AdapterReply(lease) => lease.send_adapter_reply(completion).map(|()| None),
             Self::DevToolsSessionPending(_) => Err(completion),
             Self::DevToolsSession { lease, host } => {
-                let settlement_tx = match lease.claim_session() {
-                    Ok(settlement_tx) => settlement_tx,
-                    Err(()) => return Err(completion),
-                };
                 let mut responses =
                     completion
                         .output
@@ -3434,15 +3397,9 @@ impl RendererRuntimeInspectorResponseDestination {
                     return Err(completion);
                 }
                 let response_succeeded = response.get("error").is_none();
-                let fence = host.publish(completion)?;
-                let settlement = RendererRuntimeInspectorSessionResponseSettlement::new(
-                    fence,
-                    response_succeeded,
-                );
-                if let Some(settlement_tx) = settlement_tx {
-                    let _ = settlement_tx.send(settlement.clone());
-                }
-                Ok(Some(settlement))
+                lease
+                    .send_session_response(&host, completion, response_succeeded)
+                    .map(Some)
             }
         }
     }
@@ -3463,7 +3420,7 @@ impl RendererRuntimeInspectorResponseDestination {
 enum RendererRuntimeInspectorResponsePublicationBoundary {
     Immediate,
     PageOwner(RendererOwnerWakeSender),
-    WorkerParent(tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>),
+    WorkerParent(crate::worker::WorkerParentSender),
 }
 
 #[derive(Clone)]
@@ -3489,7 +3446,7 @@ impl RendererRuntimeInspectorResponseSender {
             state: Arc::new(Mutex::new(RendererRuntimeInspectorResponseChannelState {
                 next_lease_id: 2,
                 active_lease_id: Some(1),
-                open: true,
+                terminal: None,
                 tx: Some(tx),
                 session_response_settlement_tx: None,
             })),
@@ -3549,7 +3506,7 @@ impl RendererRuntimeInspectorResponseSender {
 
     pub(crate) fn defer_publication_to_worker_parent(
         mut self,
-        parent_tx: tokio::sync::mpsc::UnboundedSender<crate::worker::WorkerToParentMessage>,
+        parent_tx: crate::worker::WorkerParentSender,
     ) -> Self {
         self.publication_boundary =
             RendererRuntimeInspectorResponsePublicationBoundary::WorkerParent(parent_tx);
@@ -3816,6 +3773,21 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert_eq!(rx.await.unwrap().call_id, 1);
     }
 
+    #[test]
+    fn retired_session_sender_leaves_terminal_completion_to_protocol() {
+        let attachment = RendererAgentAttachmentId::allocate();
+        let (channel, receiver) = RendererRuntimeInspectorResponseChannel::new_for_delivery(
+            moli_page_types::RendererInspectorResponseDelivery::SessionSink,
+        );
+        assert!(receiver.is_none());
+        drop(channel.activate_sender(1, Some(attachment)));
+        assert!(
+            channel.try_revoke_active_lease(),
+            "a retired renderer that published no response cannot consume the session's terminal reply"
+        );
+        assert!(!channel.try_revoke_active_lease());
+    }
+
     #[tokio::test]
     async fn direct_response_has_no_implicit_process_global_predecessor() {
         let (channel, rx) = RendererRuntimeInspectorResponseChannel::new();
@@ -3929,7 +3901,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
 
@@ -4021,7 +3993,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.recv().await,
             Some(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
 
@@ -4060,6 +4032,10 @@ mod renderer_runtime_inspector_response_channel_tests {
             .expect("successful transport admission should settle the session call");
         let (fence, response_succeeded) = settlement.into_parts();
         assert!(response_succeeded);
+        assert!(
+            !channel.try_revoke_active_lease(),
+            "an admitted session response wins over attachment retirement"
+        );
         assert_eq!(transport.diagnostics().pending_observation_messages, 1);
         assert!(
             transport.diagnostics().admitted_essential_messages >= 3,
@@ -4144,10 +4120,14 @@ mod renderer_runtime_inspector_response_channel_tests {
             "transport rejection must close rather than satisfy the settlement waiter"
         );
         assert!(channel.try_activate_sender(32, Some(attachment)).is_none());
+        assert!(
+            channel.try_revoke_active_lease(),
+            "rejected publication must leave terminal completion to the protocol session"
+        );
         assert!(matches!(
             transport_rx.recv().await,
             Some(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
         assert_eq!(transport_rx.recv().await, None);
@@ -4197,13 +4177,13 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             old_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream }
+                RendererOutputStreamControl::Opened { stream, .. }
             )) if stream == old_stream
         ));
         assert!(matches!(
             new_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream }
+                RendererOutputStreamControl::Opened { stream, .. }
             )) if stream == new_stream
         ));
 
@@ -4281,7 +4261,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
         let attachment = RendererAgentAttachmentId::allocate();
@@ -4353,7 +4333,7 @@ mod renderer_runtime_inspector_response_channel_tests {
         assert!(matches!(
             transport_rx.try_recv(),
             Ok(RendererOutputTransportMessage::StreamControl(
-                RendererOutputStreamControl::Opened { stream: opened }
+                RendererOutputStreamControl::Opened { stream: opened, .. }
             )) if opened == stream
         ));
         let attachment = RendererAgentAttachmentId::allocate();
@@ -4750,9 +4730,6 @@ pub(crate) enum RendererInspectorPageCommand {
         stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
         session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     },
-    DetachRuntimeInspectorSession {
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    },
     AddRuntimeBinding {
         name: String,
         execution_context_name: Option<String>,
@@ -4978,9 +4955,7 @@ pub enum RendererPageCommand {
     LiveChildDefaultRuntimeRealmInventory,
     ChildFrameIdForDefaultExecutionContextId(i64),
     ChildDefaultExecutionContextIdForFrameId(String),
-    RuntimeConsoleMessagesWithContext,
     RuntimeHeapUsage,
-    PerformanceMetricSnapshot,
     RuntimeCollectGarbage,
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
@@ -5448,16 +5423,6 @@ impl RendererPageCommand {
         )
     }
 
-    pub fn detach_runtime_inspector_session(
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    ) -> Self {
-        Self::inspector_command(
-            inspector_session_id,
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession { pause_guard },
-        )
-    }
-
     pub fn add_runtime_binding(
         inspector_session_id: Option<String>,
         name: String,
@@ -5691,7 +5656,6 @@ impl RendererPageCommand {
             Self::PageDiagnosticsSnapshot
                 | Self::HasPendingLocationNavigation
                 | Self::LiveChildDefaultRuntimeRealmInventory
-                | Self::RuntimeConsoleMessagesWithContext
                 | Self::ChildFrameTreeSnapshot
                 | Self::PendingSubresourceRequestCount
         )
@@ -6121,9 +6085,7 @@ pub enum RendererPageReply {
     ElementClickDispatch(Result<RendererInputDispatchOutcome, RendererElementClickError>),
     RuntimeEvaluationResult(RendererRuntimeEvaluationResult),
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
-    RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
     RuntimeHeapUsage(Box<RendererRuntimeHeapUsage>),
-    PerformanceMetricSnapshot(Box<RendererPerformanceMetricSnapshot>),
     RuntimeRealmInventory(Vec<RendererRuntimeRealmInfo>),
     ExecutionContextId(i64),
     ExecutionContextIds(Vec<i64>),
@@ -6245,43 +6207,14 @@ impl RendererPageTable {
         Ok(slot)
     }
 
-    pub(crate) fn refresh(
-        &self,
-        page_id: PageId,
-        vm_creation_id: u64,
-        view_generation: u64,
-        requested_url: Url,
-        final_url: Url,
-        document_title: String,
-        status: u16,
-    ) -> Result<()> {
-        let Some(slot) = self.slot(page_id) else {
-            bail!(
+    pub(crate) fn refresh_view_for_testing(&self, view: RendererPageView) -> Result<()> {
+        let slot = self.slot(view.page_id).ok_or_else(|| {
+            anyhow!(
                 "renderer owner has never tracked page {} for refresh",
-                page_id.as_u64()
-            );
-        };
-        slot.refresh(RendererPageView {
-            page_id,
-            vm_creation_id,
-            view_generation,
-            page_state: Arc::new(RendererPageState {
-                requested_url,
-                navigation_initiator_url: None,
-                navigation_redirected: false,
-                navigation_redirect_count: 0,
-                navigation_redirect_chain: Vec::new(),
-                final_url,
-                document_title,
-                status,
-                headers: Vec::new(),
-                script_execution: Arc::new(ScriptExecutionReport::default()),
-                idle_override: None,
-                service_worker_client_id: 0,
-                dedicated_worker_running_worker_isolate_count: 0,
-                performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
-            }),
-        })
+                view.page_id.as_u64()
+            )
+        })?;
+        slot.refresh(view)
     }
 
     pub(crate) fn remove(&self, page_id: PageId) {

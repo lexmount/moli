@@ -126,13 +126,6 @@ impl PendingPhaseOneResidence {
         }
     }
 
-    pub(in crate::runtime) fn has_ready_streaming_input(&mut self) -> bool {
-        match self {
-            Self::OpenStreaming(continuation) => continuation.has_ready_input(),
-            Self::ParserBlockingSourceLoad { .. } | Self::ClosedInputPageWork { .. } => false,
-        }
-    }
-
     pub(in crate::runtime) async fn resume(self) -> Result<PendingPhaseOneResumeOutcome> {
         match self {
             Self::ParserBlockingSourceLoad { runtime, started }

@@ -1,6 +1,6 @@
 use std::{fmt, marker::PhantomData, ops::Deref, rc::Rc, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use moli_cookie_jar::SharedBrowserCookieStore;
 
 use crate::{
@@ -55,24 +55,19 @@ impl FetchClientHandle {
 
     /// Materialized raw compatibility API.
     ///
-    /// Non-auth requests enter the streaming raw transport first and only
-    /// materialize at this API boundary. Auth challenge-response still uses the
-    /// buffered libcurl path so intermediate 401/407 bodies are hidden.
+    /// Requests use the raw streaming transport and materialize at this API boundary.
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
-        if request.auth_requires_buffered_transport() {
-            // Digest auth retries are still completed inside libcurl on the
-            // buffered path. Keep auth requests there until the raw streaming
-            // collector can model intermediate auth challenges without
-            // surfacing them as final responses.
-            return self
-                .runtime
-                .submit_auth_raw(request)?
-                .await
-                .context("fetch runtime task dropped raw response channel")?;
-        }
+        self.fetch_raw_with_cancel(request, FetchCancelHandle::new())
+            .await
+    }
 
+    pub async fn fetch_raw_with_cancel(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<RawResponse> {
         let response = self
-            .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+            .fetch_raw_stream_with_cancel(request, cancel_handle)
             .await?;
         response.into_materialized_raw_response().await
     }
@@ -81,9 +76,21 @@ impl FetchClientHandle {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.fetch_raw_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel_and_network_metadata(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let recorder = NetworkObservationRecorder::default();
         let request = request.with_network_observation_recorder(recorder.clone());
-        network_fetch_result_from_result(self.fetch_raw(request).await, recorder)
+        network_fetch_result_from_result(
+            self.fetch_raw_with_cancel(request, cancel_handle).await,
+            recorder,
+        )
     }
 
     pub async fn fetch_raw_stream_with_cancel(
@@ -116,18 +123,6 @@ impl FetchClientHandle {
         request: Request,
         cancel_handle: FetchCancelHandle,
     ) -> Result<Response> {
-        if request.auth_requires_buffered_transport() || !request.follow_redirects {
-            // Auth retries still need the buffered libcurl path so
-            // intermediate 401/407 challenge bodies are not exposed as final
-            // streaming responses. Manual redirect callers also need the
-            // intermediate 3xx response before any raw streaming body starts.
-            return self
-                .runtime
-                .submit_with_cancel(request, cancel_handle)?
-                .await
-                .context("fetch runtime task dropped response channel")?;
-        }
-
         let response = self
             .fetch_raw_stream_with_cancel(request, cancel_handle)
             .await?;
@@ -208,6 +203,29 @@ impl FetchClientHandle {
 
     pub fn cookie_store(&self) -> SharedBrowserCookieStore {
         Arc::clone(&self.cookie_store)
+    }
+
+    /// Captures effective request values for a cacheable response's Vary fields.
+    /// Memory and HTTP caches use the same supported-header and config rules.
+    pub fn cache_vary_headers(
+        &self,
+        request: &Request,
+        response_headers: &[(String, Vec<u8>)],
+    ) -> Option<Vec<moli_http_cache::HttpCacheVaryHeader>> {
+        crate::blocking::vary_headers_for_response(
+            &self.config,
+            request,
+            &request.url,
+            response_headers,
+        )
+    }
+
+    pub fn cache_vary_headers_match(
+        &self,
+        request: &Request,
+        vary_headers: &[moli_http_cache::HttpCacheVaryHeader],
+    ) -> bool {
+        crate::blocking::vary_headers_match(&self.config, request, &request.url, vary_headers)
     }
 
     /// Idempotently asks the semantic owner to stop without joining it.

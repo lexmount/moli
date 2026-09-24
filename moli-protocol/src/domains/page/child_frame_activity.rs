@@ -1,7 +1,4 @@
-use moli_core::page::{
-    ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentNetworkSnapshot,
-    ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot,
-};
+use moli_core::page::{ChildFrameDocumentOpenedSnapshot, ChildFrameNavigationSnapshot};
 
 use crate::conn::TargetRootDocumentProtocolAttachmentIdentity;
 
@@ -46,7 +43,7 @@ pub(crate) struct PagePreparedChildFrameDocumentActivity {
     pub(super) timestamp: f64,
     pub(super) child_frame_tree_events: Vec<PagePreparedChildFrameTreeEvent>,
     pub(super) document_opened_events: Vec<ChildFrameDocumentOpenedSnapshot>,
-    pub(super) document_networks: Vec<PagePreparedChildFrameDocumentNetwork>,
+    pub(super) navigation_starts: Vec<PagePreparedChildFrameNavigationStart>,
     pub(super) loads: Vec<PagePreparedChildFrameLoadActivity>,
     pub(super) security_origin: String,
     pub(super) secure_context_type: String,
@@ -57,7 +54,6 @@ impl PagePreparedChildFrameDocumentActivity {
         timestamp: f64,
         child_frame_tree_events: Vec<PagePreparedChildFrameTreeEvent>,
         document_opened_events: Vec<ChildFrameDocumentOpenedSnapshot>,
-        document_networks: Vec<ChildFrameDocumentNetworkActivitySnapshot>,
         loads: Vec<ChildFrameNavigationSnapshot>,
         security_origin: String,
         secure_context_type: String,
@@ -66,15 +62,7 @@ impl PagePreparedChildFrameDocumentActivity {
             timestamp,
             child_frame_tree_events,
             document_opened_events,
-            document_networks: document_networks
-                .into_iter()
-                .map(|network| PagePreparedChildFrameDocumentNetwork {
-                    frame_id: network.frame_id,
-                    loader_id: network.loader_id,
-                    timestamp,
-                    snapshot: network.snapshot,
-                })
-                .collect(),
+            navigation_starts: Vec::new(),
             loads: loads
                 .into_iter()
                 .map(|load| PagePreparedChildFrameLoadActivity::from_snapshot(load, timestamp))
@@ -105,29 +93,14 @@ pub(crate) enum PagePreparedChildFrameTreeEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PagePreparedChildFrameLoadActivity {
     pub(super) document_open_replacement: bool,
-    pub(super) navigation_start: PagePreparedChildFrameNavigationStart,
-    pub(super) document_network: Option<PagePreparedChildFrameDocumentNetwork>,
     pub(super) navigation_commit: PagePreparedChildFrameNavigationCommit,
     pub(super) lifecycle_terminal: PagePreparedChildFrameLifecycleTerminal,
 }
 
 impl PagePreparedChildFrameLoadActivity {
-    fn from_snapshot(load: ChildFrameNavigationSnapshot, timestamp: f64) -> Self {
+    pub(super) fn from_snapshot(load: ChildFrameNavigationSnapshot, timestamp: f64) -> Self {
         let exact_loader_id = load.loader_id.clone();
         let loader_id = load.loader_id.unwrap_or_else(|| LOADER_ID.to_owned());
-        let navigation_start = PagePreparedChildFrameNavigationStart {
-            frame_id: load.frame_id.clone(),
-            loader_id: loader_id.clone(),
-            url: load.url.clone(),
-        };
-        let document_network =
-            load.document_network
-                .map(|snapshot| PagePreparedChildFrameDocumentNetwork {
-                    frame_id: load.frame_id.clone(),
-                    loader_id: loader_id.clone(),
-                    timestamp,
-                    snapshot,
-                });
         let navigation_commit = PagePreparedChildFrameNavigationCommit {
             frame_id: load.frame_id.clone(),
             parent_frame_id: load.parent_frame_id,
@@ -145,8 +118,6 @@ impl PagePreparedChildFrameLoadActivity {
         };
         Self {
             document_open_replacement: load.document_open_replacement,
-            navigation_start,
-            document_network,
             navigation_commit,
             lifecycle_terminal,
         }
@@ -158,14 +129,6 @@ pub(super) struct PagePreparedChildFrameNavigationStart {
     pub(super) frame_id: String,
     pub(super) loader_id: String,
     pub(super) url: String,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub(super) struct PagePreparedChildFrameDocumentNetwork {
-    pub(super) frame_id: String,
-    pub(super) loader_id: String,
-    pub(super) timestamp: f64,
-    pub(super) snapshot: ChildFrameDocumentNetworkSnapshot,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

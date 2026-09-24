@@ -1195,6 +1195,7 @@ async fn runtime_xhr_subresource_fulfill_request_loads_synthetic_response() {
         .to_owned();
     assert_eq!(paused["params"]["resourceType"], "XHR");
     assert_eq!(paused["params"]["request"]["url"], xhr_url);
+    let request = request_started_before_fetch_pause(&ctx, &paused);
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1211,12 +1212,13 @@ async fn runtime_xhr_subresource_fulfill_request_loads_synthetic_response() {
     .await;
     ctx.expect_result(380, json!({}), Some("SID-1"));
 
-    let request = ctx
-        .sent
-        .iter()
-        .find(|message| message["method"] == json!("Network.requestWillBeSent"))
-        .cloned()
-        .expect("network xhr request event");
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == "Network.requestWillBeSent"
+                && message["params"]["requestId"] == request["params"]["requestId"]
+        }),
+        "completion must not announce the initial request again"
+    );
     let network_request_id = request["params"]["requestId"]
         .as_str()
         .expect("network request id")

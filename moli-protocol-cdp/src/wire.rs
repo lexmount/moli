@@ -155,24 +155,6 @@ impl CdpRequest {
     }
 }
 
-/// Renderer access required by one parsed CDP command.
-///
-/// Chromium physically separates renderer main-thread and IO
-/// DevTools routes. Moli keeps one protocol actor, so the parsed command
-/// carries the equivalent scheduling fact explicitly instead of asking later
-/// layers to reinterpret the wire method string.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CdpRendererCommandAccess {
-    /// The command is handled outside the renderer attachment cutover.
-    OwnerIndependent,
-    /// The command must wait for a cross-document navigation to install its
-    /// replacement renderer attachment.
-    MainThread,
-    /// The command may address the suspended renderer in order to inspect,
-    /// interrupt, or release it while navigation is in flight.
-    Io,
-}
-
 /// V8 execution capability of a command delivered through a renderer
 /// DevTools IO receiver.
 ///
@@ -220,14 +202,13 @@ pub enum CdpRendererCommandReplayDispatch {
     ResolveRuntimeContext,
 }
 
-/// Immutable renderer scheduling policy derived once from a validated CDP
-/// method at command ingress.
+/// Immutable renderer behavior derived once from a validated CDP method at
+/// command ingress.
 ///
-/// Downstream dispatch and renderer-call registration copy this value instead
-/// of rebuilding policy from serialized Inspector JSON.
+/// This contains V8 task and replacement behavior only. Renderer routing is a
+/// DevTools AgentHost decision made after the domain handler runs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CdpRendererCommandPolicy {
-    renderer_access: CdpRendererCommandAccess,
     inspector_task_mode: CdpInspectorTaskMode,
     renderer_replacement: CdpRendererCommandReplacement,
     renderer_replay_dispatch: CdpRendererCommandReplayDispatch,
@@ -235,10 +216,6 @@ pub struct CdpRendererCommandPolicy {
 }
 
 impl CdpRendererCommandPolicy {
-    pub const fn access(self) -> CdpRendererCommandAccess {
-        self.renderer_access
-    }
-
     pub const fn inspector_task_mode(self) -> CdpInspectorTaskMode {
         self.inspector_task_mode
     }
@@ -383,10 +360,6 @@ impl ParsedCdpCommand {
         self.renderer_policy
     }
 
-    pub fn renderer_access(&self) -> CdpRendererCommandAccess {
-        self.renderer_policy.access()
-    }
-
     pub fn inspector_task_mode(&self) -> CdpInspectorTaskMode {
         self.renderer_policy.inspector_task_mode()
     }
@@ -402,17 +375,7 @@ impl ParsedCdpCommand {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CdpMethodDomain {
-    Accessibility,
-    Console,
-    Css,
     Debugger,
-    Dom,
-    DomSnapshot,
-    Emulation,
-    HeapProfiler,
-    Page,
-    Performance,
-    Profiler,
     Runtime,
     Other,
 }
@@ -420,17 +383,7 @@ enum CdpMethodDomain {
 impl CdpMethodDomain {
     fn parse(domain: &str) -> Self {
         match domain {
-            "Accessibility" => Self::Accessibility,
-            "Console" => Self::Console,
-            "CSS" => Self::Css,
             "Debugger" => Self::Debugger,
-            "DOM" => Self::Dom,
-            "DOMSnapshot" => Self::DomSnapshot,
-            "Emulation" => Self::Emulation,
-            "HeapProfiler" => Self::HeapProfiler,
-            "Page" => Self::Page,
-            "Performance" => Self::Performance,
-            "Profiler" => Self::Profiler,
             "Runtime" => Self::Runtime,
             _ => Self::Other,
         }
@@ -470,95 +423,22 @@ impl RuntimeWireAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PageWireAction {
-    MainThread,
-    Crash,
-    Other,
-}
-
-impl PageWireAction {
-    fn parse(action: &str) -> Self {
-        match action {
-            "captureScreenshot"
-            | "captureSnapshot"
-            | "createIsolatedWorld"
-            | "getFrameTree"
-            | "getResourceTree"
-            | "searchInResource"
-            | "getLayoutMetrics"
-            | "printToPDF" => Self::MainThread,
-            "crash" => Self::Crash,
-            _ => Self::Other,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DebuggerWireAction {
-    Interruptible,
-    IoExecutionControl,
-    MainThreadExecutionControl,
+    ExecutionControl,
     Other,
 }
 
 impl DebuggerWireAction {
-    fn is_interruptible(self) -> bool {
-        matches!(self, Self::Interruptible | Self::IoExecutionControl)
-    }
-
     fn executes_page_javascript(self) -> bool {
-        matches!(
-            self,
-            Self::IoExecutionControl | Self::MainThreadExecutionControl
-        )
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum PerformanceWireAction {
-    GetMetrics,
-    Other,
-}
-
-impl PerformanceWireAction {
-    fn parse(action: &str) -> Self {
-        match action {
-            "getMetrics" => Self::GetMetrics,
-            _ => Self::Other,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum EmulationWireAction {
-    SetScriptExecutionDisabled,
-    Other,
-}
-
-impl EmulationWireAction {
-    fn parse(action: &str) -> Self {
-        match action {
-            "setScriptExecutionDisabled" => Self::SetScriptExecutionDisabled,
-            _ => Self::Other,
-        }
+        matches!(self, Self::ExecutionControl)
     }
 }
 
 impl DebuggerWireAction {
     fn parse(action: &str) -> Self {
         match action {
-            "getPossibleBreakpoints"
-            | "getScriptSource"
-            | "getStackTrace"
-            | "pause"
-            | "removeBreakpoint"
-            | "setBreakpoint"
-            | "setBreakpointByUrl"
-            | "setBreakpointsActive" => Self::Interruptible,
-            "resume" => Self::IoExecutionControl,
-            "continueToLocation" | "restartFrame" | "stepInto" | "stepOut" | "stepOver" => {
-                Self::MainThreadExecutionControl
-            }
+            "resume" | "continueToLocation" | "restartFrame" | "stepInto" | "stepOut"
+            | "stepOver" => Self::ExecutionControl,
             _ => Self::Other,
         }
     }
@@ -568,7 +448,6 @@ impl CdpRendererCommandPolicy {
     fn for_method(method: &str) -> Self {
         let Some((domain, action)) = method.split_once('.') else {
             return Self {
-                renderer_access: CdpRendererCommandAccess::OwnerIndependent,
                 inspector_task_mode: CdpInspectorTaskMode::for_method(method),
                 renderer_replacement: CdpRendererCommandReplacement::Replay,
                 renderer_replay_dispatch: CdpRendererCommandReplayDispatch::Direct,
@@ -580,53 +459,7 @@ impl CdpRendererCommandPolicy {
             (domain == CdpMethodDomain::Runtime).then(|| RuntimeWireAction::parse(action));
         let debugger_action =
             (domain == CdpMethodDomain::Debugger).then(|| DebuggerWireAction::parse(action));
-        let renderer_access = match domain {
-            CdpMethodDomain::Runtime => {
-                if runtime_action == Some(RuntimeWireAction::TerminateExecution) {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::MainThread
-                }
-            }
-            CdpMethodDomain::Debugger => {
-                if debugger_action.is_some_and(DebuggerWireAction::is_interruptible) {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::MainThread
-                }
-            }
-            CdpMethodDomain::Performance => {
-                if PerformanceWireAction::parse(action) == PerformanceWireAction::GetMetrics {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::MainThread
-                }
-            }
-            CdpMethodDomain::Emulation => {
-                if EmulationWireAction::parse(action)
-                    == EmulationWireAction::SetScriptExecutionDisabled
-                {
-                    CdpRendererCommandAccess::Io
-                } else {
-                    CdpRendererCommandAccess::OwnerIndependent
-                }
-            }
-            CdpMethodDomain::Page => match PageWireAction::parse(action) {
-                PageWireAction::MainThread => CdpRendererCommandAccess::MainThread,
-                PageWireAction::Crash => CdpRendererCommandAccess::Io,
-                PageWireAction::Other => CdpRendererCommandAccess::OwnerIndependent,
-            },
-            CdpMethodDomain::Accessibility
-            | CdpMethodDomain::Console
-            | CdpMethodDomain::Css
-            | CdpMethodDomain::Dom
-            | CdpMethodDomain::DomSnapshot
-            | CdpMethodDomain::HeapProfiler
-            | CdpMethodDomain::Profiler => CdpRendererCommandAccess::MainThread,
-            CdpMethodDomain::Other => CdpRendererCommandAccess::OwnerIndependent,
-        };
         Self {
-            renderer_access,
             inspector_task_mode: CdpInspectorTaskMode::for_method(method),
             renderer_replacement: if runtime_action.is_some_and(|action| {
                 matches!(
@@ -672,82 +505,6 @@ mod tests {
         assert_eq!(command.session_id(), Some("s1"));
         assert_eq!(command.command_output_session_id(), Some("s1"));
         assert!(command.runtime_command_executes_page_javascript());
-        assert_eq!(
-            command.renderer_access(),
-            CdpRendererCommandAccess::MainThread
-        );
-    }
-
-    #[test]
-    fn parsed_cdp_command_keeps_navigation_control_commands_unblocked() {
-        let command = parse(
-            r#"{"id":9,"method":"Fetch.continueResponse","params":{"requestId":"r"},"sessionId":"s1"}"#,
-        );
-
-        assert_eq!(command.method(), "Fetch.continueResponse");
-        assert_eq!(command.session_id(), Some("s1"));
-        assert_eq!(
-            command.renderer_access(),
-            CdpRendererCommandAccess::OwnerIndependent
-        );
-    }
-
-    #[test]
-    fn renderer_inspector_control_commands_wait_for_navigation_resume() {
-        for method in [
-            "Runtime.getIsolateId",
-            "Console.clearMessages",
-            "Profiler.enable",
-            "HeapProfiler.enable",
-        ] {
-            let command = parse(format!(r#"{{"id":11,"method":"{method}"}}"#));
-            assert!(
-                command.renderer_access() == CdpRendererCommandAccess::MainThread,
-                "{method} must not bind to the suspended attachment"
-            );
-        }
-    }
-
-    #[test]
-    fn renderer_navigation_suspension_matches_chromium_io_route_exceptions() {
-        for method in [
-            "Debugger.getPossibleBreakpoints",
-            "Debugger.getScriptSource",
-            "Debugger.getStackTrace",
-            "Debugger.pause",
-            "Debugger.removeBreakpoint",
-            "Debugger.resume",
-            "Debugger.setBreakpoint",
-            "Debugger.setBreakpointByUrl",
-            "Debugger.setBreakpointsActive",
-            "Emulation.setScriptExecutionDisabled",
-            "Page.crash",
-            "Performance.getMetrics",
-            "Runtime.terminateExecution",
-        ] {
-            let command = parse(format!(r#"{{"id":12,"method":"{method}"}}"#));
-            assert!(
-                command.renderer_access() == CdpRendererCommandAccess::Io,
-                "{method} must remain dispatchable while the renderer attachment is suspended"
-            );
-        }
-
-        for method in [
-            "Debugger.continueToLocation",
-            "Debugger.enable",
-            "Debugger.restartFrame",
-            "Debugger.stepInto",
-            "Debugger.stepOut",
-            "Debugger.stepOver",
-            "Performance.enable",
-            "Runtime.getIsolateId",
-        ] {
-            let command = parse(format!(r#"{{"id":13,"method":"{method}"}}"#));
-            assert!(
-                command.renderer_access() == CdpRendererCommandAccess::MainThread,
-                "{method} must bind to the replacement renderer attachment"
-            );
-        }
     }
 
     #[test]
@@ -846,18 +603,6 @@ mod tests {
     }
 
     #[test]
-    fn page_resource_search_waits_for_document_navigation() {
-        let command = parse(
-            r#"{"id":10,"method":"Page.searchInResource","params":{"frameId":"F","url":"https://example.test/","query":"needle"},"sessionId":"s1"}"#,
-        );
-
-        assert_eq!(
-            command.renderer_access(),
-            CdpRendererCommandAccess::MainThread
-        );
-    }
-
-    #[test]
     fn parsed_command_rejects_invalid_json_instead_of_storing_parse_failure() {
         let error = ParsedCdpCommand::parse_str("{")
             .err()
@@ -920,7 +665,6 @@ mod tests {
 
         assert_eq!(command.request().id(), 14);
         assert_eq!(command.session_id(), Some("s2"));
-        assert_eq!(command.renderer_access(), CdpRendererCommandAccess::Io);
         assert!(!command.runtime_command_executes_page_javascript());
     }
 

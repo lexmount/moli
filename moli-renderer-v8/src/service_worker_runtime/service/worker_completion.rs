@@ -497,10 +497,22 @@ impl ServiceWorkerRuntimeService {
     pub(super) fn finish_main_script_update_check_completed(
         &self,
         registration_id: ServiceWorkerRegistrationId,
+        owner: ServiceWorkerRunOwner,
         result: ServiceWorkerScriptUpdateCheckCompletion,
     ) {
         let (register_completion, launch, queue_progress) = {
             let mut state = self.inner.state.lock();
+            if state
+                .pending_main_script_update_checks
+                .get(&registration_id)
+                .is_none_or(|pending| pending.new_version_id != owner.version_id())
+                || state
+                    .versions
+                    .get(&owner.version_id())
+                    .is_some_and(|version| version.run_owner() != owner)
+            {
+                return;
+            }
             let Some(pending_check) = state
                 .pending_main_script_update_checks
                 .remove(&registration_id)
@@ -841,7 +853,7 @@ impl ServiceWorkerRuntimeService {
             );
             let target_run = previous.into_host().map(|host| {
                 let run = host.run_identity();
-                host.terminate_without_join();
+                host.terminate();
                 run
             });
             let failed_pending_events = version.pending_start_events.drain(..).collect::<Vec<_>>();
@@ -874,7 +886,7 @@ impl ServiceWorkerRuntimeService {
                 Vec::new()
             };
             if failed_installing_version {
-                state.record_target_destroyed(version_id);
+                state.record_target_destroyed_with_run(version_id, target_run);
                 state.versions.remove(&version_id);
             } else if let Some(run) = target_run {
                 state.record_target_stopped(version_id, run, "start_failed");
@@ -950,7 +962,7 @@ impl ServiceWorkerRuntimeService {
             host
         };
         if let Some(host) = host {
-            host.terminate_without_join();
+            host.terminate();
         }
     }
 }
@@ -961,9 +973,6 @@ fn registration_error_for_update_check_failure(
     match failure.status {
         ServiceWorkerScriptUpdateCheckFailureStatus::ScriptLoadFailed => {
             registration_error_for_script_load_failure(failure.message)
-        }
-        ServiceWorkerScriptUpdateCheckFailureStatus::Internal => {
-            ServiceWorkerRegistrationError::unknown(failure.message)
         }
         ServiceWorkerScriptUpdateCheckFailureStatus::Stale => {
             ServiceWorkerRegistrationError::abort(failure.message)

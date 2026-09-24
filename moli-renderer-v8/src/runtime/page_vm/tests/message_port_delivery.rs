@@ -45,7 +45,7 @@ __messagePortBodyBoundaryChannel.port2.postMessage("one");
             "the body-only executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm
                 .vm_mut()
@@ -97,8 +97,7 @@ async fn message_port_delivery_runs_one_event_and_checkpoint_per_typed_turn() {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "first MessagePort event should consume one selected typed turn"
@@ -115,8 +114,7 @@ async fn message_port_delivery_runs_one_event_and_checkpoint_per_typed_turn() {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "second MessagePort event should remain for the next selected turn"
@@ -131,8 +129,7 @@ async fn message_port_delivery_runs_one_event_and_checkpoint_per_typed_turn() {
         assert!(
             !page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "one producer task per queued event must not leave a duplicate no-op turn"
@@ -224,8 +221,7 @@ async fn message_port_listeners_use_event_listener_callback_interface_semantics(
             assert!(
                 page_vm
                     .run_exact_selected_page_task_for_test(
-                        PageSelectedTaskTestSelector::MessagePortDelivery,
-                        &loader,
+                        PageSelectedTaskTestSelector::MessagePortDelivery
                     )
                     .await?,
                 "each queued MessagePort event must run through one selected task"
@@ -323,8 +319,7 @@ async fn message_port_listener_signal_controls_the_exact_registration() {
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader,
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "the first MessagePort event should be selected"
@@ -352,8 +347,7 @@ __messagePortSignalChannel.port2.postMessage("second");
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader,
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "aborting the ignored duplicate signal must preserve the original registration"
@@ -375,8 +369,7 @@ __messagePortSignalChannel.port2.postMessage("third");
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader,
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "the baseline listener should keep the port delivery observable"
@@ -460,10 +453,7 @@ document.body.appendChild(frame);
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                 .await?
         );
         assert_eq!(
@@ -482,10 +472,7 @@ __messagePortRealmChannel.port2.postMessage("after-retirement");
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                 .await?,
             "retiring the callback Window must not retire the top-owned port"
         );
@@ -531,7 +518,7 @@ __messagePortChildChannel.port2.postMessage("create-child");
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                 .await?,
             "the exact MessagePort task should run through the selected dispatcher"
         );
@@ -586,7 +573,7 @@ async fn message_port_close_during_dispatch_preserves_already_queued_delivery_ta
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                 .await?,
             "the first queued event should consume one selected typed turn"
         );
@@ -600,7 +587,7 @@ async fn message_port_close_during_dispatch_preserves_already_queued_delivery_ta
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                 .await?,
             "close must not cancel a delivery task accepted before the callback"
         );
@@ -614,7 +601,7 @@ async fn message_port_close_during_dispatch_preserves_already_queued_delivery_ta
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                 .await?,
             "closing the receiving endpoint should queue one peer close event"
         );
@@ -652,8 +639,7 @@ __activationChannel.port2.postMessage("retained");
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "the unstarted port still owns one bounded selected delivery opportunity"
@@ -673,8 +659,7 @@ __activationChannel.port1.onmessage = event => __activationEvents.push(event.dat
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "installing onmessage must re-admit the retained registry payload"
@@ -754,10 +739,7 @@ document.body.appendChild(frame);
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::WindowMessage,
-                    &loader
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::WindowMessage)
                 .await?,
             "the transfer Window.postMessage task should install the child wrapper"
         );
@@ -765,8 +747,7 @@ document.body.appendChild(frame);
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "the old attachment task should consume one stale selected turn"
@@ -780,8 +761,7 @@ document.body.appendChild(frame);
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "the new attachment task should remain behind the stale task"
@@ -797,8 +777,7 @@ document.body.appendChild(frame);
         assert!(
             !page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MessagePortDelivery,
-                    &loader
+                    PageSelectedTaskTestSelector::MessagePortDelivery
                 )
                 .await?,
             "materializing one transferred wrapper must not enqueue a duplicate delivery task"
@@ -878,7 +857,7 @@ __replacementMessagePortChannel.port2.postMessage("current");
                 loop {
                     assert!(
                         page_vm
-                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery, &loader)
+                            .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MessagePortDelivery)
                             .await?,
                         "the replacement task must remain behind retired PageVm tasks"
                     );

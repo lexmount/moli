@@ -6,13 +6,16 @@ use crate::{
     page_task_queue::{RendererPageRenderingUpdateTaskId, RendererPageRenderingUpdateTaskKind},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) enum PendingRenderingUpdatePayload {
     DocumentScrollEvents,
     AnimationStartScan(EventTargetHandle),
     /// Flush the main Document's autofocus candidates after DOMContentLoaded.
     /// The candidate is intentionally resolved at execution time.
     PostParseAutofocus,
+    LayoutResourceAdmission(
+        Vec<moli_layout::LayoutCssImageReference<crate::document_runtime::DomHandle>>,
+    ),
     EnvironmentChange(PendingEnvironmentChange),
 }
 
@@ -42,6 +45,44 @@ pub(super) type RenderingUpdateState = ExactWindowDocumentTaskLedger<
 >;
 
 impl JsContextHost {
+    /// Painting during a debugger pause cannot enter the suspended isolate to
+    /// admit requests. Retain only resource references in the existing exact-
+    /// Document rendering source; never retain a paint snapshot or layout pass.
+    pub(crate) fn queue_layout_resource_admission(
+        &mut self,
+        css_images: Vec<moli_layout::LayoutCssImageReference<crate::document_runtime::DomHandle>>,
+    ) -> bool {
+        let Some(target) =
+            self.current_window_document_task_target_for_dispatch_scope(OwnerDispatchScope::Top)
+        else {
+            return false;
+        };
+        let kind = RendererPageRenderingUpdateTaskKind::LayoutResourceAdmission;
+        if let Some(index) = self
+            .rendering_updates
+            .find_slot_index(target, kind, |_| true)
+        {
+            if !css_images.is_empty() {
+                let task_id = self.rendering_updates.at(index).task_id();
+                self.rendering_updates.replace(
+                    index,
+                    PendingExactWindowDocumentTask::new(
+                        task_id,
+                        target,
+                        kind,
+                        PendingRenderingUpdatePayload::LayoutResourceAdmission(css_images),
+                    ),
+                );
+            }
+            return true;
+        }
+        self.queue_rendering_update(
+            target,
+            kind,
+            PendingRenderingUpdatePayload::LayoutResourceAdmission(css_images),
+        )
+    }
+
     /// Publish post-parse autofocus as a rendering update for the exact main
     /// Document that just completed DOMContentLoaded.
     ///
@@ -200,9 +241,9 @@ impl JsContextHost {
         }
 
         let removed = self.rendering_updates.remove_exact(task_id, target, kind);
-        debug_assert_eq!(
-            removed.as_ref().map(|pending| pending.payload()),
-            Some(&payload)
+        debug_assert!(
+            removed.is_some(),
+            "a rejected route must retire its exact payload"
         );
         tracing::debug!(
             ?target,
@@ -225,6 +266,25 @@ impl JsContextHost {
             pending.target().dispatch_scope(),
         )?;
         Some((current_target, pending.kind()))
+    }
+
+    pub(crate) fn take_authorized_layout_resources(
+        &mut self,
+        task_id: RendererPageRenderingUpdateTaskId,
+        target: WindowDocumentTaskTarget,
+    ) -> Option<Vec<moli_layout::LayoutCssImageReference<crate::document_runtime::DomHandle>>> {
+        let payload = self
+            .rendering_updates
+            .remove_exact(
+                task_id,
+                target,
+                RendererPageRenderingUpdateTaskKind::LayoutResourceAdmission,
+            )?
+            .into_payload();
+        let PendingRenderingUpdatePayload::LayoutResourceAdmission(css_images) = payload else {
+            unreachable!("layout resource task must retain its matching payload");
+        };
+        Some(css_images)
     }
 
     /// Consume and apply one update already authorized against its exact
@@ -251,6 +311,9 @@ impl JsContextHost {
             }
             PendingRenderingUpdatePayload::PostParseAutofocus => {
                 self.dispatch_authorized_post_parse_autofocus(scope, host_ptr, target)
+            }
+            PendingRenderingUpdatePayload::LayoutResourceAdmission(_) => {
+                unreachable!("layout resources are admitted by ScriptVm before entering a context")
             }
             PendingRenderingUpdatePayload::EnvironmentChange(change) => {
                 self.dispatch_authorized_environment_change(scope, host_ptr, target, change)

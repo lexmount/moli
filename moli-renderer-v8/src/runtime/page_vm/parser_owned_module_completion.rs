@@ -13,7 +13,6 @@ use crate::module_script_continuation::{
     MainParserDocumentOwner, ModuleScriptContinuation, ModuleScriptContinuationGraphAdvance,
     ModuleScriptEvaluationContinuation, ModuleScriptEvaluationReactionState,
 };
-use crate::network::ResourceRequestClient;
 use crate::script_vm::{
     ParserModuleEvaluationSettlement, ParserModuleTerminalDisposition,
     ParserOwnedModuleSuccessTerminal, PreparedModuleSuccessSettlement, PreparedScriptBodyActivity,
@@ -147,7 +146,6 @@ impl PageVm {
 
     pub(super) async fn finish_ready_completed_module_script(
         &mut self,
-        loader: &ResourceRequestClient,
         mut script_continuation: ModuleScriptContinuation,
         terminal_disposition: ParserModuleTerminalDisposition,
     ) -> Result<MainParserModuleExecution> {
@@ -169,7 +167,6 @@ impl PageVm {
         let outcome = match self.start_module_script_graph_evaluation(&graph) {
             Ok(ModuleScriptEvaluationStart::Completed(prepared_activity)) => {
                 self.finalize_module_script_success(
-                    loader,
                     script_continuation,
                     ParserModuleEvaluationSettlement::Completed,
                     terminal_disposition,
@@ -184,7 +181,6 @@ impl PageVm {
                 let completion_applied_at_evaluation_start = true;
                 let outcome = self
                     .finalize_module_script_completion(
-                        loader,
                         &mut script_continuation,
                         ParserModuleEvaluationSettlement::Suspended,
                         terminal_disposition,
@@ -226,14 +222,12 @@ impl PageVm {
 
     async fn finalize_module_script_success(
         &mut self,
-        loader: &ResourceRequestClient,
         mut script_continuation: ModuleScriptContinuation,
         evaluation: ParserModuleEvaluationSettlement,
         terminal_disposition: ParserModuleTerminalDisposition,
         prepared_activity: PreparedScriptBodyActivity,
     ) -> ModuleScriptCompletionOutcome {
         self.finalize_module_script_completion(
-            loader,
             &mut script_continuation,
             evaluation,
             terminal_disposition,
@@ -244,7 +238,6 @@ impl PageVm {
 
     async fn finalize_module_script_completion(
         &mut self,
-        loader: &ResourceRequestClient,
         script_continuation: &mut ModuleScriptContinuation,
         evaluation: ParserModuleEvaluationSettlement,
         terminal_disposition: ParserModuleTerminalDisposition,
@@ -262,7 +255,6 @@ impl PageVm {
         let finish_result = self
             .vm_mut()
             .settle_prepared_module_success(
-                loader,
                 &script,
                 document_owner_before_run,
                 dynamic_script_owner_id,
@@ -372,7 +364,6 @@ impl PageVm {
 
     pub(super) async fn run_ready_module_evaluation_completion(
         &mut self,
-        loader: &ResourceRequestClient,
         evaluation: Option<ModuleScriptEvaluationContinuation>,
         terminal_disposition: ParserModuleTerminalDisposition,
     ) -> Result<MainParserModuleExecution> {
@@ -476,7 +467,6 @@ impl PageVm {
                 );
                 Some(
                     self.finalize_module_script_success(
-                        loader,
                         evaluation.script_continuation,
                         ParserModuleEvaluationSettlement::Completed,
                         terminal_disposition,

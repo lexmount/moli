@@ -41,6 +41,7 @@ async fn queue_real_child_module_dependency_start(
         "child module root fetch should start through its existing source: {startup_sources:?}"
     );
     super::child_document_completion::wait_for_page_resource_completion(
+        page_vm,
         resource_source,
         owner_wake_rx,
         "child module root completion",
@@ -185,8 +186,7 @@ Promise.resolve().then(() => __selectedChildDependencyStartCheckpoint += 1);
         assert!(
             page_vm
                 .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::ChildModuleDependencyFetchStart,
-                    &loader,
+                    PageSelectedTaskTestSelector::ChildModuleDependencyFetchStart
                 )
                 .await?,
             "one exact dependency-start task must enter the production selected dispatcher",
@@ -260,7 +260,7 @@ Promise.resolve().then(() => __staleChildDependencyStartCheckpoint += 1);
             )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm

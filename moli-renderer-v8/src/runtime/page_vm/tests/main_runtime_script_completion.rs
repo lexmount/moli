@@ -98,7 +98,7 @@ queueMicrotask(() => __runtimeAdmissionBodyOrder.push("microtask"));
         )?;
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("runtime script insertion must publish one exact admission");
         assert_eq!(
@@ -145,12 +145,9 @@ queueMicrotask(() => __runtimeAdmissionSelectedOrder.push("microtask"));
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?
         );
         assert_eq!(
@@ -192,12 +189,9 @@ async fn runtime_script_continuation_body_precedes_its_task_end_reaction() {
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?
         );
 
@@ -216,12 +210,9 @@ queueMicrotask(() => {
         )?;
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptContinuation,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?
         );
         assert_eq!(
@@ -233,12 +224,9 @@ queueMicrotask(() => {
         );
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::PostParseWork,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?,
             "the first script body published by the continuation must remain ahead of the admission created by its task-end reaction"
         );
@@ -285,8 +273,7 @@ async fn runtime_script_continuation_body_leaves_checkpoint_to_selected_dispatch
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?
         );
@@ -301,7 +288,7 @@ queueMicrotask(() => { __runtimeContinuationBodyCheckpoint = "wrong"; });
             )?;
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("admitted runtime script must publish one continuation body");
         assert_eq!(
@@ -363,7 +350,7 @@ queueMicrotask(() => { __spentRuntimeContinuationBody = "wrong"; });
             )?;
 
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("spent continuation reservation must retain one selected body turn");
         assert_eq!(
@@ -407,12 +394,9 @@ queueMicrotask(() => { __spentRuntimeContinuation = "checkpointed"; });
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::MainDocumentRuntime(
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptContinuation,
-                    ),
-                    &loader,
-                )
+                    ))
                 .await?
         );
         assert_eq!(
@@ -455,13 +439,12 @@ async fn runtime_data_module_becomes_document_script_work_without_continuation_l
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::MainDocumentRuntime(
                         PageMainDocumentRuntimeActionKind::RuntimeScriptAdmission,
-                    ),
-                    &loader,
+                    )
                 )
                 .await?
         );
         let outcome = page_vm
-            .run_page_main_document_runtime_body_for_test(&loader)
+            .run_page_main_document_runtime_body_for_test()
             .await?
             .expect("the admitted data module must publish one continuation");
         assert_eq!(
@@ -528,7 +511,7 @@ queueMicrotask(() => { __replacementAdmissionCheckpoint = "wrong"; });
         )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(
@@ -568,7 +551,7 @@ queueMicrotask(() => { __replacementContinuationCheckpoint = "wrong"; });
         )?;
 
         page_vm
-            .run_claimed_selected_page_task_for_test(claimed, &loader)
+            .run_claimed_selected_page_task_for_test(claimed)
             .await?;
         assert_eq!(
             page_vm.vm_mut().eval_without_microtask_checkpoint_for_test(

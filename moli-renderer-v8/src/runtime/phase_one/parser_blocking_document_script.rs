@@ -255,11 +255,7 @@ impl ParserClassicDocumentScriptExecutionHooks
             owner
                 .page_vm
                 .vm_mut()
-                .record_script_subresource_network_result(
-                    script.initiator_url,
-                    script.url,
-                    network_result,
-                );
+                .record_script_resource_timing(script.url, network_result);
         }
         tracing::debug!(
             expected_owner = ?target.owner(),

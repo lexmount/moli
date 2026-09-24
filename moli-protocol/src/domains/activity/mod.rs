@@ -5,17 +5,12 @@ mod output_payloads;
 mod output_slot;
 mod output_work;
 mod publication_route;
-mod runtime_command_barrier;
+mod renderer_command_response_order;
 mod scheduler_work;
 mod subresource;
 
 pub(in crate::domains) use contextual_projection::ProtocolOutputProjectionContext;
-pub(crate) use main_document::{
-    CompletedDeferredMainDocumentLoadCompletionActivity,
-    DeferredMainDocumentLoadCompletionAdmission, MainDocumentDownloadNavigationActivity,
-    MainDocumentFailedNavigationActivity, MainDocumentNavigationActivity,
-    PendingDeferredMainDocumentLoadCompletionActivity,
-};
+pub(crate) use main_document::MainDocumentFailedNavigationActivity;
 pub(crate) use output_ingress::{
     OrderedRendererOutputIngress, RendererOutputIngressAdmission,
     ingest_renderer_output_transport_async, project_protocol_local_command_outputs,
@@ -26,9 +21,9 @@ pub(crate) use output_work::{
     ProtocolOutputWork, RootFrameStoppedLoadingSettlement, RootFrameStoppedLoadingSettlementError,
 };
 pub(crate) use publication_route::{RendererPublicationOwner, renderer_publication_owners};
-pub use runtime_command_barrier::{
-    RuntimeCommandOutputBarrierCompletion, RuntimeCommandOutputBarrierPermit,
-    RuntimeCommandOutputBarrierTerminal, RuntimeCommandOutputBarriers,
+pub use renderer_command_response_order::{
+    RendererCommandResponseCompletion, RendererCommandResponseOrder, RendererCommandResponsePermit,
+    RendererCommandResponseTerminal,
 };
 pub(crate) use scheduler_work::ReadyProtocolSchedulerWork;
 pub use scheduler_work::{

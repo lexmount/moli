@@ -48,13 +48,12 @@ impl PageVm {
     pub(super) async fn finish_selected_page_connected_style_event_task(
         &mut self,
         action: PageConnectedStyleEventTurnAction,
-        loader: &crate::network::ResourceRequestClient,
     ) -> anyhow::Result<()> {
         let targeted_current_owner = !matches!(
             action.target_effect,
             PageConnectedStyleEventTargetEffect::DiscardedStaleOwner
         );
-        self.finish_selected_page_task_completion(action.into_page_task_completion(), loader)
+        self.finish_selected_page_task_completion(action.into_page_task_completion())
             .await?;
         if targeted_current_owner {
             // A load/error listener or one of its Promise reactions can

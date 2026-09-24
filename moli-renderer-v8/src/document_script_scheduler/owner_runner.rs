@@ -9,7 +9,7 @@ use anyhow::{Result, anyhow};
 use crate::{
     dynamic_script_owner::{DynamicScriptOwnerId, DynamicScriptPageTaskClaim},
     planning::PreparedScript,
-    types::{SharedNavigationResponseResult, SubresourceRequestInitiatorType},
+    types::SharedNavigationResponseResult,
 };
 
 use super::{
@@ -45,7 +45,7 @@ struct PageOwnedPreparedDocumentScript<DocumentOwnerToken> {
     task_started: Instant,
     document_owner_token_before_task: DocumentOwnerToken,
     task_script_url: url::Url,
-    task_script_initiator_url: url::Url,
+
     task_script_timing_labels: Option<(String, String, String)>,
 }
 
@@ -81,18 +81,8 @@ struct PageOwnedPreparedSourceFailure<DocumentOwnerToken> {
     task_phase: &'static str,
     task_started: Instant,
     task_script_url: url::Url,
-    task_script_initiator_url: url::Url,
-    task_script_timing_labels: Option<(String, String, String)>,
-}
 
-fn script_request_initiator_type(
-    runtime_script_claim: Option<&DynamicScriptPageTaskClaim>,
-) -> SubresourceRequestInitiatorType {
-    if runtime_script_claim.is_some() {
-        SubresourceRequestInitiatorType::Script
-    } else {
-        SubresourceRequestInitiatorType::Parser
-    }
+    task_script_timing_labels: Option<(String, String, String)>,
 }
 
 struct PageOwnedSourceFailureResult<DocumentOwnerToken> {
@@ -156,7 +146,7 @@ where
             .current_document_owner_token()
             .expect("main page-owned script execution requires a current Document owner");
         let task_script_url = script.url.clone();
-        let task_script_initiator_url = script.initiator_url.clone();
+
         let cdp_nav_timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let task_script_timing_labels = cdp_nav_timing_enabled.then(|| {
             (
@@ -199,7 +189,7 @@ where
                 task_started,
                 document_owner_token_before_task,
                 task_script_url,
-                task_script_initiator_url,
+
                 task_script_timing_labels,
             },
             body,
@@ -217,19 +207,15 @@ where
                 task_started,
                 document_owner_token_before_task,
                 task_script_url,
-                task_script_initiator_url,
+
                 task_script_timing_labels,
             } = work;
             if lane.sets_document_ready_state_loading() {
                 self.hooks.set_loading_ready_state()?;
             }
             if let Some(network_result) = source_network_result.as_deref() {
-                self.hooks.record_script_source_network_result(
-                    task_script_initiator_url,
-                    task_script_url.clone(),
-                    script_request_initiator_type(runtime_script_claim.as_ref()),
-                    network_result,
-                );
+                self.hooks
+                    .record_script_resource_timing(task_script_url.clone(), network_result);
             }
             let checkpoint_started = Instant::now();
             self.hooks.perform_pre_script_checkpoint(&task_script_url)?;
@@ -347,7 +333,7 @@ where
             .current_document_owner_token()
             .expect("main page-owned script source failure requires a current Document owner");
         let task_script_url = script.url.clone();
-        let task_script_initiator_url = script.initiator_url.clone();
+
         let cdp_nav_timing_enabled = moli_trace::cdp_nav_timing_enabled();
         let task_script_timing_labels = cdp_nav_timing_enabled.then(|| {
             (
@@ -388,7 +374,7 @@ where
                 task_phase,
                 task_started,
                 task_script_url,
-                task_script_initiator_url,
+
                 task_script_timing_labels,
             },
             PageOwnedDocumentScriptBodyKind::SourceFailure(lane),
@@ -406,16 +392,12 @@ where
             task_phase,
             task_started,
             task_script_url,
-            task_script_initiator_url,
+
             task_script_timing_labels,
         } = work;
         if let Some(network_result) = source_network_result.as_deref() {
-            self.hooks.record_script_source_network_result(
-                task_script_initiator_url,
-                task_script_url.clone(),
-                script_request_initiator_type(runtime_script_claim.as_ref()),
-                network_result,
-            );
+            self.hooks
+                .record_script_resource_timing(task_script_url.clone(), network_result);
         }
         let failure_started = Instant::now();
         let execution =
@@ -615,7 +597,7 @@ mod tests {
         document_target_disappeared: bool,
         completed_source_failures: usize,
         executed_scripts: usize,
-        recorded_network_results: usize,
+        recorded_resource_timings: usize,
         pre_script_checkpoints: usize,
         queued_load_delay_settlements: usize,
     }
@@ -631,14 +613,14 @@ mod tests {
             Ok(())
         }
 
-        fn record_script_source_network_result(
+        fn record_script_resource_timing(
             &mut self,
-            _initiator_url: url::Url,
+
             _script_url: url::Url,
-            _request_initiator_type: crate::types::SubresourceRequestInitiatorType,
+
             _network_result: &std::result::Result<NavigationResponse, String>,
         ) {
-            self.recorded_network_results += 1;
+            self.recorded_resource_timings += 1;
         }
 
         fn perform_pre_script_checkpoint(&mut self, _script_url: &url::Url) -> Result<()> {
@@ -770,7 +752,7 @@ mod tests {
         let (run, completion) = execution.into_parts();
 
         assert_eq!(runner.hooks.completed_source_failures, 1);
-        assert_eq!(runner.hooks.recorded_network_results, 1);
+        assert_eq!(runner.hooks.recorded_resource_timings, 1);
         assert_eq!(runner.hooks.pre_script_checkpoints, 0);
         assert_eq!(runner.hooks.executed_scripts, 0);
         assert!(

@@ -42,21 +42,25 @@ async fn wait_until_runtime_expression_true(
 }
 
 fn record_shared_worker_runtime_context(ctx: &mut TestContext, session_id: &str, context_id: i64) {
+    let target = ctx
+        .conn
+        .shared_worker_target_for_session_mut(Some(session_id))
+        .expect("shared worker target session should exist");
     let event = RuntimeExecutionContextEvent {
-        target_id: None,
+        target_id: Some(DevToolsTargetId::from(target.target_id.as_str())),
         context_id: Some(context_id),
-        realm_id: None,
+        realm_id: Some(crate::devtools_runtime::DevToolsRealmId::from(format!(
+            "{}:native-realm-{context_id}",
+            target.target_id
+        ))),
         frame_id: None,
-        origin: None,
-        name: None,
-        is_default: None,
+        origin: Some("https://example.test".to_owned()),
+        name: Some(target.name.clone()),
+        is_default: Some(true),
         context_type: Some("worker".to_owned()),
         grant_universal_access: None,
     };
-    ctx.conn
-        .shared_worker_target_for_session_mut(Some(session_id))
-        .expect("shared worker target session should exist")
-        .record_runtime_execution_context_created_event(&event);
+    target.record_runtime_execution_context_created_event(&event);
 }
 
 #[tokio::test]
@@ -198,7 +202,7 @@ async fn get_realms_on_shared_worker_target_returns_real_renderer_realm() {
     assert_eq!(realm.context_id, Some(81_081));
     assert_eq!(
         realm.realm_id.as_ref().map(|realm| realm.as_str()),
-        Some("shared-worker-TID-shared-worker")
+        Some("TID-shared-worker:native-realm-81081")
     );
     assert_eq!(realm.frame_id, None);
     assert_eq!(realm.origin.as_deref(), Some("https://example.test"));
@@ -266,7 +270,7 @@ async fn get_realms_global_enumeration_includes_shared_worker_real_renderer_real
                 && realm.context_id == Some(81_081)
                 && realm.context_type.as_deref() == Some("shared-worker")
                 && realm.realm_id.as_ref().map(|realm| realm.as_str())
-                    == Some("shared-worker-TID-shared-worker")
+                    == Some("TID-shared-worker:native-realm-81081")
         }),
         "global getRealms should include shared worker target realms after renderer context creation: {:?}",
         result.realms
@@ -573,23 +577,21 @@ onconnect = event => {
     .await;
 
     let background_url = "data:text/html,<!doctype html><body>background</body>";
-    let background_page = ctx
-        .conn
-        .load_page_via_runtime_async(background_url)
-        .await
-        .expect("background diagnostics page should load");
     let browser_context = ctx
         .conn
         .browser_context
         .as_mut()
         .expect("browser context should remain installed");
-    let mut background = crate::conn::PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-diagnostics-document-worker-bg".to_owned(),
         Some("SID-diagnostics-document-worker-bg".to_owned()),
         background_url.to_owned(),
     );
-    background.replace_loaded_page(Some(background_page));
-    browser_context.insert_page_target_host(background);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        background_url,
+        Some("SID-diagnostics-document-worker-bg"),
+    )
+    .await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -604,8 +606,8 @@ onconnect = event => {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(1),
-        "this accounting fixture deliberately reuses the active engine for both document snapshots: {response:?}"
+        json!(2),
+        "each WebContents must build its Document on its own renderer owner: {response:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],
@@ -3180,8 +3182,8 @@ onconnect = event => {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .renderer_runtime()
-            .shared_worker_running_worker_isolate_count_for_diagnostics(),
+            .shared_worker_runtime_diagnostics_for_diagnostics()
+            .running_worker_isolate_count,
         1,
         "same-origin pages with the same SharedWorker key should share one running worker isolate"
     );

@@ -1,9 +1,7 @@
+use moli_page_types::OutputHistory;
 use std::collections::BTreeMap;
 
-use moli_core::{
-    RendererOwnerLocalHostId,
-    page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot},
-};
+use moli_core::page::{RendererSharedWorkerConsoleMessage, RuntimeConsoleMessageSnapshot};
 use moli_shared_worker::SharedWorkerInstanceId;
 
 use crate::devtools_runtime::RuntimeExecutionContextEvent;
@@ -38,15 +36,16 @@ const SHARED_WORKER_SYNTHETIC_EXECUTION_CONTEXT_ID_BASE: i64 = -10_000_000;
 /// already been created by the renderer event stream.
 #[derive(Debug)]
 pub(crate) struct SharedWorkerTargetState {
-    pub(crate) renderer_owner_local_host_id: RendererOwnerLocalHostId,
+    pub(crate) network: crate::domains::network::TargetNetworkAgentState,
     pub(crate) renderer_instance_id: SharedWorkerInstanceId,
     pub(crate) target_id: String,
     owner_target_id: Option<String>,
     sessions: BTreeMap<String, SharedWorkerTargetSessionState>,
     pub(crate) url: String,
     pub(crate) name: String,
-    runtime_execution_context_id: Option<i64>,
-    console_messages: Vec<RuntimeConsoleMessageSnapshot>,
+    pub(crate) execution_ready: bool,
+    runtime_execution_context: Option<RuntimeExecutionContextEvent>,
+    console_messages: OutputHistory<RuntimeConsoleMessageSnapshot>,
 }
 
 #[derive(Debug)]
@@ -66,28 +65,29 @@ impl Default for SharedWorkerTargetSessionState {
 
 impl SharedWorkerTargetState {
     pub(crate) fn new(
-        renderer_owner_local_host_id: RendererOwnerLocalHostId,
         renderer_instance_id: SharedWorkerInstanceId,
         target_id: String,
         owner_target_id: Option<String>,
         url: String,
         name: String,
+        execution_ready: bool,
     ) -> Self {
         Self {
-            renderer_owner_local_host_id,
+            network: Default::default(),
             renderer_instance_id,
             target_id,
             owner_target_id,
             sessions: BTreeMap::new(),
             url,
             name,
-            runtime_execution_context_id: None,
-            console_messages: Vec::new(),
+            execution_ready,
+            runtime_execution_context: None,
+            console_messages: OutputHistory::default(),
         }
     }
 
     pub(crate) fn execution_context_id(&self) -> i64 {
-        if let Some(id) = self.runtime_execution_context_id {
+        if let Some(id) = self.real_runtime_execution_context_id() {
             return id;
         }
         let instance_id = i64::try_from(self.renderer_instance_id.as_u64()).unwrap_or(i64::MAX);
@@ -95,11 +95,15 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn real_runtime_execution_context_id(&self) -> Option<i64> {
-        self.runtime_execution_context_id
+        self.runtime_execution_context.as_ref()?.context_id
+    }
+
+    pub(crate) fn runtime_execution_context(&self) -> Option<&RuntimeExecutionContextEvent> {
+        self.runtime_execution_context.as_ref()
     }
 
     fn rebind_synthetic_runtime_snapshots(&mut self, synthetic_id: i64, real_id: i64) {
-        for message in &mut self.console_messages {
+        for message in self.console_messages.iter_mut() {
             if message.execution_context_id == synthetic_id {
                 message.execution_context_id = real_id;
             }
@@ -114,12 +118,16 @@ impl SharedWorkerTargetState {
             && let Some(id) = event.context_id
         {
             let previous_id = self.execution_context_id();
-            if self.runtime_execution_context_id.is_some()
-                && self.runtime_execution_context_id != Some(id)
+            if self
+                .runtime_execution_context
+                .as_ref()
+                .is_some_and(|previous| {
+                    previous.context_id != event.context_id || previous.realm_id != event.realm_id
+                })
             {
                 self.mark_all_runtime_bindings_pending_replay();
             }
-            self.runtime_execution_context_id = Some(id);
+            self.runtime_execution_context = Some(event.clone());
             if previous_id < 0 {
                 self.rebind_synthetic_runtime_snapshots(previous_id, id);
             }
@@ -130,14 +138,24 @@ impl SharedWorkerTargetState {
         &mut self,
         event: &RuntimeExecutionContextEvent,
     ) {
-        if event.context_id == self.runtime_execution_context_id {
-            self.runtime_execution_context_id = None;
+        if self
+            .runtime_execution_context
+            .as_ref()
+            .is_some_and(|current| {
+                current.context_id == event.context_id
+                    && event
+                        .realm_id
+                        .as_ref()
+                        .is_none_or(|id| current.realm_id.as_ref() == Some(id))
+            })
+        {
+            self.runtime_execution_context = None;
             self.mark_all_runtime_bindings_pending_replay();
         }
     }
 
     pub(crate) fn record_runtime_execution_contexts_cleared_event(&mut self) {
-        self.runtime_execution_context_id = None;
+        self.runtime_execution_context = None;
         self.mark_all_runtime_bindings_pending_replay();
     }
 
@@ -200,7 +218,7 @@ impl SharedWorkerTargetState {
         &self,
         session_id: &str,
     ) -> Vec<RuntimeBindingDefinition> {
-        if self.runtime_execution_context_id.is_none() {
+        if self.runtime_execution_context.is_none() {
             return Vec::new();
         }
         let Some(state) = self.session_state(session_id) else {
@@ -421,6 +439,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn detach_session(&mut self, session_id: &str) -> Option<String> {
+        self.set_network_enabled(session_id, false);
         self.sessions
             .remove(session_id)
             .map(|_| session_id.to_owned())
@@ -434,7 +453,6 @@ impl SharedWorkerTargetState {
         let session = self.sessions.get(session_id)?;
         Some(session.attachment_scope.bind(
             browser_context_id,
-            self.renderer_owner_local_host_id,
             self.renderer_instance_id,
             self.owner_target_id.clone(),
             self.target_id.clone(),
@@ -452,6 +470,7 @@ impl SharedWorkerTargetState {
         session_id: &str,
     ) -> Option<TargetSharedWorkerProtocolAttachmentRetirement> {
         let identity = self.protocol_attachment_identity(browser_context_id, session_id)?;
+        self.set_network_enabled(session_id, false);
         let session = self.sessions.remove(session_id)?;
         Some(session.attachment_scope.into_retirement(identity))
     }
@@ -466,7 +485,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_runtime_frontend_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -491,9 +510,18 @@ impl SharedWorkerTargetState {
             return false;
         };
         if enabled {
+            let was_enabled = state.network_session_state.network_enabled;
             state.network_session_state.network_enabled = true;
+            if !was_enabled {
+                self.network
+                    .initialize_session_observation_cursor_at_output_tail(Some(session_id));
+            }
+            self.network.enable_attached_events(session_id);
         } else {
             state.network_session_state = Default::default();
+            self.network.remove_attached_session(session_id);
+            self.network
+                .remove_captured_response_body_visibility_for_session(Some(session_id));
         }
         true
     }
@@ -504,7 +532,7 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn set_console_enabled(&mut self, session_id: &str, enabled: bool) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         let Some(state) = self.session_state_mut(session_id) else {
             return;
         };
@@ -513,81 +541,92 @@ impl SharedWorkerTargetState {
     }
 
     pub(crate) fn clear_console_messages(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.console_domain_entries = console_len;
         }
     }
 
     pub(crate) fn discard_runtime_console_entries(&mut self, session_id: &str) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
             state.console_output_session_state.runtime_console_entries = console_len;
         }
     }
 
     pub(crate) fn record_console_message(&mut self, message: RendererSharedWorkerConsoleMessage) {
-        self.console_messages.push(RuntimeConsoleMessageSnapshot {
+        let message = RuntimeConsoleMessageSnapshot {
             execution_context_id: self.execution_context_id(),
             message: message.message,
             args: message.args,
             stack: message.stack,
-        });
+        };
+        let bytes = message.retained_payload_bytes();
+        self.console_messages.push(message, bytes);
     }
 
     pub(crate) fn pending_console_domain_messages(
         &self,
         session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.console_output_session_state.console_enabled {
-            return &[];
+            return Vec::new();
         }
-        &self.console_messages[state
-            .console_output_session_state
-            .console_domain_entries
-            .min(self.console_messages.len())..]
+        self.console_messages
+            .since(state.console_output_session_state.console_domain_entries)
     }
 
     pub(crate) fn pending_runtime_console_messages(
         &self,
         session_id: &str,
-    ) -> &[RuntimeConsoleMessageSnapshot] {
+    ) -> Vec<RuntimeConsoleMessageSnapshot> {
         let Some(state) = self.session_state(session_id) else {
-            return &[];
+            return Vec::new();
         };
         if !state.runtime_session_state.runtime_frontend_enabled {
-            return &[];
+            return Vec::new();
         }
-        if self.runtime_execution_context_id.is_none() {
-            return &[];
+        if self.runtime_execution_context.is_none() {
+            return Vec::new();
         }
-        &self.console_messages[state
-            .console_output_session_state
-            .runtime_console_entries
-            .min(self.console_messages.len())..]
+        self.console_messages
+            .since(state.console_output_session_state.runtime_console_entries)
     }
 
     pub(crate) fn mark_console_domain_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.console_domain_entries =
-                console_end.min(console_len);
+            state.console_output_session_state.console_domain_entries = state
+                .console_output_session_state
+                .console_domain_entries
+                .max(console_end)
+                .min(console_len);
         }
     }
 
     pub(crate) fn mark_runtime_console_emitted(&mut self, session_id: &str, console_end: usize) {
-        let console_len = self.console_messages.len();
+        let console_len = self.console_messages.end();
         if let Some(state) = self.session_state_mut(session_id) {
-            state.console_output_session_state.runtime_console_entries =
-                console_end.min(console_len);
+            state.console_output_session_state.runtime_console_entries = state
+                .console_output_session_state
+                .runtime_console_entries
+                .max(console_end)
+                .min(console_len);
         }
     }
 
+    pub(crate) fn retained_output_stats(&self) -> (usize, usize) {
+        (
+            self.console_messages.len(),
+            self.console_messages.retained_bytes(),
+        )
+    }
+
     pub(crate) fn console_message_count(&self) -> usize {
-        self.console_messages.len()
+        self.console_messages.end()
     }
 
     #[cfg(test)]
@@ -700,8 +739,25 @@ impl SharedWorkerTargetState {
         cdp_request_id: u64,
     ) -> Option<PendingInspectorAwait> {
         self.session_state_mut(owner_session_id)?
-            .pending_inspector_awaits
-            .remove(cdp_request_id)
+            .remove_pending_inspector_await(cdp_request_id)
+    }
+
+    pub(crate) fn claim_pending_inspector_await(
+        &mut self,
+        owner_session_id: &str,
+        cdp_request_id: u64,
+    ) -> bool {
+        self.session_state_mut(owner_session_id)
+            .is_some_and(|state| state.claim_pending_inspector_await(cdp_request_id))
+    }
+
+    pub(crate) fn take_claimed_pending_inspector_await(
+        &mut self,
+        owner_session_id: &str,
+        cdp_request_id: u64,
+    ) -> Option<PendingInspectorAwait> {
+        self.session_state_mut(owner_session_id)?
+            .take_claimed_pending_inspector_await(cdp_request_id)
     }
 
     pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
@@ -713,6 +769,24 @@ impl SharedWorkerTargetState {
     pub(crate) fn has_pending_inspector_awaits_for_session(&self, session_id: &str) -> bool {
         self.session_state(session_id)
             .is_some_and(|state| !state.pending_inspector_awaits.is_empty())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_claimed_pending_inspector_awaits_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session_state(session_id)
+            .is_some_and(DevToolsSessionState::has_claimed_pending_inspector_awaits)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_unclaimed_pending_inspector_awaits_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session_state(session_id)
+            .is_some_and(DevToolsSessionState::has_unclaimed_pending_inspector_awaits)
     }
 
     pub(crate) fn pending_inspector_await_count_all_sessions(&self) -> usize {
@@ -756,17 +830,17 @@ impl SharedWorkerTargetState {
 mod tests {
     use super::SharedWorkerTargetState;
     use crate::devtools_runtime::RuntimeExecutionContextEvent;
-    use moli_core::{RendererOwnerLocalHostId, page::RendererSharedWorkerConsoleMessage};
+    use moli_core::page::RendererSharedWorkerConsoleMessage;
     use moli_shared_worker::SharedWorkerInstanceId;
 
     fn shared_worker_target() -> SharedWorkerTargetState {
         SharedWorkerTargetState::new(
-            RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
             "TID-shared-worker".to_owned(),
             None,
             "https://example.test/shared-worker.js".to_owned(),
             "shared-worker".to_owned(),
+            true,
         )
     }
 
@@ -781,6 +855,33 @@ mod tests {
             is_default: None,
             context_type: Some("worker".to_owned()),
             grant_universal_access: None,
+        }
+    }
+
+    #[test]
+    fn shared_worker_network_retirement_removes_only_its_listener() {
+        for retire in [false, true] {
+            let mut target = shared_worker_target();
+            for session in ["SID-a", "SID-b"] {
+                target.attach_session(session.into());
+                assert!(target.set_network_enabled(session, true));
+            }
+            if retire {
+                assert!(
+                    target
+                        .take_protocol_attachment_retirement("BID-1", "SID-a")
+                        .is_some()
+                );
+            } else {
+                assert!(target.detach_session("SID-a").is_some());
+            }
+            assert_eq!(
+                target.network.event_session_ids(None, None),
+                vec![Some("SID-b".into())]
+            );
+            target.attach_session("SID-a".into());
+            assert!(!target.network_enabled("SID-a"));
+            assert!(!target.network.attached_events_enabled_for_session("SID-a"));
         }
     }
 
@@ -849,5 +950,87 @@ mod tests {
             target.pending_runtime_console_messages("SID-shared-worker")[0].execution_context_id,
             2901
         );
+    }
+
+    #[test]
+    fn shared_worker_history_without_sessions_has_a_count_bound() {
+        let mut target = shared_worker_target();
+        for index in 0..4096 {
+            target.record_console_message(RendererSharedWorkerConsoleMessage {
+                message: format!("log: {index}"),
+                args: vec![serde_json::json!(index)],
+                stack: None,
+            });
+        }
+        assert_eq!(target.console_messages.len(), 1000);
+        assert_eq!(
+            target.console_message_count(),
+            4096,
+            "emission positions never wrap with history"
+        );
+        target.attach_session("late".into());
+        target.set_runtime_frontend_enabled("late", true);
+        target.record_runtime_execution_context_created_event(&worker_context_created_event(2901));
+        let pending = target.pending_runtime_console_messages("late");
+        assert_eq!(pending.len(), 1000);
+        assert_eq!(pending[0].args[0], 3096);
+        assert_eq!(pending.last().unwrap().args[0], 4095);
+    }
+
+    #[test]
+    fn shared_worker_history_accounts_for_nested_console_arguments() {
+        let mut target = shared_worker_target();
+        let payload = "x".repeat(512 * 1024);
+        for index in 0..32 {
+            target.record_console_message(RendererSharedWorkerConsoleMessage {
+                message: "log".into(),
+                args: vec![serde_json::json!({"index": index, "nested": {"payload": payload}})],
+                stack: None,
+            });
+        }
+        let retained = target
+            .console_messages
+            .iter()
+            .map(|message| message.args[0]["nested"]["payload"].as_str().unwrap().len())
+            .sum::<usize>();
+        assert!(
+            retained <= 10 * 1024 * 1024,
+            "nested argument bytes retained: {retained}"
+        );
+        assert_eq!(
+            target.console_messages.iter().next_back().unwrap().args[0]["index"],
+            31
+        );
+    }
+
+    #[test]
+    fn shared_worker_history_eviction_preserves_frozen_and_independent_session_positions() {
+        let mut target = shared_worker_target();
+        target.record_runtime_execution_context_created_event(&worker_context_created_event(2901));
+        for session in ["fast", "slow"] {
+            target.attach_session(session.into());
+            target.set_runtime_frontend_enabled(session, true);
+            target.set_console_enabled(session, true);
+        }
+        for index in 0..1005 {
+            target.record_console_message(RendererSharedWorkerConsoleMessage {
+                message: format!("log: {index}"),
+                args: Vec::new(),
+                stack: None,
+            });
+        }
+        target.mark_runtime_console_emitted("fast", 1000);
+        target.mark_console_domain_emitted("fast", 1000);
+        assert_eq!(target.pending_runtime_console_messages("fast").len(), 5);
+        assert_eq!(target.pending_console_domain_messages("fast").len(), 5);
+        assert_eq!(target.pending_runtime_console_messages("slow").len(), 1000);
+        target.mark_runtime_console_emitted("fast", 1005);
+        target.mark_console_domain_emitted("fast", 1005);
+        // An older prepared output cannot unconsume a newer publication.
+        target.mark_runtime_console_emitted("fast", 1000);
+        target.mark_console_domain_emitted("fast", 1000);
+        assert!(target.pending_runtime_console_messages("fast").is_empty());
+        assert!(target.pending_console_domain_messages("fast").is_empty());
+        assert_eq!(target.pending_console_domain_messages("slow").len(), 1000);
     }
 }

@@ -114,6 +114,7 @@ impl TargetLogOutputQueueState {
                 }
             }
             ScriptNetworkOutputItem::SubresourceRequestStarted(_)
+            | ScriptNetworkOutputItem::SubresourceRequestUpdated(_)
             | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
             | ScriptNetworkOutputItem::SubresourceDataReceived(_)
             | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
@@ -287,7 +288,7 @@ mod tests {
         )
         .with_status_text(Some("Not Found".to_owned()));
         let items = [ScriptNetworkOutputItem::SubresourceResponseStarted(
-            Box::new(response),
+            std::sync::Arc::new(response),
         )];
         let mut queue = TargetLogOutputQueueState::default();
 

@@ -20,15 +20,11 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            let output_effect = PageResourceCompletionOutputEffect::capture_if(
-                self.vm_mut()
-                    .record_historical_child_classic_script_network_result(&completion),
-            );
             return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,
                 current_owner,
-                output_effect,
+                PageResourceCompletionOutputEffect::None,
             ));
         }
 
@@ -49,11 +45,7 @@ impl PageVm {
     ) -> Result<PageResourceCompletionTurnAction> {
         let current_owner = self.current_page_resource_completion_owner(owner);
         if current_owner != Some(owner) {
-            // The completed request remains a Page-observable Network fact,
-            // but it must neither mutate nor advance activity for the current
-            // replacement Document.
-            self.vm_mut()
-                .record_historical_child_blocking_stylesheet_network_results(&completion);
+            // Native request stages were already published by the physical load.
             return Ok(PageResourceCompletionTurnAction::discarded_stale(
                 source,
                 owner,

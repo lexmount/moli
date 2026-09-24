@@ -93,7 +93,6 @@ async fn hyperlink_target_blank_reloads_rel_opener_policy_for_each_activation() 
     assert_eq!(setup, "0");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__hyperlinkPopupResults.length)",
         "1",
         "anchor noopener popup should load",
@@ -110,7 +109,6 @@ __hyperlink.click();
     .expect("anchor opener popup should schedule");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__hyperlinkPopupResults.length)",
         "2",
         "anchor opener popup should load",
@@ -130,7 +128,6 @@ __hyperlink.click();
     .expect("area noreferrer popup should schedule");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__hyperlinkPopupResults.length)",
         "3",
         "area noreferrer popup should load",
@@ -147,7 +144,6 @@ __hyperlink.click();
     .expect("area opener popup should schedule");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "String(globalThis.__hyperlinkPopupResults.length)",
         "4",
         "area opener popup should load",
@@ -675,7 +671,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
         "void 0;".to_owned(),
     ));
 
-    vm.record_script_subresource_network_result(document_url, script_url, &response);
+    vm.record_script_resource_timing(script_url, &response);
 
     let result = vm
         .eval(
@@ -2794,7 +2790,7 @@ async fn reentrant_same_document_navigation_aborts_active_navigate_event() {
 
     assert_eq!(setup, "#two:navigate:|abort:AbortError:|navigate:");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("reentrant navigation handler should drain");
     let settled = vm
@@ -2886,7 +2882,7 @@ async fn active_navigate_event_slot_is_not_script_writable() {
         "#two:true:function:#spoofed|navigate:|exposed:false|abort:AbortError:|navigate:"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("active navigate event private slot timers should drain");
     let settled = vm
@@ -2983,7 +2979,7 @@ async fn pending_precommit_navigation_slot_is_not_script_writable() {
         ":precommitSpoof:false:reload|navigate:|precommit:|exposed:false|abort:AbortError:|navigate:|precommit:"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("pending precommit private slot timers should drain");
     let settled = vm
@@ -3025,7 +3021,6 @@ async fn navigation_retirement_reentry_preserves_successor_window() {
         .unwrap();
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(loaded === (pendingSibling ? 2 : 1))",
             "true",
             "retirement child load",
@@ -3132,7 +3127,6 @@ async fn navigation_intercept_handlers_preserve_cancellation_and_committed_entry
             let context = format!("{api}/{cause}");
             advance_page_task_executor_until_eval_equals(
                 &mut vm,
-                &loader,
                 "String(interceptionResult !== 'pending')",
                 "true",
                 &context,
@@ -3208,7 +3202,6 @@ async fn navigation_intercept_reentrant_handlers_preserve_replacement_navigation
         let context = format!("throws after replacement: {throws_after_replacement}");
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(interceptionResult !== 'pending')",
             "true",
             &context,
@@ -3290,7 +3283,7 @@ async fn nested_same_document_navigation_marks_outer_event_canceled() {
         "#two:,#two:navigate:1:false:|navigate:2:false:|outerCanceled:true"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("nested navigation cancellation should drain");
     let settled = vm
@@ -3371,7 +3364,7 @@ async fn interrupted_intercepted_same_document_navigation_rejects_first_finished
         "interceptSpoof:false:spoof.js::null|navigate::null|currententrychange:#one:push|handler:#one:push|abort:AbortError:#one:push|navigateerror:AbortError:#one:push|navigate:#one:null|currententrychange:#two:push|handler:#two:push"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("double intercept timers should drain");
     let settled = vm
@@ -3443,7 +3436,7 @@ async fn location_href_double_intercept_cancels_first_settlement() {
         "locationInterceptSpoof:false:spoof-location.js:https://example.com/start:null|navigate:https://example.com/start:null|currententrychange:https://example.com/common/blank.html#1:push|handler:https://example.com/common/blank.html#1:push|abort:AbortError:https://example.com/common/blank.html#1:push|navigateerror:AbortError:https://example.com/common/blank.html#1:push|navigate:https://example.com/common/blank.html#1:null|currententrychange:https://example.com/common/blank.html#2:replace|handler:https://example.com/common/blank.html#2:replace"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("location double timers should drain");
     let settled = vm
@@ -3566,7 +3559,7 @@ async fn same_document_navigation_precommit_added_handler_delays_finished() {
         "#one:handler"
     );
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("precommit added handler timer should drain");
     let after_timeout = vm
@@ -3616,7 +3609,7 @@ async fn window_stop_cancels_pending_precommit_before_commit() {
         .expect("window.stop pending precommit setup should evaluate");
 
     assert_eq!(setup, ":abort:AbortError:|error:");
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("window.stop pending precommit should drain");
     let settled = vm
@@ -3661,7 +3654,7 @@ async fn same_document_navigation_async_precommit_waits_to_commit() {
 
     assert_eq!(setup, ":");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("async precommit timer should drain");
     let after_timeout = vm
@@ -3707,7 +3700,7 @@ async fn same_document_navigation_async_precommit_reject_blocks_commit() {
 
     assert_eq!(setup, ":");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("async precommit rejection timer should drain");
     let after_timeout = vm
@@ -4076,7 +4069,7 @@ async fn navigation_reload_async_precommit_reject_blocks_commit() {
 
     assert_eq!(setup, "");
 
-    vm.advance_timers_until_deadline_for_test(&loader)
+    vm.advance_timers_until_deadline_for_test()
         .await
         .expect("reload async precommit rejection timer should drain");
     let after_timeout = vm
@@ -4462,7 +4455,7 @@ async fn history_methods_from_child_realm_traverse_receiver_history() {
 "#,
     )
     .expect("cross-realm History frame setup should evaluate");
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("child setup should use the selected-task dispatcher");
 
@@ -4483,7 +4476,6 @@ async fn history_methods_from_child_realm_traverse_receiver_history() {
     assert_eq!(setup, "#two");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "`${location.hash}|${__lmCrossRealmHistoryEvents.join(',')}`",
         "#one|#one",
         "borrowed child History.back should traverse the receiver history",
@@ -4503,7 +4495,6 @@ document.querySelector("iframe").contentWindow.history.forward.call(history);
     .expect("borrowed child History.forward should queue against the receiver");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "`${location.hash}|${__lmCrossRealmHistoryEvents.join(',')}`",
         "#two|#one,#two",
         "borrowed child History.forward should traverse the receiver history",
@@ -4523,7 +4514,6 @@ document.querySelector("iframe").contentWindow.history.go.call(history, -2);
     .expect("borrowed child History.go should queue against the receiver");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "`${location.hash}|${__lmCrossRealmHistoryEvents.join(',')}`",
         "|#one,#two,initial",
         "borrowed child History.go should traverse the receiver history",
@@ -4565,7 +4555,7 @@ async fn traversal_navigate_destination_index_tracks_entry_identity() {
     assert_eq!(before_back, "");
 
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("queued history traversal should run")
     );
@@ -4614,7 +4604,7 @@ async fn traversal_navigate_destination_index_tracks_entry_identity() {
         r#"{"committedRejected":null,"finishedRejected":null}"#
     );
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("queued forward traversal should run")
     );
@@ -4735,7 +4725,7 @@ async fn traverse_to_preserves_intervening_history_back() {
     let mut executed = Vec::new();
     for _ in 0..4 {
         executed.push(
-            vm.run_one_history_traversal_executor_turn(&loader)
+            vm.run_one_history_traversal_executor_turn()
                 .await
                 .expect("mixed history traversal should execute"),
         );
@@ -4783,7 +4773,7 @@ async fn repeated_traverse_to_reuses_promises_after_history_request() {
 
     for _ in 0..2 {
         assert!(
-            vm.run_one_history_traversal_executor_turn(&loader)
+            vm.run_one_history_traversal_executor_turn()
                 .await
                 .expect("History and Navigation requests should execute separately")
         );
@@ -4794,7 +4784,7 @@ async fn repeated_traverse_to_reuses_promises_after_history_request() {
         "#1|first:#1|second:#1"
     );
     assert!(
-        !vm.run_one_history_traversal_executor_turn(&loader)
+        !vm.run_one_history_traversal_executor_turn()
             .await
             .expect("the repeated Navigation request should not add another task")
     );
@@ -4834,7 +4824,7 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
 
     assert_eq!(setup, "true|true|true");
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("queued repeated traverseTo should run")
     );
@@ -4843,7 +4833,7 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
         .expect("repeated traverseTo settlement should evaluate");
     assert_eq!(settled, "info:first|finished:https://example.com/base:");
     assert!(
-        !vm.run_one_history_traversal_executor_turn(&loader)
+        !vm.run_one_history_traversal_executor_turn()
             .await
             .expect("repeated traverseTo should share one traversal task")
     );

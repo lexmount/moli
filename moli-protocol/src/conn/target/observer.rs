@@ -265,15 +265,21 @@ fn target_destroyed_event(
     ))
 }
 
-pub(crate) fn target_destroyed_automation_events(
-    target_infos: Vec<DevToolsTargetInfo>,
+pub(crate) fn with_primary_target_lifecycle_event(
+    mut events: Vec<BackgroundProtocolEvent>,
+    target_info: DevToolsTargetInfo,
+    project: fn(TargetLifecycleEvent) -> AutomationEvent,
 ) -> Vec<BackgroundProtocolEvent> {
-    target_infos
-        .into_iter()
-        .filter_map(target_lifecycle_event)
-        .map(AutomationEvent::TargetDestroyed)
-        .map(BackgroundProtocolEvent::automation_only)
-        .collect()
+    // Root discovery already carries the primary automation receipt. Other
+    // discovery scopes and filters cannot suppress the actual lifecycle fact.
+    if events
+        .iter()
+        .all(|event| event.protocol_session_id().is_some())
+        && let Some(lifecycle) = target_lifecycle_event(target_info)
+    {
+        events.push(BackgroundProtocolEvent::automation_only(project(lifecycle)));
+    }
+    events
 }
 
 fn target_lifecycle_event(target_info: DevToolsTargetInfo) -> Option<TargetLifecycleEvent> {
@@ -403,13 +409,20 @@ mod tests {
 
     #[test]
     fn target_destroyed_automation_events_do_not_require_reported_hosts() {
-        let events = super::target_destroyed_automation_events(vec![
+        let events = [
             target_info("TAB-TID-page", DevToolsTargetKind::Tab),
             target_info("TID-page", DevToolsTargetKind::Page),
-        ]);
+        ]
+        .into_iter()
+        .flat_map(|info| {
+            super::with_primary_target_lifecycle_event(
+                Vec::new(),
+                info,
+                AutomationEvent::TargetDestroyed,
+            )
+        });
 
         let target_ids = events
-            .into_iter()
             .filter_map(|event| {
                 let (_message, automation_event) = event.into_parts();
                 let Some(AutomationEvent::TargetDestroyed(event)) = automation_event else {

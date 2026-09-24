@@ -1,5 +1,5 @@
 use crate::conn::{
-    CdpConnection, CommandOwnerScope, PendingFetchAuthNavigation, PendingFetchNavigation,
+    CdpConnection, CommandOwnerScope, PendingFetchAuthNavigation,
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest,
 };
@@ -13,7 +13,7 @@ use super::patterns::validate_request_id;
 /// renderer dispatch can remove the prepared entry again.
 #[derive(Debug, Clone)]
 pub(super) struct PreparedSubresourceCorrelation {
-    internal_id: u64,
+    internal_id: crate::conn::SubresourceFetchKey,
     registered: bool,
     owner_scope: CommandOwnerScope,
 }
@@ -36,7 +36,7 @@ impl PreparedSubresourceCorrelation {
             return None;
         }
         Some(Self {
-            internal_id: pending.internal_id,
+            internal_id: pending.continuation_key(),
             registered: should_register,
             owner_scope: owner.clone(),
         })
@@ -65,7 +65,7 @@ impl PreparedSubresourceCorrelation {
             return None;
         }
         Some(Self {
-            internal_id: pending.internal_id,
+            internal_id: pending.continuation_key(),
             registered: true,
             owner_scope: owner.clone(),
         })
@@ -134,7 +134,7 @@ pub(crate) fn take_pending_navigation(
     owner: &CommandOwnerScope,
     action_session_id: Option<&str>,
     request_id: &str,
-) -> Option<PendingFetchNavigation> {
+) -> Option<crate::conn::ClaimedFetchNavigation> {
     conn.take_pending_fetch_navigation_for_owner(owner, action_session_id, request_id)
 }
 

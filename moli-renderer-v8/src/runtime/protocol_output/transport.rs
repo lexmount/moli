@@ -64,7 +64,7 @@ impl RendererOutputTransportMessage {
 
     pub fn residence(&self) -> RendererOutputResidenceIdentity {
         match self {
-            Self::StreamControl(RendererOutputStreamControl::Opened { stream })
+            Self::StreamControl(RendererOutputStreamControl::Opened { stream, .. })
             | Self::StreamControl(RendererOutputStreamControl::Closed { stream, .. }) => {
                 stream.residence()
             }
@@ -182,6 +182,7 @@ pub struct RendererOutputTransportDiagnostics {
     pub admitted_bytes: u64,
     pub admitted_page_messages: u64,
     pub admitted_shared_worker_messages: u64,
+    pub admitted_dedicated_worker_messages: u64,
     pub admitted_service_worker_messages: u64,
     pub admitted_observation_publications: u64,
     pub admitted_essential_messages: u64,
@@ -256,6 +257,12 @@ impl RendererOutputTransportBudgetState {
             .admitted_bytes
             .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
         match residence {
+            RendererOutputResidenceIdentity::DedicatedWorker { .. } => {
+                self.diagnostics.admitted_dedicated_worker_messages = self
+                    .diagnostics
+                    .admitted_dedicated_worker_messages
+                    .saturating_add(1);
+            }
             RendererOutputResidenceIdentity::Page { .. } => {
                 self.diagnostics.admitted_page_messages =
                     self.diagnostics.admitted_page_messages.saturating_add(1);
@@ -395,6 +402,12 @@ impl RendererOutputTransportSender {
 
     pub fn same_channel(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.shared, &other.shared)
+    }
+
+    /// Admission is permanently closed, even if the receiver is still draining
+    /// the prefix preceding a budget-exhaustion terminal.
+    pub fn is_closed(&self) -> bool {
+        self.tx.is_closed() || self.diagnostics().terminal
     }
 
     pub fn diagnostics(&self) -> RendererOutputTransportDiagnostics {
@@ -556,13 +569,11 @@ pub(in crate::runtime) fn renderer_output_transport_channel_with_test_limits(
 mod tests {
     use std::sync::{Arc, Barrier};
 
-    use moli_shared_worker::SharedWorkerInstanceId;
-
     use super::*;
     use crate::runtime::{
         RendererOutputItem, RendererOutputRecord, RendererOwnerAction,
         RendererPendingDownloadActivation, RendererPendingDownloadResponse,
-        RendererProtocolObservation, RendererSharedWorkerTargetEvent,
+        RendererProtocolObservation,
     };
 
     fn test_limits() -> RendererOutputTransportLimits {
@@ -588,14 +599,60 @@ mod tests {
         ))
     }
 
-    fn owner_action_record() -> RendererOutputRecord {
-        RendererOutputRecord::new_for_test(RendererOutputItem::OwnerAction(
-            RendererOwnerAction::SharedWorkerTargetLifecycle(
-                RendererSharedWorkerTargetEvent::Destroyed {
-                    instance_id: SharedWorkerInstanceId::from_u64(7),
+    fn essential_worker_record() -> RendererOutputRecord {
+        let reporter = crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(17),
+        );
+        RendererOutputRecord::new_for_test(RendererOutputItem::Observation(
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::Service(
+                    crate::runtime::RendererServiceWorkerLifecycle::Destroyed {
+                        version_id: 7,
+                        active_run: None,
+                    },
+                ),
+            )),
+        ))
+    }
+
+    #[test]
+    fn native_worker_lifecycle_and_inspector_output_keep_essential_admission() {
+        let reporter = crate::runtime::RendererWorkerLifecycleReporter::new(
+            crate::runtime::RendererBrowserContextRuntimeId::new_for_testing(17),
+        );
+        for observation in [
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::DedicatedDestroyed(7),
+            )),
+            RendererProtocolObservation::DedicatedWorker(
+                crate::runtime::RendererDedicatedWorkerObservation::RuntimeInspectorMessages {
+                    instance_id: 7,
+                    inspector_session_id: None,
+                    messages: Vec::new(),
                 },
             ),
-        ))
+            RendererProtocolObservation::WorkerLifecycle(reporter.report(
+                crate::runtime::RendererWorkerLifecycle::Service(
+                    crate::runtime::RendererServiceWorkerLifecycle::Stopped {
+                        version_id: 7,
+                        run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                        reason: "idle_timeout".into(),
+                    },
+                ),
+            )),
+            RendererProtocolObservation::ServiceWorker(
+                crate::runtime::RendererServiceWorkerObservation::RuntimeInspectorMessages {
+                    version_id: 7,
+                    run: crate::runtime::RendererServiceWorkerRunIdentity::fresh(),
+                    inspector_session_id: None,
+                    messages: Vec::new(),
+                },
+            ),
+        ] {
+            let record =
+                RendererOutputRecord::new_for_test(RendererOutputItem::Observation(observation));
+            assert!(record.requires_essential_transport_admission());
+        }
     }
 
     fn publication(
@@ -614,6 +671,7 @@ mod tests {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(test_limits());
         let opened =
             RendererOutputTransportMessage::StreamControl(RendererOutputStreamControl::Opened {
+                first_sequence: std::num::NonZeroU64::MIN,
                 stream: stream(),
             });
         let first = publication(1, vec![observation_record(1)]);
@@ -629,6 +687,7 @@ mod tests {
             "the observation ceiling must not borrow the essential reserve"
         );
         assert!(sender.diagnostics().terminal);
+        assert!(sender.is_closed());
         assert!(receiver.is_terminal());
         assert!(
             !receiver.is_closed(),
@@ -644,10 +703,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn exhausted_observer_can_be_replaced_before_its_admitted_prefix_drains() {
+        let (sender, mut old) = renderer_output_transport_channel_with_limits(test_limits());
+        let journal =
+            crate::runtime::RendererTurnOutputJournal::new_with_transport(stream(), sender.clone());
+        journal.publish_record(observation_record(1));
+        journal.publish_record(observation_record(2));
+        assert!(sender.is_closed());
+        assert!(!old.is_closed());
+        let (replacement, mut resumed) = renderer_output_transport_channel();
+        journal.bind_transport(replacement.clone());
+        assert!(
+            matches!(resumed.try_recv().unwrap(), RendererOutputTransportMessage::StreamControl(
+            RendererOutputStreamControl::Opened { first_sequence, .. }) if first_sequence.get() == 3)
+        );
+        journal.publish_record(observation_record(3));
+        assert!(
+            matches!(resumed.try_recv().unwrap(), RendererOutputTransportMessage::Publication(publication)
+            if publication.cursor().stream() == journal.stream() && publication.cursor().sequence() == 3
+            && publication.records() == [observation_record(3)])
+        );
+        assert!(!replacement.is_closed());
+        assert!(
+            matches!(old.recv().await.unwrap(), RendererOutputTransportMessage::StreamControl(
+            RendererOutputStreamControl::Opened { first_sequence, .. }) if first_sequence.get() == 1)
+        );
+        assert!(
+            matches!(old.recv().await.unwrap(), RendererOutputTransportMessage::Publication(publication)
+            if publication.cursor().stream() == journal.stream() && publication.cursor().sequence() == 1
+            && publication.records() == [observation_record(1)])
+        );
+        assert_eq!(old.recv().await, None);
+        assert_eq!(sender.diagnostics().pending_messages, 0);
+        assert!(resumed.try_recv().is_err());
+    }
+
+    #[tokio::test]
     async fn mixed_publication_is_admitted_atomically_from_the_essential_reserve() {
         let (sender, mut receiver) = renderer_output_transport_channel_with_limits(test_limits());
         let observation = publication(1, vec![observation_record(1)]);
-        let mixed = publication(2, vec![observation_record(1), owner_action_record()]);
+        let mixed = publication(2, vec![observation_record(1), essential_worker_record()]);
 
         sender
             .send(observation.clone())
@@ -735,7 +830,7 @@ mod tests {
             let barrier = barrier.clone();
             workers.push(std::thread::spawn(move || {
                 barrier.wait();
-                sender.send(publication(sequence, vec![owner_action_record()]))
+                sender.send(publication(sequence, vec![essential_worker_record()]))
             }));
         }
 

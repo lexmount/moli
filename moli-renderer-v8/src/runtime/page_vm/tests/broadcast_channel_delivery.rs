@@ -58,7 +58,7 @@ __broadcastBodySender.postMessage("go");
             "the body-only executor must leave Promise reactions pending"
         );
 
-        page_vm.finish_selected_page_callback_task(&loader).await?;
+        page_vm.finish_selected_page_callback_task().await?;
         assert_eq!(
             page_vm.vm_mut().eval("__broadcastBodyBoundary.join('|')")?,
             "callback|microtask|runtime-script",
@@ -100,10 +100,7 @@ __broadcastChildSender.postMessage("go");
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(
-                    PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::BroadcastChannel),
-                    &loader,
-                )
+                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::DomManipulation(PageDomManipulationTestFamily::BroadcastChannel))
                 .await?,
             "the exact BroadcastChannel task should run through the selected dispatcher"
         );
@@ -170,8 +167,7 @@ details.open = true;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "BroadcastChannel should consume the first shared DOM turn"
@@ -189,8 +185,7 @@ details.open = true;
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::ElementToggle
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "the existing element-toggle task should retain the second shared DOM turn"
@@ -240,8 +235,7 @@ async fn broadcast_channel_delivery_applies_a_real_producer_task_and_microtask_c
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "real producer task should consume one selected typed turn"
@@ -329,8 +323,7 @@ async fn broadcast_channel_delivery_consumes_one_exact_owner_task_per_turn() {
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "first delivery should consume one selected turn"
@@ -347,8 +340,7 @@ async fn broadcast_channel_delivery_consumes_one_exact_owner_task_per_turn() {
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "second delivery should consume the following selected turn"
@@ -365,8 +357,7 @@ async fn broadcast_channel_delivery_consumes_one_exact_owner_task_per_turn() {
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DomManipulation(
                         PageDomManipulationTestFamily::BroadcastChannel
-                    ),
-                    &loader,
+                    )
                 )
                 .await?,
             "two recipient deliveries must consume exactly two selected turns"
@@ -471,8 +462,7 @@ fn broadcast_channel_delivery_rejects_a_real_page_vm_replacement_identity_collis
                             .run_exact_selected_page_task_for_test(
                                 PageSelectedTaskTestSelector::DomManipulation(
                                     PageDomManipulationTestFamily::BroadcastChannel
-                                ),
-                                &loader,
+                                )
                             )
                             .await?,
                         "replacement producer task should consume the next selected turn"
@@ -585,7 +575,6 @@ async fn broadcast_channel_delivery_rejects_a_replaced_child_realm_without_rebin
                         current_task,
                     ),
                 ),
-                loader.clone(),
             )
             .await?;
         assert_eq!(
