@@ -901,13 +901,16 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 } else {
                     history_entry_seed_for_cross_document_location(scope, owner, &resolved, kind)
                 };
-                if let Some(entry_seed) = entry_seed {
-                    host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+                if let Some(entry_seed) = entry_seed
+                    && host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
                         handle,
                         resolved.as_str(),
                         entry_seed,
                         initiator_url,
-                    );
+                    )
+                    && let Some(navigation_load) = host.current_child_navigation_load(handle)
+                {
+                    host.check_child_navigation_beforeunload(scope, handle, navigation_load);
                 }
             }
         }

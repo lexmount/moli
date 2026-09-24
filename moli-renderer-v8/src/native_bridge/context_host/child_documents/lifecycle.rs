@@ -1,5 +1,4 @@
 use super::super::JsContextHost;
-use super::ChildDocumentNavigationInitiator;
 
 #[derive(Clone, Copy)]
 enum ChildDocumentInteractiveScriptDisposition {
@@ -9,8 +8,9 @@ enum ChildDocumentInteractiveScriptDisposition {
 use crate::{
     context_bootstrap::{
         dispatch_beforeunload_for_runtime_owner, dispatch_pagehide_for_runtime_owner,
-        dispatch_unload_for_runtime_owner, record_performance_dom_content_loaded_event_end,
-        record_performance_dom_content_loaded_event_start,
+        dispatch_unload_for_runtime_owner, navigation_unload_event_active,
+        record_performance_dom_content_loaded_event_end,
+        record_performance_dom_content_loaded_event_start, replace_navigation_unload_event_active,
     },
     detached_event_target::dispatch_detached_simple_event,
     document_runtime::DomHandle,
@@ -858,14 +858,57 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
     ) {
+        self.dispatch_child_document_tree_beforeunload(scope, handle, None);
+    }
+
+    pub(crate) fn check_child_navigation_beforeunload(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        navigation_load: FrameDocumentNavigationLoadBinding,
+    ) -> bool {
+        if !self
+            .frame_owner_store
+            .claim_current_child_navigation_beforeunload(handle, navigation_load)
+        {
+            return self.current_child_navigation_load(handle) == Some(navigation_load)
+                && self
+                    .frame_owner_store
+                    .child_document_task_owner_is_current(handle, navigation_load.owner());
+        }
+        self.dispatch_child_document_tree_beforeunload(scope, handle, Some(navigation_load))
+    }
+
+    fn dispatch_child_document_tree_beforeunload(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        navigation_load: Option<FrameDocumentNavigationLoadBinding>,
+    ) -> bool {
+        let is_current = |host: &Self| {
+            navigation_load.is_none_or(|navigation_load| {
+                host.current_child_navigation_load(handle) == Some(navigation_load)
+                    && host
+                        .frame_owner_store
+                        .child_document_task_owner_is_current(handle, navigation_load.owner())
+            })
+        };
         let documents = self.child_document_unload_tree_snapshot(handle);
-        let mut unload_guards = Vec::new();
+        let mut navigation_guards: Vec<(DomHandle, v8::Global<v8::Object>, bool)> = Vec::new();
         for (handle, document, parent_document) in documents {
-            while unload_guards
+            while navigation_guards
                 .last()
-                .is_some_and(|(document, _)| Some(*document) != parent_document)
+                .is_some_and(|(document, _, _)| Some(*document) != parent_document)
             {
-                unload_guards.pop();
+                let (_, window, previous) = navigation_guards.pop().unwrap();
+                let window = v8::Local::new(scope, &window);
+                if let Some(context) = window.get_creation_context(scope) {
+                    let scope = &mut v8::ContextScope::new(scope, context);
+                    replace_navigation_unload_event_active(scope, window, previous);
+                }
+            }
+            if !is_current(self) {
+                break;
             }
             if !self.child_browsing_context_is_live(handle)
                 || self.child_browsing_context_document_handle(handle) != Some(document)
@@ -876,55 +919,53 @@ impl JsContextHost {
             else {
                 continue;
             };
-            // Checking beforeunload must not retire the Document: the response
-            // can still be a 204, 205, or download. Keep ancestor guards active
-            // while checking descendants, just as for an ordinary navigation.
-            unload_guards.push((document, self.enter_document_unload(document)));
+            let Some(context) = window.get_creation_context(scope) else {
+                continue;
+            };
+            // The caller may only have cross-origin Location write access.
+            // Internal flags and event construction belong to the retiring realm.
+            let scope = &mut v8::ContextScope::new(scope, context);
+            if navigation_unload_event_active(scope, window) {
+                continue;
+            }
+            // Prevent navigation reentry into ancestors while checking their
+            // descendants. Destructive writes are suppressed only during each
+            // document's own beforeunload callback, whose dispatcher owns the
+            // native unload counter. Checking does not retire the document or
+            // require Window load to have started.
+            let previous = replace_navigation_unload_event_active(scope, window, true);
+            navigation_guards.push((document, v8::Global::new(scope, window), previous));
             dispatch_beforeunload_for_runtime_owner(scope, window);
         }
+        for (_, window, previous) in navigation_guards.into_iter().rev() {
+            let window = v8::Local::new(scope, &window);
+            if let Some(context) = window.get_creation_context(scope) {
+                let scope = &mut v8::ContextScope::new(scope, context);
+                replace_navigation_unload_event_active(scope, window, previous);
+            }
+        }
+        is_current(self)
     }
 
     pub(in crate::native_bridge::context_host) fn dispatch_child_browsing_context_unload_lifecycle_if_needed(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
-        initiator: ChildDocumentNavigationInitiator,
-    ) -> bool {
-        self.dispatch_child_document_tree_unload_lifecycle(
-            scope,
-            handle,
-            initiator != ChildDocumentNavigationInitiator::HistoryTraversal,
-        )
-    }
-
-    fn dispatch_child_document_tree_unload_lifecycle(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        handle: DomHandle,
-        include_beforeunload: bool,
     ) -> bool {
         let documents = self.child_document_unload_tree_snapshot(handle);
-        let mut unload_guards = Vec::new();
         let mut actions = Vec::new();
-        // Every descendant gets its cancellation check before actual unload
-        // begins. Keep ancestor counters active across descendant callbacks.
+        // Beforeunload was checked before fetching the replacement. Only a
+        // response that commits a new document starts the actual unload.
         for (handle, document, parent_document) in documents {
-            while unload_guards
-                .last()
-                .is_some_and(|(document, _)| Some(*document) != parent_document)
-            {
-                unload_guards.pop();
-            }
             if self.child_browsing_context_document_handle(handle) != Some(document) {
                 continue;
             }
-            let Some(window) = self.existing_child_browsing_context_window_wrapper(scope, handle)
-            else {
-                continue;
-            };
             if self
-                .existing_child_browsing_context_document_wrapper(scope, handle)
+                .existing_child_browsing_context_window_wrapper(scope, handle)
                 .is_none()
+                || self
+                    .existing_child_browsing_context_document_wrapper(scope, handle)
+                    .is_none()
             {
                 continue;
             }
@@ -934,13 +975,9 @@ impl JsContextHost {
             else {
                 continue;
             };
-            unload_guards.push((document, self.enter_document_unload(document)));
             actions.push((document, parent_document, action));
-            if include_beforeunload {
-                dispatch_beforeunload_for_runtime_owner(scope, window);
-            }
         }
-        unload_guards.clear();
+        let mut unload_guards = Vec::new();
         let dispatched = !actions.is_empty();
         for (document, parent_document, action) in actions {
             while unload_guards

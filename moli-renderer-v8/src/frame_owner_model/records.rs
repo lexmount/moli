@@ -286,6 +286,7 @@ pub(crate) struct FrameRecord {
 pub(super) struct FrameNavigationLoadState {
     pub(super) binding: FrameDocumentNavigationLoadBinding,
     pub(super) commit_task_queued: bool,
+    pub(super) beforeunload_checked: bool,
 }
 
 impl FrameNavigationLoadState {
@@ -293,6 +294,7 @@ impl FrameNavigationLoadState {
         Self {
             binding,
             commit_task_queued: false,
+            beforeunload_checked: false,
         }
     }
 }

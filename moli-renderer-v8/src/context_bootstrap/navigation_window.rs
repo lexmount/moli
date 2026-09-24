@@ -302,11 +302,12 @@ pub(super) fn navigation_document_has_opaque_origin<'s>(
     host.child_browsing_context_has_opaque_origin(handle)
 }
 
-pub(super) fn navigation_unload_event_active<'s>(
+pub(crate) fn navigation_unload_event_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> bool {
-    object_bool_property(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT).unwrap_or(false)
+    get_private_value(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT)
+        .is_some_and(|value| value.is_true())
         || context_host_ptr_from_global_bridge(scope).is_some_and(|host_ptr| {
             let host = unsafe { &*host_ptr };
             super::window_accessors::window_document_handle(scope, owner, host)
@@ -314,16 +315,21 @@ pub(super) fn navigation_unload_event_active<'s>(
         })
 }
 
-pub(super) fn replace_navigation_unload_event_active<'s>(
+pub(crate) fn replace_navigation_unload_event_active<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     active: bool,
 ) -> bool {
     // Restore only the event flag, not the effective state that also includes
     // native ancestor guards. Those counters unwind independently.
-    let previous =
-        object_bool_property(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT).unwrap_or(false);
-    define_non_enumerable_bool_property(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT, active);
+    let previous = get_private_value(scope, owner, WINDOW_UNLOAD_EVENT_ACTIVE_SLOT)
+        .is_some_and(|value| value.is_true());
+    set_private_value(
+        scope,
+        owner,
+        WINDOW_UNLOAD_EVENT_ACTIVE_SLOT,
+        v8::Boolean::new(scope, active).into(),
+    );
     previous
 }
 
