@@ -47,8 +47,7 @@ use super::super::{
 };
 use super::targets::{
     SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
-    navigate_element_target_browsing_context, navigate_hyperlink_source_browsing_context,
-    queue_top_level_location_navigation,
+    navigate_element_target_browsing_context,
 };
 
 fn call_node_contains(
@@ -1691,15 +1690,6 @@ fn anchor_click_default_action(
             unreachable!("download hyperlink policy returned before target selection")
         }
     };
-    let special_target = target_name
-        .as_deref()
-        .and_then(SpecialBrowsingContextTarget::parse);
-    if (target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current))
-        && navigate_hyperlink_source_browsing_context(scope, runtime_ptr, handle, &resolved)
-    {
-        return None;
-    }
-    let source_element = node_wrapper_from_handle(scope, handle);
     if click_listener_changed_named_child_navigation(
         scope,
         runtime_ptr,
@@ -1716,7 +1706,6 @@ fn anchor_click_default_action(
         handle,
         target_name.as_deref(),
         &resolved,
-        source_element,
         user_initiated,
         popup_disposition,
     );
