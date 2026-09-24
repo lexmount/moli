@@ -2,6 +2,7 @@ use super::*;
 
 mod child_history_traversal;
 mod cross_origin_navigation;
+mod history_limits;
 mod hyperlink_navigation;
 mod navigation_focus;
 mod navigation_window_reuse;
