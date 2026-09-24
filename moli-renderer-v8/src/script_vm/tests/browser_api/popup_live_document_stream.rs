@@ -1,5 +1,114 @@
 use super::*;
 
+#[tokio::test]
+async fn popup_navigation_parser_preserves_nested_writes_and_the_unparsed_tail() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://popup-navigation-parser.test/",
+        "<!doctype html><body>opener",
+        &loader,
+    );
+    vm.eval(r#"
+globalThis.__popupParseTrace = [];
+const nested = URL.createObjectURL(new Blob([
+  'opener.__popupParseTrace.push(["nested",!!document.getElementById("tail")]);document.write("<b id=nested>nested</b>");'
+], {type:'text/javascript'}));
+const written = '<span id=written>one</span><script src="'+nested+'"></script><span id=written-tail>two</span>';
+const blocking = URL.createObjectURL(new Blob([
+  'const doc=document, before=document.getElementById("before");' +
+  'doc.addEventListener("readystatechange",()=>{if(doc.readyState==="interactive")opener.__popupParseTrace.push(["interactive"])});' +
+  'opener.__popupParseTrace.push(["blocking",document.currentScript.tagName,!!document.getElementById("tail")]);' +
+  'document.open();document.close();document.write('+JSON.stringify(written)+');' +
+  'opener.__popupParseTrace.push(["write",doc===document,before===document.getElementById("before"),!!document.getElementById("written")]);'
+], {type:'text/javascript'}));
+const deferred = URL.createObjectURL(new Blob([
+  'opener.__popupParseTrace.push(["deferred",!!document.getElementById("tail"),document.readyState]);document.write("destructive");'
+], {type:'text/javascript'}));
+const html = '<!doctype html><body><div id=before>before</div><script src="'+blocking+'"></script>' +
+  '<script defer src="'+deferred+'"></script><p id=tail>tail</p>' +
+  '<script>opener.__popupParseTrace.push(["tail",document.readyState]);Promise.resolve().then(()=>opener.__popupParseTrace.push(["tail-reaction"]));</script>';
+globalThis.__parsedPopup = open(URL.createObjectURL(new Blob([html], {type:'text/html'})));
+__parsedPopup.onload = () => __popupParseTrace.push(['load', __parsedPopup.document.readyState]);
+"#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__popupParseTrace.length)",
+        "8",
+        "popup navigation nested parser scripts and load",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("JSON.stringify(__popupParseTrace)").unwrap(),
+        r#"[["blocking","SCRIPT",false],["write",true,true,true],["nested",false],["tail","loading"],["tail-reaction"],["interactive"],["deferred",true,"interactive"],["load","complete"]]"#
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(Array.from(__parsedPopup.document.querySelectorAll('[id]'),n=>[n.id,n.textContent]))").unwrap(),
+        r#"[["before","before"],["written","one"],["nested","nested"],["written-tail","two"],["tail","tail"]]"#
+    );
+    vm.eval("__parsedPopup.close()").unwrap();
+}
+
+#[tokio::test]
+async fn popup_navigation_parser_applies_meta_csp_only_to_subsequent_scripts() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://popup-navigation-meta.test/",
+        "<!doctype html><body>opener",
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.__popupParsePolicy = [];
+const html = '<!doctype html><head><script>opener.__popupParsePolicy.push("before")</script>' +
+  '<meta http-equiv="Content-Security-Policy" content="script-src &apos;nonce-ok&apos;">' +
+  '<script>opener.__popupParsePolicy.push("blocked")</script>' +
+  '<script nonce=ok>opener.__popupParsePolicy.push("allowed")</script>';
+globalThis.__policyPopup = open(URL.createObjectURL(new Blob([html], {type:'text/html'})));
+__policyPopup.onload = () => __popupParsePolicy.push('load');
+"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "JSON.stringify(__popupParsePolicy)",
+        r#"["before","allowed","load"]"#,
+        "popup navigation parser policy delivery",
+    )
+    .await;
+    vm.eval("__policyPopup.close()").unwrap();
+}
+
+#[tokio::test]
+async fn popup_navigation_parser_uses_the_live_base_for_relative_requests() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_parsed_page_task_executor_test_vm(
+        "https://popup-navigation-base.test/",
+        "<!doctype html><body>opener",
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.__popupParseBase = [];
+const html = '<!doctype html><head><base href="https://popup-navigation-base.test/resources/">' +
+  '<script>opener.__popupParseBase.push(document.baseURI,new Request("asset").url);</script>';
+globalThis.__basePopup = open(URL.createObjectURL(new Blob([html], {type:'text/html'})));
+__basePopup.onload = () => __popupParseBase.push('load');
+"#,
+    )
+    .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "JSON.stringify(__popupParseBase)",
+        r#"["https://popup-navigation-base.test/resources/","https://popup-navigation-base.test/resources/asset","load"]"#,
+        "popup navigation parser base URL",
+    )
+    .await;
+    vm.eval("__basePopup.close()").unwrap();
+}
+
 #[test]
 fn popup_live_document_open_replaces_the_tree_and_close_finishes_the_parser() {
     let mut vm = new_storage_test_vm("https://popup-live-open.test/");

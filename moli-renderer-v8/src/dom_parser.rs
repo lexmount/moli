@@ -420,9 +420,7 @@ fn parse_browsing_context_document_snapshot(
     content_type: Option<&str>,
     html_parser: HtmlParser,
 ) -> (DomHost, DetachedDocumentKind) {
-    if content_type.is_some_and(is_xml_document_mime)
-        || (content_type.is_none() && child_document_url_is_xml_like(&document_url))
-    {
+    if browsing_context_document_uses_xml_parser(&document_url, content_type) {
         let parser = XmlParser;
         return (
             DomHost::from_dom(parser.parse(document_url, source.to_owned())),
@@ -443,7 +441,13 @@ fn parse_browsing_context_document_snapshot(
     )
 }
 
-fn child_document_url_is_xml_like(url: &Url) -> bool {
+pub(crate) fn browsing_context_document_uses_xml_parser(
+    url: &Url,
+    content_type: Option<&str>,
+) -> bool {
+    if let Some(content_type) = content_type {
+        return is_xml_document_mime(content_type);
+    }
     let path = url.path().to_ascii_lowercase();
     path.ends_with(".xml") || path.ends_with(".xhtml") || path.ends_with(".svg")
 }

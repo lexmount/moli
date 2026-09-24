@@ -32,6 +32,10 @@ impl PopupDocumentStream {
     pub(super) fn async_loads_finished(&self) -> bool {
         self.async_pending == 0
     }
+
+    fn parser_finished(&self) -> bool {
+        self.parser.is_none() && self.deferred.is_empty() && !self.deferred_pending
+    }
 }
 
 impl Drop for PopupDocumentStream {
@@ -46,6 +50,65 @@ impl Drop for PopupDocumentStream {
 }
 
 impl JsContextHost {
+    pub(super) fn start_lightweight_popup_document_parser(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: LightweightPopupNavigationTaskToken,
+        document_handle: DomHandle,
+        markup: &str,
+    ) -> LightweightPopupClassicScriptAdvance {
+        let mut parser = DocumentParserSession::start_finite_live_document(
+            self.document_url_for_handle(document_handle),
+            document_handle,
+            self.lightweight_popup_scripting_enabled(task.popup_id()),
+        );
+        let markup = crate::dom_parser::preserve_decoded_bom_only_browsing_context_body(
+            markup,
+            Some("text/html"),
+        );
+        parser.queue_arrived_chunk(markup.into_owned());
+        self.lightweight_popup_document_record_mut(task.popup_id())
+            .expect("installed popup Document")
+            .stream = Some(PopupDocumentStream {
+            task,
+            control: parser.control_handle(),
+            parser: Some(parser),
+            deferred: Default::default(),
+            deferred_pending: false,
+            async_pending: 0,
+        });
+        let activity = self.pump_popup_document_stream(scope, task, None, false);
+        if self.popup_document_stream_is_current(task)
+            && self
+                .lightweight_popup_document_record(task.popup_id())
+                .and_then(|record| record.stream.as_ref())
+                .is_some_and(|stream| !stream.parser_finished())
+        {
+            LightweightPopupClassicScriptAdvance::Pending(activity)
+        } else {
+            LightweightPopupClassicScriptAdvance::Completed(activity)
+        }
+    }
+
+    pub(super) fn complete_lightweight_popup_document_parser(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: LightweightPopupNavigationTaskToken,
+    ) -> Option<PopupDocumentParserCompletion> {
+        if !self.popup_document_stream_is_current(task) {
+            return None;
+        }
+        let record = self.lightweight_popup_document_record(task.popup_id())?;
+        let stream = record.stream.as_ref()?;
+        if stream.control.lifetime() != DocumentParserLifetime::Finite || !stream.parser_finished()
+        {
+            return None;
+        }
+        let document_handle = record.handle?;
+        self.sync_child_browsing_context_subtree(scope, document_handle);
+        self.prepare_lightweight_popup_parser_completion(task)
+    }
+
     pub(in crate::native_bridge::context_host) fn popup_document_parser_is_current(
         &self,
         owner: LightweightPopupDocumentOwner,
@@ -194,7 +257,7 @@ impl JsContextHost {
         else {
             return;
         };
-        self.pump_popup_document_stream(scope, task, Some(html), false);
+        let _ = self.pump_popup_document_stream(scope, task, Some(html), false);
     }
 
     pub(in crate::native_bridge) fn close_lightweight_popup_document_stream(
@@ -210,7 +273,14 @@ impl JsContextHost {
         else {
             return;
         };
-        self.pump_popup_document_stream(scope, task, None, true);
+        // Only document.open() creates a stream that document.close() may end.
+        if self
+            .popup_document_stream_insertion(task.popup_id())
+            .is_some_and(|insertion| insertion.lifetime() == DocumentParserLifetime::Finite)
+        {
+            return;
+        }
+        let _ = self.pump_popup_document_stream(scope, task, None, true);
     }
 
     fn pump_popup_document_stream(
@@ -219,6 +289,19 @@ impl JsContextHost {
         task: LightweightPopupNavigationTaskToken,
         html: Option<&str>,
         close: bool,
+    ) -> PopupDocumentLoadBodyActivity {
+        let mut activity = PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
+        self.pump_popup_document_stream_with_activity(scope, task, html, close, &mut activity);
+        activity
+    }
+
+    fn pump_popup_document_stream_with_activity(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        task: LightweightPopupNavigationTaskToken,
+        html: Option<&str>,
+        close: bool,
+        activity: &mut PopupDocumentLoadBodyActivity,
     ) {
         if !self.popup_document_stream_is_current(task) {
             return;
@@ -322,7 +405,10 @@ impl JsContextHost {
                     if !insertion.input_is_empty() {
                         continue;
                     }
-                    if insertion.lifetime() == DocumentParserLifetime::Closing {
+                    if matches!(
+                        insertion.lifetime(),
+                        DocumentParserLifetime::Finite | DocumentParserLifetime::Closing
+                    ) {
                         let Some(mut parser) = self
                             .lightweight_popup_document_record_mut(popup_id)
                             .and_then(|record| record.stream.as_mut())
@@ -347,11 +433,12 @@ impl JsContextHost {
                             self,
                             &signals.parser_created_null_registry_elements,
                         );
-                        self.finish_popup_document_stream(scope, task);
+                        self.finish_popup_document_stream(scope, task, activity);
                     }
                     return;
                 }
                 LiveDocumentParserStepOutcome::CustomElementConstructionHandoff(handoff) => {
+                    *activity = PopupDocumentLoadBodyActivity::PageCodeOrEventDispatchAttempted;
                     let host_ptr = self as *mut JsContextHost;
                     let _ =
                         custom_elements::construct_parser_created_autonomous_element_from_handoff(
@@ -384,7 +471,9 @@ impl JsContextHost {
                     // execution or the script waits in the deferred queue.
                     self.dom_host_mut()
                         .set_script_already_started(script.node_id, true);
-                    if script.kind != ScriptKind::Classic {
+                    if script.kind != ScriptKind::Classic
+                        || !self.lightweight_popup_scripting_enabled(popup_id)
+                    {
                         continue;
                     }
                     if mode == PopupStreamScriptMode::Deferred {
@@ -395,7 +484,8 @@ impl JsContextHost {
                             .expect("current stream")
                             .deferred
                             .push_back(script);
-                    } else if self.run_popup_document_stream_script(scope, task, mode, script)
+                    } else if self
+                        .run_popup_document_stream_script(scope, task, mode, script, activity)
                         && mode == PopupStreamScriptMode::Blocking
                     {
                         return;
@@ -413,6 +503,7 @@ impl JsContextHost {
         task: LightweightPopupNavigationTaskToken,
         mode: PopupStreamScriptMode,
         script: PreparedScript,
+        activity: &mut PopupDocumentLoadBodyActivity,
     ) -> bool {
         if !self.popup_document_stream_is_current(task) {
             return false;
@@ -445,14 +536,18 @@ impl JsContextHost {
                 .content_security_reporting_endpoints
                 .clone(),
         };
-        let pending = matches!(
-            self.advance_lightweight_popup_classic_scripts(
-                scope,
-                continuation,
-                PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch
-            ),
-            LightweightPopupClassicScriptAdvance::Pending(_)
-        );
+        let advance =
+            self.advance_lightweight_popup_classic_scripts(scope, continuation, *activity);
+        let pending = match advance {
+            LightweightPopupClassicScriptAdvance::Completed(executed) => {
+                *activity = executed;
+                false
+            }
+            LightweightPopupClassicScriptAdvance::Pending(executed) => {
+                *activity = executed;
+                true
+            }
+        };
         if pending && self.popup_document_stream_is_current(task) {
             let stream = self
                 .lightweight_popup_document_record_mut(task.popup_id())
@@ -479,11 +574,32 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         task: LightweightPopupNavigationTaskToken,
+        activity: &mut PopupDocumentLoadBodyActivity,
     ) {
         if !self.popup_document_stream_is_current(task) {
             return;
         }
+        let stream = self
+            .lightweight_popup_document_record(task.popup_id())
+            .and_then(|record| record.stream.as_ref())
+            .expect("current stream");
+        let finite = stream.control.lifetime() == DocumentParserLifetime::Finite;
+        if finite && stream.parser_finished() {
+            // The enclosing resource task must complete its script checkpoint
+            // before publishing interactive and DOMContentLoaded.
+            return;
+        }
+        if finite {
+            // Deferred scripts need interactive readiness while this resource
+            // task still owns the parser. Settle the last blocking script's
+            // reactions before entering that lifecycle boundary.
+            let _ = crate::script_cleanup::perform_parser_script_preparation_checkpoint(scope);
+            if !self.popup_document_stream_is_current(task) {
+                return;
+            }
+        }
         if let Some(window) = self.current_popup_window_event_target(task.popup_id()) {
+            *activity = PopupDocumentLoadBodyActivity::PageCodeOrEventDispatchAttempted;
             self.dispatch_lightweight_popup_document_readiness(
                 scope,
                 window,
@@ -511,12 +627,16 @@ impl JsContextHost {
                 task,
                 PopupStreamScriptMode::Deferred,
                 script,
+                activity,
             ) {
                 return;
             }
             if !self.popup_document_stream_is_current(task) {
                 return;
             }
+        }
+        if finite {
+            return;
         }
         if let Some(completion) = self.prepare_lightweight_popup_parser_completion(task)
             && self.begin_lightweight_popup_interactive(scope, completion)
@@ -539,9 +659,10 @@ impl JsContextHost {
         scope: &mut v8::PinScope<'_, '_>,
         task: LightweightPopupNavigationTaskToken,
         mode: PopupStreamScriptMode,
-    ) {
+    ) -> PopupDocumentLoadBodyActivity {
+        let mut activity = PopupDocumentLoadBodyActivity::NoPageCodeOrEventDispatch;
         if !self.popup_document_stream_is_current(task) {
-            return;
+            return activity;
         }
         let stream = self
             .lightweight_popup_document_record_mut(task.popup_id())
@@ -551,17 +672,18 @@ impl JsContextHost {
             .expect("current stream");
         match mode {
             PopupStreamScriptMode::Blocking => {
-                self.pump_popup_document_stream(scope, task, None, false)
+                activity = self.pump_popup_document_stream(scope, task, None, false);
             }
             PopupStreamScriptMode::Deferred => {
                 stream.deferred_pending = false;
-                self.finish_popup_document_stream(scope, task);
+                self.finish_popup_document_stream(scope, task, &mut activity);
             }
             PopupStreamScriptMode::Async => {
                 stream.async_pending -= 1;
                 self.publish_lightweight_popup_load_event_if_ready(task.popup_id());
             }
         }
+        activity
     }
 
     pub(super) fn prepare_popup_document_stream_script_resume(
