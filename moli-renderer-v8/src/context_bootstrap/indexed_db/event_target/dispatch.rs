@@ -46,7 +46,7 @@ pub(crate) fn dispatch_indexed_db_script_event<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let Some((event, event_type)) =
-        event_target_dispatch::prepare_script_dispatch(scope, args.this(), args.get(0))
+        event_target_dispatch::prepare_script_dispatch(scope, args.get(0))
     else {
         return;
     };
