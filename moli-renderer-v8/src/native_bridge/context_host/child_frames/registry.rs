@@ -596,6 +596,9 @@ impl PageScriptHost {
                             .map(|entry| entry.srcdoc_history.clone())
                             .unwrap_or_default(),
                         document_policy_container,
+                        can_navigate_top_without_user_gesture: existing
+                            .as_ref()
+                            .is_some_and(|entry| entry.can_navigate_top_without_user_gesture),
                         document_internal_ancestor_origins,
                         ancestor_origins_referrer_policy_snapshot,
                         completed_frame_owner_resource_timing: existing.as_ref().and_then(

@@ -224,7 +224,6 @@ pub(crate) use location_navigation::{
     navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
-    sandbox_blocks_ancestor_or_top_navigation_from_source,
 };
 #[cfg(feature = "molio")]
 pub(crate) use location_navigation::{
