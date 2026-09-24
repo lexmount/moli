@@ -18,6 +18,24 @@ use super::gate::{
 };
 use super::*;
 
+#[test]
+fn aborted_navigation_preserves_document_without_changing_other_failure_policies() {
+    assert_eq!(
+        failed_navigation_document_policy(moli_fetch::NET_ERR_ABORTED_ERROR_TEXT),
+        FailedNavigationDocumentPolicy::PreserveCommittedDocument
+    );
+    for error in [
+        "net::ERR_CONNECTION_REFUSED",
+        "net::ERR_TIMED_OUT",
+        "net::ERR_HTTP_RESPONSE_CODE_FAILURE",
+    ] {
+        assert_eq!(
+            failed_navigation_document_policy(error),
+            FailedNavigationDocumentPolicy::InvalidateCommittedDocument
+        );
+    }
+}
+
 fn completed_events() -> CompletedMainDocumentNetworkEvents {
     CompletedMainDocumentNetworkEvents::new(
         "GET".to_owned(),
