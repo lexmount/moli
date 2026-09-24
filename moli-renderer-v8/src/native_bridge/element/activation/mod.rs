@@ -16,10 +16,11 @@ pub(crate) use text_input::perform_text_input;
 pub(crate) use clipboard::perform_clipboard_key_default_action;
 
 pub(in crate::native_bridge) use click::{input_show_picker_callback, node_click_callback};
+#[cfg(test)]
+pub(crate) use default_action::activate_handle_via_click;
 #[cfg(feature = "ace-protocol")]
 pub(crate) use default_action::activate_handle_via_click_with_detail_and_modifiers;
 pub(super) use default_action::dispatch_click_event;
-pub(in crate::native_bridge) use default_action::navigate_form_target_browsing_context;
 #[cfg(feature = "devtools")]
 pub(crate) use default_action::{
     accepts_drop_default_action, activate_handle_after_pointer_release,
@@ -37,18 +38,8 @@ pub(crate) use default_action::{
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
     scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
 };
+pub(in crate::native_bridge) use targets::choose_form_navigation_target;
 pub(crate) use targets::{
     SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
 };
-pub(in crate::native_bridge) use targets::{
-    browsing_context_window_for_dispatch_scope, form_navigation_target_document,
-    named_iframe_target_handle_for_navigation,
-};
-pub(in crate::native_bridge::element) use targets::{
-    queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request,
-};
-
-#[cfg(test)]
-pub(crate) use default_action::activate_handle_via_click;

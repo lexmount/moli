@@ -27,12 +27,9 @@ use super::super::{
 use super::{
     attribute_property_getter_from_object_or_detached,
     boolean_attribute_property_getter_from_object_or_detached, close_dialog_element,
-    construct_simple_event, construct_simple_event_for_target, construct_submit_event,
-    dispatch_public_event, element_attribute, element_has_attribute, html_element_getter_receiver,
-    html_element_setter_receiver, navigate_form_target_browsing_context,
-    parse_non_negative_dimension, property_usv_string_value,
-    queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request, reflected_element_attribute_handle,
+    construct_simple_event, construct_simple_event_for_target, construct_submit_event, dispatch_public_event, element_attribute,
+    element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
+    parse_non_negative_dimension, property_usv_string_value, reflected_element_attribute_handle,
     resolve_url_like_attribute, set_attribute_property_on_object_or_detached,
     set_reflected_attribute, set_reflected_boolean_attribute, update_focus,
 };
@@ -47,6 +44,9 @@ mod select;
 mod simple_controls;
 mod submission;
 pub(in crate::native_bridge::element) use submission::dispatch_form_reset_event;
+pub(in crate::native_bridge) use submission::{
+    PlannedFormNavigation, apply_planned_form_navigation,
+};
 mod text_control;
 mod validation;
 

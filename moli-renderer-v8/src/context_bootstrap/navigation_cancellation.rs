@@ -83,6 +83,8 @@ impl WindowNavigationStop {
             ) == Some(self.target)
                 && let OwnerDispatchScope::Child(handle) = self.target.dispatch_scope()
             {
+                unsafe { &mut *host_ptr }
+                    .cancel_planned_form_navigation_to(self.target.dispatch_scope());
                 unsafe { &mut *host_ptr }.cancel_pending_child_browsing_context_navigation(handle);
             }
             return;
@@ -94,6 +96,8 @@ impl WindowNavigationStop {
             {
                 return;
             }
+            unsafe { &mut *host_ptr }
+                .cancel_planned_form_navigation_to(self.target.dispatch_scope());
             // Keep ancestors guarded while stopping children: an abort listener
             // may synchronously call stop() on this Window again.
             set_private_value(
