@@ -26,7 +26,7 @@ fn message_channel_retained_constructor_creates_detached_ports_without_endpoints
 }
 
 #[test]
-fn simple_event_targets_validate_events_before_rejecting_retired_receiver_realms() {
+fn simple_event_targets_dispatch_retained_objects_using_listener_realms() {
     let mut vm = new_parsed_test_vm(
         "https://retired-event-target.test/",
         "<!doctype html><body>",
