@@ -2858,10 +2858,6 @@ async fn websocket_cdp_browser_reconnect_clears_detached_session_emulated_media(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn websocket_cdp_browser_style_environment_survives_target_creation_and_session_detach() {
     let (addr, server) = spawn_test_protocol_server().await;
-    let (mut browser, _) =
-        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
-            .await
-            .expect("connect browser websocket");
     let mut root_page = connect_dynamic_page(addr, DEFAULT_TARGET_ID).await;
 
     let media = send_cdp_command(
@@ -2887,9 +2883,9 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
     .await;
     assert_eq!(response_by_id(&text_scale, 2)["result"], json!({}));
 
-    let target_id = create_dynamic_target(&mut browser, 3).await;
+    let target_id = create_dynamic_target(&mut root_page, 3).await;
     let attach = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         4,
         "Target.attachToTarget",
         None,
@@ -2902,7 +2898,7 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
         .to_owned();
     let url = "data:text/html,<style>body{font-size:calc(16px * env(preferred-text-scale,1))}</style><body>text</body>";
     let navigation = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         5,
         "Page.navigate",
         Some(&session_id),
@@ -2912,7 +2908,7 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
     assert!(response_by_id(&navigation, 5).get("result").is_some());
 
     let inherited = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         6,
         "Runtime.evaluate",
         Some(&session_id),
@@ -2928,7 +2924,7 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
     );
 
     let detach = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         7,
         "Target.detachFromTarget",
         None,
@@ -2937,7 +2933,7 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
     .await;
     assert_eq!(response_by_id(&detach, 7)["result"], json!({}));
     let reattach = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         8,
         "Target.attachToTarget",
         None,
@@ -2949,7 +2945,7 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
         .expect("replacement target session")
         .to_owned();
     let retained = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         9,
         "Runtime.evaluate",
         Some(&replacement_session_id),
