@@ -590,8 +590,9 @@ impl JsContextHost {
                             .as_ref()
                             .map(|entry| entry.classic_script_document_state.clone())
                             .unwrap_or_default(),
-                        // Attribute changes can schedule navigation, but the active
-                        // Document keeps its mutable origin until replacement commits.
+                        // Navigation attributes do not replace the current Document.
+                        // Keep its domain through unload or a cancelled navigation;
+                        // committing the new Document resets this state.
                         document_domain_override: existing
                             .as_ref()
                             .map(|entry| entry.document_domain_override.clone())

@@ -3,8 +3,10 @@ use super::*;
 #[tokio::test(flavor = "current_thread")]
 async fn document_domain_survives_stream_replacement_and_pending_navigation() {
     const HOST: &str = "document-domain-lifetime.test";
-    let child = "<!doctype html><body><p id=original>original</p>\
-        <script>document.domain = location.hostname;</script>";
+    let child = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/document-open-origin-child.html"
+    ));
     let same = StaticHttpServer::spawn_with_bodies(vec![child.to_owned()]).await;
     let cross = StaticHttpServer::spawn_with_bodies(vec![
         child.to_owned(),
@@ -50,7 +52,10 @@ globalThis.__documentDomainLifetimeResult = null;
             .unwrap(),
     )
     .unwrap();
-    assert_eq!(result["checks"], 48, "{result}");
+    assert!(
+        result["checks"].as_u64().is_some_and(|count| count >= 80),
+        "{result}"
+    );
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
     assert_eq!(same.finish_targets().await, ["/child.html"]);
     assert_eq!(
