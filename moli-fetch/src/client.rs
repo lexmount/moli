@@ -210,7 +210,7 @@ impl FetchClientHandle {
     pub fn cache_vary_headers(
         &self,
         request: &Request,
-        response_headers: &[(String, String)],
+        response_headers: &[(String, Vec<u8>)],
     ) -> Option<Vec<moli_http_cache::HttpCacheVaryHeader>> {
         crate::blocking::vary_headers_for_response(
             &self.config,

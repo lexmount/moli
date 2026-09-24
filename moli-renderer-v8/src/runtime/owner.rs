@@ -110,6 +110,8 @@ pub struct RendererPreparedDocumentInspectionConfiguration {
 /// Inspector session configuration travels through its own restricted ingress.
 #[derive(Debug, Clone)]
 pub struct RendererPreparedDocumentPolicy {
+    pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+
     /// Browser-owned initialization, installed before observer preloads.
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: moli_fetch::RequestHeaders,
@@ -186,6 +188,8 @@ pub struct RendererCreateHtmlPageRequest {
 }
 
 pub struct RendererCreateStreamingRawPageRequest {
+    pub session_history_position: Option<moli_session_history::SessionHistoryPosition>,
+
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
     pub top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
@@ -2133,6 +2137,7 @@ impl RendererOwnerHandle {
         options: crate::RendererDocumentOptions,
     ) -> RendererCreateStreamingRawPageRequest {
         RendererCreateStreamingRawPageRequest {
+            session_history_position: None,
             root_frame_id: options.root_frame_id,
             main_document_commit: options.main_document_commit,
             top_level_storage_key: None,
@@ -6703,6 +6708,7 @@ impl RendererOwnerHandle {
                     main_document_commit,
                     top_level_storage_key,
                     navigation_bootstrap_entry: None,
+                    session_history_position: None,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };
@@ -6888,6 +6894,7 @@ impl RendererOwnerHandle {
         _owner_local_store: &mut RendererOwnerLocalStore,
     ) -> RenderRuntimeDispatchOutcome {
         let RendererCreateStreamingRawPageRequest {
+            session_history_position,
             root_frame_id,
             main_document_commit,
             top_level_storage_key,
@@ -7005,6 +7012,7 @@ impl RendererOwnerHandle {
                     main_document_commit,
                     top_level_storage_key,
                     navigation_bootstrap_entry: None,
+                    session_history_position,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),
                 };

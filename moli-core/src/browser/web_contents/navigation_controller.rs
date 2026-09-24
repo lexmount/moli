@@ -1028,6 +1028,19 @@ impl NavigationController {
         self.history.snapshot()
     }
 
+    pub(super) fn document_history_position(&self) -> moli_session_history::SessionHistoryPosition {
+        self.pending_navigation_request
+            .as_ref()
+            .filter(|request| !request.committed)
+            .map_or_else(
+                || self.history.position(),
+                |request| {
+                    self.history
+                        .position_after_navigation(request.history_update)
+                },
+            )
+    }
+
     pub(super) fn reset_navigation_history(&mut self) -> bool {
         self.can_reset_navigation_history() && self.history.prune_all_but_current()
     }
@@ -1062,14 +1075,27 @@ impl NavigationController {
         self.history.record_loaded_entry(entry, update);
     }
 
-    pub(super) fn record_same_document_navigation_history(
+    pub(super) fn record_session_history_update(
         &mut self,
-        url: String,
+        update: &crate::page::SessionHistoryUpdate,
         title: String,
-        history_update: crate::page::SameDocumentHistoryUpdate,
     ) -> bool {
+        if !self.history.record_session_history_update(
+            update.root_url.clone(),
+            title,
+            update.update,
+        ) {
+            return false;
+        }
         self.history
-            .record_same_document_update(url, title, history_update)
+            .synchronize_root_entry_url(&update.root_entry_steps, &update.root_url);
+        let (index, entries) = self.history.snapshot();
+        debug_assert_eq!(
+            (index, entries.len()),
+            (update.position.index(), update.position.length()),
+            "browser and renderer joint history positions must agree"
+        );
+        true
     }
 }
 
@@ -1233,7 +1259,7 @@ mod tests {
         controller.clear_document_navigation_state();
         assert!(controller.response_snapshots().is_empty());
     }
-    use crate::page::SameDocumentHistoryUpdate;
+    use crate::page::SessionHistoryUpdateKind;
 
     #[test]
     fn dropping_claimed_native_request_releases_its_exact_decision() {
@@ -1358,6 +1384,11 @@ mod tests {
         assert_eq!(entries[0].url, "about:blank");
         assert_eq!(entries[0].user_typed_url, "about:blank");
         assert_eq!(entries[0].transition_type, "auto_toplevel");
+        assert_eq!(
+            owner.document_history_position(),
+            moli_session_history::SessionHistoryPosition::new(0, 1).unwrap(),
+            "materializing the existing initial Document must not reserve another history entry"
+        );
     }
 
     #[test]
@@ -1393,10 +1424,10 @@ mod tests {
             transition_type: "typed".to_owned(),
             document_sequence_number: None,
         });
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/pushed".to_owned(),
             "pushed".to_owned(),
-            SameDocumentHistoryUpdate::Push,
+            SessionHistoryUpdateKind::Push,
         ));
         let pushed_id = history.snapshot().1[1].id;
 
@@ -1431,10 +1462,10 @@ mod tests {
             transition_type: "typed".to_owned(),
             document_sequence_number: None,
         });
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/page?state=pushed".to_owned(),
             "page".to_owned(),
-            SameDocumentHistoryUpdate::Push,
+            SessionHistoryUpdateKind::Push,
         ));
 
         let (_, entries) = history.snapshot();
@@ -1446,10 +1477,10 @@ mod tests {
         assert_eq!(entries[1].user_typed_url, "https://example.test/page");
         assert_eq!(entries[1].transition_type, "link");
 
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/page".to_owned(),
             "page".to_owned(),
-            SameDocumentHistoryUpdate::Traverse { delta: -1 },
+            SessionHistoryUpdateKind::Traverse { delta: -1 },
         ));
         let (current_index, entries) = history.snapshot();
         assert_eq!(current_index, 0);
@@ -1457,10 +1488,10 @@ mod tests {
         assert_eq!(entries[0].id, initial_id);
         assert_eq!(entries[1].id, pushed_id);
 
-        assert!(history.record_same_document_update(
+        assert!(history.record_session_history_update(
             "https://example.test/page?state=pushed".to_owned(),
             "page".to_owned(),
-            SameDocumentHistoryUpdate::Traverse { delta: 1 },
+            SessionHistoryUpdateKind::Traverse { delta: 1 },
         ));
         let (current_index, entries) = history.snapshot();
         assert_eq!(current_index, 1);

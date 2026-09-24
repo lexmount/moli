@@ -2595,21 +2595,20 @@ pub(super) fn emit_same_document_navigation_background_events(
         let Ok(url) = Url::parse(&navigation.url) else {
             continue;
         };
-        let Some((frame_id, committed)) =
-            conn.commit_same_document_navigation_for_page(&page, url, navigation.history_update)
-        else {
+        if !conn.target_page_residence_identity_is_current(&page) {
+            continue;
+        }
+        let Some(frame_id) = page.target_id() else {
             continue;
         };
-        // Browser mutation is already committed. The session that initiated
-        // the renderer action does not own history or its other observers.
         let owner = CommandOwnerScope::for_page_residence(&page);
         for event_session_id in conn.page_event_session_ids_for_owner(&owner) {
             out.push(BackgroundProtocolEvent::page_same_document_navigation(
                 event_session_id.as_deref(),
                 SameDocumentNavigationEvent {
-                    target_id: DevToolsTargetId::from(frame_id.as_str()),
-                    frame_id: DevToolsFrameId::from(frame_id.as_str()),
-                    url: committed.url.to_string(),
+                    target_id: DevToolsTargetId::from(frame_id),
+                    frame_id: DevToolsFrameId::from(frame_id),
+                    url: url.to_string(),
                     navigation_type: navigation.navigation_type.clone(),
                 },
             ));

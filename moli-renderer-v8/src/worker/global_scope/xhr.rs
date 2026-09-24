@@ -1,7 +1,7 @@
 use super::fetch::{publish_worker_request_failure, worker_request_started};
 use super::*;
-use crate::network_host::ResolveContextUrlError;
 use crate::network::{PausedResourceResponse, ResourceResponseBody};
+use crate::network_host::ResolveContextUrlError;
 use crossbeam_channel::{after, bounded, never, select};
 use moli_webapi_declare::WebApiObject;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -505,7 +505,9 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             Err(error) => {
                 network
                     .network
-                    .failed(&crate::network::ResourceResponseFailure::Request(error.to_string()));
+                    .failed(&crate::network::ResourceResponseFailure::Request(
+                        error.to_string(),
+                    ));
                 throw_synchronous_xhr_failure(scope, xhr, &request_url, "NetworkError");
             }
         }
@@ -588,7 +590,9 @@ pub(crate) fn try_worker_xhr_send_callback<'s>(
             .xhr_completion_tx
             .send(WorkerXhrCompletion::decision(
                 xhr_id,
-                result.map(ResourceBodyResponse::from).map_err(|error| error.to_string().into()),
+                result
+                    .map(ResourceBodyResponse::from)
+                    .map_err(|error| error.to_string().into()),
             ));
         return true;
     }

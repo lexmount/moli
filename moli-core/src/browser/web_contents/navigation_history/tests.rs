@@ -1,7 +1,18 @@
 use super::*;
 use crate::browser::web_contents::tests::BrowserFixture;
+use crate::page::SessionHistoryUpdateKind;
 use crate::{RendererDocumentTitleChanged, page::RendererDocumentLifecycleIdentity};
 use serde_json::json;
+
+fn pushed_history_update(contents: &WebContents, url: &str) -> SessionHistoryUpdate {
+    let (index, _) = contents.navigation_history_snapshot();
+    SessionHistoryUpdate {
+        position: moli_session_history::SessionHistoryPosition::new(index + 1, index + 2).unwrap(),
+        update: SessionHistoryUpdateKind::Push,
+        root_url: url.to_owned(),
+        root_entry_steps: vec![index + 1],
+    }
+}
 
 fn title_change(browser: &BrowserFixture, title: &str) -> RendererDocumentTitleChanged {
     let snapshot = browser
@@ -37,11 +48,7 @@ async fn push(browser: &mut BrowserFixture, fragment: &str) {
         .id;
     let committed = browser
         .contents
-        .commit_same_document_navigation(
-            document,
-            Url::parse(&url).unwrap(),
-            SameDocumentHistoryUpdate::Push,
-        )
+        .commit_session_history_update(document, pushed_history_update(&browser.contents, &url))
         .unwrap();
     assert_eq!(committed.document, document);
     assert_eq!(committed.web_contents, browser.contents.id());
@@ -87,7 +94,7 @@ async fn history_queries_preserve_observed_native_title_without_page_readback() 
 }
 
 #[tokio::test]
-async fn same_document_history_rejects_replacement_foreign_and_pending_navigation() {
+async fn session_history_rejects_replaced_documents_and_accepts_the_outgoing_document() {
     let mut browser = BrowserFixture::new();
     let old_document = browser.navigate("outgoing").await;
     let current = browser.navigate("current").await;
@@ -96,27 +103,28 @@ async fn same_document_history_rejects_replacement_foreign_and_pending_navigatio
         assert!(
             browser
                 .contents
-                .commit_same_document_navigation(
+                .commit_session_history_update(
                     document,
-                    Url::parse("https://navigation.example/#stale").unwrap(),
-                    SameDocumentHistoryUpdate::Push
+                    pushed_history_update(&browser.contents, "https://navigation.example/#stale")
                 )
                 .is_none()
         );
         assert_eq!(browser.contents.navigation_history_snapshot(), before);
     }
     let pending = browser.contents.navigation.start_document_navigation();
+    browser
+        .evaluate("history.pushState(null, '', '#pending')")
+        .await;
+    let update = pushed_history_update(&browser.contents, "https://navigation.example/#pending");
     assert!(
         browser
             .contents
-            .commit_same_document_navigation(
-                current,
-                Url::parse("https://navigation.example/#pending").unwrap(),
-                SameDocumentHistoryUpdate::Push
-            )
-            .is_none()
+            .commit_session_history_update(current, update)
+            .is_some()
     );
-    assert_eq!(browser.contents.navigation_history_snapshot(), before);
+    let committed = browser.contents.navigation_history_snapshot();
+    assert_eq!(committed.0, before.0 + 1);
+    assert_eq!(committed.1.len(), before.1.len() + 1);
     assert!(
         browser.contents.navigation.cancel_document_navigation(
             &pending,
@@ -125,12 +133,12 @@ async fn same_document_history_rejects_replacement_foreign_and_pending_navigatio
     );
     push(&mut browser, "accepted").await;
     let after = browser.contents.navigation_history_snapshot();
-    assert_eq!(after.0, 2);
-    assert_eq!(after.1.len(), 3);
-    assert_eq!(after.1[2].title, "current");
+    assert_eq!(after.0, 3);
+    assert_eq!(after.1.len(), 4);
+    assert_eq!(after.1[3].title, "current");
     assert_eq!(
         after.1[1].document_sequence_number,
-        after.1[2].document_sequence_number
+        after.1[3].document_sequence_number
     );
     assert_eq!(
         browser

@@ -75,7 +75,7 @@ pub(crate) use javascript_dialog::{
 #[cfg(test)]
 pub(crate) use moli_core::browser::web_contents::JavaScriptDialogKey;
 pub(in crate::conn) use moli_core::browser::web_contents::PageSurface;
-pub(crate) use moli_core::browser::web_contents::SameDocumentNavigationCommitted;
+pub(crate) use moli_core::browser::web_contents::SessionHistoryCommitted;
 pub(crate) use moli_core::browser::web_contents::{
     CommittedDocumentLifecycle, DocumentLifecycleEvent,
 };

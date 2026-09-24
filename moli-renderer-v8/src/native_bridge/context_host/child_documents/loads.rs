@@ -416,7 +416,6 @@ impl JsContextHost {
                 target.navigation_load(),
             );
             return ChildDocumentLoadApplication::SupersededDuringApplication {
-                completion: ChildDocumentLoadCompletion::new(target, network_attribution, result),
                 body_activity: ChildDocumentLoadBodyActivity::NoPageCodeOrEventDispatch,
             };
         }

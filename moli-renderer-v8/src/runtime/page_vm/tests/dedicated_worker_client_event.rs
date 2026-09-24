@@ -370,7 +370,6 @@ globalThis.__bootstrapEventWorker = new Worker("data:text/javascript,onmessage =
             page_vm
                 .run_exact_selected_page_task_for_test(
                     PageSelectedTaskTestSelector::DedicatedWorkerClientEvent,
-                    &loader,
                 )
                 .await?
         );

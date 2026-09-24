@@ -3021,7 +3021,6 @@ async fn navigation_retirement_reentry_preserves_successor_window() {
         .unwrap();
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(loaded === (pendingSibling ? 2 : 1))",
             "true",
             "retirement child load",
@@ -3128,7 +3127,6 @@ async fn navigation_intercept_handlers_preserve_cancellation_and_committed_entry
             let context = format!("{api}/{cause}");
             advance_page_task_executor_until_eval_equals(
                 &mut vm,
-                &loader,
                 "String(interceptionResult !== 'pending')",
                 "true",
                 &context,
@@ -3204,7 +3202,6 @@ async fn navigation_intercept_reentrant_handlers_preserve_replacement_navigation
         let context = format!("throws after replacement: {throws_after_replacement}");
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "String(interceptionResult !== 'pending')",
             "true",
             &context,
@@ -4728,7 +4725,7 @@ async fn traverse_to_preserves_intervening_history_back() {
     let mut executed = Vec::new();
     for _ in 0..4 {
         executed.push(
-            vm.run_one_history_traversal_executor_turn(&loader)
+            vm.run_one_history_traversal_executor_turn()
                 .await
                 .expect("mixed history traversal should execute"),
         );
@@ -4776,7 +4773,7 @@ async fn repeated_traverse_to_reuses_promises_after_history_request() {
 
     for _ in 0..2 {
         assert!(
-            vm.run_one_history_traversal_executor_turn(&loader)
+            vm.run_one_history_traversal_executor_turn()
                 .await
                 .expect("History and Navigation requests should execute separately")
         );
@@ -4787,7 +4784,7 @@ async fn repeated_traverse_to_reuses_promises_after_history_request() {
         "#1|first:#1|second:#1"
     );
     assert!(
-        !vm.run_one_history_traversal_executor_turn(&loader)
+        !vm.run_one_history_traversal_executor_turn()
             .await
             .expect("the repeated Navigation request should not add another task")
     );
@@ -4836,7 +4833,7 @@ async fn repeated_traverse_to_reuses_pending_navigation_promises() {
         .expect("repeated traverseTo settlement should evaluate");
     assert_eq!(settled, "info:first|finished:https://example.com/base:");
     assert!(
-        !vm.run_one_history_traversal_executor_turn(&loader)
+        !vm.run_one_history_traversal_executor_turn()
             .await
             .expect("repeated traverseTo should share one traversal task")
     );

@@ -558,7 +558,7 @@ async fn navigate(
         if let Some((body, mime)) =
             moli_web_mime::data_url_body_and_mime_type(requested_url.as_str())
         {
-            return Some((200, vec![("Content-Type".into(), mime)], body));
+            return Some((200, vec![("Content-Type".into(), mime.into_bytes())], body));
         }
         moli_url::is_about_blank(&requested_url).then(|| {
             (

@@ -515,7 +515,7 @@ impl ResourceResponseStream {
     pub(crate) fn accept_response(
         &self,
         status: Option<u16>,
-        headers: Option<Vec<(String, String)>>,
+        headers: Option<Vec<(String, Vec<u8>)>>,
     ) {
         let mut state = self.response.lock();
         state.intercept_response = false;
@@ -589,7 +589,7 @@ impl ResourceResponseStream {
 fn update_response_head(
     head: &mut Arc<ResourceResponseHead>,
     status: Option<u16>,
-    headers: Option<Vec<(String, String)>>,
+    headers: Option<Vec<(String, Vec<u8>)>>,
 ) {
     let head = Arc::make_mut(head);
     if let Some(status) = status {

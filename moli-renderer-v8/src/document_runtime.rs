@@ -478,7 +478,6 @@ pub(crate) enum DocumentWriteExternalScriptLoadApplication {
     RejectedStaleTarget,
 }
 
-
 #[derive(Debug)]
 enum DocumentWriteScriptRunOutcome {
     Complete,

@@ -184,7 +184,7 @@ async fn rejected_response(worker: bool, rejection: Rejection) {
                         }));
                     }
                     assert!(head.response_headers().iter().any(|(name, value)| {
-                        name.eq_ignore_ascii_case("x-rejected-response") && value == "physical"
+                        name.eq_ignore_ascii_case("x-rejected-response") && value == b"physical"
                     }));
                 }
                 ScriptNetworkOutputItem::SubresourceDataReceived(data)

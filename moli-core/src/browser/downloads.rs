@@ -190,7 +190,7 @@ impl DownloadManager {
         &mut self,
         web_contents: WebContentsHandle,
         url: &str,
-        headers: &[(String, String)],
+        headers: &[(String, Vec<u8>)],
         hint: Option<&str>,
     ) -> Result<AdmittedDownload, String> {
         self.admit_denied(web_contents, DownloadMetadata::new(url, headers, hint))

@@ -117,7 +117,9 @@ location.hash
 
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal
+                )
                 .await?,
             "the first traversal should consume one production selected task"
         );
@@ -129,7 +131,9 @@ location.hash
         );
         assert!(
             page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal
+                )
                 .await?,
             "the second traversal should retain its own production selected task"
         );
@@ -140,7 +144,9 @@ location.hash
         );
         assert!(
             !page_vm
-                .run_exact_selected_page_task_for_test(PageSelectedTaskTestSelector::HistoryTraversal)
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal
+                )
                 .await?,
             "the history source should drain after both ordered traversal tasks"
         );

@@ -400,7 +400,7 @@ impl PausedResourceResponse {
         self.consumer.take().expect("response consumer").discard();
         head
     }
-    pub(crate) fn resume(mut self, status: Option<u16>, headers: Option<Vec<(String, String)>>) {
+    pub(crate) fn resume(mut self, status: Option<u16>, headers: Option<Vec<(String, Vec<u8>)>>) {
         self.body.resource.accept_response(status, headers);
         self.body
             .resume(self.consumer.take().expect("response consumer"));

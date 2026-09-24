@@ -170,7 +170,7 @@ impl NetworkObservationJournal {
             let ends_redirect_hop = exchange.response().is_some_and(|response| {
                 matches!(response.status(), 301 | 302 | 303 | 307 | 308)
                     || response.headers().iter().any(|(name, value)| {
-                        name.eq_ignore_ascii_case("critical-ch") && !value.trim().is_empty()
+                        name.eq_ignore_ascii_case("critical-ch") && !value.trim_ascii().is_empty()
                     })
             });
             if !ends_redirect_hop || current_hop >= redirect_count {

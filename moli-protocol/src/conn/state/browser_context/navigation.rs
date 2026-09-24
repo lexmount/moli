@@ -1,6 +1,6 @@
 use super::BrowserContext;
 use crate::conn::state::{PageNavigationHistoryEntry, TargetPageAbsenceReason};
-use moli_core::page::SameDocumentHistoryUpdate;
+use moli_core::page::SessionHistoryUpdate;
 use url::Url;
 
 impl BrowserContext {
@@ -176,17 +176,16 @@ impl BrowserContext {
             .ok()
     }
 
-    pub(in crate::conn) fn commit_target_same_document_navigation(
+    pub(in crate::conn) fn commit_target_session_history_update(
         &mut self,
         target_id: &str,
         document: moli_core::browser::DocumentId,
-        url: Url,
-        history_update: SameDocumentHistoryUpdate,
-    ) -> Option<moli_core::browser::web_contents::SameDocumentNavigationCommitted> {
+        update: SessionHistoryUpdate,
+    ) -> Option<moli_core::browser::web_contents::SessionHistoryCommitted> {
         let handle = self.web_contents_handle_for_target(target_id)?;
         let committed = self
             .browser_context
-            .commit_same_document_navigation(handle, document, url, history_update)
+            .commit_session_history_update(handle, document, update)
             .ok()??;
         if self.target_document_id(target_id) != Some(committed.document) {
             return None;

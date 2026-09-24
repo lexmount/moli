@@ -37,7 +37,7 @@ impl CdpConnection {
         method: String,
         request_headers: Vec<(String, String)>,
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body: String,
     ) -> Result<Box<DocumentCommitSnapshot>, String> {
         self.commit_declared_session_fixtures_for_test();

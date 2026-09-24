@@ -30,6 +30,11 @@ impl PagePreparedSameDocumentNavigation {
         &self.owner
     }
 
+    #[cfg(test)]
+    pub(super) fn source_document(&self) -> moli_core::page::RendererDocumentLifecycleIdentity {
+        self.navigation.source_document()
+    }
+
     pub(super) fn into_navigation(self) -> RendererPendingSameDocumentNavigation {
         self.navigation.into_navigation()
     }

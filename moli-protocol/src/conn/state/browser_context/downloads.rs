@@ -48,7 +48,7 @@ impl BrowserContext {
         web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         url: Url,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body: DownloadBody,
     ) -> Result<Option<DownloadObservation>, String> {
         self.browser_context

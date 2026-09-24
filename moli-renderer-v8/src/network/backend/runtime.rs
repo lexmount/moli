@@ -737,7 +737,7 @@ mod tests {
             ResponseHead {
                 final_url: request.url,
                 status: 200,
-                headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+                headers: vec![("cache-control".to_owned(), b"max-age=60".to_vec())],
                 request_cookie_report: None,
                 cookie_set_reports: Vec::new(),
                 redirected: false,

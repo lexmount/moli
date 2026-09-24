@@ -1973,21 +1973,15 @@ impl CdpConnection {
             .mark_next_navigation_history_traverse_to_entry(entry_id)
     }
 
-    pub(crate) fn commit_same_document_navigation_for_page(
+    pub(crate) fn commit_session_history_update_for_page(
         &mut self,
         page: &TargetPageResidenceIdentity,
-        url: Url,
-        history_update: moli_core::page::SameDocumentHistoryUpdate,
-    ) -> Option<(String, crate::conn::state::SameDocumentNavigationCommitted)> {
+        update: moli_core::page::SessionHistoryUpdate,
+    ) -> Option<(String, crate::conn::state::SessionHistoryCommitted)> {
         let target_id = page.target_id()?;
         let committed = self
             .browser_context_by_id_mut(page.browser_context_id())?
-            .commit_target_same_document_navigation(
-                target_id,
-                page.document_id(),
-                url,
-                history_update,
-            )?;
+            .commit_target_session_history_update(target_id, page.document_id(), update)?;
         Some((target_id.to_owned(), committed))
     }
 

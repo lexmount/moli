@@ -1601,7 +1601,7 @@ async fn dispatch_key_press_acknowledges_real_link_navigation() {
     tokio::task::LocalSet::new()
         .run_until(async {
             let mut ctx = TestContext::new();
-            ctx.enable_background_navigation_scheduler_for_test();
+            ctx.enable_background_event_ingress_for_test();
             with_loaded_document(
                 &mut ctx,
                 r#"<html><body>
@@ -1664,7 +1664,8 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
                </body></html>"#,
     )
     .await;
-    ctx.conn
+    let navigation = ctx
+        .conn
         .browser_context
         .as_mut()
         .expect("browser context should exist")
@@ -1684,8 +1685,15 @@ async fn dispatch_keyup_reaches_outgoing_document_while_navigation_is_pending() 
     ctx.expect_result(4105, json!({}), None);
 
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    ctx.conn
-        .clear_pending_document_navigation_for_owner_if_loader_matches(&owner, "PENDING-KEYUP");
+    assert!(
+        ctx.conn
+            .finish_navigation_without_document_projection_for_owner(&owner, &navigation)
+            .is_some()
+    );
+    assert!(
+        ctx.conn
+            .clear_pending_document_navigation_for_owner_if_matches(&owner, &navigation)
+    );
     assert!(
         !ctx.conn
             .has_pending_document_navigation_for_session_owner(None)
@@ -1723,7 +1731,7 @@ async fn dispatch_keydown_still_rejects_while_navigation_is_pending() {
 #[tokio::test(flavor = "multi_thread")]
 async fn dispatch_keyup_without_document_reports_no_document_loaded() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-I".into());
+    let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     browser_context.set_active_target_id("TID-1");
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);

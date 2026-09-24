@@ -465,7 +465,7 @@ async fn resource_response_stages(controlled: bool, finish: Finish, kind: Reques
             redirect
                 .headers
                 .iter()
-                .any(|(key, value)| key.eq_ignore_ascii_case("x-redirect") && value == "observed")
+                .any(|(key, value)| key.eq_ignore_ascii_case("x-redirect") && value == b"observed")
         );
         let exchanges = failure.observation_journal().exchanges();
         assert_eq!(exchanges.len(), 2);

@@ -570,7 +570,7 @@ async fn request_stages(resource: Resource, authenticate: bool, finish: Finish) 
                     head.response_headers()
                         .iter()
                         .any(|(name, value)| name.eq_ignore_ascii_case("x-physical")
-                            && value == "retained")
+                            && value == b"retained")
                 );
             }
             (1, ScriptNetworkOutputItem::SubresourceDataReceived(data)) => {

@@ -43,19 +43,19 @@ pub enum DocumentFetchCommand {
     FulfillRequest {
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     FulfillResponse {
         internal_id: u64,
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     ContinueResponse {
         internal_id: u64,
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     DispatchWebSocketText {
         socket_id: u64,

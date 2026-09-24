@@ -23,6 +23,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-dom = { path = "../moli-dom" }
 moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
+moli-session-history = { path = "../moli-session-history" }
 moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-selector = { path = "../moli-selector" }
 moli-shared-worker = { path = "../moli-shared-worker" }

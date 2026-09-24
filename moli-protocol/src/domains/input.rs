@@ -14,7 +14,7 @@ use crate::devtools_runtime::{
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::browser::{DocumentLifetimeObserver, DocumentRetirement};
 use moli_core::page::{
-    RendererCommandTurnCompletion, RendererDragData,
+    PendingPageCommand, RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDragData,
     RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
     RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
     RendererPointerEventProperties, RendererTouchPoint, decode_element_click_dispatch_completion,
@@ -136,12 +136,14 @@ enum PendingInputCommandKind {
 }
 
 enum PendingInputOperation {
+    Inspection(PendingPageCommand),
     Page(PendingDocumentInputCommand),
     #[cfg(test)]
     RendererAckHeldForTest,
 }
 
 enum CompletedInputOperation {
+    Inspection(Result<Box<RendererCommandTurnOutput>, String>),
     Page(Box<CompletedDocumentInputCommand>),
     PageResidenceSuperseded,
     PageResidenceUnavailable,
@@ -172,6 +174,13 @@ async fn wait_for_renderer_input_or_page_replacement<T>(
 impl PendingInputCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedInputCommandDispatch {
         let completed = match self.pending {
+            PendingInputOperation::Inspection(pending) => CompletedInputOperation::Inspection(
+                pending
+                    .wait()
+                    .await
+                    .map(|completed| Box::new(completed.into_output()))
+                    .map_err(|error| error.to_string()),
+            ),
             PendingInputOperation::Page(pending) => {
                 match wait_for_renderer_input_or_page_replacement(
                     pending.wait(),
@@ -1046,14 +1055,17 @@ fn start_page_input_command_with_access(
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
     targets_outgoing_document: bool,
-    command: PageInputCommand<'_>,
+    command: PageInputCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    let document = conn
-        .resolve_browser_document_for_owner(command_owner)
-        .map_err(|_| PendingInputCommandStartError::no_document_loaded())?;
+    let document = if targets_outgoing_document {
+        conn.loaded_browser_document_for_owner(command_owner)
+    } else {
+        conn.resolve_browser_document_for_owner(command_owner)
+    }
+    .map_err(|_| PendingInputCommandStartError::no_document_loaded())?;
     let document_lifetime_observer = if kind.uses_renderer_host_ack_cleanup() {
         Some(
             conn.observe_browser_document_lifetime(document)
@@ -1309,24 +1321,31 @@ fn start_devtools_input_command_for_owner(
     }
     match command {
         DevToolsCommand::ElementClick(command) => match command.operation {
-            DevToolsElementClickOperation::Prepare { object_id } => start_page_input_command(
-                conn,
-                command_id,
-                owner,
-                PendingInputCommandKind::PrepareElementClick,
-                |page| {
-                    page.start_prepare_element_click(
-                        owner.session_id().map(str::to_owned),
-                        object_id.to_string(),
-                    )
-                },
-            ),
+            DevToolsElementClickOperation::Prepare { object_id } => {
+                let page_owner = conn
+                    .target_page_residence_identity_for_owner(owner)
+                    .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+                let inspection = crate::domains::dom::dom_inspection_for_owner(conn, owner)
+                    .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+                let pending = inspection
+                    .start_prepare_element_click(object_id.to_string())
+                    .map(PendingPageCommand::from_inspector_main_route)
+                    .map_err(PendingInputCommandStartError::renderer_error)?;
+                Ok(Some(PendingInputCommandDispatch {
+                    command_id,
+                    session_id: owner.session_id().map(str::to_owned),
+                    owner: page_owner,
+                    document_lifetime_observer: None,
+                    kind: PendingInputCommandKind::PrepareElementClick,
+                    pending: PendingInputOperation::Inspection(pending),
+                }))
+            }
             DevToolsElementClickOperation::Dispatch(click) => start_page_input_command(
                 conn,
                 command_id,
                 owner,
                 PendingInputCommandKind::DispatchElementClick,
-                |page| page.start_dispatch_prepared_element_click(click),
+                PageInputCommand::DispatchElementClick(click),
             ),
         },
         DevToolsCommand::DispatchMouseEvent(command) => {
@@ -1359,8 +1378,13 @@ async fn complete_pending_input_command(
 ) -> CompletedInputCommandResult {
     let session_id = completed.session_id.as_deref();
     let owner = completed.owner;
-    let completed_operation = match completed.completed {
-        CompletedInputOperation::Page(completed) => *completed,
+    let completion = match completed.completed {
+        CompletedInputOperation::Page(completed) => {
+            settle_completed_input_page_command(conn, *completed, command_context)
+        }
+        CompletedInputOperation::Inspection(output) => output
+            .map(|output| command_context.consume_renderer_command_turn_output(*output))
+            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error)),
         CompletedInputOperation::PageResidenceSuperseded => {
             // Match InputInjector::Cleanup(): replacement of the widget/Page
             // retires an outstanding mouse/key ACK as protocol success even
@@ -1380,51 +1404,44 @@ async fn complete_pending_input_command(
             };
         }
     };
+    let completion = match completion {
+        Ok(completion) => completion,
+        Err(error) => {
+            return CompletedInputCommandResult {
+                result: Err(error),
+                protocol_events: Vec::new(),
+            };
+        }
+    };
     let mut side_effects = InputCommandSideEffects::default();
 
     let result = match completed.kind {
         kind @ (PendingInputCommandKind::PrepareElementClick
         | PendingInputCommandKind::DispatchElementClick) => {
-            match completed_page_command_result(completed_operation) {
-                Err(error) => Err(error),
-                Ok(result) => {
-                    let completion = settle_completed_input_page_command(
+            if matches!(kind, PendingInputCommandKind::PrepareElementClick) {
+                decode_element_click_preparation_completion(completion)
+                    .map(DevToolsCommandResult::ElementClickPreparation)
+                    .map_err(|error| {
+                        DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
+                    })
+            } else {
+                match decode_element_click_dispatch_completion(completion) {
+                    Err(error) => Err(DevToolsError::new(
+                        DevToolsErrorKind::Internal,
+                        error.to_string(),
+                    )),
+                    Ok(Err(error)) => Ok(DevToolsCommandResult::ElementClickDispatch(Err(error))),
+                    Ok(Ok(outcome)) => handle_input_dispatch_outcome_async(
                         conn,
+                        &mut side_effects,
                         session_id,
                         &owner,
-                        result,
+                        outcome,
                         command_context,
-                    );
-                    if matches!(kind, PendingInputCommandKind::PrepareElementClick) {
-                        decode_element_click_preparation_completion(completion)
-                            .map(DevToolsCommandResult::ElementClickPreparation)
-                            .map_err(|error| {
-                                DevToolsError::new(DevToolsErrorKind::Internal, error.to_string())
-                            })
-                    } else {
-                        match decode_element_click_dispatch_completion(completion) {
-                            Err(error) => Err(DevToolsError::new(
-                                DevToolsErrorKind::Internal,
-                                error.to_string(),
-                            )),
-                            Ok(Err(error)) => {
-                                Ok(DevToolsCommandResult::ElementClickDispatch(Err(error)))
-                            }
-                            Ok(Ok(outcome)) => handle_input_dispatch_outcome_async(
-                                conn,
-                                &mut side_effects,
-                                session_id,
-                                &owner,
-                                outcome,
-                                command_context,
-                            )
-                            .await
-                            .map(|()| DevToolsCommandResult::ElementClickDispatch(Ok(())))
-                            .map_err(|error| {
-                                DevToolsError::new(DevToolsErrorKind::Internal, error)
-                            }),
-                        }
-                    }
+                    )
+                    .await
+                    .map(|()| DevToolsCommandResult::ElementClickDispatch(Ok(())))
+                    .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error)),
                 }
             }
         }
@@ -1432,20 +1449,6 @@ async fn complete_pending_input_command(
         | PendingInputCommandKind::DispatchTouchEvent
         | PendingInputCommandKind::DispatchDragEvent
         | PendingInputCommandKind::SynthesizeTapGesture) => {
-            let completion = match settle_completed_input_page_command(
-                conn,
-                completed_operation,
-                command_context,
-            ) {
-                Ok(completion) => completion,
-                Err(error) => {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(error),
-                        protocol_events,
-                    };
-                }
-            };
             let operation = match kind {
                 PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
                 PendingInputCommandKind::DispatchTouchEvent
@@ -1486,20 +1489,6 @@ async fn complete_pending_input_command(
             }
         }
         PendingInputCommandKind::DispatchKeyEvent => {
-            let completion = match settle_completed_input_page_command(
-                conn,
-                completed_operation,
-                command_context,
-            ) {
-                Ok(completion) => completion,
-                Err(error) => {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(error),
-                        protocol_events,
-                    };
-                }
-            };
             let outcome =
                 decode_input_dispatch_outcome_completion(completion, "key event page command");
             match outcome {
@@ -1529,20 +1518,6 @@ async fn complete_pending_input_command(
             }
         }
         PendingInputCommandKind::InsertText => {
-            let completion = match settle_completed_input_page_command(
-                conn,
-                completed_operation,
-                command_context,
-            ) {
-                Ok(completion) => completion,
-                Err(error) => {
-                    let protocol_events = side_effects.into_events();
-                    return CompletedInputCommandResult {
-                        result: Err(error),
-                        protocol_events,
-                    };
-                }
-            };
             let result = decode_insert_text_completion(completion);
             match result {
                 Ok(_) => Ok(DevToolsCommandResult::Empty),

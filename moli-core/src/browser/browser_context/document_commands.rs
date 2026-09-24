@@ -635,7 +635,7 @@ impl BrowserContext {
     pub fn document_response_headers(
         &self,
         document: DocumentHandle,
-    ) -> Result<&[(String, String)], String> {
+    ) -> Result<&[(String, Vec<u8>)], String> {
         Ok(self.document(document)?.page.headers())
     }
 

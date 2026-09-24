@@ -122,6 +122,7 @@ impl WebContents {
                     .flatten()
             });
         Ok(PreparedDocumentPagePolicy {
+            session_history_position: Some(self.navigation.document_history_position()),
             permission_overrides: inherited.permissions,
             extra_http_headers,
             script_execution_disabled: self.emulation_policy.script_execution_disabled,

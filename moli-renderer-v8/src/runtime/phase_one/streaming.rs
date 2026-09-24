@@ -943,6 +943,7 @@ mod tests {
             layout_policy: moli_page_types::LayoutPolicy::default(),
             wpt_extensions_enabled: false,
             navigation_bootstrap_entry: None,
+            session_history_position: None,
             reserved_service_worker_client_id: None,
         }
     }
@@ -1065,7 +1066,7 @@ mod tests {
             .take_parser_stream_dom_host();
         let local_executor = JsLocalExecutor::new();
         let runtime_hooks = PageVmRuntimeHooks::standalone_without_owner_reservation_for_test();
-        let page_vm = PageVm::new(
+        let mut page_vm = PageVm::new(
             PageId::new_for_testing(1),
             local_executor,
             &loader,

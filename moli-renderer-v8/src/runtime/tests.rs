@@ -3000,6 +3000,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
             }],
         });
     let policy = RendererPreparedDocumentPolicy {
+        session_history_position: None,
         permission_overrides: vec![crate::protocol_types::PermissionOverrideRegistration {
             permission: serde_json::Value::String("notifications".to_owned()),
             setting: "granted".to_owned(),

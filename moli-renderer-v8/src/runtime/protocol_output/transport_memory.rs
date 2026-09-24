@@ -126,7 +126,7 @@ impl crate::runtime::RendererServiceWorkerFetchDiagnostic {
                 |total, (name, value)| {
                     total
                         .saturating_add(string_charge(name))
-                        .saturating_add(string_charge(value))
+                        .saturating_add(value.len().saturating_mul(2))
                 },
             ),
             crate::runtime::RendererServiceWorkerFetchDiagnosticResult::Failure { message } => {

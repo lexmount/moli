@@ -12,10 +12,10 @@ use crate::{
             DocumentNavigationDestination, HistoryTraversalDestination, InitialDocumentAdmission,
             NavigationInterceptionPermit, PageNavigationHistoryEntry, PausedDocumentTransfer,
             PreparedDocumentNavigation, PreparedNavigationResponse, ResolvedHistoryTraversal,
-            RetiringDocument, SameDocumentNavigationCommitted,
+            RetiringDocument, SessionHistoryCommitted,
         },
     },
-    page::SameDocumentHistoryUpdate,
+    page::SessionHistoryUpdate,
 };
 
 use super::BrowserContext;
@@ -495,16 +495,15 @@ impl BrowserContext {
         Ok(())
     }
 
-    pub fn commit_same_document_navigation(
+    pub fn commit_session_history_update(
         &mut self,
         handle: WebContentsHandle,
         document: DocumentId,
-        url: Url,
-        history_update: SameDocumentHistoryUpdate,
-    ) -> Result<Option<SameDocumentNavigationCommitted>, String> {
+        update: SessionHistoryUpdate,
+    ) -> Result<Option<SessionHistoryCommitted>, String> {
         Ok(self
             .web_contents_mut(handle)?
-            .commit_same_document_navigation(document, url, history_update))
+            .commit_session_history_update(document, update))
     }
 
     pub fn mark_renderer_crashed(&mut self, handle: WebContentsHandle) -> Result<(), String> {

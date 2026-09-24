@@ -46,6 +46,7 @@ pub enum PageInputCommand {
         modifiers: u8,
     },
     InsertText(String),
+    DispatchElementClick(crate::page::RendererPreparedPointerClick),
 }
 
 impl BrowserContext {
@@ -149,6 +150,9 @@ impl BrowserContext {
                 data,
                 modifiers,
             ),
+            PageInputCommand::DispatchElementClick(click) => {
+                page.start_dispatch_prepared_element_click(click)
+            }
             PageInputCommand::InsertText(text) => page.start_insert_text_into_active_control(&text),
         }
         .map_err(|error| error.to_string())?;

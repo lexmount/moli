@@ -10418,7 +10418,7 @@ async fn joint_history_branch_shrinks_after_traversal() {
         new_storage_page_task_executor_test_vm_with_loader("https://joint-history.test/", &loader);
     vm.eval("history.replaceState('A', ''); for (const state of ['B', 'C', 'D']) history.pushState(state, ''); history.go(-2); 'queued'")
         .expect("queue traversal to B");
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("traverse");
     assert_eq!(
@@ -10445,7 +10445,7 @@ async fn joint_history_siblings_share_steps_and_forward_pruning() {
     "#,
     )
     .expect("create siblings");
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("load siblings");
     assert_eq!(vm.eval(r#"
@@ -10458,12 +10458,12 @@ async fn joint_history_siblings_share_steps_and_forward_pruning() {
       snapshot()
     "#).unwrap(), "4|4|4|top|a2|b1");
     vm.eval("history.back(); 'queued'").unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("back targets a, not last iframe b");
     assert_eq!(vm.eval("snapshot()").unwrap(), "4|4|4|top|a1|b1");
     vm.eval("a.history.back(); 'queued'").unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .expect("child caller traverses joint history to b0");
     assert_eq!(vm.eval("snapshot()").unwrap(), "4|4|4|top|a1|b0");
@@ -10487,7 +10487,7 @@ async fn joint_history_navigation_traverse_uses_nearest_shared_step() {
     "#,
     )
     .unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     vm.eval(
@@ -10499,7 +10499,7 @@ async fn joint_history_navigation_traverse_uses_nearest_shared_step() {
     "#,
     )
     .unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     assert_eq!(
@@ -10515,7 +10515,7 @@ async fn joint_history_navigation_traverse_uses_nearest_shared_step() {
     // A History traversal can change more than one Document's entry; all live
     // views must be updated before observers see the committed state.
     vm.eval("history.go(-2); 'queued'").unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     assert_eq!(
@@ -10530,7 +10530,7 @@ async fn joint_history_navigation_traverse_uses_nearest_shared_step() {
         jointTraversalResult = entry === child.navigation.currentEntry ? 'child-entry' : 'wrong-entry';
       }); 'queued'
     "#).unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     assert_eq!(
@@ -10555,7 +10555,7 @@ async fn joint_history_pending_cursor_is_shared_and_detached_steps_remain_traver
     "#,
     )
     .unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     vm.eval(
@@ -10570,7 +10570,7 @@ async fn joint_history_pending_cursor_is_shared_and_detached_steps_remain_traver
     "#,
     )
     .unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     assert_eq!(
@@ -10579,7 +10579,7 @@ async fn joint_history_pending_cursor_is_shared_and_detached_steps_remain_traver
         "a1|b0|4|true|true"
     );
     vm.eval("document.getElementById('a').remove(); document.getElementById('b').remove(); globalThis.pops=0; onpopstate=()=>pops++; history.back(); 'queued'").unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+    vm.drain_ready_page_task_executor_turns_for_setup(128)
         .await
         .unwrap();
     assert_eq!(
@@ -10612,7 +10612,7 @@ async fn child_history_push_preserves_existing_top_history_length() {
 "#,
         )
         .expect("child history frame setup should evaluate");
-        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        vm.drain_ready_page_task_executor_turns_for_setup(128)
             .await
             .expect("child should finish loading");
 
@@ -10652,7 +10652,7 @@ async fn child_history_push_preserves_existing_top_history_length() {
 
         vm.eval("document.querySelector('iframe').contentWindow.history.back(); 'queued'")
             .expect("child history back should queue traversal");
-        vm.drain_ready_page_task_executor_turns_for_setup(&loader, 128)
+        vm.drain_ready_page_task_executor_turns_for_setup(128)
             .await
             .expect("child history traversal should finish");
         assert_eq!(

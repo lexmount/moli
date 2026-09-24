@@ -136,21 +136,22 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     traversal: PendingHistoryTraversal,
 ) {
     let plan = history_traversal_target_window(scope, host, traversal.target).and_then(|owner| {
-        let history = window_history_for_holder(scope, owner)?;
-        let entry = history_entries(scope, history)?
-            .get_index(scope, traversal.target_index)?
-            .try_into()
-            .ok()?;
-        if traversal
-            .target_key
-            .as_ref()
-            .is_some_and(|key| navigation_entry_key_value(scope, entry).as_ref() != Some(key))
-        {
-            return None;
-        }
-        let step = traversal
-            .joint_step
-            .or_else(|| super::super::session_history::step_for_entry(scope, owner, entry))?;
+        // A joint step resolves entries in their owning Windows. The initiating
+        // isolated realm may have a different History wrapper and entry index.
+        let step =
+            traversal.joint_step.or_else(|| {
+                let history = window_history_for_holder(scope, owner)?;
+                let entry = history_entries(scope, history)?
+                    .get_index(scope, traversal.target_index)?
+                    .try_into()
+                    .ok()?;
+                if traversal.target_key.as_ref().is_some_and(|key| {
+                    navigation_entry_key_value(scope, entry).as_ref() != Some(key)
+                }) {
+                    return None;
+                }
+                super::super::session_history::step_for_entry(scope, owner, entry)
+            })?;
         super::super::navigation_traversal_plan::JointTraversalPlan::resolve(scope, owner, step)
     });
     let Some(plan) = plan else {

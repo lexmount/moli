@@ -248,7 +248,7 @@ pub(crate) fn emit_request_will_be_sent_extra_info(
     out.push_request_will_be_sent_extra_info(
         session_id,
         request_id,
-        headers_as_json_object(request_headers),
+        request_headers_as_json_object(request_headers, None),
         cookie_query_report_to_json(cookie_access_report),
         associated_cookies_to_json(cookie_access_report),
         request_time,

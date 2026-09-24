@@ -3388,14 +3388,10 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                         crate::types::AsyncSubresourceStreamingStarted {
                             internal_id: request.internal_id,
                             request_url: request.url.clone(),
-                            request_method: "GET".to_owned(),
-                            request_headers: Default::default(),
-                            request_body: None,
                             skip_fetch_security_validation: false,
                             response_filter: None,
                             body_source_id,
                             head,
-                            network_request_headers: None,
                         },
                     )
                     .unwrap();
@@ -3422,10 +3418,7 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                     vm.complete_async_subresource_fetch(
                         crate::types::AsyncSubresourceFetchCompletion {
                             internal_id: request.internal_id,
-                            request_url: request.url.clone(),
-                            request_method: "GET".to_owned(),
-                            request_headers: Default::default(),
-                            request_body: None,
+                            network_request_headers: None,
                             skip_fetch_security_validation: false,
                             response_filter: None,
                             response_status_text: None,
@@ -3435,9 +3428,9 @@ fn xhr_response_documents_keep_distinct_source_modification_times() {
                                     head,
                                     "<html><body>response</body></html>".to_owned(),
                                     b"<html><body>response</body></html>".to_vec(),
-                                ),
-                            )
-                            .into(),
+                                )
+                                .into(),
+                            ),
                         },
                     )
                     .unwrap();

@@ -1384,7 +1384,7 @@ impl PageOutputProjectionStep {
                         // document.open() does not undo committed history. Page
                         // residence, not current Document identity, is authority.
                         if conn.target_page_residence_identity_is_current(&residence) {
-                            conn.record_session_history_update_for_owner(&owner, &update);
+                            conn.commit_session_history_update_for_page(&residence, update);
                         }
                     }
                 }
@@ -4957,42 +4957,49 @@ mod producer_tests {
     async fn emit_committed_history_and_navigation_for_test(
         conn: &mut CdpConnection,
         out: &mut Vec<BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
         mut prepared: Option<&mut ProtocolOutputPayloads>,
     ) {
-        // Production sends a separate committed-history action before the
-        // observer notification. Exercise both projections and their authority.
-        if let Some(slot) = prepared
+        // Committed history and observer notifications use separate actions.
+        let slot = prepared
             .as_deref_mut()
             .and_then(ProtocolOutputPayloads::page_mut)
-        {
-            slot.outputs.session_history_updates = slot
-                .outputs
-                .same_document_navigations
-                .iter()
-                .map(|navigation| {
-                    (
-                        navigation.owner().clone(),
-                        navigation.source_document(),
-                        moli_page_types::SessionHistoryUpdate {
-                            position: moli_session_history::SessionHistoryPosition::INITIAL,
-                            update: moli_page_types::SessionHistoryUpdateKind::Push,
-                            root_url: navigation.clone().into_navigation().url,
-                            root_entry_steps: vec![0],
-                        },
-                    )
-                })
-                .collect();
-        }
+            .unwrap();
+        let page = slot.outputs.same_document_navigations[0].owner().clone();
+        let owner = CommandOwnerScope::for_page_residence(&page);
+        let (index, _) = conn
+            .browser_context_by_id(page.browser_context_id())
+            .unwrap()
+            .target_navigation_history_snapshot(page.target_id().unwrap())
+            .unwrap();
+        slot.outputs.session_history_updates = slot
+            .outputs
+            .same_document_navigations
+            .iter()
+            .enumerate()
+            .map(|(offset, navigation)| {
+                let index = index + offset + 1;
+                (
+                    navigation.owner().clone(),
+                    navigation.source_document(),
+                    moli_page_types::SessionHistoryUpdate {
+                        position: moli_session_history::SessionHistoryPosition::new(
+                            index,
+                            index + 1,
+                        )
+                        .unwrap(),
+                        update: moli_page_types::SessionHistoryUpdateKind::Push,
+                        root_url: navigation.clone().into_navigation().url,
+                        root_entry_steps: vec![index],
+                    },
+                )
+            })
+            .collect();
         let mut command = crate::conn::CommandDispatchContext::default();
-        let mut context = ProtocolOutputProjectionContext::new(owner, &mut command);
+        let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command);
         super::PageOutputProjectionStep::SessionHistoryUpdate
             .project_async(conn, &mut context, prepared.as_deref_mut())
             .await;
-        super::emit_same_document_navigation_activity_background_events_async(
-            conn, out, owner, prepared,
-        )
-        .await;
+        super::emit_same_document_navigation_activity_background_events(conn, out, prepared);
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -5020,11 +5027,7 @@ mod producer_tests {
                 ),
             ));
 
-        emit_committed_history_and_navigation_for_test(
-            &mut conn,
-            &mut out,
-            Some(&mut prepared),
-        );
+        emit_committed_history_and_navigation_for_test(conn, &mut out, Some(&mut prepared)).await;
 
         assert!(
             conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
@@ -5125,11 +5128,12 @@ mod producer_tests {
         assert!(ctx.conn.session_route(Some("SID-history-detach")).is_none());
         assert!(ctx.conn.target_page_residence_identity_is_current(&page));
         let mut out = Vec::new();
-        super::emit_same_document_navigation_activity_background_events(
+        emit_committed_history_and_navigation_for_test(
             &mut ctx.conn,
             &mut out,
             Some(&mut prepared),
-        );
+        )
+        .await;
         let events = protocol_messages_from_background_events(out);
         assert!(
             events.iter().any(|event| event["sessionId"] == json!(peer)
@@ -5195,11 +5199,7 @@ mod producer_tests {
             ));
         let mut out = Vec::new();
 
-        emit_committed_history_and_navigation_for_test(
-            &mut conn,
-            &mut out,
-            Some(&mut prepared),
-        );
+        emit_committed_history_and_navigation_for_test(conn, &mut out, Some(&mut prepared)).await;
 
         assert_eq!(
             out.len(),
@@ -5253,11 +5253,8 @@ mod producer_tests {
             ));
         let mut out = Vec::new();
 
-        emit_committed_history_and_navigation_for_test(
-            &mut conn,
-            &mut out,
-            Some(&mut prepared),
-        );
+        emit_committed_history_and_navigation_for_test(&mut conn, &mut out, Some(&mut prepared))
+            .await;
 
         assert!(
             out.is_empty(),
@@ -6500,7 +6497,7 @@ fn network_error_page_unreachable_url(
         .flatten()
 }
 
-fn main_document_mime_type(headers: &[(String, String)]) -> String {
+fn main_document_mime_type(headers: &[(String, Vec<u8>)]) -> String {
     moli_web_mime::effective_response_mime_essence(headers, None)
         .unwrap_or_else(default_document_mime_type)
 }

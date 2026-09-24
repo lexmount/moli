@@ -36,7 +36,7 @@ pub use navigation_interception::{
     ClaimedNavigationRequest, NavigationInterceptionPermit, NavigationRequestInterception,
 };
 mod navigation_load;
-pub use navigation_history::SameDocumentNavigationCommitted;
+pub use navigation_history::SessionHistoryCommitted;
 pub use navigation_load::{AdmittedNavigationLoad, PreparedNavigationResponse};
 mod network_request_policy;
 pub use navigation_commit::{

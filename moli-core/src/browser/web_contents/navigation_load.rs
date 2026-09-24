@@ -286,7 +286,7 @@ impl AdmittedNavigationLoad {
         redirected: bool,
         redirect_count: usize,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         raw_body: ExternalRawDocumentBodyStream,
         stage: PageVmInitStage,
         reply_boundary: RendererReplyBoundary,

@@ -36,6 +36,16 @@ impl RendererDomInspection<'_> {
         )
     }
 
+    pub fn start_prepare_element_click(
+        &self,
+        object_id: String,
+    ) -> Result<RendererRuntimeInspectorMainCommandRoute> {
+        self.start_page_command(RendererPageCommand::prepare_element_click(
+            self.inspector_session_id.clone(),
+            object_id,
+        ))
+    }
+
     pub fn start_dom_snapshot_capture(
         &self,
         top_frame_id: String,

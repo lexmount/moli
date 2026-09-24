@@ -24760,7 +24760,6 @@ async fn window_open_popup_history_forward_from_restored_load() {
     .expect("popup setup should evaluate");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "popupHistoryLoads.join(',')",
         "first",
         "first popup load",
@@ -24770,7 +24769,6 @@ async fn window_open_popup_history_forward_from_restored_load() {
         .expect("second popup navigation should evaluate");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "popupHistoryLoads.join(',')",
         "first,second",
         "second popup load",
@@ -24780,7 +24778,6 @@ async fn window_open_popup_history_forward_from_restored_load() {
         .expect("popup back traversal should evaluate");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "popupHistoryLoads.join(',')",
         "first,second,first,second",
         "restored popup load should be able to traverse forward",
@@ -24841,7 +24838,6 @@ async fn assert_popup_consecutive_history_back(from_popup: bool) {
         };
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "popupTraversalLoads.join(',')",
             expected,
             "popup documents should load in traversal order",
@@ -24853,7 +24849,6 @@ async fn assert_popup_consecutive_history_back(from_popup: bool) {
             .expect("the opener should request both traversals through the outgoing History");
         advance_page_task_executor_until_eval_equals(
             &mut vm,
-            &loader,
             "popupTraversalLoads.join(',')",
             "0,1,2,1",
             "only the first traversal from the outgoing popup History should commit",
@@ -24869,7 +24864,6 @@ async fn assert_popup_consecutive_history_back(from_popup: bool) {
         .expect("the restored Document's History should allow another traversal");
     advance_page_task_executor_until_eval_equals(
         &mut vm,
-        &loader,
         "popupTraversalLoads.join(',')",
         "0,1,2,1,0",
         "completed popup loads must release the pending traversal",

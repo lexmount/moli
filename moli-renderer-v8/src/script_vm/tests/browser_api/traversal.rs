@@ -1385,7 +1385,7 @@ history.pushState(null, "", "#two");
         "#one"
     );
     assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
+        vm.run_one_history_traversal_executor_turn()
             .await
             .expect("isolated realm traversal should run after the default realm traversal")
     );

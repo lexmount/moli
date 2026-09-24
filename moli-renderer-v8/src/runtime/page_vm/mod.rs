@@ -1089,6 +1089,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) fetch_subresource_interception_resource_type: Option<crate::SubresourceResourceType>,
     pub(crate) layout_policy: LayoutPolicy,
     pub(crate) wpt_extensions_enabled: bool,
+    pub(crate) session_history_position: Option<moli_session_history::SessionHistoryPosition>,
     pub(crate) navigation_bootstrap_entry: Option<crate::native_bridge::NavigationHistoryEntrySeed>,
     pub(crate) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
@@ -4439,10 +4440,7 @@ script)
             .vm_mut()
             .install_navigation_bootstrap_entry(env.navigation_bootstrap_entry.clone());
         if env.navigation_bootstrap_entry.is_none()
-            && let Some(position) = env
-                .main_document_commit
-                .as_ref()
-                .and_then(|commit| commit.session_history_position)
+            && let Some(position) = env.session_history_position
         {
             page_vm.vm_mut().install_session_history_position(position);
         }

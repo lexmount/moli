@@ -125,7 +125,7 @@ impl BrowserContext {
     #[cfg(test)]
     pub(crate) fn loaded_document_response_headers_for_test(
         &self,
-    ) -> Option<Vec<(String, String)>> {
+    ) -> Option<Vec<(String, Vec<u8>)>> {
         let document = self.browser_context.selected_document_handle()?;
         self.browser_context
             .document_response_headers(document)

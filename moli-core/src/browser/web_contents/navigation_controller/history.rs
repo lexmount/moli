@@ -111,8 +111,19 @@ impl NavigationHistoryState {
         self.entries.is_empty()
     }
 
-    pub(super) fn position_after_navigation(&self) -> moli_session_history::SessionHistoryPosition {
-        let (index, length) = match self.pending_update {
+    pub(super) fn position(&self) -> moli_session_history::SessionHistoryPosition {
+        moli_session_history::SessionHistoryPosition::new(
+            self.current_index.unwrap_or(0),
+            self.entries.len().max(1),
+        )
+        .expect("browser session history position must be valid")
+    }
+
+    pub(super) fn position_after_navigation(
+        &self,
+        update: Option<PendingNavigationHistoryUpdate>,
+    ) -> moli_session_history::SessionHistoryPosition {
+        let (index, length) = match update {
             Some(
                 PendingNavigationHistoryUpdate::ReplaceCurrent
                 | PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument,
@@ -374,10 +385,10 @@ mod tests {
     fn history_traversal_resolution_is_native_read_only_and_document_aware() {
         let mut history = NavigationHistoryState::default();
         for url in ["https://example.test/a", "https://example.test/a#one"] {
-            assert!(history.record_same_document_update(
+            assert!(history.record_session_history_update(
                 url.into(),
                 "A".into(),
-                SameDocumentHistoryUpdate::Push
+                SessionHistoryUpdateKind::Push
             ));
         }
         let before = history.clone();
@@ -439,17 +450,17 @@ mod tests {
     fn same_document_history_traversal_rejects_mismatched_url_atomically() {
         let mut history = NavigationHistoryState::default();
         for url in ["https://example.test/a", "https://example.test/b"] {
-            assert!(history.record_same_document_update(
+            assert!(history.record_session_history_update(
                 url.into(),
                 String::new(),
-                SameDocumentHistoryUpdate::Push
+                SessionHistoryUpdateKind::Push
             ));
         }
         let before = history.clone();
-        assert!(!history.record_same_document_update(
+        assert!(!history.record_session_history_update(
             "https://example.test/wrong".into(),
             String::new(),
-            SameDocumentHistoryUpdate::Traverse { delta: -1 }
+            SessionHistoryUpdateKind::Traverse { delta: -1 }
         ));
         assert_eq!(history, before);
     }

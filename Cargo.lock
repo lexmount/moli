@@ -2554,6 +2554,7 @@ dependencies = [
  "moli-parser",
  "moli-renderer-v8",
  "moli-selector",
+ "moli-session-history",
  "moli-shared-worker",
  "moli-site",
  "moli-storage-key",

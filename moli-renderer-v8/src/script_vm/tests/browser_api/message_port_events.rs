@@ -272,7 +272,7 @@ worker.onerror=e=>{{globalThis.portResult=String(e.message);}};
         tokio::time::timeout(std::time::Duration::from_secs(10), async {
             while vm.eval("globalThis.portResult !== undefined").unwrap() != "true" {
                 browser_context_runtime.drain_shared_worker_service_lane();
-                drain_service_worker_test_turn(&mut vm, &browser_context_runtime, &loader).await;
+                drain_service_worker_test_turn(&mut vm, &browser_context_runtime).await;
             }
         })
         .await

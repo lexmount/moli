@@ -1307,7 +1307,7 @@ impl ChildModulepreloadFetchCompletion {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ChildDocumentResponseMetadata {
     pub(crate) status: u16,
-    pub(crate) headers: Vec<(String, String)>,
+    pub(crate) headers: Vec<(String, Vec<u8>)>,
     pub(crate) body_size: usize,
     pub(crate) from_cache: bool,
 }

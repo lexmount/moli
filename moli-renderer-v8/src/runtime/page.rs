@@ -587,7 +587,7 @@ impl JsRuntime {
         redirected: bool,
         redirect_count: usize,
         response_status: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         body: ExternalRawDocumentBodyStream,
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,

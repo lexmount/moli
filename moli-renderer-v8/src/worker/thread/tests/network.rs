@@ -46,7 +46,7 @@ async fn continue_worker_request(
 async fn continue_worker_response(
     pause: &crate::runtime::RendererWorkerFetchPause,
     response_code: Option<u16>,
-    response_headers: Option<Vec<(String, String)>>,
+    response_headers: Option<Vec<(String, Vec<u8>)>>,
 ) {
     decide_worker_pause(
         pause,
@@ -61,7 +61,7 @@ async fn continue_worker_response(
 async fn fulfill_worker_pause(
     pause: &crate::runtime::RendererWorkerFetchPause,
     response_code: u16,
-    response_headers: Vec<(String, String)>,
+    response_headers: Vec<(String, Vec<u8>)>,
     response_body: RendererSyntheticResponseBody,
 ) {
     decide_worker_pause(

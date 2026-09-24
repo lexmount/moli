@@ -669,7 +669,7 @@ async fn intercepted_failure(resource_type: SubresourceResourceType) {
     assert!(
         head.response_headers()
             .iter()
-            .any(|(name, value)| name == "x-physical" && value == "retained")
+            .any(|(name, value)| name == "x-physical" && value == b"retained")
     );
     let ScriptNetworkOutputItem::SubresourceDataReceived(data) = items[2].as_ref() else {
         panic!("the accepted response reports its actual prefix before failure")

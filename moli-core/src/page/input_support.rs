@@ -521,17 +521,6 @@ impl PageInputExt for Page {
 }
 
 impl Page {
-    pub fn start_prepare_element_click(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::prepare_element_click(
-            inspector_session_id,
-            object_id,
-        ))
-    }
-
     pub fn start_dispatch_prepared_element_click(
         &self,
         click: super::RendererPreparedPointerClick,

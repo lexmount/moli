@@ -1008,7 +1008,7 @@ mod tests {
         let mut response = response(request.url.as_str(), "winner");
         response
             .headers
-            .push(("vary".to_owned(), "User-Agent".to_owned()));
+            .push(("vary".to_owned(), b"User-Agent".to_vec()));
         let retained =
             script_text_retained_bytes(&key, &response) + vary_headers_retained_bytes(&winner_vary);
         let result = Ok(response);

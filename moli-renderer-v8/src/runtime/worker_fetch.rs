@@ -61,14 +61,14 @@ pub enum WorkerFetchDecision {
     },
     ContinueResponse {
         response_code: Option<u16>,
-        response_headers: Option<Vec<(String, String)>>,
+        response_headers: Option<Vec<(String, Vec<u8>)>>,
     },
     ProvideAuth(SubresourceAuthCredentials),
     CancelAuth,
     Fail(String),
     Fulfill {
         response_code: u16,
-        response_headers: Vec<(String, String)>,
+        response_headers: Vec<(String, Vec<u8>)>,
         response_body: RendererSyntheticResponseBody,
     },
     /// Neutral release when an observer or its policy disappears.

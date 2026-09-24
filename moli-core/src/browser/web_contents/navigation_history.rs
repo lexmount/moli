@@ -2,14 +2,14 @@ use super::WebContents;
 use super::{HistoryTraversalDestination, PageNavigationHistoryEntry, ResolvedHistoryTraversal};
 use crate::{
     browser::{DocumentId, WebContentsId},
-    page::{CompletedPageCommand, PendingPageCommand, SameDocumentHistoryUpdate},
+    page::{CompletedPageCommand, PendingPageCommand, SessionHistoryUpdate},
 };
 use url::Url;
 
 #[cfg(test)]
 mod tests;
 
-pub struct SameDocumentNavigationCommitted {
+pub struct SessionHistoryCommitted {
     pub web_contents: WebContentsId,
     pub document: DocumentId,
     pub url: Url,
@@ -62,16 +62,15 @@ impl WebContents {
         )
     }
 
-    pub fn commit_same_document_navigation(
+    pub fn commit_session_history_update(
         &mut self,
         document_id: DocumentId,
-        url: Url,
-        history_update: SameDocumentHistoryUpdate,
-    ) -> Option<SameDocumentNavigationCommitted> {
+        update: SessionHistoryUpdate,
+    ) -> Option<SessionHistoryCommitted> {
         let document = self.main_frame.current_document.as_ref()?;
         // A renderer document.open epoch does not undo a history operation
         // already performed on this Browser Document. Replacement does.
-        if document.id != document_id || self.navigation.has_pending_document_navigation() {
+        if document.id != document_id {
             return None;
         }
         let title = self
@@ -79,14 +78,14 @@ impl WebContents {
             .current_history_title()
             .unwrap_or_default()
             .to_owned();
-        if !self.navigation.record_same_document_navigation_history(
-            url.to_string(),
-            title,
-            history_update,
-        ) {
+        let url = Url::parse(&update.root_url).ok()?;
+        if !self
+            .navigation
+            .record_session_history_update(&update, title)
+        {
             return None;
         }
-        Some(SameDocumentNavigationCommitted {
+        Some(SessionHistoryCommitted {
             web_contents: self.id(),
             document: document_id,
             url,

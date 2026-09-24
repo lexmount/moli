@@ -60,7 +60,7 @@ impl BrowserContext {
         web_contents: WebContentsHandle,
         policy: &DownloadPolicy,
         url: Url,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body: DownloadBody,
     ) -> Result<Option<crate::browser::downloads::AdmittedDownload>, String> {
         self.web_contents(web_contents)?;

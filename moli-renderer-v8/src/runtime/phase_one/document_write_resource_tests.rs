@@ -376,10 +376,22 @@ async fn start_standalone_parser_page(
     runtime
         .page_vm
         .retain_standalone_request_client_owner_for_test(loader_owner);
-    PendingStandaloneDocumentWritePage {
+    let mut pending = PendingStandaloneDocumentWritePage {
         runtime,
         started,
         owner_wake_rx,
+    };
+    loop {
+        let document = &pending.runtime.page_vm.vm().document_runtime;
+        if document.pending_main_parser_script().is_some()
+            || document.has_pending_document_write_parser_blocking_work()
+        {
+            return pending;
+        }
+        // Native preload receipts can park phase one before the held script
+        // or stylesheet is admitted. Run their real Page turns up to that blocker.
+        let (outcome, wake) = resume_standalone_document_write_page(pending).await;
+        pending = retain_pending_parser_page(outcome, wake);
     }
 }
 
@@ -773,9 +785,9 @@ async fn resume_after_stylesheet_completion(
     ParseTimePageVmCreationOutcome,
     tokio::sync::mpsc::UnboundedReceiver<crate::page_task_queue::RendererOwnerWake>,
 ) {
-    tokio::time::timeout(
+    pending = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        wait_for_standalone_stylesheet_completion(&mut pending),
+        wait_for_standalone_stylesheet_completion(pending),
     )
     .await
     .expect("stylesheet completion");
@@ -996,9 +1008,9 @@ globalThis.__tailAtScript = !!document.getElementById('parser-tail');
             ).await.expect("parser should remain suspended");
 
             release_tx.send(()).expect("release CSS");
-            tokio::time::timeout(
+            pending = tokio::time::timeout(
                 std::time::Duration::from_secs(2),
-                wait_for_standalone_stylesheet_completion(&mut pending),
+                wait_for_standalone_stylesheet_completion(pending),
             ).await.expect("CSS completion should arrive");
             pending = run_standalone_selected_page_task(
                 pending,

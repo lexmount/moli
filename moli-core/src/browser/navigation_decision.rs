@@ -66,7 +66,7 @@ pub enum NavigationDecision {
     },
     Fulfill {
         status: u16,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body: Vec<u8>,
     },
     Authenticate {
@@ -76,7 +76,7 @@ pub enum NavigationDecision {
     Response {
         transfer: Box<super::web_contents::PausedDocumentTransfer>,
         status: Option<u16>,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
     },
     Cancel,
     Fail {

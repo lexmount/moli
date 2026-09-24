@@ -246,7 +246,6 @@ globalThis.__bootstrapEventWorker = new SharedWorker(url, {
                 page_vm
                     .run_exact_selected_page_task_for_test(
                         PageSelectedTaskTestSelector::SharedWorkerClientEvent,
-                        &loader,
                     )
                     .await?
             );

@@ -1283,7 +1283,7 @@ impl BrowserContextHandle {
         fn set_default_locale_override(locale: Option<String>) -> ();
         fn mark_next_navigation_history_replace_current(handle: WebContentsHandle) -> ();
         fn mark_next_navigation_history_traverse_to_entry(handle: WebContentsHandle, entry_id: i32) -> ();
-        fn commit_same_document_navigation(handle: WebContentsHandle, document: super::DocumentId, url: url::Url, history_update: crate::page::SameDocumentHistoryUpdate) -> Option<super::web_contents::SameDocumentNavigationCommitted>;
+        fn commit_session_history_update(handle: WebContentsHandle, document: super::DocumentId, update: crate::page::SessionHistoryUpdate) -> Option<super::web_contents::SessionHistoryCommitted>;
         fn mark_renderer_crashed(handle: WebContentsHandle) -> ();
         fn begin_initial_empty_document(handle: WebContentsHandle, initial_url: String, creator: Option<super::web_contents::InitialDocumentCreator>, storage_key: Option<moli_storage_key::MoliStorageKey>) -> ();
         fn crash_web_contents_renderer_from_io(handle: WebContentsHandle) -> ();
@@ -1585,7 +1585,7 @@ impl BrowserContextHandle {
         &self,
         web_contents: WebContentsHandle,
         url: String,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         suggested_filename: Option<String>,
     ) -> Result<super::DownloadObservation, String> {
         let context = self.id;
@@ -1609,7 +1609,7 @@ impl BrowserContextHandle {
         web_contents: WebContentsHandle,
         policy: &super::DownloadPolicy,
         url: url::Url,
-        headers: Vec<(String, String)>,
+        headers: Vec<(String, Vec<u8>)>,
         body: super::DownloadBody,
     ) -> Result<Option<super::DownloadObservation>, String> {
         let policy = policy.clone();
@@ -1767,11 +1767,11 @@ impl BrowserContextHandle {
     pub fn document_response_headers(
         &self,
         document: super::DocumentHandle,
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<Vec<(String, Vec<u8>)>, String> {
         self.try_read(move |context| {
             context
                 .document_response_headers(document)
-                .map(<[(String, String)]>::to_vec)
+                .map(<[(String, Vec<u8>)]>::to_vec)
         })
     }
 

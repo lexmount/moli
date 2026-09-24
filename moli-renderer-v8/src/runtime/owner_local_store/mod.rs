@@ -912,6 +912,7 @@ impl RendererOwnerLocalStore {
         })?;
         if let Some(policy) = policy {
             let request = &mut residence.request;
+            request.session_history_position = policy.session_history_position;
             request.permission_overrides = policy.permission_overrides;
             request.extra_http_headers = policy.extra_http_headers;
             request.script_execution_disabled = policy.script_execution_disabled;

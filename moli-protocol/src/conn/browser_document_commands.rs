@@ -530,7 +530,7 @@ impl CdpConnection {
     pub(crate) fn document_response_headers(
         &self,
         document: DocumentHandle,
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<Vec<(String, Vec<u8>)>, String> {
         Ok(self
             .browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?

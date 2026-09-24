@@ -53,7 +53,12 @@ pub(super) fn content_length_from_headers(headers: &[(String, Vec<u8>)]) -> Opti
     headers
         .iter()
         .find(|(name, _)| header_name_is(name, &HeaderName::from_static("content-length")))
-        .and_then(|(_, value)| moli_fetch::decode_header_value(value).trim().parse::<u64>().ok())
+        .and_then(|(_, value)| {
+            moli_fetch::decode_header_value(value)
+                .trim()
+                .parse::<u64>()
+                .ok()
+        })
 }
 
 pub(super) fn filename_from_headers(headers: &[(String, Vec<u8>)]) -> Option<String> {
@@ -61,7 +66,9 @@ pub(super) fn filename_from_headers(headers: &[(String, Vec<u8>)]) -> Option<Str
         if !header_name_is(name, &HeaderName::from_static("content-disposition")) {
             continue;
         }
-        if let Some(filename) = filename_from_content_disposition(&moli_fetch::decode_header_value(value)) {
+        if let Some(filename) =
+            filename_from_content_disposition(&moli_fetch::decode_header_value(value))
+        {
             return Some(filename);
         }
     }

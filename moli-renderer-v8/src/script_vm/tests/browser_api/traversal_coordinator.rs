@@ -32,11 +32,7 @@ async fn history_traversal_retirement_reentry_preserves_reattached_frame_and_sib
         result.committed.catch(error => log.push('committed:' + error.name));
         result.finished.catch(error => log.push('finished:' + error.name));
     "#).unwrap();
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_history_traversal_executor_turn().await.unwrap());
     assert_eq!(
         vm._context_host
             .borrow()
@@ -103,11 +99,7 @@ async fn history_traversal_retirement_error_can_start_successor_admission() {
     "#,
     )
     .unwrap();
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_history_traversal_executor_turn().await.unwrap());
     assert_eq!(
         vm._context_host
             .borrow()
@@ -122,11 +114,7 @@ async fn history_traversal_retirement_error_can_start_successor_admission() {
             .pending_history_traversal_admissions
             .is_empty()
     );
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_history_traversal_executor_turn().await.unwrap());
     assert_eq!(
         vm._context_host
             .borrow()
@@ -176,11 +164,7 @@ async fn history_traversal_canceled_precommit_callback_cannot_complete_successor
         first.committed.catch(error => log.push('oldCommitted:' + error.name));
         first.finished.catch(error => log.push('oldFinished:' + error.name));
     "#).unwrap();
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_history_traversal_executor_turn().await.unwrap());
     assert_eq!(
         vm._context_host
             .borrow()
@@ -204,11 +188,7 @@ async fn history_traversal_canceled_precommit_callback_cannot_complete_successor
             .len(),
         0
     );
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_history_traversal_executor_turn().await.unwrap());
     assert_eq!(
         vm._context_host
             .borrow()
@@ -270,11 +250,7 @@ async fn history_traversal_detach_releases_pending_admission_and_ignores_late_ca
     "#,
     )
     .unwrap();
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .unwrap()
-    );
+    assert!(vm.run_one_history_traversal_executor_turn().await.unwrap());
     assert_eq!(
         vm._context_host
             .borrow()

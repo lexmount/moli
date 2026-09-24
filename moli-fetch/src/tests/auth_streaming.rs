@@ -199,7 +199,7 @@ async fn digest_stream(target: RequestAuthTarget, finish: Finish, method: &'stat
             .head()
             .headers
             .iter()
-            .any(|(name, value)| name == "x-final" && value == "yes"),
+            .any(|(name, value)| name == "x-final" && value == b"yes"),
         "an intermediate challenge must not become the final response"
     );
 
