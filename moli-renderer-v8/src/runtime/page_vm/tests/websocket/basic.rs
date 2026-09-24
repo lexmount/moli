@@ -216,7 +216,7 @@ async fn child_navigation_retires_websocket_execution_context() {
                     "first child WebSocket document",
                 )
                 .await;
-                assert_eq!(
+                assert_ne!(
                     page_vm
                         .vm_mut()
                         .live_child_default_runtime_realm_inventory()
@@ -225,7 +225,7 @@ async fn child_navigation_retires_websocket_execution_context() {
                         .expect("committed child WebSocket realm")
                         .context_id,
                     initial_context_id,
-                    "the first secure commit must preserve the initial-empty LocalWindow realm"
+                    "navigation after the initial blank load must replace its realm"
                 );
 
                 page_vm.vm_mut().eval(&format!(

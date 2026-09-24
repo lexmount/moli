@@ -2036,6 +2036,7 @@ fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
     __ancestorPolicySnapshottedLocation: snapshottedLocation,
     __ancestorPolicySnapshottedInitialList: snapshottedInitialList,
     __ancestorPolicyFutureLocation: futureLocation,
+    __ancestorPolicyFutureFrame: futureNavigation,
     __ancestorPolicyFutureInitialList: futureInitialList
   });
   return JSON.stringify({
@@ -2055,7 +2056,8 @@ fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
             r#"
 (() => {
   const snapshotted = __ancestorPolicySnapshottedLocation.ancestorOrigins;
-  const future = __ancestorPolicyFutureLocation.ancestorOrigins;
+  const futureLocation = __ancestorPolicyFutureFrame.contentWindow.location;
+  const future = futureLocation.ancestorOrigins;
   return JSON.stringify({
     snapshotted: Array.from(snapshotted),
     snapshottedNewDocumentList:
@@ -2064,7 +2066,9 @@ fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
       snapshotted === __ancestorPolicySnapshottedLocation.ancestorOrigins,
     future: Array.from(future),
     futureNewDocumentList: future !== __ancestorPolicyFutureInitialList,
-    futureStable: future === __ancestorPolicyFutureLocation.ancestorOrigins
+    futureStable: future === futureLocation.ancestorOrigins,
+    futureNewLocation: futureLocation !== __ancestorPolicyFutureLocation,
+    retiredFuture: Array.from(__ancestorPolicyFutureLocation.ancestorOrigins)
   });
 })()
 "#,
@@ -2072,7 +2076,7 @@ fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
         .expect("committed Location ancestor policy probe should evaluate");
     assert_eq!(
         committed,
-        r#"{"snapshotted":["null"],"snapshottedNewDocumentList":true,"snapshottedStable":true,"future":["https://ancestor-policy.test"],"futureNewDocumentList":true,"futureStable":true}"#
+        r#"{"snapshotted":["null"],"snapshottedNewDocumentList":true,"snapshottedStable":true,"future":["https://ancestor-policy.test"],"futureNewDocumentList":true,"futureStable":true,"futureNewLocation":true,"retiredFuture":[]}"#
     );
 }
 
