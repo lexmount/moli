@@ -82,12 +82,14 @@ impl PageVm {
                         "position".to_owned(),
                         "left".to_owned(),
                         "top".to_owned(),
+                        "animation-name".to_owned(),
                     ],
                 );
             nodes
                 .into_iter()
                 .zip(values)
                 .map(|(node, mut values)| {
+                    let animation_name = values.pop().unwrap_or_default();
                     // Preserve the visibility adapter's stable field layout.
                     let span = spans.get(&node);
                     values.push(
@@ -115,6 +117,7 @@ impl PageVm {
                     );
                     values.push(String::new());
                     values.push(backgrounds.get(&node).cloned().unwrap_or_default());
+                    values.push(animation_name);
                     (node, values)
                 })
                 .collect::<Vec<_>>()
