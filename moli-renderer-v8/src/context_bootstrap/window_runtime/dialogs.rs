@@ -362,7 +362,7 @@ pub(crate) fn window_open_callback<'s>(
         let popup_id = opened_popup.popup_id;
         if opened_popup.created_new_browsing_context {
             host.set_lightweight_popup_is_popup(popup_id, parsed_features.is_popup());
-        } else if url.is_none() {
+        } else if url.is_none() || !opened_popup.allows_navigation_activation(scope, host) {
             if suppress_opener {
                 rv.set(v8::null(scope).into());
             } else {

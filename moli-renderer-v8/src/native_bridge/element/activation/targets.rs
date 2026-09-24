@@ -273,6 +273,9 @@ fn navigate_element_popup_target(
         );
         return true;
     };
+    if !opened_popup.allows_navigation_activation(scope, runtime) {
+        return true;
+    }
     let popup_id = opened_popup.popup_id;
     let session_storage_store = runtime.lightweight_popup_session_storage_store(popup_id);
     let initial_empty_document_storage_key =
@@ -360,6 +363,9 @@ pub(in crate::native_bridge) fn choose_form_navigation_target(
         creator.base_url,
         creator.policy_container,
     )?;
+    if !opened.allows_navigation_activation(scope, runtime) {
+        return None;
+    }
     let id = opened.popup_id;
     let activation = RendererPendingPopupActivation::window(
         root_document,
