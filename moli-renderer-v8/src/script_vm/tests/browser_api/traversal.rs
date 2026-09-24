@@ -1347,56 +1347,68 @@ result.finished.catch(error => __lmClosedHistoryRoute.push("finished:" + error.n
 #[tokio::test]
 async fn history_back_calls_from_default_and_isolated_world_preserve_each_step() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm =
-        new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
+    for isolated_calls in [[false, false], [false, true], [true, false], [true, true]] {
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
 
-    vm.eval(
-        r##"
+        vm.eval(
+            r##"
 history.pushState(null, "", "#one");
 history.pushState(null, "", "#two");
+globalThis.traversed = [];
+addEventListener("popstate", () => traversed.push(location.hash));
 "created"
 "##,
-    )
-    .expect("multi-realm history fixture should create entries");
-    vm.advance_timers_until_deadline_for_test(&loader)
-        .await
-        .expect("multi-realm entry-creation timers should drain");
-    let isolated_context_id = vm
-        .create_isolated_world("history-traversal-owner", false)
-        .expect("history traversal isolated world should be created");
+        )
+        .expect("multi-realm history fixture should create entries");
+        vm.advance_timers_until_deadline_for_test(&loader)
+            .await
+            .expect("multi-realm entry-creation timers should drain");
+        let isolated_context_id = vm
+            .create_isolated_world("history-traversal-owner", false)
+            .expect("history traversal isolated world should be created");
 
-    vm.eval("history.back(); 'default-queued'")
-        .expect("default realm should queue traversal");
-    vm.eval_in_isolated_context(isolated_context_id, "history.back(); 'isolated-queued'")
-        .expect("isolated realm should queue its own exact traversal");
-    assert!(
-        !vm.has_ready_timeout(),
-        "neither realm should route history traversal through PageTimer"
-    );
+        for (script, destinations) in [
+            ("history.back(); 'queued'", ["#one", ""]),
+            ("history.forward(); 'queued'", ["#one", "#two"]),
+        ] {
+            for isolated in isolated_calls {
+                if isolated {
+                    vm.eval_in_isolated_context(isolated_context_id, script)
+                } else {
+                    vm.eval(script)
+                }
+                .expect("each realm should queue its own traversal");
+            }
+            assert!(
+                !vm.has_ready_timeout(),
+                "neither realm should route history traversal through PageTimer"
+            );
 
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .expect("default realm traversal should run")
-    );
-    assert_eq!(
-        vm.eval("location.hash")
-            .expect("first queued traversal should preserve its destination"),
-        "#one"
-    );
-    assert!(
-        vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .expect("isolated realm traversal should run after the default realm traversal")
-    );
-    assert_eq!(
-        vm.eval("location.hash")
-            .expect("second queued traversal should reach the initial entry"),
-        ""
-    );
-    assert!(
-        !vm.run_one_history_traversal_executor_turn(&loader)
-            .await
-            .expect("history source should be drained after both traversals")
-    );
+            for destination in destinations {
+                assert!(
+                    vm.run_one_history_traversal_executor_turn(&loader)
+                        .await
+                        .expect("each queued traversal should run")
+                );
+                assert_eq!(
+                    vm.eval("location.hash")
+                        .expect("each queued traversal should preserve its destination"),
+                    destination,
+                    "isolated calls: {isolated_calls:?}, script: {script}"
+                );
+            }
+            assert!(
+                !vm.run_one_history_traversal_executor_turn(&loader)
+                    .await
+                    .expect("history source should be drained after both traversals")
+            );
+        }
+        assert_eq!(
+            vm.eval("traversed.join('|')")
+                .expect("each step should dispatch popstate on the owning Window"),
+            "#one||#one|#two",
+            "isolated calls: {isolated_calls:?}"
+        );
+    }
 }

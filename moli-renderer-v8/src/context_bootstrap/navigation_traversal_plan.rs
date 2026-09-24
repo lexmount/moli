@@ -184,5 +184,9 @@ pub(super) fn history_delta_traversal_plan<'s>(
         .pending_joint_history_step(&model)
         .unwrap_or_else(|| model.current_step());
     let step = model.step_by_delta_from(source, delta)?;
+    // Queue entry identity from the same Window history used when applying
+    // the traversal, rather than an isolated world's independent JS view.
+    let owner =
+        super::session_history::owner_for_context(scope, host, binding.context, binding.popup)?;
     JointTraversalPlan::resolve(scope, owner, step)
 }
