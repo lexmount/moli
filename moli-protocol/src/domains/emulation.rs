@@ -828,14 +828,11 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    let update = if emulation_command_is_context_wide(conn, cmd.session_id) {
-        page_session::set_context_emulated_media(conn, overrides)
-    } else {
+    if let Err(error) =
         page_session::update_style_environment_state(conn, cmd.session_id, |mut state| {
-            state.set_emulated_media(overrides);
+            state.set_emulated_media(overrides.clone());
         })
-    };
-    if let Err(error) = update {
+    {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, error));
     }
     start_style_environment_update(conn, cmd)
@@ -864,14 +861,11 @@ fn start_os_text_scale_command(
             "Text scale must be finite and positive",
         ));
     }
-    let update = if emulation_command_is_context_wide(conn, cmd.session_id) {
-        page_session::set_context_preferred_text_scale(conn, params.scale)
-    } else {
+    if let Err(error) =
         page_session::update_style_environment_state(conn, cmd.session_id, |mut state| {
             state.set_preferred_text_scale(params.scale);
         })
-    };
-    if let Err(error) = update {
+    {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-31998, error));
     }
     start_style_environment_update(conn, cmd)
