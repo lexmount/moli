@@ -484,7 +484,10 @@ async fn websocket_bidi_attached_classic_session_title_waits_for_script_triggere
         "POST",
         &format!("/session/{session_id}/execute/sync"),
         json!({
-            "script": "document.querySelector('form').submit(); return 'submitted';",
+            // Form submission plans a later DOM task. Wait for navigation to
+            // start so the title command tests an in-flight load while BiDi
+            // is attached, rather than racing the planned submission task.
+            "script": "return new Promise(resolve => { navigation.addEventListener('navigate', () => resolve('submitted'), { once: true }); document.querySelector('form').submit(); });",
             "args": []
         }),
     )
