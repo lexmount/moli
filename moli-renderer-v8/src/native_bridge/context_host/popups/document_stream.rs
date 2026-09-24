@@ -559,7 +559,7 @@ impl JsContextHost {
             match mode {
                 PopupStreamScriptMode::Blocking => {
                     stream.parser.as_mut().expect("blocking parser").suspend(
-                        ParserSuspensionCause::DocumentWriteExternalScript {
+                        ParserSuspensionCause::ParserClassicSource {
                             script: script_handle,
                         },
                     );
