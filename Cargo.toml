@@ -102,13 +102,13 @@ curl-sys = { git = "https://github.com/lexmount/curl-rust", rev = "a0ea59f5ca1b1
 cookie = { git = "https://github.com/ldm0/cookie-rs", branch = "priority" }
 v8 = { path = "vendor/v8-152.2.0" }
 deno_v8 = { path = "vendor/deno_v8-0.3.0" }
-selectors = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
-servo_arc = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
-stylo = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
-stylo_atoms = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
-stylo_dom = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
-stylo_static_prefs = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
-stylo_traits = { git = "https://github.com/lanyue-llk/stylo", rev = "402a73dba5624bbfb0a16639f03bd48db63af1b0" }
+selectors = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
+servo_arc = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
+stylo = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
+stylo_atoms = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
+stylo_dom = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
+stylo_static_prefs = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
+stylo_traits = { git = "https://github.com/lanyue-llk/stylo", rev = "3d44ed30808997861946a3f4b84a20318c4d451c" }
 taffy = { git = "https://github.com/ldm0/taffy", rev = "645bf5a49df607a8bff34ec90c5343901d04f10e" }
 
 [workspace.lints.clippy]
