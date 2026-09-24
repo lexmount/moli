@@ -631,7 +631,10 @@ impl JsContextHost {
         let attempted_script_job = true;
         // The script can start another navigation without replacing its
         // Document yet. Its completion must not clear that newer request.
-        if !self.frame_document_task_owner_is_current(target.child_handle(), target.task_owner())
+        if self.has_planned_form_navigation_to(super::super::OwnerDispatchScope::Child(
+            target.child_handle(),
+        )) || !self
+            .frame_document_task_owner_is_current(target.child_handle(), target.task_owner())
             || self.current_child_navigation_load(target.child_handle())
                 != Some(target.navigation_load())
         {

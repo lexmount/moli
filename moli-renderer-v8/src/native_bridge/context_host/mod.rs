@@ -155,6 +155,7 @@ mod service_workers;
 pub(crate) use service_workers::ServiceWorkerWindowOwner;
 mod font_face_loads;
 mod bitmap_tasks;
+mod form_navigations;
 mod shared_workers;
 mod signal_bridge;
 mod storage_events;
@@ -990,6 +991,7 @@ pub(crate) struct JsContextHost {
     view_transition_updates: view_transition_updates::ViewTransitionUpdateState,
     media_element_events: media_element_events::MediaElementEventState,
     element_toggle_events: element_toggle_events::ElementToggleEventState,
+    form_navigations: form_navigations::FormNavigationState,
     text_track_default_modes: text_track_default_modes::TextTrackDefaultModeState,
     child_document_script_ready_tasks:
         document_script_ready_inputs::ChildDocumentScriptReadyTaskLedger,
