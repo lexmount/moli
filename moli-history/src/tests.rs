@@ -8,6 +8,7 @@ fn entry(id: &str) -> HistoryEntryRef {
     HistoryEntry {
         url: format!("https://example.test/#{id}"),
         inherited_origin: None,
+        document_origin: "https://example.test".to_owned(),
         id: id.to_owned(),
         key: NavigationHistoryEntryKey::allocate(),
         document: NavigationHistoryDocumentId::allocate(),
