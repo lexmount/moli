@@ -1,0 +1,18 @@
+<!doctype html><body><p id="original">original</p><script>
+document.domain = location.hostname;
+onmessage = event => {
+  if (event.data !== 'document-open-origin') return;
+  const source = event.source;
+  const attempts = [];
+  for (const [method, Constructor] of [
+    [Document.prototype.open, DOMException],
+    [parent.Document.prototype.open, parent.DOMException]
+  ]) {
+    try { method.call(parent.document); attempts.push('returned'); }
+    catch (error) { attempts.push([error.name, error.code, error instanceof Constructor]); }
+  }
+  const own = document.open() === document;
+  document.write('<!doctype html><body><p id="stream">child');
+  source.postMessage({token:'document-open-origin', attempts, own}, '*');
+};
+</script>

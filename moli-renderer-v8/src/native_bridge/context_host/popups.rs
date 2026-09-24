@@ -3103,6 +3103,10 @@ impl JsContextHost {
                 .mark_subtree_connected_preserving_owner_document(document_handle);
             self.lightweight_popup_document_handles
                 .insert(document_handle, popup_id);
+            if let Some(origin) = self.lightweight_popup_access_origin(popup_id) {
+                self.lightweight_popup_document_origins
+                    .insert(document_handle, origin);
+            }
             if let Some(current_document) = self.lightweight_popup_document_record_mut(popup_id) {
                 current_document.handle = Some(document_handle);
             }

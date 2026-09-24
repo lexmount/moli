@@ -701,7 +701,7 @@ fn document_receiver_runtime_and_handle<'s>(
     Some((runtime_ptr, handle))
 }
 
-fn document_origin_source_object<'s>(
+pub(in crate::native_bridge) fn document_origin_source_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     document: v8::Local<'s, v8::Object>,
 ) -> v8::Local<'s, v8::Object> {

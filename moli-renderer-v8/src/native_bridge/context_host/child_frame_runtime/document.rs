@@ -304,12 +304,13 @@ fn initialize_child_document_context<'s>(
 }
 
 impl JsContextHost {
-    pub(in crate::native_bridge) fn write_child_document_stream(
+    pub(in crate::native_bridge) fn write_child_document_stream<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
         child_handle: DomHandle,
         document_handle: DomHandle,
+        document: v8::Local<'s, v8::Object>,
         chunk: String,
     ) {
         debug_assert!(std::ptr::eq(host_ptr, self));
@@ -341,6 +342,11 @@ impl JsContextHost {
                     }
                 }
             } else {
+                if host.has_document_unload_counter(document_handle)
+                    || !host.check_document_open_origin(scope, document)
+                {
+                    return;
+                }
                 let entry_document = host.document_open_entry_document(scope);
                 let Some(context) = host.begin_child_document_stream_replacement(
                     scope,

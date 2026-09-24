@@ -145,6 +145,7 @@ fn node_document_write_or_writeln_callback<'s>(
             scope,
             runtime_ptr,
             handle,
+            args.this(),
             &html,
         );
         rv.set_undefined();
@@ -158,6 +159,7 @@ fn node_document_write_or_writeln_callback<'s>(
             runtime_ptr,
             child_handle,
             handle,
+            args.this(),
             html,
         );
         rv.set_undefined();
@@ -165,11 +167,17 @@ fn node_document_write_or_writeln_callback<'s>(
     }
     if !document_has_browsing_context(unsafe { &*runtime_ptr }, handle) {
         let stream_was_open = unsafe { &*runtime_ptr }.has_windowless_document_parser(handle);
-        if !stream_was_open && unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
+        if !stream_was_open
+            && (unsafe { &*runtime_ptr }.has_document_unload_counter(handle)
+                || unsafe { &*runtime_ptr }.has_ignore_destructive_writes_counter(handle))
+        {
             rv.set_undefined();
             return;
         }
         if !stream_was_open {
+            if !unsafe { &*runtime_ptr }.check_document_open_origin(scope, args.this()) {
+                return;
+            }
             unsafe { &mut *runtime_ptr }.prepare_windowless_document_replacement(
                 scope,
                 runtime_ptr,
@@ -197,6 +205,9 @@ fn node_document_write_or_writeln_callback<'s>(
         return;
     }
     if implicit_replacement_session {
+        if !runtime.check_document_open_origin(scope, args.this()) {
+            return;
+        }
         let entry_document = runtime.document_open_entry_document(scope);
         clear_window_event_handlers(scope);
         JsContextHost::prepare_root_document_replacement(scope, runtime_ptr, handle, entry_document);
@@ -293,6 +304,9 @@ pub(in crate::native_bridge) fn node_document_open_callback<'s>(
             );
             return;
         }
+        if !unsafe { &*runtime_ptr }.check_document_open_origin(scope, args.this()) {
+            return;
+        }
         if unsafe { &*runtime_ptr }.has_document_unload_counter(handle) {
             rv.set(args.this().into());
             return;
@@ -360,6 +374,23 @@ fn clear_window_event_handlers(scope: &mut v8::PinScope<'_, '_>) {
 }
 
 impl JsContextHost {
+    pub(in crate::native_bridge) fn check_document_open_origin<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        document: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        if self.document_has_same_origin_as_entry(scope, document) {
+            return true;
+        }
+        throw_dom_exception(
+            scope,
+            "SecurityError",
+            18,
+            "The document is not same-origin with the entry document.",
+        );
+        false
+    }
+
     pub(in crate::native_bridge) fn document_open_entry_document(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
