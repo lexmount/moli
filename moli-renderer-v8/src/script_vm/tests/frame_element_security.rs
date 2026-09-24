@@ -51,7 +51,10 @@ globalThis.__frameElementResult = null;
     .unwrap();
     assert_eq!(result["checks"], 28, "{result}");
     assert_eq!(result["failures"], serde_json::json!([]), "{result}");
-    assert_eq!(server.finish_targets().await, vec!["/child.html"; 6]);
+    assert_eq!(
+        server.finish_targets().await,
+        ["/child.html", "/child.html?nested"].repeat(3)
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

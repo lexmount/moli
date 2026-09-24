@@ -12,7 +12,7 @@ onmessage = async event => {
   };
   const nested = document.createElement('iframe');
   const loaded = new Promise(resolve => nested.onload = resolve);
-  nested.src = location.href;
+  nested.src = location.href + '?nested';
   document.body.appendChild(nested);
   await loaded;
   event.source.postMessage({
