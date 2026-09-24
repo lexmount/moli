@@ -12,6 +12,7 @@ mod response_mime;
 mod runtime_errors;
 mod service_worker_import;
 mod source_phase;
+mod specifiers;
 mod text;
 
 const WORKER_WASM_IMPORT_PM: &[u8] = &[
