@@ -511,6 +511,16 @@ impl JsContextHost {
             .is_some_and(|(source, target)| source.has_same_origin(&target))
     }
 
+    pub(crate) fn window_scopes_have_same_origin_domain(
+        &self,
+        source: OwnerDispatchScope,
+        target: OwnerDispatchScope,
+    ) -> bool {
+        self.window_access_origin_for_dispatch_scope(source)
+            .zip(self.window_access_origin_for_dispatch_scope(target))
+            .is_some_and(|(source, target)| source.can_access(&target))
+    }
+
     pub(crate) fn window_document_origin(&self, scope: OwnerDispatchScope) -> Option<String> {
         self.window_access_origin_for_dispatch_scope(scope)
             .map(|origin| origin.serialized_origin())

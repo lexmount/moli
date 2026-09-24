@@ -746,7 +746,7 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     navigation: PlannedFormNavigation,
-    fire_navigate_event: bool,
+    source_can_access_target: bool,
 ) -> bool {
     use crate::native_bridge::OwnerDispatchScope;
     let runtime = unsafe { &mut *runtime_ptr };
@@ -759,17 +759,49 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
         }
         OwnerDispatchScope::LightweightPopup(id) => runtime.lightweight_popup_window(scope, id),
     };
+    let current_url = match navigation.destination {
+        OwnerDispatchScope::Top => Some(runtime.document_url().clone()),
+        OwnerDispatchScope::Child(handle) => runtime.child_browsing_context_current_url(handle),
+        OwnerDispatchScope::LightweightPopup(id) => runtime.lightweight_popup_document_url(id),
+    };
+    let destination_url = navigation.request.url();
+    // Fragment navigation fires in the target even for a cross-origin source.
+    // A POST resource always replaces the Document, including at the same URL.
+    let same_document_fragment = matches!(&navigation.request, FormSubmissionMethod::Get { .. })
+        && destination_url.fragment().is_some()
+        && current_url.is_some_and(|current| {
+            current[..url::Position::AfterQuery] == destination_url[..url::Position::AfterQuery]
+        });
+    let source_element =
+        source_can_access_target.then(|| v8::Local::new(scope, &navigation.source_element));
+    if same_document_fragment
+        && let Some(location) = window
+            .and_then(|window| crate::context_bootstrap::window_location_for_holder(scope, window))
+    {
+        crate::context_bootstrap::navigate_location_object_for_form_fragment(
+            scope,
+            location,
+            destination_url.as_str(),
+            if navigation.mutation == moli_page_types::NavigationHistoryMutation::Replace {
+                crate::context_bootstrap::LocationNavigationKind::Replace
+            } else {
+                crate::context_bootstrap::LocationNavigationKind::Assign
+            },
+            source_element,
+            navigation.user_initiated,
+        );
+        return true;
+    }
     let form_data = match &navigation.request {
         FormSubmissionMethod::Get { .. } => None,
         FormSubmissionMethod::Post {
             form_data_entries, ..
         } => form_data_object_from_entries(scope, form_data_entries),
     };
-    let source_element = v8::Local::new(scope, &navigation.source_element);
-    if fire_navigate_event && let Some(window) = window
+    if source_can_access_target && let Some(window) = window
         && !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
             scope, window, navigation.request.url().as_str(), navigation.mutation.navigation_type(),
-            Some(source_element), navigation.user_initiated, None, form_data,
+            source_element, navigation.user_initiated, None, form_data,
         ) {
         return true;
     }

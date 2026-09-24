@@ -190,22 +190,21 @@ impl JsContextHost {
         };
         let scope = &mut v8::ContextScope::new(scope, resolved.context);
         let dispatch = target.dispatch_scope();
-        // A cross-origin initiator must not expose its form or entry list to
-        // the target's navigate listener. Keep the source origin if its old
-        // Document has retired while a different target remains live.
+        // Keep the source origin if its old Document has retired while a
+        // different target remains live.
         let source_origin = navigation
             .source_document
             .and_then(|document| self.owner_dispatch_scope_for_node(document))
             .and_then(|source| self.window_access_origin_for_dispatch_scope(source))
             .or(pending.source_origin);
-        let fire_navigate_event = source_origin
+        let source_can_access_target = source_origin
             .zip(self.window_access_origin_for_dispatch_scope(dispatch))
             .is_some_and(|(source, target)| source.can_access(&target));
         let previous = dispatch.enter(scope);
         // The selected target owns navigation work even if the source form
         // was adopted or its Document was replaced after submission.
         let applied =
-            apply_planned_form_navigation(scope, host_ptr, navigation, fire_navigate_event);
+            apply_planned_form_navigation(scope, host_ptr, navigation, source_can_access_target);
         dispatch.restore(scope, previous);
         Some(applied)
     }

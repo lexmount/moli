@@ -1,6 +1,5 @@
 use crate::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
-    context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window,
     document_runtime::{DocumentPolicyContainer, DomHandle},
     util::v8str,
 };
@@ -681,38 +680,23 @@ pub(in crate::native_bridge) fn navigate_named_iframe_target_from_document<'s>(
         return false;
     };
     let runtime = unsafe { &mut *runtime_ptr };
-    let target_url = url::Url::parse(resolved_url).ok();
-    let target_is_same_origin_with_top = target_url
-        .as_ref()
-        .is_some_and(|url| moli_url::same_origin(runtime.document_url(), url));
-    let target_is_same_document_with_child = target_url.as_ref().is_some_and(|url| {
-        runtime
-            .child_browsing_context_current_url(target_iframe)
-            .is_some_and(|current| urls_refer_to_same_document(&current, url))
-    });
-    if ((target_is_same_origin_with_top
-        && runtime.child_browsing_context_is_same_origin_with_top(target_iframe))
-        || target_is_same_document_with_child)
-        && let Some(window) =
-            runtime.existing_child_browsing_context_window_wrapper(scope, target_iframe)
-        && !dispatch_cross_document_navigation_navigate_event_for_window(
-            scope,
-            window,
-            resolved_url,
-            source_element,
-            false,
-            None,
-        )
-    {
-        return true;
-    }
-    runtime.navigate_child_browsing_context_to_url(scope, target_iframe, resolved_url)
-}
-
-fn urls_refer_to_same_document(current: &url::Url, target: &url::Url) -> bool {
-    let mut current = current.clone();
-    current.set_fragment(None);
-    let mut target = target.clone();
-    target.set_fragment(None);
-    current == target
+    let Ok(context) = runtime.ensure_prebootstrapped_child_default_context(scope, target_iframe)
+    else {
+        return false;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let window = context.global(scope);
+    let Some(location) = crate::context_bootstrap::window_location_for_holder(scope, window) else {
+        return false;
+    };
+    // The target realm owns its Location and history. The incumbent caller
+    // still determines whether a cross-document navigate event may fire.
+    crate::context_bootstrap::navigate_location_object_with_source_element(
+        scope,
+        location,
+        crate::context_bootstrap::LocationNavigationKind::Assign,
+        Some(resolved_url.to_owned()),
+        source_element,
+    );
+    true
 }

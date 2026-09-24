@@ -68,7 +68,8 @@ struct LocationNavigationOptions {
     force_exact_same_document_navigation: bool,
     explicit_initiator_url: Option<url::Url>,
     user_initiated: bool,
-    hyperlink_source_can_access_target: Option<bool>,
+    source_can_access_target: Option<bool>,
+    hyperlink: bool,
     named_hyperlink_popup: Option<crate::native_bridge::element::NamedHyperlinkPopup>,
 }
 
@@ -94,7 +95,8 @@ pub(crate) fn navigate_location_object_for_hyperlink<'s>(
         Some(source_element),
         LocationNavigationOptions {
             user_initiated: options.user_initiated,
-            hyperlink_source_can_access_target: Some(options.source_can_access_target),
+            source_can_access_target: Some(options.source_can_access_target),
+            hyperlink: true,
             force_exact_same_document_navigation: true,
             explicit_initiator_url: Some(options.initiator_url),
             named_hyperlink_popup: options.named_popup,
@@ -132,6 +134,29 @@ pub(crate) fn navigate_location_object<'s>(
         None,
         LocationNavigationOptions {
             dispatch_child_navigate_event_for_all_kinds: replaces_unloaded_document,
+            ..LocationNavigationOptions::default()
+        },
+    );
+}
+
+pub(crate) fn navigate_location_object_for_form_fragment<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    href: &str,
+    kind: LocationNavigationKind,
+    source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
+) {
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        kind,
+        Some(href.to_owned()),
+        source_element,
+        LocationNavigationOptions {
+            user_initiated,
+            source_can_access_target: Some(source_element.is_some()),
+            force_exact_same_document_navigation: true,
             ..LocationNavigationOptions::default()
         },
     );
@@ -322,11 +347,10 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         force_exact_same_document_navigation,
         explicit_initiator_url,
         user_initiated,
-        hyperlink_source_can_access_target,
+        source_can_access_target,
+        hyperlink,
         named_hyperlink_popup,
     } = options;
-    let event_source_element =
-        source_element.filter(|_| hyperlink_source_can_access_target != Some(false));
     let current_href = location_href_slot(scope, location).unwrap_or_default();
     let current_url = url::Url::parse(&current_href).ok();
     let raw_target_is_fragment_only = raw_target
@@ -359,6 +383,21 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         return;
     }
     let owner = runtime_window_owner(scope, location);
+    let source_can_access_target = source_can_access_target.unwrap_or_else(|| {
+        let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) else {
+            return true;
+        };
+        let Some(target) = super::navigation_window::runtime_window_dispatch_scope(scope, owner)
+        else {
+            return true;
+        };
+        let host = unsafe { &*host_ptr };
+        host.window_scopes_have_same_origin_domain(
+            location_navigation_initiator_scope(scope, host),
+            target,
+        )
+    });
+    let event_source_element = source_element.filter(|_| source_can_access_target);
     if navigation_unload_event_active(scope, owner)
         || super::navigation_cancellation::window_navigation_is_stopping(scope, owner)
     {
@@ -497,7 +536,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         // Preserve synchronous fragment activation only after the navigate event
         // accepts it. Intercepted navigation owns its scroll timing separately.
-        if hyperlink_source_can_access_target.is_some()
+        if hyperlink
             && runtime_window_is_global(scope, owner)
             && !navigate_outcome
                 .as_ref()
@@ -671,7 +710,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         child_browsing_context_handle_for_runtime_owner(scope, owner)
     };
     if child_handle.is_none()
-        && hyperlink_source_can_access_target != Some(false)
+        && source_can_access_target
         && let Some(navigation) =
             super::navigation_window::window_navigation_for_holder(scope, owner)
     {
@@ -823,7 +862,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         };
         if (matches!(kind, LocationNavigationKind::Assign)
             || dispatch_child_navigate_event_for_all_kinds)
-            && hyperlink_source_can_access_target != Some(false)
+            && source_can_access_target
             && !is_javascript_url
             && let Some(window) = window_for_child_cross_document_location_navigation(scope, owner)
             && !dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
@@ -877,7 +916,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
 
     // A new top-level hyperlink leaves the source Location and history intact
     // until the browser commits the response, just as the activation path did.
-    let browser_owned_hyperlink = hyperlink_source_can_access_target.is_some() && !exact_same_href;
+    let browser_owned_hyperlink = hyperlink && !exact_same_href;
     if !browser_owned_hyperlink && resolved.scheme() != "javascript" {
         sync_location_object(scope, location, resolved.as_str());
     }
