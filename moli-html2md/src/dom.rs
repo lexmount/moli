@@ -26,4 +26,23 @@ pub trait Dom {
     fn first_child(&self, node: Self::NodeId) -> Option<Self::NodeId>;
     fn next_sibling(&self, node: Self::NodeId) -> Option<Self::NodeId>;
     fn attribute(&self, node: Self::NodeId, name: &str) -> Option<&str>;
+
+    /// A caller with computed CSS can retain block boundaries introduced by
+    /// stylesheets (for example, links rendered as separate action buttons).
+    /// Structural-only adapters can leave this at its default.
+    fn has_block_layout(&self, _node: Self::NodeId) -> bool {
+        false
+    }
+
+    /// A caller with computed CSS can retain boundaries between independent
+    /// inline boxes such as tabs, badges, and compact action controls.
+    fn has_text_boundary(&self, _node: Self::NodeId) -> bool {
+        false
+    }
+
+    /// Adapters that already inventory elements can skip the anchor prepass
+    /// when the document contains no local-fragment links.
+    fn may_have_fragment_links(&self) -> bool {
+        true
+    }
 }

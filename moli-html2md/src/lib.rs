@@ -1,6 +1,12 @@
+mod anchors;
 mod converter;
 mod dom;
+mod form;
+mod html_table;
 mod machine;
+mod math;
+mod mathml;
+mod media;
 mod options;
 mod output;
 mod table;
