@@ -1,5 +1,6 @@
 use super::*;
 
+mod child_beforeunload;
 mod child_history_traversal;
 mod cross_origin_navigation;
 mod history_limits;

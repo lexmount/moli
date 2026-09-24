@@ -654,11 +654,7 @@ impl PageScriptHost {
             }
             Ok(ChildDocumentLoadOutcome::Loaded(loaded)) => {
                 let loaded = *loaded;
-                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
-                    scope,
-                    handle,
-                    pending.initiator,
-                ) {
+                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle) {
                     body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
                 }
                 if !self.child_document_window_commit_preflight_is_current(
@@ -747,11 +743,7 @@ impl PageScriptHost {
                 self.cache_child_snapshot_with_current_document_policy(handle, snapshot)
             }
             Err(error) => {
-                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
-                    scope,
-                    handle,
-                    pending.initiator,
-                ) {
+                if self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle) {
                     body_activity = ChildDocumentLoadBodyActivity::PageCodeOrEventDispatch;
                 }
                 if !self.child_document_window_commit_preflight_is_current(
