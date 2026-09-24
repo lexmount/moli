@@ -285,6 +285,7 @@ impl JsContextHost {
                 crate::page_task_queue::RendererPageWindowMessageTaskId::from_raw(1),
             indexed_db_context_tasks: IndexedDbContextState::default(),
             window_execution_contexts: HashMap::new(),
+            history_update_limits: Default::default(),
             current_window_message_source: None,
             pending_active_child_window_restore: None,
             pending_active_lightweight_popup_restore: None,

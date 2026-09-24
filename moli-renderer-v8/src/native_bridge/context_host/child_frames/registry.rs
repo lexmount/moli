@@ -18,6 +18,8 @@ impl JsContextHost {
     ) -> Option<ChildBrowsingContextEntry> {
         self.session_histories
             .detach(super::super::OwnerDispatchScope::Child(handle));
+        self.history_update_limits
+            .remove(super::super::OwnerDispatchScope::Child(handle));
         self.child_browsing_contexts.shift_remove(&handle)
     }
 

@@ -24,8 +24,9 @@ use super::navigation_result::{
 };
 use super::navigation_serialize::sync_navigation_entry_seed_from_owner;
 use super::navigation_window::{
-    child_browsing_context_handle_for_runtime_owner, runtime_window_is_global,
-    window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
+    child_browsing_context_handle_for_runtime_owner, runtime_window_dispatch_scope,
+    runtime_window_is_global, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::structured_clone::{deserialize_history_state, serialize_history_state};
@@ -207,6 +208,19 @@ fn mutate_history_object<'s>(
         );
         return;
     }
+
+    // Admission follows argument conversion, state serialization and URL
+    // validation, but precedes navigation cancellation and event dispatch.
+    // https://html.spec.whatwg.org/multipage/nav-history-apis.html#shared-history-push/replace-state-steps
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Some(dispatch_scope) = runtime_window_dispatch_scope(scope, owner) else {
+        return;
+    };
+    let Some(_admission) = unsafe { &mut *host_ptr }.begin_history_update(dispatch_scope) else {
+        return;
+    };
 
     // Web IDL conversion, serialization and URL validation must create errors in
     // the binding's realm. Only the Window's commit/dispatch machinery runs in

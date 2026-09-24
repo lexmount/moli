@@ -129,6 +129,7 @@ pub(crate) use text_track_loads::{
     PendingMediaCanPlayFollowup, PendingMediaTextTrackGateRegistration,
     PendingTextTrackLoadTerminal, PendingTextTrackLoadTerminalFollowup,
 };
+mod history_updates;
 mod message_ports;
 mod messages;
 mod module_owner_tasks;
@@ -922,6 +923,7 @@ pub(crate) struct JsContextHost {
     next_window_message_task_id: crate::page_task_queue::RendererPageWindowMessageTaskId,
     indexed_db_context_tasks: IndexedDbContextState,
     window_execution_contexts: HashMap<WindowExecutionContextOwner, WindowExecutionContextBinding>,
+    history_update_limits: history_updates::HistoryUpdateLimits,
     current_window_message_source: Option<PendingWindowMessageEndpoint>,
     pending_active_child_window_restore: Option<Option<DomHandle>>,
     pending_active_lightweight_popup_restore: Option<Option<u64>>,

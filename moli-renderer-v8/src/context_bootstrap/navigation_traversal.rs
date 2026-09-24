@@ -38,7 +38,7 @@ use super::navigation_traversal_plan::{
 };
 use super::navigation_window::{
     navigation_can_update_current_entry, navigation_document_is_active,
-    navigation_has_current_document, navigation_unload_event_active,
+    navigation_has_current_document, navigation_unload_event_active, runtime_window_dispatch_scope,
     runtime_window_owner, window_history_for_holder, window_location_for_holder,
     window_navigation_for_holder,
 };
@@ -101,6 +101,15 @@ fn history_go_with_action<'s>(
     action: HistoryGoAction,
 ) {
     let Some(owner) = require_fully_active_history_owner(scope, history) else {
+        return;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let Some(dispatch_scope) = runtime_window_dispatch_scope(scope, owner) else {
+        return;
+    };
+    let Some(_admission) = unsafe { &mut *host_ptr }.begin_history_update(dispatch_scope) else {
         return;
     };
     match action {
