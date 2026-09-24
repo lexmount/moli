@@ -596,7 +596,7 @@ fn sync_detached_native_focus_for_style<'s>(
     }
     let runtime = unsafe { &mut *runtime_ptr };
     runtime.set_active_element_handle(next_handle);
-    runtime.mark_focus_changed();
+    runtime.mark_focus_changed(previous_handle, next_handle);
     runtime.note_focus_style_activity(previous_handle, next_handle);
 }
 

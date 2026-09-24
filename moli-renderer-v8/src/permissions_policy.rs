@@ -12,6 +12,7 @@ pub(crate) struct DocumentPermissionsPolicy {
     tools: bool,
     tools_allowlist: Option<ToolsAllowlist>,
     synchronous_xhr: bool,
+    focus_without_user_activation: bool,
 }
 
 impl Default for DocumentPermissionsPolicy {
@@ -22,6 +23,7 @@ impl Default for DocumentPermissionsPolicy {
             tools: true,
             tools_allowlist: None,
             synchronous_xhr: true,
+            focus_without_user_activation: true,
         }
     }
 }
@@ -39,6 +41,10 @@ impl DocumentPermissionsPolicy {
         self.gamepad
     }
 
+    pub(crate) const fn focus_without_user_activation_enabled(&self) -> bool {
+        self.focus_without_user_activation
+    }
+
     pub(crate) const fn tools_enabled(&self) -> bool {
         self.tools
     }
@@ -50,6 +56,8 @@ impl DocumentPermissionsPolicy {
             tools: self.tools && other.tools,
             tools_allowlist: other.tools_allowlist.clone(),
             synchronous_xhr: self.synchronous_xhr && other.synchronous_xhr,
+            focus_without_user_activation: self.focus_without_user_activation
+                && other.focus_without_user_activation,
         }
     }
 
@@ -73,6 +81,11 @@ impl DocumentPermissionsPolicy {
                     policy.gamepad = allowed;
                 } else if feature.trim().eq_ignore_ascii_case("sync-xhr") {
                     policy.synchronous_xhr = allowed;
+                } else if feature
+                    .trim()
+                    .eq_ignore_ascii_case("focus-without-user-activation")
+                {
+                    policy.focus_without_user_activation = allowed;
                 }
                 if feature.trim().eq_ignore_ascii_case("tools") {
                     policy.tools_allowlist = response_tools_allowlist(allowlist);
@@ -125,6 +138,14 @@ impl DocumentPermissionsPolicy {
             source_origin,
         )
         .unwrap_or(same_origin);
+        let focus_without_user_activation = iframe_allow_feature(
+            allow_attribute,
+            "focus-without-user-activation",
+            parent_origin,
+            child_origin,
+            source_origin,
+        )
+        .unwrap_or(same_origin);
         Self {
             fullscreen: self.fullscreen && fullscreen,
             gamepad: self.gamepad && gamepad,
@@ -134,6 +155,8 @@ impl DocumentPermissionsPolicy {
                 && tools,
             tools_allowlist: None,
             synchronous_xhr: self.synchronous_xhr && synchronous_xhr,
+            focus_without_user_activation: self.focus_without_user_activation
+                && focus_without_user_activation,
         }
     }
 
@@ -449,13 +472,15 @@ mod tests {
         let policy = DocumentPermissionsPolicy::from_navigation_response_headers(
             &[(
                 "permissions-policy".to_owned(),
-                b"fullscreen=(), gamepad=(), sync-xhr=()".to_vec(),
+                b"fullscreen=(), gamepad=(), sync-xhr=(), focus-without-user-activation=()"
+                    .to_vec(),
             )],
             &url("https://example.test/document"),
         );
         assert!(!policy.fullscreen_enabled());
         assert!(!policy.gamepad_enabled());
         assert!(!policy.synchronous_xhr_enabled());
+        assert!(!policy.focus_without_user_activation_enabled());
     }
 
     #[test]
@@ -469,22 +494,25 @@ mod tests {
         assert!(same.fullscreen_enabled());
         assert!(same.gamepad_enabled());
         assert!(same.synchronous_xhr_enabled());
+        assert!(same.focus_without_user_activation_enabled());
 
         let denied = policy.delegated_to_child_urls_with_fullscreen(&parent, &cross_origin, false, None, false);
         assert!(!denied.fullscreen_enabled());
         assert!(denied.gamepad_enabled());
         assert!(!denied.synchronous_xhr_enabled());
+        assert!(!denied.focus_without_user_activation_enabled());
 
         let delegated = policy.delegated_to_child_urls_with_fullscreen(
             &parent,
             &cross_origin,
             false,
-            Some("payment; fullscreen; gamepad *"),
+            Some("payment; fullscreen; gamepad *; focus-without-user-activation *"),
             false,
         );
         assert!(delegated.fullscreen_enabled());
         assert!(delegated.gamepad_enabled());
         assert!(!delegated.synchronous_xhr_enabled());
+        assert!(delegated.focus_without_user_activation_enabled());
     }
 
     #[test]
@@ -495,27 +523,30 @@ mod tests {
             &parent,
             &child,
             false,
-            Some("gamepad 'none'; sync-xhr 'none'"),
+            Some("gamepad 'none'; sync-xhr 'none'; focus-without-user-activation 'none'"),
             false,
         );
         assert!(!denied.gamepad_enabled());
         assert!(!denied.synchronous_xhr_enabled());
+        assert!(!denied.focus_without_user_activation_enabled());
 
         let parent_denied = DocumentPermissionsPolicy {
             fullscreen: false,
             gamepad: false,
             synchronous_xhr: false,
+            focus_without_user_activation: false,
             ..Default::default()
         };
         let delegated = parent_denied.delegated_to_child_urls_with_fullscreen(
             &parent,
             &url("https://other.test/child"),
             false,
-            Some("fullscreen *; gamepad *; sync-xhr *"),
+            Some("fullscreen *; gamepad *; sync-xhr *; focus-without-user-activation *"),
             true,
         );
         assert!(!delegated.fullscreen_enabled());
         assert!(!delegated.gamepad_enabled());
         assert!(!delegated.synchronous_xhr_enabled());
+        assert!(!delegated.focus_without_user_activation_enabled());
     }
 }
