@@ -386,15 +386,18 @@ async fn retained_child_window_origin_rebinds_default_and_isolated_realms() {
 const root = document.documentElement || document.appendChild(document.createElement('html'));
 const body = document.body || root.appendChild(document.createElement('body'));
 globalThis.frame = document.createElement('iframe');
+frame.srcdoc = '<p>pending initial load</p>';
 body.append(frame);
 globalThis.heldWindow = frame.contentWindow;
 "#,
         None,
     )
     .unwrap();
-    vm.drain_ready_page_task_executor_turns_for_setup(&loader, 16)
-        .await
-        .expect("initial child realm should materialize through Page tasks");
+    assert!(
+        vm.run_one_child_realm_materialization_body_for_test()
+            .expect("initial child realm should materialize before navigation commits")
+            .is_some()
+    );
     let child_realm = vm
         .live_child_default_runtime_realm_inventory()
         .into_iter()
@@ -415,7 +418,7 @@ globalThis.heldWindow = frame.contentWindow;
         .expect("retain a callback from the initial isolated realm");
     }
     vm.exec(
-        "globalThis.loaded = false; frame.onload = () => { loaded = true; }; frame.src = '/child.html';",
+        "globalThis.loaded = false; frame.onload = () => { loaded = true; }; frame.src = '/child.html'; frame.removeAttribute('srcdoc');",
         None,
     )
     .unwrap();

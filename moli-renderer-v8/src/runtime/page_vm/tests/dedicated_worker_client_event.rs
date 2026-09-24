@@ -550,12 +550,17 @@ async fn child_navigation_discards_retired_dedicated_worker_event_without_checkp
         .await;
         let committed_owner =
             current_single_child_document_owner(&page_vm, "committed child Worker Document");
-        assert_eq!(
+        assert_ne!(
             committed_owner.local_window_id, initial_owner.local_window_id,
-            "the first secure commit must reuse the initial-empty LocalWindow"
+            "navigation after the initial blank load must replace the LocalWindow"
         );
         assert_ne!(committed_owner.document_id, initial_owner.document_id);
 
+        run_expected_child_realm_materialization_for_wait(
+            &mut page_vm,
+            "committed child Worker realm",
+        )
+        .await;
         let child_context_id = page_vm
             .vm_mut()
             .live_child_default_runtime_realm_inventory()
