@@ -428,6 +428,7 @@ impl JsContextHost {
             lightweight_popup_browsing_contexts: HashMap::new(),
             lightweight_popup_window_names: HashMap::new(),
             lightweight_popup_document_handles: HashMap::new(),
+            lightweight_popup_document_origins: HashMap::new(),
             pending_lightweight_popup_document_loads: HashMap::new(),
             pending_lightweight_popup_classic_script_loads: HashMap::new(),
             completed_popup_javascript_url_parsers: Vec::new(),

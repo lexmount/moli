@@ -123,6 +123,61 @@ impl WindowContextSecurityOrigin {
 }
 
 impl JsContextHost {
+    pub(in crate::native_bridge) fn document_has_same_origin_as_entry<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        document: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        let document =
+            crate::native_bridge::document::document_origin_source_object(scope, document);
+        let Ok((host, handle)) =
+            crate::native_bridge::node::node_runtime_and_handle_from_object_or_detached(
+                scope, document,
+            )
+        else {
+            return false;
+        };
+        if !std::ptr::eq(host, self) {
+            return false;
+        }
+        let origin = self
+            .lightweight_popup_document_origins
+            .get(&handle)
+            .cloned()
+            .or_else(|| {
+                let dispatch = if handle == self.document_handle() {
+                    OwnerDispatchScope::Top
+                } else {
+                    OwnerDispatchScope::Child(
+                        self.child_browsing_context_host_for_document_handle(handle)?,
+                    )
+                };
+                self.window_access_origin_for_dispatch_scope(dispatch)
+            })
+            .or_else(|| {
+                // Windowless and retained Documents keep their creating realm's
+                // origin even after its execution registration has retired.
+                let context = document.get_creation_context(scope)?;
+                context
+                    .get_slot::<WindowContextSecurityOrigin>()
+                    .map(|security| security.origin.clone())
+            });
+        let entry_origin = match crate::native_bridge::active_lightweight_popup_id(scope) {
+            Some(popup_id) => self.lightweight_popup_window_access_origin(popup_id),
+            None => {
+                // Borrowed functions run in their callee realm, but HTML checks
+                // the entry global's Document, including when entered by a microtask.
+                let context = scope.get_entered_or_microtask_context();
+                context
+                    .get_slot::<WindowContextSecurityOrigin>()
+                    .map(|security| security.origin.clone())
+            }
+        };
+        origin
+            .zip(entry_origin)
+            .is_some_and(|(origin, entry)| origin.has_same_origin(&entry))
+    }
+
     pub(crate) fn install_window_context_security_origin(
         &self,
         scope: &mut v8::PinScope<'_, '_, ()>,

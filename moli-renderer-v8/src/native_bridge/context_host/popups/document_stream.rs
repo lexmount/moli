@@ -231,21 +231,22 @@ impl JsContextHost {
         });
     }
 
-    pub(in crate::native_bridge) fn write_lightweight_popup_document_stream(
+    pub(in crate::native_bridge) fn write_lightweight_popup_document_stream<'s>(
         &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
+        scope: &mut v8::PinScope<'s, '_>,
         host_ptr: *mut JsContextHost,
         document_handle: DomHandle,
+        document: v8::Local<'s, v8::Object>,
         html: &str,
     ) {
         let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document_handle) else {
             return;
         };
-        if self.has_ignore_destructive_writes_counter(document_handle) {
-            return;
-        }
         if self.popup_document_stream_insertion(popup_id).is_none() {
-            if self.has_document_unload_counter(document_handle) {
+            if self.has_document_unload_counter(document_handle)
+                || self.has_ignore_destructive_writes_counter(document_handle)
+                || !self.check_document_open_origin(scope, document)
+            {
                 return;
             }
             self.open_lightweight_popup_document_stream(scope, host_ptr, document_handle);
