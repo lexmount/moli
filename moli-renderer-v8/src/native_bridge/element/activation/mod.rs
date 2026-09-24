@@ -15,10 +15,11 @@ pub(crate) use default_action::{
     finish_legacy_activation_for_dispatched_click, perform_auxiliary_link_default_action,
     perform_click_default_action_for_dispatched_event, perform_drop_default_action,
     prepare_legacy_activation_for_dispatched_click, replace_contenteditable_selection,
-    scroll_to_url_fragment_or_top, select_contenteditable_contents,
+    scroll_to_document_fragment_target, scroll_to_url_fragment_or_top,
+    select_contenteditable_contents,
 };
 pub(in crate::native_bridge) use targets::choose_form_navigation_target;
 pub(crate) use targets::{
-    SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
+    NamedHyperlinkPopup, SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
     navigate_named_iframe_target,
 };

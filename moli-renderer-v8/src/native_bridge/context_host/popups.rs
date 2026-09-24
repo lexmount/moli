@@ -818,6 +818,12 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn named_lightweight_popup_id(&self, target_name: &str) -> Option<u64> {
+        let name = trackable_lightweight_popup_window_name(target_name)?;
+        let id = *self.lightweight_popup_window_names.get(&name)?;
+        self.lightweight_popup_is_open(id).then_some(id)
+    }
+
     pub(crate) fn open_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -829,9 +835,7 @@ impl JsContextHost {
         creator_base_url: Url,
         creator_policy_container: DocumentPolicyContainer,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
-            && let Some(popup_id) = self.lightweight_popup_window_names.get(&name).copied()
-            && self.lightweight_popup_is_open(popup_id)
+        if let Some(popup_id) = self.named_lightweight_popup_id(target_name)
             && let Some(window) = match href {
                 Some(href) => self.reopen_lightweight_popup_window(
                     scope,

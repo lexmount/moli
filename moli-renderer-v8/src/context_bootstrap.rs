@@ -158,11 +158,11 @@ pub(crate) use css_fontface_runtime::{
 pub(crate) use form_navigation::FormNavigationHistory;
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
-    LocationNavigationKind, dispatch_top_level_navigation_event_with_source_element,
+    HyperlinkNavigationOptions, LocationNavigationKind,
     history_entry_seed_for_cross_document_location, meta_refresh_navigation_kind,
+    navigate_location_object_for_hyperlink,
     navigate_location_object_with_child_navigate_event_and_initiator_url,
-    navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
-    navigate_top_level_same_document_from_browser,
+    navigate_top_level_meta_refresh, navigate_top_level_same_document_from_browser,
 };
 pub(crate) use navigation_cancellation::{
     NavigationCancellationReason, inform_about_canceled_navigation_for_window,

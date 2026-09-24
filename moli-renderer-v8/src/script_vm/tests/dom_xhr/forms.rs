@@ -3930,6 +3930,12 @@ fn anchor_click_queues_pending_top_level_location_navigation() {
     )
     .expect("anchor click should execute");
 
+    assert_eq!(
+        vm.eval("location.href")
+            .expect("source Location remains readable"),
+        "https://anchor-click-navigation.test/path/index.html",
+        "a pending hyperlink must not change the source URL before commit"
+    );
     let pending = vm
         .take_pending_location_navigation_with_seed()
         .expect("anchor click should queue a pending location navigation");
