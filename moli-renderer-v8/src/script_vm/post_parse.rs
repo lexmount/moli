@@ -303,6 +303,19 @@ impl ScriptVmContextBootstrap {
                 child_handle: None, ..
             } => unsafe { &*host_ptr }.document_url().clone(),
         };
+        if let WindowContextBootstrapMode::Isolated { child_handle, .. } = mode {
+            let owner_context = match child_handle {
+                Some(handle) => unsafe { &mut *host_ptr }
+                    .ensure_prebootstrapped_child_default_context(scope, handle)?,
+                None => unsafe { &*host_ptr }
+                    .page_default_context(scope)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("isolated History requires the default Window")
+                    })?,
+            };
+            let owner = owner_context.global(scope);
+            crate::context_bootstrap::bind_isolated_window_history_owner(scope, global, owner);
+        }
         finish_context_bootstrap(scope, unsafe { &mut *host_ptr }, &secure_context_url)?;
         match mode {
             WindowContextBootstrapMode::Isolated {

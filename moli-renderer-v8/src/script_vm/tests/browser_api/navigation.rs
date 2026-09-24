@@ -4337,12 +4337,12 @@ JSON.stringify({
     assert_eq!(
         vm.eval(RESET_REALM_STATE)
             .expect("top default reset state should evaluate"),
-        r#"{"historyLength":1,"navigationLength":1,"sameCurrent":true,"sameArrayEntry":true,"currentIndex":0,"stateRealm":"top-default","disposedAll":true,"disposedInReverseOrder":true}"#
+        r#"{"historyLength":1,"navigationLength":1,"sameCurrent":true,"sameArrayEntry":true,"currentIndex":0,"stateRealm":"top-isolated","disposedAll":true,"disposedInReverseOrder":true}"#
     );
     assert_eq!(
         vm.eval_in_child_default_context(child_context_id, RESET_REALM_STATE)
             .expect("child default reset state should evaluate"),
-        r#"{"historyLength":1,"navigationLength":1,"sameCurrent":true,"sameArrayEntry":true,"currentIndex":0,"stateRealm":"child-default","disposedAll":true,"disposedInReverseOrder":true}"#
+        r#"{"historyLength":1,"navigationLength":1,"sameCurrent":true,"sameArrayEntry":true,"currentIndex":0,"stateRealm":"child-isolated","disposedAll":true,"disposedInReverseOrder":true}"#
     );
     assert_eq!(
         vm.eval_in_isolated_context(top_isolated_context_id, RESET_REALM_STATE)
@@ -4357,7 +4357,7 @@ JSON.stringify({
     assert_eq!(
         vm.eval("JSON.stringify(__lmResetRealmOrder)")
             .expect("cross-realm reset order should evaluate"),
-        r#"[{"listener":"top","sharedLengthPruned":true,"topEntries":1,"childEntries":2},{"listener":"child","sharedLengthPruned":true,"topEntries":1,"childEntries":1}]"#
+        r#"[{"listener":"top","sharedLengthPruned":true,"topEntries":1,"childEntries":3},{"listener":"child","sharedLengthPruned":true,"topEntries":1,"childEntries":1}]"#
     );
 }
 

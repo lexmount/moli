@@ -1,3 +1,6 @@
+use super::super::history_runtime::state::{
+    HISTORY_BACKING_SLOT, new_history_backing, shared_history_backing, window_has_shared_history,
+};
 use super::super::navigation_entry::{
     history_entries, history_index, set_history_scroll_restoration, set_history_state,
 };
@@ -13,17 +16,8 @@ use moli_webapi_declare::WebApiObject;
 #[derive(WebApiObject)]
 #[webapi(interface = web_api_interfaces::History)]
 struct HistoryRuntimeObjectDeclaration<'scope> {
-    #[webapi(slot = HISTORY_STATE_SLOT)]
-    state: v8::Local<'scope, v8::Value>,
-
-    #[webapi(slot = HISTORY_SCROLL_RESTORATION_SLOT)]
-    scroll_restoration: &'static str,
-
-    #[webapi(slot = HISTORY_ENTRIES_SLOT)]
-    entries: v8::Local<'scope, v8::Array>,
-
-    #[webapi(slot = HISTORY_INDEX_SLOT)]
-    index: f64,
+    #[webapi(slot = HISTORY_BACKING_SLOT)]
+    backing: v8::Local<'scope, v8::Object>,
 }
 
 #[derive(WebApiObject)]
@@ -53,15 +47,16 @@ pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
     if let Some(prototype) = global_constructor_prototype(scope, "History") {
         install_history_prototype_accessors(scope, prototype);
     }
-    let entries = build_history_entries_array_from_seed(scope, window, initial_seed);
-    let history = HistoryRuntimeObjectDeclaration::new(
-        v8::null(scope).into(),
-        "auto",
-        entries,
-        initial_seed.current_index as f64,
-    )
-    .bind(scope)
-    .map_err(anyhow::Error::from)?;
+    let backing = if window_has_shared_history(scope, window) {
+        shared_history_backing(scope, window)
+            .ok_or_else(|| anyhow::anyhow!("isolated History is missing its Window's backing"))?
+    } else {
+        let entries = build_history_entries_array_from_seed(scope, window, initial_seed);
+        new_history_backing(scope, entries, initial_seed.current_index)
+    };
+    let history = HistoryRuntimeObjectDeclaration::new(backing)
+        .bind(scope)
+        .map_err(anyhow::Error::from)?;
     Ok(history)
 }
 

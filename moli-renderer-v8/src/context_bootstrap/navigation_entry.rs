@@ -1,6 +1,9 @@
+pub(super) use super::history_runtime::state::{
+    history_entries, history_index, history_scroll_restoration_value, history_state_value,
+    set_history_entries, set_history_index, set_history_scroll_restoration, set_history_state,
+};
 use super::location_history_storage::{
-    HISTORY_ENTRIES_SLOT, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, HISTORY_INDEX_SLOT,
-    HISTORY_SCROLL_RESTORATION_SLOT, HISTORY_STATE_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT,
+    HISTORY_ENTRY_STATE_SNAPSHOT_SLOT, NAVIGATION_CURRENT_ENTRY_SLOT,
     NAVIGATION_ENTRY_DOCUMENT_ID_SLOT, NAVIGATION_ENTRY_EVENT_LISTENERS_SLOT,
     NAVIGATION_ENTRY_STATE_SNAPSHOT_SLOT,
 };
@@ -110,13 +113,6 @@ fn finite_navigation_entry_number_slot<'s>(
         .filter(|value| !value.is_undefined())
         .and_then(|value| value.number_value(scope))
         .filter(|value| value.is_finite())
-}
-
-pub(super) fn history_state_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Value> {
-    history_slot_value(scope, history, HISTORY_STATE_SLOT).unwrap_or_else(|| v8::null(scope).into())
 }
 
 pub(super) fn sync_navigation_current_entry_from_history_entry<'s>(
@@ -545,25 +541,6 @@ fn set_navigation_entry_string_slot<'s>(
     }
 }
 
-pub(super) fn history_entries<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Array>> {
-    history_slot_value(scope, history, HISTORY_ENTRIES_SLOT)
-        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
-}
-
-pub(super) fn history_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> u32 {
-    history_slot_value(scope, history, HISTORY_INDEX_SLOT)
-        .and_then(|value| value.integer_value(scope))
-        .filter(|value| *value >= 0)
-        .map(|value| value as u32)
-        .unwrap_or(0)
-}
-
 pub(super) fn navigation_current_entry_index<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
@@ -576,78 +553,10 @@ pub(super) fn navigation_current_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let owner = super::history_runtime::state::history_window_owner(scope, owner);
     let navigation = window_navigation_for_holder(scope, owner)?;
     get_private_value(scope, navigation, NAVIGATION_CURRENT_ENTRY_SLOT)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-}
-
-fn history_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    slot: &str,
-) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, history, slot)
-}
-
-fn set_history_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    slot: &str,
-    value: v8::Local<'s, v8::Value>,
-) {
-    set_private_value(scope, history, slot, value);
-}
-
-pub(super) fn history_scroll_restoration_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Value>> {
-    history_slot_value(scope, history, HISTORY_SCROLL_RESTORATION_SLOT)
-        .filter(|value| !value.is_undefined())
-}
-
-pub(super) fn set_history_entries<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    entries: v8::Local<'s, v8::Array>,
-) {
-    set_history_slot_value(scope, history, HISTORY_ENTRIES_SLOT, entries.into());
-}
-
-pub(super) fn set_history_index<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    index: u32,
-) {
-    set_history_slot_value(
-        scope,
-        history,
-        HISTORY_INDEX_SLOT,
-        v8::Number::new(scope, index as f64).into(),
-    );
-}
-
-pub(super) fn set_history_scroll_restoration<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    value: &str,
-) {
-    if let Some(value) = v8_string(scope, value) {
-        set_history_slot_value(
-            scope,
-            history,
-            HISTORY_SCROLL_RESTORATION_SLOT,
-            value.into(),
-        );
-    }
-}
-
-pub(super) fn set_history_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    history: v8::Local<'s, v8::Object>,
-    state: v8::Local<'s, v8::Value>,
-) {
-    set_history_slot_value(scope, history, HISTORY_STATE_SLOT, state);
 }
 
 pub(super) fn stringify_history_state<'s>(

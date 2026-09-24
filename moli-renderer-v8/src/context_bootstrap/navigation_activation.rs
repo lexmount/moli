@@ -363,8 +363,8 @@ pub(super) fn navigation_current_entry_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    get_private_value(scope, navigation, NAVIGATION_CURRENT_ENTRY_SLOT)
-        .filter(|value| !value.is_undefined())
+    let owner = runtime_window_owner(scope, navigation);
+    super::navigation_entry::navigation_current_entry(scope, owner).map(Into::into)
 }
 
 pub(super) fn navigation_activation_value<'s>(

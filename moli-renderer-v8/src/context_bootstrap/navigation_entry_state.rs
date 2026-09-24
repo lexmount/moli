@@ -18,7 +18,9 @@ pub(super) fn history_entry_state_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     entry: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Value>> {
-    navigation_entry_private_slot_value(scope, entry, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT)
+    // Unlike an absent optional slot, undefined is a valid History state.
+    let key = crate::util::private_key(scope, HISTORY_ENTRY_STATE_SNAPSHOT_SLOT)?;
+    entry.get_private(scope, key)
 }
 
 pub(super) fn clone_navigation_entry_state<'s>(

@@ -5,10 +5,6 @@ use anyhow::{Result, anyhow};
 #[derive(Clone, Copy, Debug)]
 enum NavigationHistoryRealm {
     TopDefault,
-    Isolated {
-        execution_context_id: i64,
-        child_handle: Option<DomHandle>,
-    },
     ChildDefault {
         execution_context_id: i64,
         child_handle: DomHandle,
@@ -19,32 +15,16 @@ enum NavigationHistoryRealm {
 }
 
 impl NavigationHistoryRealm {
-    fn order_key(self) -> (usize, u8, i64) {
+    fn order_key(self) -> (usize, i64) {
         match self {
-            Self::TopDefault => (0, 0, 0),
-            Self::Isolated {
-                execution_context_id,
-                child_handle: None,
-            } => (0, 1, execution_context_id),
+            Self::TopDefault => (0, 0),
             Self::ChildDefault {
                 execution_context_id,
                 child_handle,
-            } => (
-                child_handle.index().saturating_add(1),
-                0,
-                execution_context_id,
-            ),
+            } => (child_handle.index().saturating_add(1), execution_context_id),
             Self::PrebootstrappedChildDefault { child_handle } => {
-                (child_handle.index().saturating_add(1), 0, i64::MIN)
+                (child_handle.index().saturating_add(1), i64::MIN)
             }
-            Self::Isolated {
-                execution_context_id,
-                child_handle: Some(child_handle),
-            } => (
-                child_handle.index().saturating_add(1),
-                1,
-                execution_context_id,
-            ),
         }
     }
 }
@@ -117,20 +97,10 @@ impl ScriptVm {
     fn live_navigation_history_realms(&mut self) -> Vec<NavigationHistoryRealm> {
         self.prune_stale_child_default_execution_contexts();
 
+        // Isolated worlds share these histories; prune each Window only once.
         let mut realms = vec![NavigationHistoryRealm::TopDefault];
         {
             let host = self._context_host.borrow();
-            realms.extend(
-                self.page_isolated_world_contexts
-                    .contexts_with_ids()
-                    .filter(|(_, world)| host.document_task_owner_is_current(world.document_owner))
-                    .map(
-                        |(execution_context_id, world)| NavigationHistoryRealm::Isolated {
-                            execution_context_id,
-                            child_handle: world.child_handle,
-                        },
-                    ),
-            );
             realms.extend(
                 self.child_frame_realm_store
                     .iter_by_execution_context_id()
@@ -166,23 +136,6 @@ impl ScriptVm {
     ) -> Option<*const v8::Global<v8::Context>> {
         match realm {
             NavigationHistoryRealm::TopDefault => Some(&self.page_default_context as *const _),
-            NavigationHistoryRealm::Isolated {
-                execution_context_id,
-                child_handle,
-            } => {
-                let world = self
-                    .page_isolated_world_contexts
-                    .context(execution_context_id)?;
-                if world.child_handle != child_handle
-                    || !self
-                        ._context_host
-                        .borrow()
-                        .document_task_owner_is_current(world.document_owner)
-                {
-                    return None;
-                }
-                Some(&world.context as *const _)
-            }
             NavigationHistoryRealm::ChildDefault {
                 execution_context_id,
                 child_handle,

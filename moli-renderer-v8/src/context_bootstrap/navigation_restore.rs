@@ -26,6 +26,9 @@ pub(crate) fn install_navigation_bootstrap_entry_for_holder<'s>(
     owner: v8::Local<'s, v8::Object>,
     entry_seed: &NavigationHistoryEntrySeed,
 ) {
+    if super::history_runtime::state::window_has_shared_history(scope, owner) {
+        return;
+    }
     install_navigation_entry_view_for_holder(scope, owner, entry_seed);
     commit_navigation_history_for_document(scope, owner, entry_seed);
 }
@@ -50,6 +53,9 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     owner: v8::Local<'s, v8::Object>,
     entry_seed: &NavigationHistoryEntrySeed,
 ) {
+    if super::history_runtime::state::window_has_shared_history(scope, owner) {
+        return;
+    }
     let Some(history) = window_history_for_holder(scope, owner) else {
         return;
     };

@@ -1,3 +1,4 @@
+use super::history_runtime::state::{history_window_owner, window_has_shared_history};
 use super::location_history_storage::WINDOW_RUNTIME_OWNER_SLOT;
 use super::location_runtime::{
     build_location_runtime_object, install_location_runtime_state,
@@ -38,7 +39,8 @@ fn new_location_runtime_object<'s>(
     href: &str,
 ) -> Result<v8::Local<'s, v8::Object>> {
     let location = build_location_runtime_object(scope)?;
-    LocationRuntimeObjectDeclaration::new(window, href.to_owned())
+    let owner = history_window_owner(scope, window);
+    LocationRuntimeObjectDeclaration::new(owner, href.to_owned())
         .initialize(scope, location)
         .map_err(|error| anyhow::anyhow!("failed to initialize Location object: {error}"))?;
     Ok(location)
@@ -55,11 +57,12 @@ pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
 
     let initial_seed = initial_navigation_history_seed(scope, window, href);
     let history = build_history_runtime_state(scope, window, &initial_seed)?;
-    set_runtime_window_owner(scope, history, window);
+    let owner = history_window_owner(scope, window);
+    set_runtime_window_owner(scope, history, owner);
     set_private_value(scope, window, WINDOW_HISTORY_SLOT, history.into());
 
     let navigation = build_navigation_runtime_state(scope, window, &initial_seed)?;
-    set_runtime_window_owner(scope, navigation, window);
+    set_runtime_window_owner(scope, navigation, owner);
     set_private_value(scope, window, WINDOW_NAVIGATION_SLOT, navigation.into());
     if crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_some() {
         super::session_history::initialize(scope, window, &initial_seed);
@@ -75,6 +78,11 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     window: v8::Local<'s, v8::Object>,
     href: &str,
 ) -> Result<()> {
+    // Creating/rebinding an isolated realm must never reset the Window's
+    // shared history, including structured-clone state absent from JSON seeds.
+    if window_has_shared_history(scope, window) {
+        return Ok(());
+    }
     let location = match window_runtime_object(scope, window, WINDOW_LOCATION_SLOT) {
         Some(location) => location,
         None => {

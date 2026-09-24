@@ -108,6 +108,12 @@ fn mutate_history_object<'s>(
     let Some(state) = structured_clone_value_for_storage(scope, parsed.state) else {
         return;
     };
+    // Argument conversion/serialization belongs to the caller. Entry objects
+    // and navigation events belong to the Window, regardless of the caller's world.
+    let Some(context) = owner.get_creation_context(scope) else {
+        return;
+    };
+    let scope = &mut v8::ContextScope::new(scope, context);
     let state_json = stringify_history_state(scope, state);
     let Some(location) = window_location_for_holder(scope, owner) else {
         return;

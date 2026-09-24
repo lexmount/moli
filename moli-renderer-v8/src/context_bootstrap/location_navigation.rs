@@ -212,6 +212,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     dispatch_child_navigate_event_for_all_kinds: bool,
     force_exact_same_document_navigation: bool,
 ) {
+    let owner = runtime_window_owner(scope, location);
+    let location = window_location_for_holder(scope, owner).unwrap_or(location);
     let current_href = location_href_slot(scope, location).unwrap_or_default();
     let current_url = url::Url::parse(&current_href).ok();
     let raw_target_is_fragment_only = raw_target

@@ -15,6 +15,17 @@ pub(in crate::context_bootstrap) fn location_href_slot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) -> Option<String> {
+    // Only a real Location wrapper may resolve the shared Window URL. The
+    // generic owner helper falls back to the current global for unbound
+    // objects, which would accidentally accept forged Location receivers.
+    let object = get_private_value(
+        scope,
+        object,
+        super::super::location_history_storage::WINDOW_RUNTIME_OWNER_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    .and_then(|owner| super::super::navigation_window::window_location_for_holder(scope, owner))
+    .unwrap_or(object);
     get_private_value(scope, object, WINDOW_LOCATION_HREF_SLOT)
         .and_then(|value| value.to_string(scope))
         .map(|value| value.to_rust_string_lossy(scope))
