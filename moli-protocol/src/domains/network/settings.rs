@@ -35,7 +35,7 @@ pub(super) fn durable_body_limits(
     let Some(total) = params.max_total_buffer_size.filter(|size| *size > 0) else {
         return Err(CommandOutputPlan::error(-32602, "InvalidParams"));
     };
-    let resource = params.max_resource_buffer_size.unwrap_or(2_000_000);
+    let resource = params.max_resource_buffer_size.unwrap_or(total);
     if resource == 0 {
         return Err(CommandOutputPlan::error(-32602, "InvalidParams"));
     }

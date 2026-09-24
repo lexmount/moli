@@ -48,7 +48,11 @@ pub(super) fn get_response_body_command_output_plan(
     if !network_events_enabled_for_session(slot, cmd.session_id, primary_session_id.as_deref()) {
         return CommandOutputPlan::error(-32000, "No resource with given identifier found");
     };
-    let Some(body) = slot.captured_response_body(request_id) else {
+    let Some(body) = slot.captured_response_body_for_session(
+        request_id,
+        cmd.session_id,
+        primary_session_id.as_deref(),
+    ) else {
         return CommandOutputPlan::error(-32000, "No resource with given identifier found");
     };
     if !body.is_visible_to_session_owner(cmd.session_id, primary_session_id.as_deref()) {
@@ -90,9 +94,15 @@ pub(super) fn get_request_post_data_command_output_plan(
         return CommandOutputPlan::error(-32000, "No resource with given id was found");
     }
     let Some(body) = slot.captured_request_body(request_id) else {
-        let request_is_known = slot.captured_response_body(request_id).is_some_and(|body| {
-            body.is_visible_to_session_owner(cmd.session_id, primary_session_id.as_deref())
-        });
+        let request_is_known = slot
+            .captured_response_body_for_session(
+                request_id,
+                cmd.session_id,
+                primary_session_id.as_deref(),
+            )
+            .is_some_and(|body| {
+                body.is_visible_to_session_owner(cmd.session_id, primary_session_id.as_deref())
+            });
         let message = if request_is_known {
             "No post data available for the request"
         } else {

@@ -1119,6 +1119,19 @@ impl TargetRuntimeSlot {
         self.network_agent.captured_response_body(request_id)
     }
 
+    pub(crate) fn captured_response_body_for_session(
+        &self,
+        request_id: &str,
+        session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+    ) -> Option<&CapturedResponseBody> {
+        self.network_agent.captured_response_body_for_session(
+            request_id,
+            session_id,
+            primary_session_id,
+        )
+    }
+
     pub(crate) fn captured_request_body(&self, request_id: &str) -> Option<&CapturedRequestBody> {
         self.network_agent.captured_request_body(request_id)
     }
@@ -1144,6 +1157,11 @@ impl TargetRuntimeSlot {
             primary_session_id,
             limits,
         );
+    }
+
+    pub(crate) fn bind_response_body_primary_session(&mut self, session_id: &str) {
+        self.network_agent
+            .bind_response_body_primary_session(session_id);
     }
 
     pub(crate) fn prepare_response_bodies_for_navigation(&mut self) {
