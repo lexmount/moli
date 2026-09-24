@@ -83,12 +83,10 @@ async fn detached_keepalive_redirect_reports_source_document_csp_without_v8() {
     );
     assert!(!report_only_fetch.3.is_cancelled());
     assert!(!enforce_fetch.3.is_cancelled());
-    let replacement_context_id = vm
-        .live_child_default_runtime_realm_inventory()
-        .into_iter()
-        .map(|realm| realm.context_id)
-        .next()
-        .expect("replacement child Fetch CSP realm");
+    let replacement_context_id = materialize_single_child_default_realm_for_test(
+        &mut vm,
+        "replacement child Fetch CSP realm",
+    );
     vm.eval_in_child_default_context(
         replacement_context_id,
         r#"

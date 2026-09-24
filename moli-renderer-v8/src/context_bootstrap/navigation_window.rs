@@ -4,8 +4,9 @@ use crate::util::{get_private_value, set_private_value};
 
 const WINDOW_UNLOAD_EVENT_ACTIVE_SLOT: &str = "__lmWindowUnloadEventActive";
 const NAVIGATION_DOCUMENT_SLOT: &str = "__lmNavigationDocument";
+const NAVIGATION_LOCAL_WINDOW_ID_SLOT: &str = "__lmNavigationLocalWindowId";
 
-pub(super) fn bind_navigation_document<'s>(
+pub(super) fn bind_navigation_owner<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
     owner: v8::Local<'s, v8::Object>,
@@ -14,6 +15,48 @@ pub(super) fn bind_navigation_document<'s>(
         let value = v8::BigInt::new_from_u64(scope, document.index() as u64);
         set_private_value(scope, navigation, NAVIGATION_DOCUMENT_SLOT, value.into());
     }
+    if let Some(local_window_id) = navigation_owner_local_window_id(scope, owner) {
+        let value = v8::BigInt::new_from_u64(scope, local_window_id);
+        set_private_value(
+            scope,
+            navigation,
+            NAVIGATION_LOCAL_WINDOW_ID_SLOT,
+            value.into(),
+        );
+    }
+}
+
+fn navigation_owner_local_window_id<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> Option<u64> {
+    let dispatch_scope = runtime_window_dispatch_scope(scope, owner)?;
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let owner = unsafe { &*host_ptr }.current_window_execution_context_owner(dispatch_scope)?;
+    Some(match owner {
+        crate::native_bridge::WindowExecutionContextOwner::Frame(local_window_id) => {
+            local_window_id.0
+        }
+        crate::native_bridge::WindowExecutionContextOwner::LightweightPopup {
+            local_window_id,
+            ..
+        } => local_window_id.as_u64(),
+    })
+}
+
+pub(super) fn navigation_belongs_to_current_local_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(local_window_id) =
+        get_private_value(scope, navigation, NAVIGATION_LOCAL_WINDOW_ID_SLOT)
+            .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+            .map(|value| value.u64_value().0)
+    else {
+        return navigation_has_current_document(scope, navigation);
+    };
+    let owner = runtime_window_owner(scope, navigation);
+    navigation_owner_local_window_id(scope, owner) == Some(local_window_id)
 }
 
 fn navigation_owner_document<'s>(

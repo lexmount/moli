@@ -719,6 +719,9 @@ impl FrameOwnerStore {
         };
         let old_policy = &snapshot.settings.document_policy_container;
         if document.creation_kind.is_initial_empty()
+            // A delivered initial about:blank load consumes the transient
+            // Window, independently of initial history-entry replacement.
+            && !document.lifecycle_progress.child_load_event_has_started()
             && old_policy.credentialless == new_document_policy.credentialless
             && old_policy.sandbox.forces_opaque_origin
                 == new_document_policy.sandbox.forces_opaque_origin
