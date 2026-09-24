@@ -116,11 +116,7 @@ fn element_is_scrollable(runtime: &JsContextHost, handle: DomHandle) -> bool {
     if !scrolls_x && !scrolls_y {
         return false;
     }
-    match observable_element_metrics(
-        runtime,
-        handle,
-        moli_layout::LayoutFlushReason::SynchronousGeometry,
-    ) {
+    match observable_element_metrics(runtime, handle, moli_layout::LayoutFlushReason::DomGeometry) {
         Ok(Some(metrics)) => {
             metrics.is_scroll_container
                 && (scrolls_x && metrics.maximum_scroll_offset.x > metrics.minimum_scroll_offset.x
