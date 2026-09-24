@@ -223,9 +223,9 @@ pub(crate) use focus::{
     perform_access_key_default_action_for_dispatched_event,
     perform_hover_interest_default_action_for_dispatched_event, perform_mouse_focus_default_action,
     perform_tab_focus_default_action_for_dispatched_event, post_parse_autofocus_is_pending,
-    process_post_parse_autofocus, reset_focus_from_previous_handle,
-    reset_focus_from_previous_handle_with_previous_focus_within, schedule_focus_blur_if_needed,
-    update_focus,
+    process_post_parse_autofocus, reset_document_navigation_focus,
+    reset_focus_from_previous_handle, reset_focus_from_previous_handle_with_previous_focus_within,
+    schedule_focus_blur_if_needed, update_focus,
 };
 use focus::{is_disabled_form_control, is_focusable};
 pub(super) use focus::{node_blur_callback, node_focus_callback};
