@@ -35,6 +35,7 @@ mod performance;
 mod performance_memory;
 mod platform_identity;
 mod pointer_lock;
+mod popup_hyperlinks;
 mod promise_rejection;
 mod security_policy;
 mod service_worker_drain;
