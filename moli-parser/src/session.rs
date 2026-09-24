@@ -207,7 +207,7 @@ impl HtmlParserSession {
         // Parse only the browser-owned shell. Response bytes enter the tokenizer
         // after it has switched to plaintext, so tags and entities stay literal.
         self.process(StrTendril::from(concat!(
-            "<!doctype html><html><head></head><body>",
+            "<html><head></head><body>",
             "<pre style=\"word-wrap: break-word; white-space: pre-wrap;\">\n"
         )));
         self.tokenizer.set_plaintext_state();
