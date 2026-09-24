@@ -69,13 +69,12 @@ impl<'a> MarkdownDom<'a> {
             })
             .collect();
         for (node, _) in &styles {
-            if Dom::attribute(dom, *node, "aria-expanded").is_some()
+            if (Dom::attribute(dom, *node, "aria-expanded").is_some()
                 || Dom::attribute(dom, *node, "role")
-                    .is_some_and(|role| role.eq_ignore_ascii_case("tab"))
+                    .is_some_and(|role| role.eq_ignore_ascii_case("tab")))
+                && let Some(targets) = Dom::attribute(dom, *node, "aria-controls")
             {
-                if let Some(targets) = Dom::attribute(dom, *node, "aria-controls") {
-                    disclosures.extend(targets.split_ascii_whitespace());
-                }
+                disclosures.extend(targets.split_ascii_whitespace());
             }
             // Some pages pair a shortened paragraph with an explicitly linked
             // hidden full-text copy. Keep the complete copy once; an unrelated
@@ -99,21 +98,22 @@ impl<'a> MarkdownDom<'a> {
                 let mut ancestor = dom.parent_node(*node);
                 while let Some(paragraph) = ancestor {
                     if matches!(Dom::node_kind(dom, paragraph), NodeKind::Element("p")) {
-                        if let Some(container) = dom.parent_node(paragraph) {
-                            if within(dom, target, container) && !within(dom, target, paragraph) {
-                                let short = text(dom, paragraph, Some(*node));
-                                let prefix = short
-                                    .strip_suffix("...")
-                                    .or_else(|| short.strip_suffix('…'));
-                                if let Some(prefix) = prefix
-                                    .map(str::trim_end)
-                                    .filter(|prefix| !prefix.is_empty())
-                                {
-                                    let full = text(dom, target, None);
-                                    if full.len() > prefix.len() && full.starts_with(prefix) {
-                                        disclosures.insert(id);
-                                        excerpts.insert(paragraph);
-                                    }
+                        if let Some(container) = dom.parent_node(paragraph)
+                            && within(dom, target, container)
+                            && !within(dom, target, paragraph)
+                        {
+                            let short = text(dom, paragraph, Some(*node));
+                            let prefix = short
+                                .strip_suffix("...")
+                                .or_else(|| short.strip_suffix('…'));
+                            if let Some(prefix) = prefix
+                                .map(str::trim_end)
+                                .filter(|prefix| !prefix.is_empty())
+                            {
+                                let full = text(dom, target, None);
+                                if full.len() > prefix.len() && full.starts_with(prefix) {
+                                    disclosures.insert(id);
+                                    excerpts.insert(paragraph);
                                 }
                             }
                         }
