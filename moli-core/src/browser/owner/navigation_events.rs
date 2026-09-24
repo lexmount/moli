@@ -215,4 +215,22 @@ impl BrowserContextHandle {
                 .resolve_navigation_decision(permit, decision))
         })?
     }
+
+    pub fn submit_navigation_decision(
+        &self,
+        contents: WebContentsHandle,
+        permit: crate::browser::web_contents::NavigationInterceptionPermit,
+        decision: crate::browser::NavigationDecision,
+    ) -> super::BrowserReply<bool> {
+        let context = self.id;
+        self.browser.submit(move |browser| {
+            let contents = browser.context_mut(context)?.web_contents_mut(contents)?;
+            if contents.id() != permit.web_contents() {
+                return Ok(false);
+            }
+            Ok(contents
+                .navigation_mut()
+                .resolve_navigation_decision(permit, decision))
+        })
+    }
 }

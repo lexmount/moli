@@ -281,7 +281,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         .conn
         .resolve_browser_document_for_owner(&command_owner)
         .expect("the original Document should resolve exactly");
-    let pending = ctx
+    let (context, admission) = ctx
         .conn
         .start_document_input_command(
             document,
@@ -305,7 +305,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         owner: original_owner.clone(),
         document_lifetime_observer: None,
         kind: PendingInputCommandKind::DispatchMouseEvent,
-        pending: PendingInputOperation::Page(pending),
+        pending: PendingInputOperation::Page { context, admission },
     }
     .wait()
     .await;

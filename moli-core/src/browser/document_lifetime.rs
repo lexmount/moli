@@ -33,8 +33,9 @@ impl DocumentLifetime {
     }
 }
 
-/// Move-only wait for the retirement of one exact DocumentHost.
-#[derive(Debug)]
+/// Subscription to the retirement of one exact DocumentHost. Cloning an
+/// observer does not keep the Document or its owner alive.
+#[derive(Clone, Debug)]
 pub struct DocumentLifetimeObserver {
     receiver: watch::Receiver<bool>,
 }

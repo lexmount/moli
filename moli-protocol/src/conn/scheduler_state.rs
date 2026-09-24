@@ -270,6 +270,8 @@ mod tests {
 
 #[derive(Default)]
 pub(super) struct CdpConnectionSchedulerState {
+    pub(super) pending_navigation_admissions:
+        std::collections::HashMap<moli_core::browser::WebContentsHandle, usize>,
     next_protocol_work_publish_sequence: u64,
     pub(super) renderer_output_ingress: crate::domains::activity::OrderedRendererOutputIngress,
     scheduler_events: Vec<CdpSchedulerEvent>,

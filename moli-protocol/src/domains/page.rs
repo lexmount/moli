@@ -2329,8 +2329,7 @@ async fn navigate_command_owner_from_renderer_request_background_events_async(
         request_headers,
         browser_navigation_kind,
     );
-    let step =
-        navigation::finish_started_navigation_command_for_parts(conn, None, owner, start, &[]);
+    let step = navigation::finish_started_navigation_command_for_parts(None, owner, start, &[]);
     complete_renderer_navigation_step_background_events_async(conn, out, step).await;
 }
 
@@ -6672,7 +6671,6 @@ fn try_start_page_enable_command(
                 Err(plan) => return Some(PageCommandTaskStep::Complete(plan)),
             };
             Some(navigation::finish_started_navigation_command_for_parts(
-                conn,
                 cmd.id,
                 owner,
                 start,
@@ -6697,7 +6695,6 @@ fn try_start_page_enable_command(
                 Err(plan) => return Some(PageCommandTaskStep::Complete(plan)),
             };
             Some(navigation::finish_started_navigation_command_for_parts(
-                conn,
                 cmd.id,
                 owner,
                 start,

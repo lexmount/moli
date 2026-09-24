@@ -46,22 +46,34 @@ use super::{
 };
 
 pub(super) struct PendingNavigateLoadCommand {
+    reloaded_after_crash_session_ids: Vec<Option<String>>,
     prefix_events: Vec<BackgroundProtocolEvent>,
-    token: NavigationId,
     state: NavigationDispatchState,
-    completion: std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<moli_core::browser::BrowserNavigationOutcome, String>,
-                > + Send,
-        >,
-    >,
-    events: moli_core::browser::BrowserEventReceiver,
+    phase: PendingNavigationPhase,
+}
+
+enum PendingNavigationPhase {
+    Admission {
+        preflight: Box<crate::conn::TargetNavigationRequestPreflight>,
+        initiator: NavigationStartInitiator,
+        background: bool,
+        receipt: moli_core::browser::BrowserReply<moli_core::browser::BrowserNavigationAdmission>,
+    },
+    Loading {
+        token: NavigationId,
+        completion: moli_core::browser::BrowserReply<moli_core::browser::BrowserNavigationOutcome>,
+        events: moli_core::browser::BrowserEventReceiver,
+    },
 }
 
 pub(super) struct CompletedNavigateLoadCommand {
     pending: PendingNavigateLoadCommand,
-    navigation: Option<Result<moli_core::browser::BrowserNavigationOutcome, String>>,
+    outcome: NavigationCommandOutcome,
+}
+
+enum NavigationCommandOutcome {
+    Admitted(Result<moli_core::browser::BrowserNavigationAdmission, String>),
+    Progress(Option<Result<moli_core::browser::BrowserNavigationOutcome, String>>),
 }
 
 pub(super) struct PendingChildFrameNavigateCommand {
@@ -131,16 +143,23 @@ impl CompletedSameDocumentHistoryTraversalCommand {
 
 impl PendingNavigateLoadCommand {
     pub(super) async fn wait(mut self) -> CompletedNavigateLoadCommand {
-        let navigation = tokio::select! {
-            result = &mut self.completion => Some(result),
-            event = self.events.recv() => match event {
-                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => Some(Err("Browser stopped during navigation".into())),
-            },
+        let outcome = match &mut self.phase {
+            PendingNavigationPhase::Admission { receipt, .. } => {
+                NavigationCommandOutcome::Admitted(receipt.await)
+            }
+            PendingNavigationPhase::Loading {
+                completion, events, ..
+            } => NavigationCommandOutcome::Progress(tokio::select! {
+                result = completion => Some(result),
+                event = events.recv() => match event {
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => None,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => Some(Err("Browser stopped during navigation".into())),
+                },
+            }),
         };
         CompletedNavigateLoadCommand {
             pending: self,
-            navigation,
+            outcome,
         }
     }
 }
@@ -178,7 +197,6 @@ impl PendingSameDocumentHistoryTraversalCommand {
 
 pub(super) enum NavigateCommandStart {
     CompletePlan(CommandOutputPlan),
-    CompleteImmediate(CommandOutputPlan),
     PendingLoad(Box<PendingNavigateLoadCommand>),
     PendingChildFrame(Box<PendingChildFrameNavigateCommand>),
     PendingSameDocument(Box<PendingSameDocumentNavigateCommand>),
@@ -523,7 +541,6 @@ fn start_devtools_page_command(
                 options.allow_background_navigation,
             );
             finish_started_navigation_command_for_parts(
-                conn,
                 command_id,
                 options.owner,
                 start,
@@ -1030,7 +1047,17 @@ fn direct_navigation_result_from_completed_load(
     result: &mut DirectNavigationResult,
 ) -> Result<(), DevToolsError> {
     let state = &completed.pending.state;
-    match &completed.navigation {
+    let navigation = match &completed.outcome {
+        NavigationCommandOutcome::Progress(navigation) => navigation,
+        NavigationCommandOutcome::Admitted(Ok(_)) => return Ok(()),
+        NavigationCommandOutcome::Admitted(Err(error)) => {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::Internal,
+                error.clone(),
+            ));
+        }
+    };
+    match navigation {
         Some(Ok(navigation)) => {
             result.set_navigation_identity(&state.frame_id, &state.loader_id);
             match navigation {
@@ -1351,12 +1378,6 @@ fn start_devtools_reload_command(
     let Some(url) = conn.runtime_session_owner_target_url_for_owner(&owner) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
     };
-    if conn
-        .mark_next_navigation_history_replace_current_for_owner(&owner)
-        .is_none()
-    {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "TargetNotLoaded"));
-    }
     let start = start_navigate_to_url_command_with_background_policy(
         conn,
         command_id,
@@ -1369,7 +1390,6 @@ fn start_devtools_reload_command(
         NavigationStartInitiator::Browser,
     );
     finish_started_navigation_command_for_parts(
-        conn,
         command_id,
         owner,
         start,
@@ -1614,7 +1634,6 @@ fn start_resolved_history_traversal_command(
         initiator,
     );
     finish_started_navigation_command_for_parts(
-        conn,
         command_id,
         owner,
         start,
@@ -1673,7 +1692,6 @@ fn start_devtools_traverse_history_command(
 }
 
 pub(super) fn finish_started_navigation_command_for_parts(
-    conn: &mut CdpConnection,
     command_id: Option<u64>,
     owner: CommandOwnerScope,
     mut start: NavigateCommandStart,
@@ -1681,26 +1699,14 @@ pub(super) fn finish_started_navigation_command_for_parts(
 ) -> PageCommandTaskStep {
     match &mut start {
         NavigateCommandStart::CompletePlan(_) => {}
-        NavigateCommandStart::CompleteImmediate(plan) => {
-            clear_crash_state_after_navigation_into_plan(
-                conn,
-                plan,
-                &owner,
-                reloaded_after_crash_session_ids,
-            )
+        NavigateCommandStart::PendingLoad(pending) => {
+            pending.reloaded_after_crash_session_ids = reloaded_after_crash_session_ids.to_vec();
         }
-        NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
-            conn,
-            &mut pending.prefix_events,
-            &owner,
-            reloaded_after_crash_session_ids,
-        ),
         NavigateCommandStart::PendingChildFrame(_) => {}
         NavigateCommandStart::PendingSameDocument(_) => {}
     }
     match start {
         NavigateCommandStart::CompletePlan(plan) => PageCommandTaskStep::Complete(plan),
-        NavigateCommandStart::CompleteImmediate(plan) => PageCommandTaskStep::Complete(plan),
         NavigateCommandStart::PendingLoad(pending) => {
             PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
                 command_id,
@@ -1786,7 +1792,7 @@ pub(super) fn start_session_owner_navigation_from_renderer(
             NavigationStartInitiator::Renderer,
         )
     };
-    clear_crash_state_for_renderer_navigation(conn, start, owner, &reloaded_after_crash_session_ids)
+    with_navigation_crash_recovery_sessions(start, &reloaded_after_crash_session_ids)
 }
 
 #[cfg(test)]
@@ -2139,9 +2145,6 @@ fn reloaded_after_crash_session_ids(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Vec<Option<String>> {
-    if !conn.target_is_crashed_for_owner(owner) {
-        return Vec::new();
-    }
     conn.page_event_session_ids_for_owner(owner)
         .into_iter()
         .filter(|event_session_id| {
@@ -2151,62 +2154,21 @@ fn reloaded_after_crash_session_ids(
         .collect()
 }
 
-fn clear_crash_state_after_navigation(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    reloaded_after_crash_session_ids: &[Option<String>],
-) {
-    conn.clear_target_crash_state_for_owner(owner);
-    for session_id in reloaded_after_crash_session_ids {
-        out.push(inspector_target_reloaded_after_crash_event(
-            session_id.as_deref(),
-        ));
-    }
-}
-
-fn clear_crash_state_after_navigation_into_plan(
-    conn: &mut CdpConnection,
-    plan: &mut CommandOutputPlan,
-    owner: &CommandOwnerScope,
-    reloaded_after_crash_session_ids: &[Option<String>],
-) {
-    conn.clear_target_crash_state_for_owner(owner);
-    for session_id in reloaded_after_crash_session_ids {
-        plan.push_background_event(inspector_target_reloaded_after_crash_event(
-            session_id.as_deref(),
-        ));
-    }
-}
-
 fn inspector_target_reloaded_after_crash_event(
     session_id: Option<&str>,
 ) -> BackgroundProtocolEvent {
     BackgroundProtocolEvent::inspector_target_reloaded_after_crash(session_id)
 }
 
-fn clear_crash_state_for_renderer_navigation(
-    conn: &mut CdpConnection,
+fn with_navigation_crash_recovery_sessions(
     mut start: NavigateCommandStart,
-    owner: &CommandOwnerScope,
     reloaded_after_crash_session_ids: &[Option<String>],
 ) -> NavigateCommandStart {
     match &mut start {
         NavigateCommandStart::CompletePlan(_) => {}
-        NavigateCommandStart::CompleteImmediate(plan) => {
-            clear_crash_state_after_navigation_into_plan(
-                conn,
-                plan,
-                owner,
-                reloaded_after_crash_session_ids,
-            )
+        NavigateCommandStart::PendingLoad(pending) => {
+            pending.reloaded_after_crash_session_ids = reloaded_after_crash_session_ids.to_vec();
         }
-        NavigateCommandStart::PendingLoad(pending) => clear_crash_state_after_navigation(
-            conn,
-            &mut pending.prefix_events,
-            owner,
-            reloaded_after_crash_session_ids,
-        ),
         NavigateCommandStart::PendingChildFrame(_) => {}
         NavigateCommandStart::PendingSameDocument(_) => {}
     }
@@ -2321,38 +2283,22 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         || (state.result_projection.protocol() == DevToolsProtocol::Cdp
             && preflight.document_fetch_request_stage
                 == Some(crate::conn::FetchRequestStage::Request));
-    // A synchronous observer subscribes before admission. Background navigation
-    // is already observed by the shared protocol owner.
-    let events = match (!background)
-        .then(|| conn.subscribe_browser_events())
-        .transpose()
-    {
-        Ok(events) => events.map(|(_, events)| events),
+    let receipt = match conn.start_native_navigation_command(&state, &preflight) {
+        Ok(started) => started,
         Err(error) => {
             return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error));
         }
     };
-    let (waiter, prefix_events) =
-        match conn.start_native_navigation_command(state.clone(), preflight, initiator) {
-            Ok(started) => started,
-            Err(error) => {
-                return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(-32000, error));
-            }
-        };
-    let token = waiter.request().navigation;
-    if background {
-        // Browser occurrences drive publication on the shared protocol owner.
-        // Dropping this receipt cannot cancel the already-admitted native task.
-        let mut output = CommandOutputBuffer::default();
-        output.extend_background_events_after_messages(prefix_events);
-        return NavigateCommandStart::CompleteImmediate(output.into_plan());
-    }
     NavigateCommandStart::PendingLoad(Box::new(PendingNavigateLoadCommand {
-        prefix_events,
-        token,
+        reloaded_after_crash_session_ids: Vec::new(),
+        prefix_events: Vec::new(),
         state,
-        completion: Box::pin(waiter.wait()),
-        events: events.expect("synchronous navigation subscribed before admission"),
+        phase: PendingNavigationPhase::Admission {
+            preflight: Box::new(preflight),
+            initiator,
+            background,
+            receipt,
+        },
     }))
 }
 
@@ -2387,8 +2333,65 @@ pub(super) async fn complete_pending_navigate_load_command(
 ) -> PageCommandTaskStep {
     let CompletedNavigateLoadCommand {
         mut pending,
-        navigation,
+        outcome,
     } = completed;
+    let navigation = match outcome {
+        NavigationCommandOutcome::Admitted(result) => {
+            if result
+                .as_ref()
+                .is_ok_and(|admission| admission.reloaded_after_crash)
+            {
+                pending
+                    .prefix_events
+                    .extend(
+                        pending
+                            .reloaded_after_crash_session_ids
+                            .iter()
+                            .map(|session| {
+                                inspector_target_reloaded_after_crash_event(session.as_deref())
+                            }),
+                    );
+            }
+            let PendingNavigationPhase::Admission {
+                preflight,
+                initiator,
+                background,
+                ..
+            } = pending.phase
+            else {
+                unreachable!("admission reply belongs to admission phase")
+            };
+            let (waiter, events, state, prefix) = match conn.finish_native_navigation_command(
+                pending.state,
+                *preflight,
+                initiator,
+                result,
+            ) {
+                Ok(admitted) => admitted,
+                Err(error) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
+                }
+            };
+            pending.prefix_events.extend(prefix);
+            if background {
+                let mut output = CommandOutputBuffer::default();
+                output.extend_background_events_after_messages(pending.prefix_events);
+                return PageCommandTaskStep::Complete(output.into_plan());
+            }
+            pending.state = state;
+            pending.phase = PendingNavigationPhase::Loading {
+                token: waiter.request().navigation,
+                completion: Box::pin(waiter.wait()),
+                events,
+            };
+            None
+        }
+        NavigationCommandOutcome::Progress(navigation) => navigation,
+    };
+    let PendingNavigationPhase::Loading { token, .. } = &pending.phase else {
+        unreachable!("loading follows admission")
+    };
+    let token = *token;
     let contents = pending.state.web_contents;
     pending.prefix_events.extend(
         conn.project_browser_initial_document_inspection(contents, None)
@@ -2398,7 +2401,7 @@ pub(super) async fn complete_pending_navigate_load_command(
         .native_navigation_decision_for_target(&pending.state.frame_id)
         .filter(|(paused_contents, decision)| {
             *paused_contents == contents
-                && decision.permit.navigation() == pending.token
+                && decision.permit.navigation() == token
                 && matches!(
                     decision.stage,
                     moli_core::browser::NavigationDecisionStage::Request { .. }

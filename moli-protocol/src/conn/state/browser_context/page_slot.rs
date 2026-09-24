@@ -346,6 +346,12 @@ impl TargetPageSlot {
 
 impl BrowserContext {
     pub(crate) fn target_has_loaded_page(&self, target_id: &str) -> bool {
+        if self
+            .renderer_document_lifecycle_binding_for_target(target_id)
+            .is_some()
+        {
+            return true;
+        }
         self.web_contents_handle_for_target(target_id)
             .is_some_and(|handle| self.browser_context.has_loaded_document(handle))
     }
@@ -615,11 +621,19 @@ impl BrowserContext {
         document_id
     }
 
-    #[cfg(test)]
     pub(crate) fn document_lifetime_observer_for_target(
-        &mut self,
+        &self,
         target_id: &str,
     ) -> Option<DocumentLifetimeObserver> {
+        if let Some(binding) = self
+            .page_slot_for_target(target_id)?
+            .renderer_document_lifecycle
+            .binding
+            .as_ref()
+            && binding.lifetime.is_current()
+        {
+            return Some(binding.lifetime.clone());
+        }
         let web_contents = self.web_contents_handle_for_target(target_id)?;
         let document = self
             .browser_context

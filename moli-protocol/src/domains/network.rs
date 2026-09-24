@@ -715,14 +715,14 @@ fn finish_document_policy_network_command(
         return Err("InvalidNetworkCommandCompletion".to_owned());
     };
     let document = completed.document();
-    match conn.finish_document_policy_update(*completed) {
+    match completed.result {
         Ok(()) => Ok(()),
         Err(error)
             if error == "Document changed"
                 && conn
                     .runtime_session_owner_slot_for_owner(&owner_scope)
                     .is_ok()
-                && conn.loaded_browser_document_for_owner(&owner_scope).ok() != Some(document) =>
+                && conn.loaded_browser_document_for_owner(&owner_scope).ok() != document =>
         {
             Ok(())
         }

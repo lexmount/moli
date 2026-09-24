@@ -155,16 +155,6 @@ impl BrowserContext {
             .ok()?
     }
 
-    pub(crate) fn mark_target_next_navigation_history_replace_current(
-        &mut self,
-        target_id: &str,
-    ) -> Option<()> {
-        let handle = self.web_contents_handle_for_target(target_id)?;
-        self.browser_context
-            .mark_next_navigation_history_replace_current(handle)
-            .ok()
-    }
-
     pub(crate) fn mark_target_next_navigation_history_traverse_to_entry(
         &mut self,
         target_id: &str,

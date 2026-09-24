@@ -25,3 +25,4 @@ pub(crate) use runtime_owner::{
 };
 #[cfg(test)]
 pub(crate) use target_session_owner::TargetNavigationLoadInputs;
+pub(crate) use target_session_owner::TargetNavigationRequestPreflight;

@@ -12,6 +12,9 @@ impl CdpConnection {
         &mut self,
         contents: WebContentsHandle,
     ) -> Vec<BackgroundProtocolEvent> {
+        if self.navigation_admission_pending(contents) {
+            return Vec::new();
+        }
         // A terminal attempt can retire its projection before a queued response
         // event is consumed. Recover the exact retained response first.
         let mut events = Box::pin(self.project_browser_navigation_responses(contents)).await;

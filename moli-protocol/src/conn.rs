@@ -32,6 +32,7 @@ mod activity_source;
 mod automation_session;
 mod bidi_channel_work;
 mod browser_context;
+pub(crate) use browser_context::TargetNavigationRequestPreflight;
 mod browser_worker_commands;
 mod command_owner_scope;
 mod command_view;
@@ -81,7 +82,7 @@ pub(crate) use state::{
     CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
-    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyUpdate,
+    CompletedDocumentLifecycleStop, CompletedDocumentPolicyUpdate,
     CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
     CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
     CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,

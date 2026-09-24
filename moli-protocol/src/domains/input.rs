@@ -1,7 +1,7 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
-    CompletedDocumentInputCommand, PageInputCommand, PendingDocumentInputCommand,
-    PreparedDownloadActivation, TargetPageResidenceIdentity,
+    PageInputCommand, PendingDocumentInputCommand, PreparedDownloadActivation,
+    TargetPageResidenceIdentity,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -14,12 +14,11 @@ use crate::devtools_runtime::{
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::browser::{DocumentLifetimeObserver, DocumentRetirement};
 use moli_core::page::{
-    PendingPageCommand, RendererCommandTurnCompletion, RendererCommandTurnOutput, RendererDragData,
-    RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
-    RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
-    RendererPointerEventProperties, RendererTouchPoint, decode_element_click_dispatch_completion,
-    decode_element_click_preparation_completion, decode_input_dispatch_outcome_completion,
-    decode_insert_text_completion,
+    PendingPageCommand, RendererCommandTurnOutput, RendererDragData, RendererDragDataItem,
+    RendererDraggedFile, RendererInputDispatchOutcome, RendererPendingDownloadActivation,
+    RendererPendingFileChooserActivation, RendererPointerEventProperties, RendererTouchPoint,
+    decode_element_click_dispatch_completion, decode_element_click_preparation_completion,
+    decode_input_dispatch_outcome_completion, decode_insert_text_completion,
 };
 use serde::Deserialize;
 #[cfg(test)]
@@ -137,14 +136,16 @@ enum PendingInputCommandKind {
 
 enum PendingInputOperation {
     Inspection(PendingPageCommand),
-    Page(PendingDocumentInputCommand),
+    Page {
+        context: moli_core::browser::BrowserContextHandle,
+        admission: moli_core::browser::BrowserReply<PendingDocumentInputCommand>,
+    },
     #[cfg(test)]
     RendererAckHeldForTest,
 }
 
 enum CompletedInputOperation {
-    Inspection(Result<Box<RendererCommandTurnOutput>, String>),
-    Page(Box<CompletedDocumentInputCommand>),
+    Renderer(Result<Box<RendererCommandTurnOutput>, String>),
     PageResidenceSuperseded,
     PageResidenceUnavailable,
 }
@@ -174,22 +175,32 @@ async fn wait_for_renderer_input_or_page_replacement<T>(
 impl PendingInputCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedInputCommandDispatch {
         let completed = match self.pending {
-            PendingInputOperation::Inspection(pending) => CompletedInputOperation::Inspection(
+            PendingInputOperation::Inspection(pending) => CompletedInputOperation::Renderer(
                 pending
                     .wait()
                     .await
                     .map(|completed| Box::new(completed.into_output()))
                     .map_err(|error| error.to_string()),
             ),
-            PendingInputOperation::Page(pending) => {
+            PendingInputOperation::Page { context, admission } => {
                 match wait_for_renderer_input_or_page_replacement(
-                    pending.wait(),
+                    async move {
+                        let pending = admission.await?;
+                        Ok::<_, String>(pending.wait().await)
+                    },
                     self.document_lifetime_observer,
                 )
                 .await
                 {
                     RendererInputWaitOutcome::Completed(result) => {
-                        CompletedInputOperation::Page(Box::new(result))
+                        let output = match result {
+                            Ok(completed) => context
+                                .finish_document_input_command(completed)
+                                .await
+                                .map(Box::new),
+                            Err(error) => Err(error),
+                        };
+                        CompletedInputOperation::Renderer(output)
                     }
                     RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded) => {
                         CompletedInputOperation::PageResidenceSuperseded
@@ -227,7 +238,7 @@ impl PendingInputCommandDispatch {
     }
 
     #[cfg(test)]
-    pub(crate) fn hold_renderer_ack_for_test(&mut self) -> bool {
+    pub(crate) async fn hold_renderer_ack_for_test(&mut self) -> bool {
         // The command has already crossed the real JSON/domain admission path
         // and been enqueued in the renderer. Replacing only its reply receiver
         // gives lifecycle smoke tests a deterministic outstanding callback;
@@ -237,7 +248,16 @@ impl PendingInputCommandDispatch {
         {
             return false;
         }
-        self.pending = PendingInputOperation::RendererAckHeldForTest;
+        let pending = std::mem::replace(
+            &mut self.pending,
+            PendingInputOperation::RendererAckHeldForTest,
+        );
+        if let PendingInputOperation::Page { admission, .. } = pending {
+            // Cross the real native admission before holding only the ACK.
+            admission
+                .await
+                .expect("input must be enqueued before its test ACK gate");
+        }
         true
     }
 }
@@ -589,7 +609,7 @@ fn key_event_targets_outgoing_document(
     event_type: DevToolsKeyEventType,
 ) -> bool {
     event_type == DevToolsKeyEventType::KeyUp
-        && conn.has_pending_document_navigation_for_owner(owner)
+        && conn.ensure_document_accessible_for_owner(owner).is_err()
 }
 
 fn start_pending_input_command(
@@ -1074,7 +1094,7 @@ fn start_page_input_command_with_access(
     } else {
         None
     };
-    let pending = conn
+    let (context, admission) = conn
         .start_document_input_command(document, command)
         .map_err(PendingInputCommandStartError::renderer_error)?;
     Ok(Some(PendingInputCommandDispatch {
@@ -1083,7 +1103,7 @@ fn start_page_input_command_with_access(
         owner: page_owner,
         document_lifetime_observer,
         kind,
-        pending: PendingInputOperation::Page(pending),
+        pending: PendingInputOperation::Page { context, admission },
     }))
 }
 
@@ -1379,10 +1399,7 @@ async fn complete_pending_input_command(
     let session_id = completed.session_id.as_deref();
     let owner = completed.owner;
     let completion = match completed.completed {
-        CompletedInputOperation::Page(completed) => {
-            settle_completed_input_page_command(conn, *completed, command_context)
-        }
-        CompletedInputOperation::Inspection(output) => output
+        CompletedInputOperation::Renderer(output) => output
             .map(|output| command_context.consume_renderer_command_turn_output(*output))
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error)),
         CompletedInputOperation::PageResidenceSuperseded => {
@@ -1534,17 +1551,6 @@ async fn complete_pending_input_command(
         result,
         protocol_events,
     }
-}
-
-fn settle_completed_input_page_command(
-    conn: &mut CdpConnection,
-    completed: CompletedDocumentInputCommand,
-    command_context: &mut CommandDispatchContext,
-) -> Result<RendererCommandTurnCompletion, DevToolsError> {
-    let output = conn
-        .finish_document_input_command(completed)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-    Ok(command_context.consume_renderer_command_turn_output(output))
 }
 
 pub(crate) async fn complete_pending_input_command_output_plan(

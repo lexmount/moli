@@ -1,4 +1,157 @@
 use super::*;
+use serde_json::Value;
+
+#[tokio::test]
+async fn native_navigation_admission_does_not_block_another_pages_inspection() {
+    native_admission_does_not_block_inspection(
+        "Page.navigate",
+        json!({"url":"data:text/html,next"}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn native_reload_admission_does_not_block_another_pages_inspection() {
+    native_admission_does_not_block_inspection("Page.reload", json!({})).await;
+}
+
+#[tokio::test]
+async fn native_input_admission_does_not_block_another_pages_inspection() {
+    native_admission_does_not_block_inspection("Input.insertText", json!({"text":"native"})).await;
+}
+
+#[tokio::test]
+async fn native_policy_admission_does_not_block_another_pages_inspection() {
+    native_admission_does_not_block_inspection(
+        "Emulation.setTimezoneOverride",
+        json!({"timezoneId":"Asia/Shanghai"}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn native_document_policy_admission_does_not_block_another_pages_inspection() {
+    native_admission_does_not_block_inspection(
+        "Emulation.setIdleOverride",
+        json!({"isUserActive":true,"isScreenUnlocked":true}),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn native_network_policy_admission_does_not_block_another_pages_inspection() {
+    native_admission_does_not_block_inspection(
+        "Network.setExtraHTTPHeaders",
+        json!({"headers":{"x-policy":"native"}}),
+    )
+    .await;
+}
+
+async fn native_admission_does_not_block_inspection(method: &str, params: Value) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let state = protocol_server_test_state(
+        addr,
+        FetchConfig::default(),
+        OptionalResourceFetchMask::NONE,
+    );
+    let browser = state.browser_service.handle();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, build_router(state)).await.unwrap();
+    });
+    let (mut socket, _) =
+        connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
+            .await
+            .unwrap();
+    let mut sessions = Vec::new();
+    for id in [1, 4] {
+        let created = send_cdp_command(
+            &mut socket,
+            id,
+            "Target.createTarget",
+            None,
+            json!({"url":"about:blank"}),
+        )
+        .await;
+        let target =
+            created.iter().find(|message| message["id"] == id).unwrap()["result"]["targetId"]
+                .as_str()
+                .unwrap();
+        let attached = send_cdp_command(
+            &mut socket,
+            id + 1,
+            "Target.attachToTarget",
+            None,
+            json!({"targetId":target,"flatten":true}),
+        )
+        .await;
+        let session = attached
+            .iter()
+            .find(|message| message["id"] == id + 1)
+            .unwrap()["result"]["sessionId"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let ready = send_cdp_command(
+            &mut socket,
+            id + 2,
+            "Runtime.evaluate",
+            Some(&session),
+            json!({"expression":"6 * 7","returnByValue":true}),
+        )
+        .await;
+        assert_eq!(
+            ready
+                .iter()
+                .find(|message| message["id"] == id + 2)
+                .unwrap()["result"]["result"]["value"],
+            42
+        );
+        sessions.push(session);
+    }
+    let release = browser.block_owner_for_test().unwrap();
+    let (finished, completion) = std::sync::mpsc::channel();
+    // The owner gate is released even if the protocol actor blocks its own
+    // executor. The deadline detects failure; it never schedules production.
+    let watchdog = std::thread::spawn(move || {
+        let progressed = completion.recv_timeout(Duration::from_secs(5)).is_ok();
+        drop(release);
+        progressed
+    });
+    socket
+        .send(WsMessage::Text(
+            json!({"id":10,"method":method,"sessionId":sessions[0],"params":params})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    socket.send(WsMessage::Text(json!({"id":11,"method":"Runtime.evaluate","sessionId":sessions[1],"params":{"expression":"6 * 7","returnByValue":true}}).to_string().into())).await.unwrap();
+    let inspection = recv_until_match(&mut socket, |message| message["id"] == 11).await;
+    let _ = finished.send(());
+    let progressed = watchdog.join().unwrap();
+    let reply = inspection
+        .iter()
+        .find(|message| message["id"] == 11)
+        .unwrap();
+    assert_eq!(reply["result"]["result"]["value"], 42);
+    let native = if let Some(reply) = inspection.iter().find(|message| message["id"] == 10) {
+        reply.clone()
+    } else {
+        recv_until_match(&mut socket, |message| message["id"] == 10)
+            .await
+            .into_iter()
+            .find(|message| message["id"] == 10)
+            .unwrap()
+    };
+    let _ = socket.close(None).await;
+    abort_test_cdp_server(server).await;
+    assert!(native["error"].is_null(), "{native}");
+    assert!(
+        progressed,
+        "{method} blocked independent inspection until BrowserOwner was released"
+    );
+}
 
 #[tokio::test]
 async fn commands_and_renderer_replies_advance_during_continuous_browser_activity() {

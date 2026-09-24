@@ -229,6 +229,10 @@ impl Default for BrowserEventStream {
 }
 
 impl BrowserEventStream {
+    pub(super) fn receiver(&self) -> BrowserEventReceiver {
+        self.sender.subscribe()
+    }
+
     pub(super) fn sequence(&self) -> BrowserSequence {
         self.sequence
     }

@@ -38,6 +38,16 @@ pub enum BrowserNavigationOutcome {
     Download { url: Url },
 }
 
+/// Facts captured together with native admission, before later owner turns
+/// can replace the Document or change request policy.
+pub struct BrowserNavigationAdmission {
+    pub reloaded_after_crash: bool,
+    pub waiter: BrowserNavigationWaiter,
+    pub events: crate::browser::BrowserEventReceiver,
+    pub request_headers: moli_fetch::RequestHeaders,
+    pub request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
+}
+
 impl BrowserNavigationWaiter {
     pub fn request(&self) -> NavigationRequest {
         self.request
@@ -61,6 +71,62 @@ impl BrowserNavigationWaiter {
 }
 
 impl BrowserContextHandle {
+    pub fn submit_document_navigation(
+        &self,
+        contents: WebContentsHandle,
+        mut request: NavigationRequestInterception,
+        global_headers: moli_fetch::RequestHeaders,
+        fallback_user_agent: String,
+    ) -> super::BrowserReply<BrowserNavigationAdmission> {
+        let id = self.id;
+        self.browser.submit(move |browser| {
+            let context = browser.context(id)?;
+            let mut headers = navigation_request_headers(
+                context,
+                contents,
+                &global_headers,
+                &fallback_user_agent,
+            )?;
+            headers.overlay(request.headers);
+            request.headers = headers.clone();
+            let initiator = context
+                .current_document_url(contents)?
+                .filter(|url| url.host_str().is_some());
+            let mut cookie_context =
+                moli_cookie_jar::NetworkCookieRequestContext::top_level_navigation(&request.method);
+            if let Some(initiator) = initiator {
+                cookie_context =
+                    cookie_context.with_initiator_url(&request.requested_url, &initiator);
+            }
+            let request_cookie_report = context
+                .observe_request_cookie_access_report(&request.requested_url, cookie_context);
+            let reloaded_after_crash = context.web_contents_is_crashed(contents)?;
+            let events = browser.events.receiver();
+            if request.policy == NavigationRequestLoadPolicy::Reload {
+                browser
+                    .context_mut(id)?
+                    .mark_next_navigation_history_replace_current(contents)?;
+            }
+            let policy = browser.native_navigation_policy(contents)?;
+            let waiter = browser.start_native_document_navigation(
+                contents,
+                request,
+                policy,
+                std::sync::Weak::new(),
+            )?;
+            browser
+                .context_mut(id)?
+                .set_web_contents_crashed(contents, false)?;
+            Ok(BrowserNavigationAdmission {
+                reloaded_after_crash,
+                waiter,
+                events,
+                request_headers: headers,
+                request_cookie_report,
+            })
+        })
+    }
+
     /// Resolve header inheritance against one current Context/WebContents view.
     pub fn navigation_request_headers(
         &self,
@@ -69,26 +135,7 @@ impl BrowserContextHandle {
         fallback_user_agent: String,
     ) -> Result<moli_fetch::RequestHeaders, String> {
         self.try_read(move |context| {
-            let contents = context.web_contents(contents)?;
-            let mut headers = crate::browser::web_contents::merge_extra_header_layers(&[
-                &global_headers,
-                &context.network_policy().extra_headers,
-                &contents.network_request_policy.extra_headers,
-            ]);
-            if !headers
-                .iter()
-                .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
-            {
-                let user_agent = contents
-                    .browser_identity_override
-                    .as_ref()
-                    .or_else(|| context.browser_identity_override())
-                    .map_or(fallback_user_agent.as_str(), |identity| {
-                        identity.user_agent()
-                    });
-                headers.push(("User-Agent".to_owned(), user_agent.as_bytes().to_vec()));
-            }
-            Ok(headers)
+            navigation_request_headers(context, contents, &global_headers, &fallback_user_agent)
         })
     }
 
@@ -142,6 +189,32 @@ impl BrowserContextHandle {
                 .map(|waiter| Some(waiter.request.navigation))
         })?
     }
+}
+
+fn navigation_request_headers(
+    context: &crate::browser::BrowserContext,
+    contents: WebContentsHandle,
+    global_headers: &moli_fetch::RequestHeaders,
+    fallback_user_agent: &str,
+) -> Result<moli_fetch::RequestHeaders, String> {
+    let contents = context.web_contents(contents)?;
+    let mut headers = crate::browser::web_contents::merge_extra_header_layers(&[
+        global_headers,
+        &context.network_policy().extra_headers,
+        &contents.network_request_policy.extra_headers,
+    ]);
+    if !headers
+        .iter()
+        .any(|(name, _)| name.eq_ignore_ascii_case("user-agent"))
+    {
+        let user_agent = contents
+            .browser_identity_override
+            .as_ref()
+            .or_else(|| context.browser_identity_override())
+            .map_or(fallback_user_agent, |identity| identity.user_agent());
+        headers.push(("User-Agent".to_owned(), user_agent.as_bytes().to_vec()));
+    }
+    Ok(headers)
 }
 
 impl Browser {

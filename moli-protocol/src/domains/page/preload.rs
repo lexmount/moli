@@ -1259,15 +1259,6 @@ fn start_create_isolated_world_initial_navigation_or_renderer_phase(
         Err(plan) => return PageCommandTaskStep::Complete(plan),
     };
     match start {
-        super::navigation::NavigateCommandStart::CompleteImmediate(plan) => {
-            if let Err(plan) = append_page_command_step_output(
-                &mut task.prefix_output,
-                PageCommandTaskStep::Complete(plan),
-            ) {
-                return PageCommandTaskStep::Complete(plan);
-            }
-            start_create_isolated_world_frame_or_world_phase(conn, command_id, owner, task)
-        }
         super::navigation::NavigateCommandStart::CompletePlan(plan) => {
             PageCommandTaskStep::Complete(plan)
         }

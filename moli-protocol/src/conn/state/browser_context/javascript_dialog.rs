@@ -293,7 +293,6 @@ impl TargetJavaScriptDialogState {
         self.pending_dialogs.clear();
     }
 
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.pending_dialogs.is_empty()
     }

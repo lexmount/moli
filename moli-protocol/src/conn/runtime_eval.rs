@@ -6976,7 +6976,7 @@ mod tests {
             )
             .unwrap();
         let completed = pending.wait().await;
-        context.finish_document_policy_update(completed).unwrap();
+        completed.result.unwrap();
         let source =
             "JSON.stringify([document.hasFocus(), document.hidden, document.visibilityState])";
         let raw = json!({

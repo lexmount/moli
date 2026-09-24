@@ -515,9 +515,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
                     target,
                     operation: super::PendingEmulationPageOperation::RebuildResourceRuntime,
                     source: super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
-                    completed: super::CompletedEmulationPageWork::ResourceRuntime(
+                    completed: super::CompletedEmulationPageWork::ResourceRuntime(Box::new(
                         resource_completion,
-                    ),
+                    )),
                 },
             ]),
         },

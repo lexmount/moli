@@ -21,7 +21,9 @@ mod initial_document;
 mod navigation;
 pub use initial_document::{BrowserCommittedInitialDocument, BrowserInitialDocumentWaiter};
 mod navigation_driver;
-pub use navigation_driver::{BrowserNavigationOutcome, BrowserNavigationWaiter};
+pub use navigation_driver::{
+    BrowserNavigationAdmission, BrowserNavigationOutcome, BrowserNavigationWaiter,
+};
 mod navigation_events;
 mod network;
 mod popup;
@@ -273,6 +275,10 @@ impl Drop for BrowserOwnerEndpoint {
     }
 }
 
+/// An owned asynchronous reply to a typed Browser command.
+pub type BrowserReply<T> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<T, String>> + Send>>;
+
 /// Cloneable command endpoint for the unique Browser owner sequence.
 #[derive(Clone)]
 pub struct BrowserHandle {
@@ -353,6 +359,28 @@ impl BrowserHandle {
         result_rx
             .recv()
             .map_err(|_| "Browser owner stopped before completing the operation".to_owned())
+    }
+
+    /// Enqueue immediately; waiting for the receipt never occupies the caller's
+    /// executor. Only typed public commands may submit an owner operation.
+    fn submit<R: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Browser) -> Result<R, String> + Send + 'static,
+    ) -> BrowserReply<R> {
+        let (result_tx, result_rx) = oneshot::channel();
+        let admitted = self
+            .endpoint
+            .tx
+            .send(BrowserOwnerMessage::Execute(Box::new(move |browser| {
+                let _ = result_tx.send(operation(browser));
+            })))
+            .map_err(|_| "Browser owner is unavailable".to_owned());
+        Box::pin(async move {
+            admitted?;
+            result_rx
+                .await
+                .map_err(|_| "Browser owner stopped before completing the operation".to_owned())?
+        })
     }
 
     /// Hold the owner queue until the test drops the returned release sender.
@@ -1734,7 +1762,6 @@ impl BrowserContextHandle {
         fn start_app_manifest_load_preparation(document: super::DocumentHandle) -> super::PendingAppManifestLoadPreparation;
         fn start_app_manifest_publication(document: super::DocumentHandle, publication: crate::page::RendererAppManifestLoadPublication) -> super::PendingAppManifestPublication;
         fn start_document_autofill_trigger(document: super::DocumentHandle, request: crate::page::RendererAutofillTriggerRequest) -> super::PendingDocumentAutofillTrigger;
-        fn start_document_input_command(document: super::DocumentHandle, command: super::PageInputCommand) -> super::PendingDocumentInputCommand;
     }
 
     forward_context_try_update! {
@@ -1760,8 +1787,106 @@ impl BrowserContextHandle {
         fn finish_app_manifest_load_preparation(completed: super::CompletedAppManifestLoadPreparation) -> super::BrowserAppManifestLoadPreparation;
         fn finish_app_manifest_publication(completed: super::CompletedAppManifestPublication) -> crate::page::RendererCommandTurnOutput;
         fn finish_document_autofill_trigger(completed: super::CompletedDocumentAutofillTrigger) -> crate::page::RendererAutofillTriggerOutcome;
-        fn finish_document_input_command(completed: super::CompletedDocumentInputCommand) -> crate::page::RendererCommandTurnOutput;
         fn observe_document_lifetime(document: super::DocumentHandle) -> super::DocumentLifetimeObserver;
+    }
+
+    /// Admit and settle against the captured Document without occupying the
+    /// protocol sequence during either owner turn.
+    pub fn apply_document_policy(
+        &self,
+        document: super::DocumentHandle,
+        update: super::DocumentPolicyUpdate,
+    ) -> BrowserReply<()> {
+        let context = self.id;
+        let admission = self.browser.submit(move |browser| {
+            browser
+                .context_mut(context)?
+                .start_document_policy_update(document, update)
+                .map(Some)
+        });
+        self.complete_document_policy(admission)
+    }
+
+    /// Persist the policy and prepare its renderer update in the same owner
+    /// turn. Context header inheritance is resolved here, never via protocol getters.
+    pub fn apply_network_request_policy(
+        &self,
+        contents: super::WebContentsHandle,
+        document: Option<super::DocumentHandle>,
+        policy: super::web_contents::NetworkRequestPolicy,
+        mut headers: moli_fetch::RequestHeaders,
+    ) -> BrowserReply<()> {
+        let context = self.id;
+        let admission = self.browser.submit(move |browser| {
+            let context = browser.context_mut(context)?;
+            if document.is_some_and(|document| document.web_contents() != contents) {
+                return Err("Document changed".into());
+            }
+            context.set_web_contents_network_request_policy(contents, policy.clone())?;
+            let Some(document) = document else {
+                return Ok(None);
+            };
+            headers.overlay(context.network_policy().extra_headers.clone());
+            headers.overlay(policy.extra_headers);
+            context
+                .start_document_policy_update(
+                    document,
+                    super::DocumentPolicyUpdate::NetworkRequestPolicy {
+                        extra_headers: headers,
+                        bypass_service_worker: policy.bypass_service_worker,
+                        cache_disabled: policy.cache_disabled,
+                        blocked_url_patterns: policy.blocked_url_patterns,
+                    },
+                )
+                .map(Some)
+        });
+        self.complete_document_policy(admission)
+    }
+
+    fn complete_document_policy(
+        &self,
+        admission: BrowserReply<Option<super::PendingDocumentPolicyUpdate>>,
+    ) -> BrowserReply<()> {
+        let context = self.id;
+        let browser = self.browser.clone();
+        Box::pin(async move {
+            let Some(pending) = admission.await? else {
+                return Ok(());
+            };
+            let completed = pending.wait().await;
+            browser
+                .submit(move |browser| {
+                    browser
+                        .context_mut(context)?
+                        .finish_document_policy_update(completed)
+                })
+                .await
+        })
+    }
+
+    pub fn start_document_input_command(
+        &self,
+        document: super::DocumentHandle,
+        command: super::PageInputCommand,
+    ) -> BrowserReply<super::PendingDocumentInputCommand> {
+        let id = self.id;
+        self.browser.submit(move |browser| {
+            browser
+                .context(id)?
+                .start_document_input_command(document, command)
+        })
+    }
+
+    pub fn finish_document_input_command(
+        &self,
+        completed: super::CompletedDocumentInputCommand,
+    ) -> BrowserReply<crate::page::RendererCommandTurnOutput> {
+        let id = self.id;
+        self.browser.submit(move |browser| {
+            browser
+                .context_mut(id)?
+                .finish_document_input_command(completed)
+        })
     }
 
     pub fn document_response_headers(

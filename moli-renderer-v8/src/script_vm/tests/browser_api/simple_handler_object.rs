@@ -136,7 +136,9 @@ const WORKER_PARENT_PROBE: &str = r#"
         const listener = event => { navigator.serviceWorker.removeEventListener('message', listener); resolve(event.data); };
         navigator.serviceWorker.addEventListener('message', listener);
         registration = await navigator.serviceWorker.register('/handler-sw.js?case=' + encodeURIComponent(config.name), {scope:'./'});
-        const active = registration.active || registration.installing || registration.waiting;
+        // Wait for activation before testing handlers. Reading three live slots
+        // separately is not an activation barrier.
+        const active = (await navigator.serviceWorker.ready).active;
         if (active.state !== 'activated') await new Promise(done => active.addEventListener('statechange', () => { if (active.state === 'activated') done(); }));
         active.postMessage('probe');
       } else {

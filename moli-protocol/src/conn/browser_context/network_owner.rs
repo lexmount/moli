@@ -152,14 +152,9 @@ impl TargetSessionOwnerMut<'_> {
         &mut self,
         f: impl FnOnce(&mut crate::conn::state::DevToolsNetworkSessionState) -> T,
     ) -> T {
-        {
-            self.browser_context
-                .mutate_devtools_network_session_state_for_target(
-                    &self.target_id,
-                    &self.session_key,
-                    f,
-                )
-        }
+        f(self
+            .browser_context
+            .network_policy_contribution_for_target(&self.target_id, &self.session_key))
     }
 
     fn start_set_cache_disabled(
@@ -176,31 +171,23 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_bypass_service_worker(
         mut self,
         bypass_service_worker: bool,
+        global_extra_headers: &moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
-            state.bypass_service_worker = bypass_service_worker;
+            state.bypass_service_worker = bypass_service_worker
         });
-        let effective = self
-            .browser_context
-            .effective_policy_for_target(&self.target_id);
-        self.start_document_policy_update(DocumentPolicyUpdate::BypassServiceWorker(
-            effective.bypass_service_worker(),
-        ))
+        self.start_replay_effective_network_request_policy(global_extra_headers)
     }
 
     fn start_set_blocked_url_patterns(
         mut self,
         blocked_url_patterns: Vec<String>,
+        global_extra_headers: &moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
-            state.blocked_url_patterns = blocked_url_patterns;
+            state.blocked_url_patterns = blocked_url_patterns
         });
-        let effective = self
-            .browser_context
-            .effective_policy_for_target(&self.target_id);
-        self.start_document_policy_update(DocumentPolicyUpdate::BlockedUrls(
-            effective.blocked_url_patterns().to_vec(),
-        ))
+        self.start_replay_effective_network_request_policy(global_extra_headers)
     }
 
     fn start_set_extra_http_headers(
@@ -211,7 +198,7 @@ impl TargetSessionOwnerMut<'_> {
         self.mutate_network_policy_session_state(|state| {
             state.extra_headers = extra_headers;
         });
-        self.start_effective_extra_http_headers_update(global_extra_headers)
+        self.start_replay_effective_network_request_policy(global_extra_headers)
     }
 
     fn start_set_target_extra_http_headers(
@@ -220,60 +207,31 @@ impl TargetSessionOwnerMut<'_> {
         global_extra_headers: &moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.browser_context
-            .set_base_extra_headers_for_target(&self.target_id, extra_headers);
-        self.start_effective_extra_http_headers_update(global_extra_headers)
-    }
-
-    fn start_effective_extra_http_headers_update(
-        &mut self,
-        global_extra_headers: &moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
-        let headers = self
-            .browser_context
-            .effective_extra_headers_for_target(&self.target_id, global_extra_headers);
-        let Some(document) = self
-            .browser_context
-            .document_handle_for_target(&self.target_id)
-        else {
-            return Ok(None);
-        };
-        self.browser_context
-            .start_document_policy_update(document, DocumentPolicyUpdate::ExtraHttpHeaders(headers))
-            .map(Some)
+            .contribute_base_extra_headers_for_target(&self.target_id, extra_headers);
+        self.start_replay_effective_network_request_policy(global_extra_headers)
     }
 
     fn start_replay_effective_network_request_policy(
         &mut self,
         global_extra_headers: &moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
-        let effective = self
+        let contents = self
             .browser_context
-            .effective_policy_for_target(&self.target_id);
-        let headers = self.browser_context.merged_extra_headers_for_target_policy(
-            global_extra_headers,
-            effective.extra_headers(),
-        );
-        self.start_document_policy_update(DocumentPolicyUpdate::NetworkRequestPolicy {
-            extra_headers: headers,
-            bypass_service_worker: effective.bypass_service_worker(),
-            cache_disabled: effective.cache_disabled(),
-            blocked_url_patterns: effective.blocked_url_patterns().to_vec(),
-        })
-    }
-
-    fn start_document_policy_update(
-        &mut self,
-        update: DocumentPolicyUpdate,
-    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
-        let Some(document) = self
+            .web_contents_handle_for_target(&self.target_id)
+            .ok_or("TargetNotLoaded")?;
+        let document = self
             .browser_context
-            .document_handle_for_target(&self.target_id)
-        else {
-            return Ok(None);
-        };
-        self.browser_context
-            .start_document_policy_update(document, update)
-            .map(Some)
+            .document_handle_for_target(&self.target_id);
+        let policy = self
+            .browser_context
+            .network_request_policy_for_target(&self.target_id);
+        Ok(Some(PendingDocumentPolicyUpdate::network(
+            self.browser_context.browser_context_handle(),
+            contents,
+            document,
+            policy,
+            global_extra_headers.clone(),
+        )))
     }
 
     fn set_devtools_browser_identity_override(
@@ -623,10 +581,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         bypass_service_worker: bool,
     ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_set_bypass_service_worker(bypass_service_worker)
+        owner.start_set_bypass_service_worker(bypass_service_worker, &global_extra_headers)
     }
 
     pub(crate) fn start_set_blocked_url_patterns_for_session_owner(
@@ -634,10 +593,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         blocked_url_patterns: Vec<String>,
     ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_set_blocked_url_patterns(blocked_url_patterns)
+        owner.start_set_blocked_url_patterns(blocked_url_patterns, &global_extra_headers)
     }
 
     pub(crate) fn start_set_extra_http_headers_for_session_owner(

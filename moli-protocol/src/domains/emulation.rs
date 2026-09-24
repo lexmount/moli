@@ -79,7 +79,7 @@ enum PendingEmulationPageWork {
 
 enum CompletedEmulationPageWork {
     DocumentPolicy(CompletedDocumentPolicyUpdate),
-    ResourceRuntime(CompletedDocumentResourceRuntimeUpdate),
+    ResourceRuntime(Box<CompletedDocumentResourceRuntimeUpdate>),
 }
 
 #[derive(Clone, Copy)]
@@ -163,7 +163,9 @@ impl PendingEmulationCommandDispatch {
                             CompletedEmulationPageWork::DocumentPolicy(pending.wait().await)
                         }
                         PendingEmulationPageWork::ResourceRuntime(pending) => {
-                            CompletedEmulationPageWork::ResourceRuntime(pending.wait().await)
+                            CompletedEmulationPageWork::ResourceRuntime(Box::new(
+                                pending.wait().await,
+                            ))
                         }
                     };
                     completed.push(CompletedEmulationPageCommand {
@@ -2471,12 +2473,14 @@ fn finish_completed_emulation_page_command(
     match completed {
         CompletedEmulationPageWork::DocumentPolicy(completed) => {
             let document = completed.document();
-            match conn.finish_document_policy_update(completed) {
+            match completed.result {
                 Ok(()) => Ok(()),
                 Err(error)
                     if error == "Document changed"
                         && (!operation.has_authoritative_replay_state()
-                            || document_policy_will_be_replayed(conn, &target, document)) =>
+                            || document.is_some_and(|document| {
+                                document_policy_will_be_replayed(conn, &target, document)
+                            })) =>
                 {
                     Ok(())
                 }
@@ -2484,7 +2488,7 @@ fn finish_completed_emulation_page_command(
             }
         }
         CompletedEmulationPageWork::ResourceRuntime(completed) => {
-            match conn.finish_document_resource_runtime_update(completed) {
+            match conn.finish_document_resource_runtime_update(*completed) {
                 Ok(()) => Ok(()),
                 Err(_)
                     if pending_emulation_page_configuration_will_be_replayed(

@@ -7143,8 +7143,8 @@ async fn command_dispatch_completes_target_startup_commands_without_legacy_fallb
     );
 }
 
-#[test]
-fn command_dispatch_completes_network_sync_settings() {
+#[tokio::test]
+async fn command_dispatch_completes_network_settings() {
     let mut conn = crate::test_support::connection();
     conn.browser_context =
         Some(conn.new_page_target_fixture_for_test("BID-network", "TID-network"));
@@ -7165,9 +7165,11 @@ fn command_dispatch_completes_network_sync_settings() {
     ] {
         let raw = serde_json::to_string(&json!({ "id": id, "method": method, "params": params }))
             .unwrap();
-        let step = conn.start_command_dispatch(&raw);
+        let CdpCommandTaskStep::Pending(pending) = conn.start_command_dispatch(&raw) else {
+            panic!("{method} must await native policy admission even without a loaded renderer");
+        };
         assert_eq!(
-            complete_messages(step),
+            complete_command_task_for_test(&mut conn, *pending).await,
             vec![json!({ "id": id, "result": {} })],
             "{method} should complete through the command dispatch entry"
         );

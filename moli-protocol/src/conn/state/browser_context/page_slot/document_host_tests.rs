@@ -1273,6 +1273,7 @@ async fn document_policy_completion_rejects_replacement_document() {
     let mut owner = context_with_document("data:text/html,<p>first policy owner</p>").await;
     let document = owner.document_handle_for_target(TARGET).unwrap();
     let completed = owner
+        .browser_context
         .start_document_policy_update(
             document,
             crate::conn::DocumentPolicyUpdate::DocumentActivity(
@@ -1283,6 +1284,7 @@ async fn document_policy_completion_rejects_replacement_document() {
         .wait()
         .await;
     let navigator_completed = owner
+        .browser_context
         .start_document_policy_update(
             document,
             crate::conn::DocumentPolicyUpdate::NavigatorOverrides(

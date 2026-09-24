@@ -120,7 +120,7 @@ pub(crate) use browser_context::{
     CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
-    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyUpdate,
+    CompletedDocumentLifecycleStop, CompletedDocumentPolicyUpdate,
     CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
     CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
     CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,

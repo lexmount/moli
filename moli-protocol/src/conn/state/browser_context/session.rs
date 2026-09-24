@@ -199,9 +199,10 @@ impl BrowserContext {
         }
     }
 
-    // Aggregate DevTools contributions on writes and install the resulting
-    // policy through the physical WebContents handle.
-    fn install_effective_network_request_policy_for_target(&mut self, target_id: &str) {
+    pub(crate) fn network_request_policy_for_target(
+        &self,
+        target_id: &str,
+    ) -> NetworkRequestPolicy {
         let projection = self
             .page_targets
             .get(target_id)
@@ -211,6 +212,13 @@ impl BrowserContext {
         let mut headers = projection.base_network_request_policy.extra_headers.clone();
         overlay_extra_headers(&mut headers, &policy.extra_headers);
         policy.extra_headers = headers;
+        policy
+    }
+
+    // Aggregate DevTools contributions on writes and install the resulting
+    // policy through the physical WebContents handle.
+    fn install_effective_network_request_policy_for_target(&mut self, target_id: &str) {
+        let policy = self.network_request_policy_for_target(target_id);
         let handle = self
             .web_contents_handle_for_target(target_id)
             .expect("resolved WebContents must remain live");
@@ -239,7 +247,7 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) fn set_base_extra_headers_for_target(
+    pub(crate) fn contribute_base_extra_headers_for_target(
         &mut self,
         target_id: &str,
         headers: moli_fetch::RequestHeaders,
@@ -249,6 +257,15 @@ impl BrowserContext {
             .expect("resolved target projection must remain live")
             .base_network_request_policy
             .extra_headers = headers;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_base_extra_headers_for_target(
+        &mut self,
+        target_id: &str,
+        headers: moli_fetch::RequestHeaders,
+    ) {
+        self.contribute_base_extra_headers_for_target(target_id, headers);
         self.install_effective_network_request_policy_for_target(target_id);
     }
 
@@ -377,19 +394,28 @@ impl BrowserContext {
         );
     }
 
+    pub(crate) fn network_policy_contribution_for_target(
+        &mut self,
+        target_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> &mut DevToolsNetworkSessionState {
+        &mut self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .devtools_sessions
+            .ensure_session(session_key)
+            .network_session_state
+    }
+
+    #[cfg(test)]
     pub(crate) fn mutate_devtools_network_session_state_for_target<T>(
         &mut self,
         target_id: &str,
         session_key: &moli_page_types::DevToolsSessionKey,
         f: impl FnOnce(&mut DevToolsNetworkSessionState) -> T,
     ) -> T {
-        let session = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .devtools_sessions
-            .ensure_session(session_key);
-        let result = f(&mut session.network_session_state);
+        let result = f(self.network_policy_contribution_for_target(target_id, session_key));
         self.install_effective_network_request_policy_for_target(target_id);
         result
     }

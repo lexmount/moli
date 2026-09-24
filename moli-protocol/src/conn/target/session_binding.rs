@@ -236,14 +236,14 @@ impl CdpConnection {
         };
         let completed = pending.wait().await;
         let document = completed.document();
-        match self.finish_document_policy_update(completed) {
+        match completed.result {
             Ok(()) => Ok(()),
             Err(error)
                 if error == "Document changed"
                     && self
                         .browser_context_by_id(&browser_context_id)
                         .and_then(|context| context.document_handle_for_target(&target_id))
-                        != Some(document) =>
+                        != document =>
             {
                 Ok(())
             }

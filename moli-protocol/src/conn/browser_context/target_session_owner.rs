@@ -73,6 +73,8 @@ pub(crate) struct TargetNavigationRequestPreflight {
     pub(crate) session_id: Option<String>,
     pub(crate) document_fetch_event_session_id: Option<String>,
     pub(crate) request_headers: moli_fetch::RequestHeaders,
+    pub(crate) global_headers: moli_fetch::RequestHeaders,
+    pub(crate) fallback_user_agent: String,
     pub(crate) document_fetch_request_stage: Option<FetchRequestStage>,
     pub(crate) document_fetch_response_stage_candidate: bool,
     pub(crate) document_auth_required_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
@@ -720,11 +722,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .commit_target_document_title(&self.target_id, change)
     }
 
-    pub(super) fn mark_next_navigation_history_replace_current(&mut self) -> Option<()> {
-        self.browser_context
-            .mark_target_next_navigation_history_replace_current(&self.target_id)
-    }
-
     pub(super) fn mark_next_navigation_history_traverse_to_entry(
         &mut self,
         entry_id: i32,
@@ -751,15 +748,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             let target_session_id = target.session_id().map(str::to_owned);
             let target_has_network_event_listeners =
                 target.runtime_slot().has_network_event_listeners();
-            let mut request_headers = self
-                .browser_context
-                .browser_context_handle()
-                .navigation_request_headers(
-                    web_contents,
-                    global_extra_headers.clone(),
-                    fallback_browser_identity.user_agent().to_owned(),
-                )
-                .ok()?;
+            let mut request_headers = moli_fetch::RequestHeaders::default();
             apply_referrer_header(&mut request_headers, referrer);
             let fetch_config = target.fetch_owner.config_snapshot();
             let fetch_snapshot = fetch_config.subresource_interception_snapshot();
@@ -835,6 +824,8 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 session_id: target_session_id,
                 document_fetch_event_session_id,
                 request_headers,
+                global_headers: global_extra_headers.clone(),
+                fallback_user_agent: fallback_browser_identity.user_agent().to_owned(),
                 document_fetch_request_stage,
                 document_fetch_response_stage_candidate,
                 document_auth_required_blocked_intercepts,
@@ -1097,14 +1088,6 @@ impl CdpConnection {
     pub(crate) fn target_is_crashed_for_owner(&self, owner: &CommandOwnerScope) -> bool {
         self.target_session_owner_ref_for_owner(owner)
             .is_some_and(|owner| owner.browser_context.target_is_crashed(&owner.target_id))
-    }
-
-    pub(crate) fn clear_target_crash_state_for_owner(&mut self, owner: &CommandOwnerScope) {
-        if let Some(owner) = self.target_session_owner_mut_for_owner(owner) {
-            owner
-                .browser_context
-                .set_target_crash_state(&owner.target_id, false);
-        }
     }
 
     pub(crate) fn set_window_surface_state_for_owner(
@@ -1956,14 +1939,6 @@ impl CdpConnection {
             .navigation_history_entry_url(entry_id)
     }
 
-    pub(crate) fn mark_next_navigation_history_replace_current_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<()> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .mark_next_navigation_history_replace_current()
-    }
-
     pub(crate) fn mark_next_navigation_history_traverse_to_entry_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2417,9 +2392,37 @@ mod tests {
         }
     }
 
-    #[test]
-    fn target_session_owner_mut_prepares_active_navigation_request_preflight() {
-        let mut active = BrowserContext::new_with_page_for_test("BID-active", "FRAME-0");
+    async fn admitted_request_headers(
+        context: &BrowserContext,
+        preflight: &TargetNavigationRequestPreflight,
+    ) -> moli_fetch::RequestHeaders {
+        let admission = context
+            .browser_context_handle()
+            .submit_document_navigation(
+                preflight.web_contents,
+                moli_core::browser::web_contents::NavigationRequestInterception::new(
+                    Url::parse("https://nav.example/doc").unwrap(),
+                    "GET".into(),
+                    None,
+                    preflight.request_headers.clone(),
+                    moli_core::browser::NavigationRequestLoadPolicy::BrowserInitiated,
+                ),
+                preflight.global_headers.clone(),
+                preflight.fallback_user_agent.clone(),
+            )
+            .await
+            .unwrap();
+        assert!(
+            admission.waiter.initial_decision().is_some(),
+            "fixture must stop at native admission before network I/O"
+        );
+        admission.request_headers
+    }
+
+    #[tokio::test]
+    async fn target_session_owner_mut_prepares_active_navigation_request_preflight() {
+        let conn = crate::test_support::connection();
+        let mut active = conn.new_page_target_fixture_for_test("BID-active", "FRAME-0");
         active
             .active_page_target_mut()
             .runtime_slot
@@ -2458,6 +2461,8 @@ mod tests {
             )
             .expect("active preflight should prepare");
 
+        let headers = admitted_request_headers(&active, &preflight).await;
+
         assert_eq!(preflight.frame_id, "FRAME-0");
         assert_eq!(
             preflight.document_fetch_request_stage,
@@ -2471,11 +2476,7 @@ mod tests {
             preflight.fetch_navigation_request_id.as_deref(),
             Some("INT-1")
         );
-        assert!(
-            preflight
-                .request_headers
-                .contains(&("User-Agent".to_owned(), b"Moli/Test-UA".to_vec()))
-        );
+        assert!(headers.contains(&("User-Agent".to_owned(), b"Moli/Test-UA".to_vec())));
         assert!(!active.has_captured_response_body_for_test("REQ-old"));
     }
 
@@ -2518,9 +2519,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn target_session_owner_mut_prepares_background_navigation_request_preflight() {
-        let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
+    #[tokio::test]
+    async fn target_session_owner_mut_prepares_background_navigation_request_preflight() {
+        let conn = crate::test_support::connection();
+        let mut background = conn.new_page_target_fixture_for_test("BID-background", "TID-active");
         {
             let context = &mut background;
             let target_id = context
@@ -2598,6 +2600,8 @@ mod tests {
             )
             .expect("background preflight should prepare");
 
+        let headers = admitted_request_headers(&background, &preflight).await;
+
         assert_eq!(preflight.frame_id, "TID-background");
         assert_eq!(preflight.session_id.as_deref(), Some("SID-background"));
         assert_eq!(
@@ -2619,33 +2623,23 @@ mod tests {
                 .runtime_slot()
                 .has_captured_response_body("REQ-old")
         );
+        assert!(headers.contains(&("X-Owner".to_owned(), b"background".to_vec())));
         assert!(
-            preflight
-                .request_headers
-                .contains(&("X-Owner".to_owned(), b"background".to_vec()))
-        );
-        assert!(
-            preflight
-                .request_headers
+            headers
                 .iter()
                 .all(|(name, _)| !name.eq_ignore_ascii_case("accept-language"))
         );
-        assert!(preflight.request_headers.contains(&(
+        assert!(headers.contains(&(
             "User-Agent".to_owned(),
             b"Browser-Context-Default-UA".to_vec()
         )));
         assert!(
-            !preflight
-                .request_headers
+            !headers
                 .iter()
                 .any(|(name, value)| name.eq_ignore_ascii_case("user-agent")
                     && value == b"Active-Only-UA")
         );
-        assert!(
-            preflight
-                .request_headers
-                .contains(&("Referer".to_owned(), b"https://referrer.example/".to_vec()))
-        );
+        assert!(headers.contains(&("Referer".to_owned(), b"https://referrer.example/".to_vec())));
     }
 
     #[test]
@@ -2930,7 +2924,12 @@ mod tests {
                 ("https://old.example/".to_owned(), "old".to_owned()),
             );
             background
-                .mark_target_next_navigation_history_replace_current("TID-background")
+                .browser_context_handle()
+                .mark_next_navigation_history_replace_current(
+                    background
+                        .web_contents_handle_for_target("TID-background")
+                        .unwrap(),
+                )
                 .unwrap();
         }
         let navigation = background

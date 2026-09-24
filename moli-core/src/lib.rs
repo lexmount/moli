@@ -1,3 +1,4 @@
+#![recursion_limit = "256"]
 //! Stable facade crate for Moli.
 //!
 //! This crate is the public entry point for browser runtime APIs such as

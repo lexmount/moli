@@ -268,9 +268,11 @@ impl PendingCdpCommandDispatch {
     }
 
     #[cfg(test)]
-    pub(crate) fn hold_input_renderer_ack_for_test(&mut self) -> bool {
+    pub(crate) async fn hold_input_renderer_ack_for_test(&mut self) -> bool {
         match &mut self.inner {
-            PendingCdpCommandDispatchKind::Input(pending) => pending.hold_renderer_ack_for_test(),
+            PendingCdpCommandDispatchKind::Input(pending) => {
+                pending.hold_renderer_ack_for_test().await
+            }
             _ => false,
         }
     }

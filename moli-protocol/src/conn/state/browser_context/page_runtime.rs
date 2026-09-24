@@ -8,25 +8,74 @@ pub(crate) use moli_core::browser::{
     CompletedChildFrameTreeSnapshot, CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
-    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
-    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate,
-    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
-    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
-    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentFetchCommand, DocumentFetchCommandOutcome,
-    DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
+    CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
+    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
+    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    DocumentFetchCommand, DocumentFetchCommandOutcome, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
     PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
     PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
     PendingDocumentFetchCommand, PendingDocumentInputCommand, PendingDocumentLifecycleStop,
-    PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+    PendingDocumentPolicyBatch, PendingDocumentResourceRuntimeUpdate,
     PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
     PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
     PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
     PendingTopLevelSameDocumentNavigation,
 };
+
+pub(crate) struct PendingDocumentPolicyUpdate {
+    document: Option<moli_core::browser::DocumentHandle>,
+    completion: moli_core::browser::BrowserReply<()>,
+}
+
+pub(crate) struct CompletedDocumentPolicyUpdate {
+    document: Option<moli_core::browser::DocumentHandle>,
+    pub(crate) result: Result<(), String>,
+}
+
+impl PendingDocumentPolicyUpdate {
+    pub(crate) fn start(
+        context: &moli_core::browser::BrowserContextHandle,
+        document: moli_core::browser::DocumentHandle,
+        update: DocumentPolicyUpdate,
+    ) -> Self {
+        Self {
+            document: Some(document),
+            completion: context.apply_document_policy(document, update),
+        }
+    }
+
+    pub(crate) fn network(
+        context: &moli_core::browser::BrowserContextHandle,
+        contents: moli_core::browser::WebContentsHandle,
+        document: Option<moli_core::browser::DocumentHandle>,
+        policy: moli_core::browser::web_contents::NetworkRequestPolicy,
+        headers: moli_fetch::RequestHeaders,
+    ) -> Self {
+        Self {
+            document,
+            completion: context.apply_network_request_policy(contents, document, policy, headers),
+        }
+    }
+
+    pub(crate) async fn wait(self) -> CompletedDocumentPolicyUpdate {
+        CompletedDocumentPolicyUpdate {
+            document: self.document,
+            result: self.completion.await,
+        }
+    }
+}
+
+impl CompletedDocumentPolicyUpdate {
+    pub(crate) fn document(&self) -> Option<moli_core::browser::DocumentHandle> {
+        self.document
+    }
+}
 
 impl BrowserContext {
     pub(crate) fn start_document_diagnostics_snapshot(
@@ -61,8 +110,11 @@ impl BrowserContext {
         document: moli_core::browser::DocumentHandle,
         update: DocumentPolicyUpdate,
     ) -> Result<PendingDocumentPolicyUpdate, String> {
-        self.browser_context
-            .start_document_policy_update(document, update)
+        Ok(PendingDocumentPolicyUpdate::start(
+            &self.browser_context,
+            document,
+            update,
+        ))
     }
 
     pub(crate) fn start_document_page_surface_update(
@@ -79,15 +131,6 @@ impl BrowserContext {
             global_network_conditions,
             global_geolocation,
         )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn finish_document_policy_update(
-        &mut self,
-        completed: CompletedDocumentPolicyUpdate,
-    ) -> Result<(), String> {
-        self.browser_context
-            .finish_document_policy_update(completed)
     }
 
     pub(crate) fn start_web_contents_fetch_interception_update(
@@ -338,6 +381,12 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<moli_core::browser::DocumentHandle> {
+        if let Some(binding) = self.renderer_document_lifecycle_binding_for_target(target_id) {
+            return Some(moli_core::browser::DocumentHandle::new(
+                self.web_contents_handle_for_target(target_id)?,
+                binding.document_id,
+            ));
+        }
         self.document_handle_for_web_contents(self.web_contents_handle_for_target(target_id)?)
             .ok()
             .flatten()

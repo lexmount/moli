@@ -43,7 +43,7 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
     };
     assert_eq!(pending.kind_name(), "Input");
     assert!(
-        pending.hold_input_renderer_ack_for_test(),
+        pending.hold_input_renderer_ack_for_test().await,
         "{method} should use Chromium's renderer-host ACK cleanup queue"
     );
 

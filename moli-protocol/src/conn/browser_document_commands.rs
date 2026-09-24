@@ -22,13 +22,13 @@ use super::{
     CompletedChildFrameTreeSnapshot, CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
-    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
-    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate,
-    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
-    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
-    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentFetchCommand, DocumentFetchCommandOutcome,
-    DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
+    CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
+    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
+    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    DocumentFetchCommand, DocumentFetchCommandOutcome, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
@@ -116,9 +116,18 @@ impl CdpConnection {
         &mut self,
         document: DocumentHandle,
     ) -> Result<DocumentLifetimeObserver, String> {
-        self.browser_context_handle_by_id_mut(document.web_contents().context())
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .observe_document_lifetime(document)
+        let context = self
+            .browser_context_by_browser_id(document.web_contents().context())
+            .ok_or("NoDocumentLoaded")?;
+        let target = context
+            .target_id_for_web_contents(document.web_contents().id())
+            .ok_or("NoDocumentLoaded")?;
+        if context.target_document_id(target) != Some(document.id()) {
+            return Err("Document changed".to_owned());
+        }
+        context
+            .document_lifetime_observer_for_target(target)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
 
     pub(crate) fn start_document_fetch_command(
@@ -149,20 +158,19 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
         command: PageInputCommand,
-    ) -> Result<PendingDocumentInputCommand, String> {
-        self.browser_context_handle_by_id(document.web_contents().context())
+    ) -> Result<
+        (
+            moli_core::browser::BrowserContextHandle,
+            moli_core::browser::BrowserReply<PendingDocumentInputCommand>,
+        ),
+        String,
+    > {
+        let context = self
+            .browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .start_document_input_command(document, command)
-    }
-
-    pub(crate) fn finish_document_input_command(
-        &mut self,
-        completed: CompletedDocumentInputCommand,
-    ) -> Result<RendererCommandTurnOutput, String> {
-        let context = completed.document().web_contents().context();
-        self.browser_context_handle_by_id_mut(context)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .finish_document_input_command(completed)
+            .clone();
+        let admission = context.start_document_input_command(document, command);
+        Ok((context, admission))
     }
 
     pub(crate) fn start_document_autofill_trigger(
@@ -280,9 +288,12 @@ impl CdpConnection {
         document: DocumentHandle,
         update: DocumentPolicyUpdate,
     ) -> Result<PendingDocumentPolicyUpdate, String> {
-        self.browser_context_handle_by_id_mut(document.web_contents().context())
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .start_document_policy_update(document, update)
+        let context = self
+            .browser_context_handle_by_id_mut(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+        Ok(PendingDocumentPolicyUpdate::start(
+            context, document, update,
+        ))
     }
 
     pub(crate) fn start_document_runtime_policy_reconciliation(
@@ -294,16 +305,6 @@ impl CdpConnection {
             .browser_context_handle_by_id_mut(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_runtime_policy_reconciliation(document, policy))
-    }
-
-    pub(crate) fn finish_document_policy_update(
-        &mut self,
-        completed: CompletedDocumentPolicyUpdate,
-    ) -> Result<(), String> {
-        let context = completed.document().web_contents().context();
-        self.browser_context_handle_by_id_mut(context)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .finish_document_policy_update(completed)
     }
 
     pub(crate) fn finish_document_policy_batch(

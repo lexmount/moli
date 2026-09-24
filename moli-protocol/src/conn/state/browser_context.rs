@@ -60,13 +60,13 @@ pub(crate) use page_runtime::{
     CompletedChildFrameTreeSnapshot, CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
-    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
-    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate,
-    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
-    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
-    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentFetchCommand, DocumentFetchCommandOutcome,
-    DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
+    CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
+    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
+    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    DocumentFetchCommand, DocumentFetchCommandOutcome, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
@@ -803,7 +803,17 @@ impl BrowserContext {
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.browser_context.has_pending_javascript_dialog()
+        // Scheduling follows dialogs visible to this AgentHost. The native
+        // renderer owns blocking until its opening reaches this projection;
+        // querying it every actor turn would stall all protocol frontends.
+        self.page_targets.iter().any(|target| {
+            target.devtools_sessions.states().any(|session| {
+                !session
+                    .page_session_state
+                    .javascript_dialog_state
+                    .is_empty()
+            })
+        })
     }
 
     pub(crate) fn page_target_with_pending_inspector_await_count_for_diagnostics(&self) -> usize {

@@ -8,7 +8,7 @@ establish independent scheduling or acceptable overload isolation.
 The remaining deliverables are asynchronous native admission with fewer owner
 round trips, scheduler fairness under sustained production, explicit bounded
 output/overload behavior, and a final frozen comparison. Fairness is delivered
-first; native admission and transport overload remain open.
+first, followed by native admission; transport capacity acceptance remains open.
 
 ## Scheduler fairness
 
@@ -44,6 +44,50 @@ Validation evidence is retained in
   shared-page regression, Classic parser waits and the continuous producer.
 - Root fmt and strict workspace/all-targets/all-features Clippy pass. The final
   full nextest passes all 19,688 tests (16 configured skips, 158.087s).
+
+## Asynchronous native admission
+
+Ordinary new-Document navigation and reload submit a typed Browser request
+before returning a pending command to the scheduler. The owner captures request
+headers, cookie access, initial decision and prior navigation in one turn.
+Reload history replacement and crash recovery are part of that same admission;
+protocol no longer reads and resets crash state through separate synchronous
+calls. Admission completion installs protocol correlation before resuming the
+native decision. This preserves request identity and event causality while an
+independent page continues using its renderer inspection endpoint.
+
+Input awaits native admission, the renderer ACK and native settlement without
+blocking the protocol sequence. Its existing Document lifetime subscription is
+cloned from the exact projected binding; a successful ACK retains priority over
+later retirement. Document policy completion follows the same asynchronous
+boundary. Network settings fold session contributions, persist the native
+WebContents policy, merge Context headers and prepare the original Document's
+renderer update in one owner turn. A setting with no loaded renderer still
+waits for native policy admission.
+
+The actor's dialog scheduling gate uses its already-projected dialogs instead
+of synchronously querying every native Context on every turn. Retired reload,
+input and policy-completion forwarding functions are removed. Native ownership,
+exact Document validation and output fences remain unchanged. Synchronous Core
+APIs remain for operations outside these migrated admission paths; these tests
+do not establish that every native query is independent of owner load.
+
+The six public websocket regressions gate BrowserOwner, enqueue navigation,
+reload, input or policy on one page, and require another page's Runtime reply
+before the gate is released. The original navigation/input/common actor cases
+all fail before the fix. A debugger trace identifies the remaining navigation
+crash query rather than inferring its cause from timeout alone. Header
+inheritance, stale Document rejection and protocol result assertions remain.
+The selected 592-test run passes. Final root fmt and strict workspace Clippy
+pass; full nextest passes all 19,694 tests (16 configured skips, 99.662s).
+The preceding full runs retain three obsolete fixture assumptions and a
+ServiceWorker handler setup race as failures. That handler test now awaits
+`serviceWorker.ready` before reading the active Worker, preserving the state
+check, timeout and all original handler assertions. Its four-test module
+passes twenty zero-retry iterations after the correction. This changes no
+production ServiceWorker semantics; separate live registration-slot reads are
+not claimed to be atomic. All failed compiler, lint, fixture and full-suite
+attempts remain in the artifact evidence index.
 
 ## Frozen main
 

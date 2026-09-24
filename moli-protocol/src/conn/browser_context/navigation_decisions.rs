@@ -414,6 +414,9 @@ impl CdpConnection {
         contents: WebContentsHandle,
         expected_permit: Option<NavigationInterceptionPermit>,
     ) -> Vec<BackgroundProtocolEvent> {
+        if self.navigation_admission_pending(contents) {
+            return Vec::new();
+        }
         let Some((context_id, target_id)) = self
             .browser_context_by_browser_id(contents.context())
             .and_then(|context| {
@@ -670,7 +673,21 @@ impl CdpConnection {
         else {
             return Vec::new();
         };
-        let mut request_headers = preflight.request_headers.clone();
+        let Some(mut request_headers) = self
+            .browser_context_by_browser_id(contents.context())
+            .and_then(|context| {
+                context
+                    .browser_context_handle()
+                    .navigation_request_headers(
+                        contents,
+                        preflight.global_headers.clone(),
+                        preflight.fallback_user_agent.clone(),
+                    )
+                    .ok()
+            })
+        else {
+            return Vec::new();
+        };
         request_headers.overlay(request.headers);
         let state = NavigationDispatchState {
             redirect_chain: Vec::new(),
@@ -695,24 +712,22 @@ impl CdpConnection {
             request_load_policy: request.policy,
             timestamp: monotonic_timestamp_seconds(),
         };
+        let request_cookie_report = self.navigation_request_cookie_report(&state);
         self.project_admitted_navigation_request(
             state,
             preflight,
             permit,
             crate::domains::page::NavigationStartInitiator::Renderer,
+            request_cookie_report,
         )
     }
 
     pub(crate) fn start_native_navigation_command(
         &mut self,
-        state: NavigationDispatchState,
-        preflight: super::target_session_owner::TargetNavigationRequestPreflight,
-        initiator: crate::domains::page::NavigationStartInitiator,
+        state: &NavigationDispatchState,
+        preflight: &super::target_session_owner::TargetNavigationRequestPreflight,
     ) -> Result<
-        (
-            moli_core::browser::BrowserNavigationWaiter,
-            Vec<BackgroundProtocolEvent>,
-        ),
+        moli_core::browser::BrowserReply<moli_core::browser::BrowserNavigationAdmission>,
         String,
     > {
         let contents = state.web_contents;
@@ -721,7 +736,7 @@ impl CdpConnection {
             .ok_or("navigation Context projection unavailable")?
             .browser_context_handle()
             .clone();
-        let waiter = context.navigate_document(
+        let admission = context.submit_document_navigation(
             contents,
             moli_core::browser::web_contents::NavigationRequestInterception::new(
                 state.requested_url.clone(),
@@ -730,7 +745,57 @@ impl CdpConnection {
                 state.request_headers.clone(),
                 state.request_load_policy,
             ),
-        )?;
+            preflight.global_headers.clone(),
+            preflight.fallback_user_agent.clone(),
+        );
+        *self
+            .scheduler_state
+            .pending_navigation_admissions
+            .entry(contents)
+            .or_default() += 1;
+        Ok(admission)
+    }
+
+    pub(crate) fn navigation_admission_pending(&self, contents: WebContentsHandle) -> bool {
+        self.scheduler_state
+            .pending_navigation_admissions
+            .contains_key(&contents)
+    }
+
+    pub(crate) fn finish_native_navigation_command(
+        &mut self,
+        mut state: NavigationDispatchState,
+        preflight: super::target_session_owner::TargetNavigationRequestPreflight,
+        initiator: crate::domains::page::NavigationStartInitiator,
+        result: Result<moli_core::browser::BrowserNavigationAdmission, String>,
+    ) -> Result<
+        (
+            moli_core::browser::BrowserNavigationWaiter,
+            moli_core::browser::BrowserEventReceiver,
+            NavigationDispatchState,
+            Vec<BackgroundProtocolEvent>,
+        ),
+        String,
+    > {
+        let contents = state.web_contents;
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = self
+            .scheduler_state
+            .pending_navigation_admissions
+            .entry(contents)
+        {
+            *entry.get_mut() -= 1;
+            if *entry.get() == 0 {
+                entry.remove();
+            }
+        }
+        let moli_core::browser::BrowserNavigationAdmission {
+            waiter,
+            events: source_events,
+            request_headers,
+            request_cookie_report,
+            ..
+        } = result?;
+        state.request_headers = request_headers;
         let request = waiter.request();
         let permit = waiter
             .initial_decision()
@@ -745,9 +810,14 @@ impl CdpConnection {
         self.browser_context_by_id_mut(&context_id)
             .expect("resolved Context")
             .observe_target_navigation_started(&target_id, request);
-        events
-            .extend(self.project_admitted_navigation_request(state, preflight, permit, initiator));
-        Ok((waiter, events))
+        events.extend(self.project_admitted_navigation_request(
+            state.clone(),
+            preflight,
+            permit,
+            initiator,
+            request_cookie_report,
+        ));
+        Ok((waiter, source_events, state, events))
     }
 
     fn project_admitted_navigation_request(
@@ -756,6 +826,7 @@ impl CdpConnection {
         preflight: super::target_session_owner::TargetNavigationRequestPreflight,
         permit: NavigationInterceptionPermit,
         initiator: crate::domains::page::NavigationStartInitiator,
+        request_cookie_report: Option<moli_cookie_jar::StoredCookieQueryReport>,
     ) -> Vec<BackgroundProtocolEvent> {
         let owner = state.owner.clone();
         let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(&owner)
@@ -768,18 +839,6 @@ impl CdpConnection {
         let fetch_id = preflight.fetch_navigation_request_id.unwrap_or_else(|| {
             self.allocate_fetch_navigation_request_id_for_owner(&owner)
                 .expect("resolved native navigation owner")
-        });
-        let cookie_initiator = self.navigation_initiator_url_for_owner(&owner);
-        let request_cookie_report = self.browser_context_by_id(&context_id).and_then(|context| {
-            context.observe_request_cookie_access_report(
-                &state.requested_url,
-                crate::domains::network::navigation_cookie_request_context(
-                    &state.requested_url,
-                    &state.request_method,
-                    None,
-                    cookie_initiator.as_ref(),
-                ),
-            )
         });
         let pending = PendingFetchNavigation {
             fetch_request_id: fetch_id,
@@ -821,8 +880,12 @@ impl CdpConnection {
                 &pending,
             ));
             self.register_pending_fetch_navigation_request_for_owner(&owner, pending);
-        } else {
-            let _ = self.resolve_native_navigation_decision(
+        } else if let Some(context) =
+            self.browser_context_by_browser_id(pending.navigation.web_contents.context())
+        {
+            // Admission already captured this exact decision. Enqueue its
+            // continuation; subsequent Browser occurrences carry the outcome.
+            drop(context.browser_context_handle().submit_navigation_decision(
                 pending.navigation.web_contents,
                 permit,
                 NavigationDecision::Request {
@@ -832,9 +895,26 @@ impl CdpConnection {
                     headers: pending.navigation.request_headers.clone(),
                     redirect_headers: pending.navigation.redirect_headers.clone(),
                 },
-            );
+            ));
         }
         out
+    }
+
+    fn navigation_request_cookie_report(
+        &self,
+        state: &NavigationDispatchState,
+    ) -> Option<moli_cookie_jar::StoredCookieQueryReport> {
+        let cookie_initiator = self.navigation_initiator_url_for_owner(&state.owner);
+        let context = self.browser_context_by_browser_id(state.web_contents.context())?;
+        context.observe_request_cookie_access_report(
+            &state.requested_url,
+            crate::domains::network::navigation_cookie_request_context(
+                &state.requested_url,
+                &state.request_method,
+                None,
+                cookie_initiator.as_ref(),
+            ),
+        )
     }
 
     pub(crate) fn resolve_native_navigation_decision(
