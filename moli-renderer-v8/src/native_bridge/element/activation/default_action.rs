@@ -1,7 +1,4 @@
-use crate::context_bootstrap::{
-    LocationNavigationKind, navigate_location_object_with_source_element,
-    selection_value_for_window,
-};
+use crate::context_bootstrap::selection_value_for_window;
 use crate::dom::{
     forms::{ButtonTypeState, InputType},
     native::{Element, Node, SelectedFile},
@@ -41,7 +38,7 @@ use super::super::{
 };
 use super::targets::{
     SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
-    navigate_element_target_browsing_context, navigate_hyperlink_source_browsing_context,
+    navigate_element_target_browsing_context,
 };
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
@@ -1920,82 +1917,6 @@ fn anchor_click_default_action(
             unreachable!("download hyperlink policy returned before target selection")
         }
     };
-    let special_target = target_name
-        .as_deref()
-        .and_then(SpecialBrowsingContextTarget::parse);
-    if (target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current))
-        && navigate_hyperlink_source_browsing_context(scope, runtime_ptr, handle, &resolved)
-    {
-        return None;
-    }
-    if (target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current))
-        && runtime.host_document().url().as_str() == resolved
-    {
-        let global = scope.get_current_context().global(scope);
-        if let Some(location) = global
-            .get(scope, v8str(scope, "location").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            let source_element = node_wrapper_from_handle(scope, handle);
-            navigate_location_object_with_source_element(
-                scope,
-                location,
-                LocationNavigationKind::Assign,
-                Some(resolved),
-                source_element,
-            );
-        }
-        return None;
-    }
-    if (target_name.is_none()
-        || matches!(
-            special_target,
-            Some(
-                SpecialBrowsingContextTarget::Current
-                    | SpecialBrowsingContextTarget::Top
-                    | SpecialBrowsingContextTarget::Parent
-            )
-        ))
-        && let Ok(url) = url::Url::parse(&resolved)
-        && same_document_fragment_target(runtime.host_document().url(), &url)
-    {
-        if let Err(error) = scroll_to_document_fragment_target(scope, runtime_ptr, &url) {
-            throw_activation_layout_error(scope, "scrolling to fragment", error);
-            return None;
-        }
-        let global = scope.get_current_context().global(scope);
-        if let Some(location) = global
-            .get(scope, v8str(scope, "location").into())
-            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            let source_element = node_wrapper_from_handle(scope, handle);
-            navigate_location_object_with_source_element(
-                scope,
-                location,
-                LocationNavigationKind::Assign,
-                Some(resolved),
-                source_element,
-            );
-        }
-        return None;
-    }
-    if target_name.is_none() || special_target == Some(SpecialBrowsingContextTarget::Current) {
-        let source_element = node_wrapper_from_handle(scope, handle);
-        let can_intercept = url::Url::parse(&resolved)
-            .is_ok_and(|url| moli_url::same_origin(runtime.document_url(), &url));
-        if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
-            scope,
-            &resolved,
-            "push",
-            source_element,
-            can_intercept,
-            user_initiated,
-            None,
-        ) {
-            return None;
-        }
-    }
-    let source_element = node_wrapper_from_handle(scope, handle);
     if click_listener_changed_named_child_navigation(
         scope,
         runtime_ptr,
@@ -2012,7 +1933,7 @@ fn anchor_click_default_action(
         handle,
         target_name.as_deref(),
         &resolved,
-        source_element,
+        user_initiated,
         popup_disposition,
     );
     None
@@ -2191,7 +2112,7 @@ pub(crate) fn scroll_to_url_fragment_or_top(
     Ok(())
 }
 
-fn scroll_to_document_fragment_target(
+pub(crate) fn scroll_to_document_fragment_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     target_url: &url::Url,

@@ -67,6 +67,30 @@ struct ElementPopupRelations {
     suppress_referrer: bool,
 }
 
+pub(crate) struct NamedHyperlinkPopup {
+    source_handle: DomHandle,
+    target_name: String,
+    disposition: RendererPopupDisposition,
+}
+
+impl NamedHyperlinkPopup {
+    pub(crate) fn navigate(
+        &self,
+        scope: &mut v8::PinScope<'_, '_>,
+        runtime_ptr: *mut JsContextHost,
+        href: &str,
+    ) {
+        navigate_element_popup_target(
+            scope,
+            runtime_ptr,
+            self.source_handle,
+            &self.target_name,
+            href,
+            self.disposition,
+        );
+    }
+}
+
 fn element_popup_relations(
     runtime: &JsContextHost,
     source_handle: DomHandle,
@@ -473,103 +497,137 @@ pub(crate) fn navigate_existing_browsing_context_target<'s>(
     )
 }
 
-pub(super) fn navigate_hyperlink_source_browsing_context(
+/// Resolve an existing target without reading script-visible WindowProxy properties.
+fn existing_hyperlink_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
-    resolved_url: &str,
-) -> bool {
-    let Some(dispatch_scope) =
-        browsing_context_dispatch_scope_for_node(scope, runtime_ptr, source_handle)
-    else {
-        return false;
+    source: crate::native_bridge::OwnerDispatchScope,
+    target_name: Option<&str>,
+) -> Option<crate::native_bridge::OwnerDispatchScope> {
+    use crate::native_bridge::OwnerDispatchScope;
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(name) = target_name else {
+        return Some(source);
     };
-    match dispatch_scope {
-        crate::native_bridge::OwnerDispatchScope::Top => false,
-        crate::native_bridge::OwnerDispatchScope::Child(handle) => unsafe { &mut *runtime_ptr }
-            .navigate_child_browsing_context_to_url(scope, handle, resolved_url),
-        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
-            let Some(source_window) =
-                unsafe { &*runtime_ptr }.lightweight_popup_window(scope, popup_id)
-            else {
-                return false;
-            };
-            navigate_special_target_from_window(
-                scope,
-                runtime_ptr,
-                source_window,
-                Some(SpecialBrowsingContextTarget::Current),
-                Some(resolved_url),
-            )
-            .is_some()
+    match SpecialBrowsingContextTarget::parse(name) {
+        Some(SpecialBrowsingContextTarget::Current) => Some(source),
+        Some(
+            special @ (SpecialBrowsingContextTarget::Top | SpecialBrowsingContextTarget::Parent),
+        ) => {
+            let mut target = source;
+            while let OwnerDispatchScope::Child(handle) = target {
+                target = runtime.owner_dispatch_scope_for_node(handle)?;
+                if special == SpecialBrowsingContextTarget::Parent {
+                    break;
+                }
+            }
+            Some(target)
+        }
+        Some(SpecialBrowsingContextTarget::Blank) => None,
+        None => {
+            let document = runtime.dom_host().owner_document_handle(source_handle);
+            named_iframe_target_handle_for_navigation(scope, runtime_ptr, name, document)
+                .map(OwnerDispatchScope::Child)
+                .or_else(|| {
+                    unsafe { &*runtime_ptr }
+                        .named_lightweight_popup_id(name)
+                        .map(OwnerDispatchScope::LightweightPopup)
+                })
         }
     }
 }
 
-pub(in crate::native_bridge) fn navigate_element_target_browsing_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
+pub(in crate::native_bridge) fn navigate_element_target_browsing_context(
+    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     source_handle: DomHandle,
     target_name: Option<&str>,
     resolved_url: &str,
-    source_element: Option<v8::Local<'s, v8::Object>>,
+    user_initiated: bool,
     popup_disposition: RendererPopupDisposition,
 ) -> bool {
+    use crate::native_bridge::OwnerDispatchScope;
     if !element_javascript_url_allowed_by_csp(scope, runtime_ptr, source_handle, resolved_url) {
         return true;
     }
-    let special_target = target_name.and_then(SpecialBrowsingContextTarget::parse);
-    if special_target == Some(SpecialBrowsingContextTarget::Blank) {
-        return navigate_element_popup_target(
-            scope,
-            runtime_ptr,
-            source_handle,
-            "_blank",
-            resolved_url,
-            popup_disposition,
-        );
+    let Some(source) = unsafe { &*runtime_ptr }.owner_dispatch_scope_for_node(source_handle) else {
+        return false;
+    };
+    let Some(target) =
+        existing_hyperlink_target(scope, runtime_ptr, source_handle, source, target_name)
+    else {
+        return target_name.is_some_and(|name| {
+            navigate_element_popup_target(
+                scope,
+                runtime_ptr,
+                source_handle,
+                name,
+                resolved_url,
+                popup_disposition,
+            )
+        });
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    if runtime.sandbox_blocks_ancestor_navigation(source, target) {
+        return true;
     }
-    if let Some(target_name) = target_name
-        && special_target.is_none()
-    {
-        let source_document = unsafe { &*runtime_ptr }
-            .dom_host()
-            .node(source_handle)
-            .and_then(|node| node.owner_document());
-        return navigate_named_iframe_target_from_document(
-            scope,
-            runtime_ptr,
-            target_name,
-            resolved_url,
-            source_document,
-            source_element,
-        ) || navigate_element_popup_target(
-            scope,
-            runtime_ptr,
-            source_handle,
-            target_name,
-            resolved_url,
-            popup_disposition,
-        );
-    }
-    let Some(dispatch_scope) =
-        browsing_context_dispatch_scope_for_node(scope, runtime_ptr, source_handle)
+    let Some(document) = runtime.dom_host().owner_document_handle(source_handle) else {
+        return false;
+    };
+    let initiator_url = runtime.document_url_for_handle(document);
+    let Some(source_element) = crate::util::node_wrapper_from_handle(scope, source_handle) else {
+        return false;
+    };
+    // Resolve the native target realm before reading its private Location slot.
+    // The source's access check controls event dispatch and sourceElement exposure.
+    let context = match target {
+        OwnerDispatchScope::Child(handle) => runtime
+            .ensure_prebootstrapped_child_default_context(scope, handle)
+            .ok(),
+        _ => runtime
+            .current_registered_window_execution_context_identity(target)
+            .and_then(|identity| runtime.window_execution_context(scope, identity.owner(), target))
+            .map(|(_, context)| context),
+    };
+    let Some(context) = context else { return false };
+    let can_access = runtime
+        .current_registered_window_execution_context_identity(source)
+        .is_some_and(|identity| {
+            runtime.window_execution_context_can_access_dispatch_scope(identity, target)
+        });
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let window = match target {
+        OwnerDispatchScope::LightweightPopup(id) => runtime.lightweight_popup_window(scope, id),
+        _ => Some(context.global(scope)),
+    };
+    let Some(location) = window
+        .and_then(|window| crate::context_bootstrap::window_location_for_holder(scope, window))
     else {
         return false;
     };
-    let Some(source_window) =
-        browsing_context_window_for_dispatch_scope(scope, runtime_ptr, dispatch_scope)
-    else {
-        return false;
-    };
-    navigate_special_target_from_window(
+    crate::context_bootstrap::navigate_location_object_for_hyperlink(
         scope,
-        runtime_ptr,
-        source_window,
-        special_target,
-        Some(resolved_url),
-    )
-    .is_some()
+        location,
+        resolved_url,
+        source_element,
+        crate::context_bootstrap::HyperlinkNavigationOptions {
+            user_initiated,
+            source_can_access_target: can_access,
+            initiator_url,
+            named_popup: target_name
+                .filter(|name| {
+                    matches!(target, OwnerDispatchScope::LightweightPopup(_))
+                        && SpecialBrowsingContextTarget::parse(name).is_none()
+                })
+                .map(|name| NamedHyperlinkPopup {
+                    source_handle,
+                    target_name: name.to_owned(),
+                    disposition: popup_disposition,
+                }),
+        },
+    );
+    true
 }
 
 pub(crate) fn navigate_named_iframe_target<'s>(
