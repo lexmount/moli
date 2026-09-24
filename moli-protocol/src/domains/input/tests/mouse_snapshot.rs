@@ -50,12 +50,12 @@ async fn cdp_geometry_and_mouse_require_explicit_layout_publication() {
             .expect("missing-layout error");
         for command in [
             "Page.captureScreenshot",
-            "Page.printToPDF",
             "Page.startScreencast",
             "wait for a frame",
         ] {
             assert!(message.contains(command), "{cold}");
         }
+        assert!(!message.contains("Page.printToPDF"), "{cold}");
     }
     ctx.process_async(json!({"id":719,"method":"Page.captureScreenshot"}))
         .await;

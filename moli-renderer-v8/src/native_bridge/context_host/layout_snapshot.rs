@@ -12,7 +12,8 @@ struct LatestFrozenLayout {
 /// This owns exactly one recursively frozen snapshot. It has no separately
 /// keyed child tree, working layout world, source index, hit-test index, Taffy
 /// cache, style borrow, pass diagnostics, paint snapshot, timer, or invalidation
-/// policy. Only explicit visual output replaces this published layout.
+/// policy. Only screenshots and screencast frames replace this published layout;
+/// print projections are temporary and never enter this cache.
 #[derive(Default)]
 pub(super) struct LatestLayoutTreeCache {
     latest: Option<LatestFrozenLayout>,

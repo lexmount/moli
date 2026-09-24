@@ -5,7 +5,7 @@ use thiserror::Error;
 pub enum LayoutError {
     /// Geometry and input consume published layout and cannot create it.
     #[error(
-        "no published layout is available for the current document; call Page.captureScreenshot or Page.printToPDF, or start Page.startScreencast and wait for a frame, then retry. Geometry queries and input do not create layout"
+        "no published layout is available for the current document; call Page.captureScreenshot, or start Page.startScreencast and wait for a frame, then retry. Geometry queries and input do not create layout"
     )]
     NoLayoutSnapshot,
     /// A geometry consumer forced layout before the Document had an element root.

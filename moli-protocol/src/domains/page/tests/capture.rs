@@ -513,7 +513,7 @@ fn mhtml_snapshot_base64_encodes_html_and_sanitizes_header_url() {
     assert!(!mhtml.contains(html));
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn print_to_pdf_returns_base64_pdf_and_publishes_print_geometry() {
+async fn print_to_pdf_returns_base64_pdf_without_publishing_interactive_geometry() {
     let mut ctx = TestContext::new();
     install_active_screenshot_page(
         &mut ctx,
@@ -546,8 +546,28 @@ async fn print_to_pdf_returns_base64_pdf_and_publishes_print_geometry() {
     ctx.process_async(query.clone()).await;
     assert_eq!(
         take_response_by_id(&mut ctx, 1111)["result"]["result"]["value"],
-        80
+        0
     );
+    for (method, params) in [
+        ("Page.getLayoutMetrics", json!({})),
+        (
+            "Input.dispatchMouseEvent",
+            json!({"type":"mousePressed","x":20,"y":20,"button":"left"}),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": 1113,
+            "method": method,
+            "sessionId": "SID-PDF-BASE64",
+            "params": params
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, 1113);
+        assert_eq!(response["error"]["code"], -32000, "{response}");
+        let message = response["error"]["message"].as_str().unwrap();
+        assert!(message.contains("Page.captureScreenshot"), "{response}");
+        assert!(!message.contains("Page.printToPDF"), "{response}");
+    }
     ctx.capture_fixture_layout(Some("SID-PDF-BASE64")).await;
     ctx.process_async(query).await;
     assert_eq!(

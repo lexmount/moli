@@ -206,12 +206,11 @@ impl JsContextHost {
             .inferred_frame_style_viewport_cache_observability()
     }
 
-    pub(crate) fn with_fresh_layout_pass_for_document<T>(
+    pub(crate) fn build_layout_pass_for_document(
         &self,
         document: DomHandle,
         request: LayoutPassRequest,
-        consume: impl FnOnce(&mut LayoutPassResult<DomHandle>) -> Result<T, LayoutError>,
-    ) -> Result<Option<T>, LayoutError> {
+    ) -> Result<Option<LayoutPassResult<DomHandle>>, LayoutError> {
         let Some(root) = self
             .dom_host()
             .dom()
@@ -219,15 +218,13 @@ impl JsContextHost {
         else {
             return Ok(None);
         };
-        let pass_viewport = request.viewport;
         let _active = ActiveLayoutPass::enter(&self.layout_pass_active)?;
-        let mut pass = {
+        let pass = {
             let mut state = self.document_layout_state.borrow_mut();
             state.retain_live_embedded_document_services(|candidate| {
                 self.child_browsing_context_host_for_document_handle(candidate)
                     .is_some()
             });
-            state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
             state.with_services_for_document(
                 document,
                 self.document_handle(),
@@ -283,8 +280,16 @@ impl JsContextHost {
             );
         }
         pass.validate_retention_budget()?;
-        let consumed = consume(&mut pass)?;
+        Ok(Some(pass))
+    }
+
+    pub(crate) fn publish_layout_pass_for_document(
+        &self,
+        document: DomHandle,
+        pass: LayoutPassResult<DomHandle>,
+    ) {
         let metrics = pass.metrics;
+        let pass_viewport = pass.viewport;
         let frame_viewports = self
             .child_browsing_context_handles_in_document_order()
             .into_iter()
@@ -310,6 +315,7 @@ impl JsContextHost {
         let tree = pass.into_tree();
         let frame_viewports_changed = {
             let mut state = self.document_layout_state.borrow_mut();
+            state.retain_live_frame_viewports(|frame| self.child_browsing_context_is_live(frame));
             state.publish_latest_layout(document, tree);
             state.update_frame_viewports(frame_viewports)
         };
@@ -320,7 +326,6 @@ impl JsContextHost {
         self.last_layout_pass_metrics.set(Some(metrics));
         self.layout_snapshot_cache_publishes
             .set(self.layout_snapshot_cache_publishes.get().saturating_add(1));
-        Ok(Some(consumed))
     }
 
     pub(crate) fn answer_layout_for_document(

@@ -2525,17 +2525,28 @@ impl ScriptVm {
         // call.
         self.reconcile_document_web_fonts_for_layout();
         let requests_paint = request.requests_paint();
+        // Printing consumes a temporary projection. Screenshots and screencast
+        // frames publish geometry for input, observers and subsequent DOM reads.
+        let publishes_layout = request.reason != moli_layout::LayoutFlushReason::Print;
         let (document, result) = {
             let context_host = self._context_host.borrow();
             let document = context_host.document_handle();
-            let result =
-                context_host.with_fresh_layout_pass_for_document(document, request, |pass| {
+            let result = context_host
+                .build_layout_pass_for_document(document, request)
+                .and_then(|pass| {
+                    let Some(mut pass) = pass else {
+                        return Ok(None);
+                    };
                     let css_images = if requests_paint {
                         pass.css_image_references().to_vec()
                     } else {
                         Vec::new()
                     };
-                    consume(pass).map(|value| (value, css_images))
+                    let value = consume(&mut pass)?;
+                    if publishes_layout {
+                        context_host.publish_layout_pass_for_document(document, pass);
+                    }
+                    Ok(Some((value, css_images)))
                 });
             (document, result)
         };
@@ -2545,7 +2556,8 @@ impl ScriptVm {
             Err(error) => (Err(error), Vec::new()),
         };
         self.start_css_images_discovered_by_layout(css_images);
-        if matches!(&result, Ok(Some(_)))
+        if publishes_layout
+            && matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
                 crate::observer_runtime::queue_intersection_checks(scope, runtime_ptr);
                 crate::native_bridge::element::queue_revealed_lazy_image_loads(

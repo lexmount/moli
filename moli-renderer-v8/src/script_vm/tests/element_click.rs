@@ -13,13 +13,10 @@ fn native_element_click_requires_explicit_layout_without_building_it() {
     let crate::runtime::RendererElementClickError::LayoutUnavailable(message) = error else {
         panic!("expected missing-layout guidance, got {error:?}");
     };
-    for command in [
-        "Page.captureScreenshot",
-        "Page.printToPDF",
-        "Page.startScreencast",
-    ] {
+    for command in ["Page.captureScreenshot", "Page.startScreencast"] {
         assert!(message.contains(command), "{message}");
     }
+    assert!(!message.contains("Page.printToPDF"), "{message}");
     assert_eq!(vm.layout_pass_observability_for_test().1, before);
     publish_layout_for_test(&mut vm);
     assert!(matches!(

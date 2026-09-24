@@ -189,7 +189,7 @@ pub trait GeometryProvider {
     /// Answers a batch from the provider's latest layout state.
     ///
     /// Reading never computes layout. Real-layout providers require a tree
-    /// published by a screenshot, screencast frame, or PDF output.
+    /// published by a screenshot or screencast frame.
     fn answer(
         &mut self,
         queries: &LayoutQueryBatch<Self::NodeId>,

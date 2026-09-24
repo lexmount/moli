@@ -1,5 +1,6 @@
 use super::*;
 
+mod print;
 mod transform_precision;
 
 use base64::Engine as _;
@@ -170,9 +171,10 @@ document.body.innerHTML = '<div id="target"></div><div id="pass-through"></div><
         let viewport = moli_layout::LayoutViewport::new(320, 200, 1.0);
         let error = moli_layout::GeometryProvider::answer(page_vm.vm_mut(), &batch).unwrap_err();
         assert_eq!(error, moli_layout::LayoutError::NoLayoutSnapshot);
-        for command in ["Page.captureScreenshot", "Page.printToPDF", "Page.startScreencast"] {
+        for command in ["Page.captureScreenshot", "Page.startScreencast"] {
             assert!(error.to_string().contains(command));
         }
+        assert!(!error.to_string().contains("Page.printToPDF"));
         assert_eq!(page_vm.vm().layout_pass_observability_for_test().1, before.1);
         page_vm.vm_mut().screenshot_layout_snapshot(viewport)?.expect("initial screenshot layout");
         let first = moli_layout::GeometryProvider::answer(

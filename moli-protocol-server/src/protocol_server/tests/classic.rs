@@ -11274,16 +11274,19 @@ async fn webdriver_classic_element_click_uses_shared_dom_geometry_and_input() {
     )
     .await;
     assert_eq!(cold_status, StatusCode::INTERNAL_SERVER_ERROR);
-    for command in [
-        "Page.captureScreenshot",
-        "Page.printToPDF",
-        "Page.startScreencast",
-    ] {
+    for command in ["Page.captureScreenshot", "Page.startScreencast"] {
         assert!(
             cold["value"]["message"].as_str().unwrap().contains(command),
             "{cold}"
         );
     }
+    assert!(
+        !cold["value"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Page.printToPDF"),
+        "{cold}"
+    );
     classic_capture_layout(app.clone(), session_id).await;
 
     let clicked = classic_request_json(
