@@ -223,3 +223,22 @@ fn fragment_navigation_reveals_closed_details_ancestors_but_not_their_summary() 
         r##"{"targetState":[true,true,"#target"],"summaryState":[true,false,"#inner-summary"]}"##
     );
 }
+
+#[test]
+fn canceled_fragment_hyperlink_does_not_reveal_closed_details() {
+    let mut vm = new_parsed_test_vm(
+        "https://details-canceled-fragment.test/",
+        r##"<!doctype html><a id="link" href="#target">Go</a>
+        <details id="closed"><summary>Summary</summary><div id="target">Target</div></details>"##,
+    );
+    let result = vm
+        .eval(
+            r#"(() => {
+        navigation.onnavigate = event => event.preventDefault();
+        document.getElementById('link').click();
+        return JSON.stringify([document.getElementById('closed').open, location.hash]);
+    })()"#,
+        )
+        .expect("canceled fragment activation");
+    assert_eq!(result, r#"[false,""]"#);
+}

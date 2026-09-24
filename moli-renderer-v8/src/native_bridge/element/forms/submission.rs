@@ -826,7 +826,7 @@ pub(in crate::native_bridge) fn apply_planned_form_navigation(
             OwnerDispatchScope::Top =>
                 crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
                     scope, window, navigation.request.url().as_str(), navigation.mutation.navigation_type(),
-                    Some(source_element), true, navigation.user_initiated, form_data,
+                    Some(source_element), true, navigation.user_initiated, None, form_data,
                 ),
             OwnerDispatchScope::Child(_) | OwnerDispatchScope::LightweightPopup(_) =>
                 crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(

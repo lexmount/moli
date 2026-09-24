@@ -847,6 +847,13 @@ impl JsContextHost {
         }
     }
 
+    pub(crate) fn named_lightweight_popup_id(&self, target_name: &str) -> Option<u64> {
+        let name = trackable_lightweight_popup_window_name(target_name)?;
+        self.lightweight_popup_browsing_contexts.iter().find_map(|(id, record)| {
+            (record.is_open() && record.name_lookup_allowed && record.name.get() == name).then_some(*id)
+        })
+    }
+
     pub(crate) fn open_lightweight_popup_window<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -859,16 +866,7 @@ impl JsContextHost {
         creator_policy_container: DocumentPolicyContainer,
         update_existing_opener: bool,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
-            && let Some(popup_id) =
-                self.lightweight_popup_browsing_contexts
-                    .iter()
-                    .find_map(|(id, record)| {
-                        (record.is_open()
-                            && record.name_lookup_allowed
-                            && record.name.get() == name)
-                            .then_some(*id)
-                    })
+        if let Some(popup_id) = self.named_lightweight_popup_id(target_name)
         {
             let window = self.lightweight_popup_window(scope, popup_id)?;
             if update_existing_opener && let Some(opener) = opener {
