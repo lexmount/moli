@@ -145,7 +145,7 @@ pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
     }
     matches!(
         element.local_name(),
-        "body" | "input" | "button" | "select" | "textarea" | "a" | "iframe" | "frame" | "dialog"
+        "input" | "button" | "select" | "textarea" | "a" | "iframe" | "frame" | "dialog"
     ) || element.has_attribute("tabindex")
         || contenteditable_editing_host(runtime, handle) == Some(handle)
         || element_is_scrollable(runtime, handle)
@@ -381,6 +381,57 @@ pub(crate) fn process_post_parse_autofocus(
     true
 }
 
+pub(crate) fn reset_document_navigation_focus(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    document: DomHandle,
+    user_initiated: bool,
+) {
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(endpoint) = runtime.window_endpoint_for_document(document) else {
+        return;
+    };
+    let allowed = user_initiated
+        || runtime.window_has_transient_user_activation(endpoint.dispatch_scope())
+        || runtime
+            .document_permissions_policy_for_document_handle(document)
+            .is_some_and(|policy| policy.focus_without_user_activation_enabled());
+    if !allowed {
+        return;
+    }
+    // Navigation autofocus is a fresh search of this Document. The one-time
+    // post-parse autofocus processed flag does not apply to an intercepted navigation.
+    let focus_target = first_autofocus_delegate(runtime, document).or_else(|| {
+        runtime
+            .dom_host()
+            .document_body_handle_for_document(document)
+            .or_else(|| {
+                runtime
+                    .dom_host()
+                    .document_element_handle_for_document(document)
+            })
+    });
+    let target = focus_target.and_then(|element| focusable_area_for_element(runtime, element));
+    if let Some(target) = target {
+        update_focus(scope, runtime_ptr, Some(target));
+    } else {
+        let previous = runtime.active_element_handle();
+        let viewport = match endpoint {
+            PendingWindowMessageEndpoint::ChildWindow(container) => Some(container),
+            _ => None,
+        };
+        update_focus_from_previous_with_previous_focus_within(
+            scope,
+            runtime_ptr,
+            previous,
+            viewport,
+            None,
+            Some(document),
+        );
+    }
+    unsafe { &mut *runtime_ptr }.set_sequential_focus_starting_point(document, focus_target);
+}
+
 pub(super) fn run_dialog_focusing_steps(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -597,6 +648,7 @@ pub(crate) fn reset_focus_from_previous_handle(
         Some(previous),
         None,
         None,
+        None,
     );
 }
 
@@ -612,6 +664,7 @@ pub(crate) fn reset_focus_from_previous_handle_with_previous_focus_within(
         Some(previous),
         None,
         Some(previous_focus_within),
+        None,
     );
 }
 
@@ -621,7 +674,14 @@ fn update_focus_from_previous(
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
 ) {
-    update_focus_from_previous_with_previous_focus_within(scope, runtime_ptr, previous, next, None);
+    update_focus_from_previous_with_previous_focus_within(
+        scope,
+        runtime_ptr,
+        previous,
+        next,
+        None,
+        None,
+    );
 }
 
 fn update_focus_from_previous_with_previous_focus_within(
@@ -630,7 +690,13 @@ fn update_focus_from_previous_with_previous_focus_within(
     previous: Option<DomHandle>,
     next: Option<DomHandle>,
     previous_focus_within: Option<Vec<DomHandle>>,
+    viewport_document: Option<DomHandle>,
 ) {
+    // A viewport has no element handle. Its Document must stay explicit:
+    // clearing a parent's focus does not clear its inactive child's focused area.
+    if let Some(document) = viewport_document {
+        unsafe { &mut *runtime_ptr }.note_document_focused_area(document, None);
+    }
     if previous == next {
         return;
     }
@@ -640,7 +706,9 @@ fn update_focus_from_previous_with_previous_focus_within(
     if let Some(handle) = next.filter(|handle| is_text_control(runtime, *handle)) {
         runtime.note_text_control_selection(handle);
     }
-    runtime.mark_focus_changed();
+    if viewport_document.is_none() || next.is_some() {
+        runtime.mark_focus_changed(previous, next);
+    }
     if let Some(previous_focus_within) = previous_focus_within {
         runtime.note_focus_style_activity_with_previous_focus_within(
             previous,
@@ -829,12 +897,14 @@ pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
     }
     let runtime = unsafe { &*runtime_ptr };
     let active = runtime.active_element_handle();
+    let starting_point =
+        active.or_else(|| runtime.sequential_focus_starting_point(runtime.document_handle()));
     let order = sequential_focus_order(runtime, active);
     if order.is_empty() {
         return;
     }
     let reverse = event_boolean_property(scope, event, "shiftKey");
-    let next_handle = active
+    let next_handle = starting_point
         .and_then(|active| order.iter().position(|candidate| *candidate == active))
         .map(|index| {
             let next_index = if reverse {
@@ -845,7 +915,8 @@ pub(crate) fn perform_tab_focus_default_action_for_dispatched_event(
             order[next_index]
         })
         .or_else(|| {
-            active.and_then(|active| negative_shadow_scope_tab_target(runtime, active, reverse))
+            starting_point
+                .and_then(|active| negative_shadow_scope_tab_target(runtime, active, reverse))
         })
         .unwrap_or_else(|| order[if reverse { order.len() - 1 } else { 0 }]);
     update_focus(scope, runtime_ptr, Some(next_handle));
