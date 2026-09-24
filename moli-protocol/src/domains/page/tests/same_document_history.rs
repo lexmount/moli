@@ -3,6 +3,7 @@ use super::*;
 mod child_history_traversal;
 mod cross_origin_navigation;
 mod hyperlink_navigation;
+mod navigation_focus;
 mod navigation_window_reuse;
 mod popup_network_navigation;
 mod response_gate;
