@@ -630,7 +630,7 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     else {
         return false;
     };
-    if runtime.sandbox_blocks_ancestor_navigation(source, destination) {
+    if runtime.blocks_ancestor_navigation(source, destination, request.url()) {
         return false;
     }
     let mutation = runtime.form_navigation_history_mutation_for_scope(

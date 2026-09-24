@@ -134,6 +134,7 @@ mod message_ports;
 mod messages;
 mod module_owner_tasks;
 mod navigation;
+mod navigation_permissions;
 mod navigator_overrides;
 mod opfs_tasks;
 mod permissions;

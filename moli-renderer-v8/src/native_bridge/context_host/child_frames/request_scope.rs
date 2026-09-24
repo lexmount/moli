@@ -870,36 +870,6 @@ impl JsContextHost {
         (policy.sandboxes_document_domain && !policy.allows_popups_to_escape).then_some(policy)
     }
 
-    pub(crate) fn child_browsing_context_allows_top_navigation(&self, handle: DomHandle) -> bool {
-        self.child_browsing_contexts
-            .get(&handle)
-            .is_some_and(|entry| entry.document_sandbox_policy().allows_top_navigation)
-    }
-
-    pub(crate) fn sandbox_blocks_ancestor_navigation(
-        &self,
-        source: OwnerDispatchScope,
-        target: OwnerDispatchScope,
-    ) -> bool {
-        let OwnerDispatchScope::Child(source_handle) = source else {
-            return false;
-        };
-        if self.child_browsing_context_allows_top_navigation(source_handle) {
-            return false;
-        }
-        let mut ancestor = self.owner_dispatch_scope_for_node(source_handle);
-        while let Some(owner) = ancestor {
-            if owner == target {
-                return true;
-            }
-            ancestor = match owner {
-                OwnerDispatchScope::Child(handle) => self.owner_dispatch_scope_for_node(handle),
-                OwnerDispatchScope::Top | OwnerDispatchScope::LightweightPopup(_) => None,
-            };
-        }
-        false
-    }
-
     pub(crate) fn sandbox_allows_history_traversal(
         &self,
         source: OwnerDispatchScope,

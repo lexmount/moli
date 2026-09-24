@@ -3154,6 +3154,12 @@ fn live_location_for_cross_origin_window<'s>(
     };
     let host_ptr = context_host_ptr_from_global_bridge(scope)?;
     let host = unsafe { &mut *host_ptr };
+    if let super::super::OwnerDispatchScope::LightweightPopup(popup_id) = dispatch_scope {
+        // Lightweight popups share a V8 realm with the opener. Its global is
+        // not the popup's Window and must not supply this proxy's Location.
+        let window = host.lightweight_popup_window(scope, popup_id)?;
+        return crate::context_bootstrap::window_location_for_holder(scope, window);
+    }
     let owner = host.current_window_execution_context_owner(dispatch_scope)?;
     let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
     let target_scope = &mut v8::ContextScope::new(scope, context);

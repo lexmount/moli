@@ -378,6 +378,7 @@ impl JsContextHost {
             replaced_document_handle, expected_current_document_handle,
             "adapter document handle must change in the same owner commit"
         );
+        self.capture_child_top_navigation_permission(handle);
         if let Some(loader_id) = loader_id {
             self.child_browsing_contexts
                 .get_mut(&handle)
