@@ -2856,9 +2856,10 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
         connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
             .await
             .expect("connect browser websocket");
+    let mut root_page = connect_dynamic_page(addr, DEFAULT_TARGET_ID).await;
 
     let media = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         1,
         "Emulation.setEmulatedMedia",
         None,
@@ -2871,7 +2872,7 @@ async fn websocket_cdp_browser_style_environment_survives_target_creation_and_se
     .await;
     assert_eq!(response_by_id(&media, 1)["result"], json!({}));
     let text_scale = send_cdp_command(
-        &mut browser,
+        &mut root_page,
         2,
         "Emulation.setEmulatedOSTextScale",
         None,
