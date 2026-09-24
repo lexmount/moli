@@ -25,6 +25,55 @@ impl ChildFrameOwnerElementKind {
 }
 
 impl JsContextHost {
+    pub(crate) fn clear_ignored_child_frame_navigation_attribute(&mut self, handle: DomHandle) {
+        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
+            entry.ignored_attribute_bootstrap = None;
+        }
+    }
+
+    pub(crate) fn child_frame_src_attribute_navigation_is_ignored(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        self.dom_host().get_attribute(handle, "srcdoc").is_some()
+            || self
+                .child_browsing_contexts
+                .get(&handle)
+                .is_some_and(|entry| entry.ignored_attribute_bootstrap.is_some())
+    }
+
+    pub(super) fn child_frame_attribute_bootstrap_repeats_ancestor(
+        &self,
+        handle: DomHandle,
+        bootstrap: &ChildBrowsingContextBootstrap,
+    ) -> bool {
+        if !matches!(
+            self.child_frame_owner_element_kind(handle),
+            Some(ChildFrameOwnerElementKind::Iframe | ChildFrameOwnerElementKind::Frame)
+        ) || matches!(bootstrap, ChildBrowsingContextBootstrap::Srcdoc { .. })
+        {
+            return false;
+        }
+        let Some(url) = Self::child_browsing_context_bootstrap_url(bootstrap) else {
+            return false;
+        };
+        // The shared iframe/frame attribute steps reject even one matching
+        // ancestor. This is separate from the general navigation recursion cap.
+        let mut child = handle;
+        for _ in 0..=self.child_browsing_contexts.len() {
+            if self.document_url_for_child_context(child)[..url::Position::AfterQuery]
+                == url[..url::Position::AfterQuery]
+            {
+                return true;
+            }
+            let Some(parent) = self.child_browsing_context_parent_handle(child) else {
+                break;
+            };
+            child = parent;
+        }
+        false
+    }
+
     pub(in crate::native_bridge::context_host) fn child_browsing_context_initial_live_bootstrap(
         attribute_bootstrap: &ChildBrowsingContextBootstrap,
     ) -> ChildBrowsingContextBootstrap {
