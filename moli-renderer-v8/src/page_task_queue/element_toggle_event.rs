@@ -1,8 +1,3 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
-
 use crate::{
     document_runtime::DomHandle,
     native_bridge::WindowDocumentTaskTarget,
@@ -94,27 +89,8 @@ impl RendererPageElementToggleEventData {
 
 pub(crate) type RendererPageElementToggleEventOwner = RendererPageWindowDocumentTaskOwner;
 
-/// Cancellation shared by the Host coalescing slot and its queued task.
-///
-/// Blink cancels the old task and posts the replacement at the tail. The
-/// shared DOM source drops a cancelled head before exposing a ready descriptor,
-/// so cancellation does not manufacture a browser task turn or checkpoint.
-#[derive(Clone, Debug)]
-pub(crate) struct RendererPageElementToggleEventCancellation(Arc<AtomicBool>);
-
-impl RendererPageElementToggleEventCancellation {
-    pub(crate) fn new() -> Self {
-        Self(Arc::new(AtomicBool::new(false)))
-    }
-
-    pub(crate) fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-
-    pub(crate) fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
+pub(crate) type RendererPageElementToggleEventCancellation =
+    super::dom_manipulation::RendererPageDomManipulationCancellation;
 
 #[derive(Debug)]
 pub(crate) struct RendererPageElementToggleEventTask {

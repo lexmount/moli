@@ -1221,7 +1221,7 @@ impl JsContextHost {
         } else {
             self.start_lightweight_popup_document_load(
                 navigation_task,
-                Request::get_with_url(initial_url.clone()),
+                initial_url.clone(),
                 about_blank_url(),
                 initial_document_state,
                 response,
@@ -1334,7 +1334,7 @@ impl JsContextHost {
         } else {
             self.start_lightweight_popup_document_load(
                 navigation_task,
-                Request::get_with_url(target_url),
+                target_url,
                 previous_url,
                 navigation_state,
                 response,
@@ -1870,7 +1870,12 @@ impl JsContextHost {
         self.navigate_lightweight_popup_window_with_response(
             scope,
             popup_id,
-            Request::get_with_url(target_url),
+            super::ChildBrowsingContextNavigationRequest {
+                url: target_url,
+                method: "GET".to_owned(),
+                body: None,
+                request_headers: Vec::new(),
+            },
             kind,
             response,
         )
@@ -1880,7 +1885,7 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
-        request: Request,
+        request: super::ChildBrowsingContextNavigationRequest,
         kind: crate::context_bootstrap::LocationNavigationKind,
     ) -> bool {
         self.navigate_lightweight_popup_window_with_response(scope, popup_id, request, kind, None)
@@ -1890,10 +1895,11 @@ impl JsContextHost {
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         popup_id: u64,
-        request: Request,
+        request: super::ChildBrowsingContextNavigationRequest,
         kind: crate::context_bootstrap::LocationNavigationKind,
         response: Option<crate::runtime::AuxiliaryDocumentResponseReceiver>,
     ) -> bool {
+        let target_url = request.url.clone();
         if !self.lightweight_popup_is_open(popup_id) {
             return false;
         }
@@ -1906,7 +1912,6 @@ impl JsContextHost {
         );
         let current_url = lightweight_popup_location_href(scope, window)
             .or_else(|| self.lightweight_popup_location_url(popup_id));
-        let target_url = request.url.clone();
         let allows_fragment_navigation = request.method == "GET"
             && target_url.fragment().is_some()
             && !matches!(
@@ -2018,7 +2023,7 @@ impl JsContextHost {
                 .map(PendingLightweightPopupHistory::Navigation)
                 .unwrap_or(PendingLightweightPopupHistory::Initial);
         if self
-            .start_lightweight_popup_document_load(
+            .start_lightweight_popup_document_load_with_request(
                 navigation_task,
                 request,
                 previous_url,
@@ -2145,7 +2150,7 @@ impl JsContextHost {
         if self
             .start_lightweight_popup_document_load(
                 navigation_task,
-                Request::get_with_url(target_url),
+                target_url,
                 previous_url,
                 navigation_state,
                 None,
@@ -2515,6 +2520,9 @@ impl JsContextHost {
         target_url: Url,
         document_target: LightweightPopupNavigationDocumentTarget,
     ) -> Option<LightweightPopupNavigationTaskToken> {
+        self.cancel_planned_form_navigation_to(super::OwnerDispatchScope::LightweightPopup(
+            popup_id,
+        ));
         let current_owner = self.current_lightweight_popup_document_owner(popup_id)?;
         let document_owner = match document_target {
             LightweightPopupNavigationDocumentTarget::CurrentDocument => current_owner,
@@ -2668,12 +2676,44 @@ impl JsContextHost {
     fn start_lightweight_popup_document_load(
         &mut self,
         task: LightweightPopupNavigationTaskToken,
-        request: Request,
+        target_url: Url,
         previous_url: Url,
         document_state: LightweightPopupDocumentState,
         response: Option<crate::runtime::AuxiliaryDocumentResponseReceiver>,
         history: PendingLightweightPopupHistory,
     ) -> Option<u64> {
+        self.start_lightweight_popup_document_load_with_request(
+            task,
+            super::ChildBrowsingContextNavigationRequest {
+                url: target_url,
+                method: "GET".to_owned(),
+                body: None,
+                request_headers: Vec::new(),
+            },
+            previous_url,
+            document_state,
+            response,
+            history,
+        )
+    }
+
+    fn start_lightweight_popup_document_load_with_request(
+        &mut self,
+        task: LightweightPopupNavigationTaskToken,
+        request: super::ChildBrowsingContextNavigationRequest,
+        previous_url: Url,
+        document_state: LightweightPopupDocumentState,
+        response: Option<crate::runtime::AuxiliaryDocumentResponseReceiver>,
+        history: PendingLightweightPopupHistory,
+    ) -> Option<u64> {
+        let target_url = request.url.clone();
+        let request = Request::new_bytes(
+            &request.method,
+            request.url.as_str(),
+            request.body,
+            request.request_headers,
+        )
+        .ok()?;
         let popup_id = task.popup_id();
         if !self.lightweight_popup_navigation_attempt_is_current(task) {
             return None;
@@ -2682,7 +2722,6 @@ impl JsContextHost {
         self.next_lightweight_popup_document_load_id =
             self.next_lightweight_popup_document_load_id.wrapping_add(1);
         let target = LightweightPopupDocumentFetchTarget::new(load_id, task);
-        let target_url = request.url.clone();
         let local_snapshot = (request.method == "GET")
             .then(|| self.materialize_local_child_snapshot_for_url(&target_url))
             .flatten();
@@ -4613,6 +4652,9 @@ impl JsContextHost {
         };
         if completion.is_string()
             && self.lightweight_popup_committed_navigation_task_is_current(task)
+            && !self.has_planned_form_navigation_to(super::OwnerDispatchScope::LightweightPopup(
+                popup_id,
+            ))
         {
             let markup = completion
                 .to_string(scope)
