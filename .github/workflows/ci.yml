@@ -337,6 +337,60 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  webmainbench:
+    name: WebMainBench · 545 pages
+    needs: [resolve-refs, build-release-head]
+    # Run on the hosted VM: unshare needs a network namespace, which is not
+    # available in the default Docker job container.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve-refs.outputs.head_sha }}
+      - name: Use HEAD release
+        uses: ./.github/actions/use-ci-release
+        with:
+          side: head
+          revision: ${{ needs.resolve-refs.outputs.head_sha }}
+      - name: Install replay tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends python3 iproute2 openssl util-linux
+      - name: Download pinned WebMainBench corpus
+        env:
+          PYTHONPATH: moli-benchmark
+        run: >-
+          python3 -m moli_benchmark.webmainbench download
+          --output target/webmainbench-data/WebMainBench_545.jsonl
+      - name: Replay all pages with external networking disabled
+        timeout-minutes: 25
+        env:
+          HEAD_SHA: ${{ needs.resolve-refs.outputs.head_sha }}
+        run: >-
+          sudo unshare --net --
+          env PYTHONPATH="$PWD/moli-benchmark"
+          python3 -u -m moli_benchmark.webmainbench run
+          --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
+          --dataset "$PWD/target/webmainbench-data/WebMainBench_545.jsonl"
+          --output "$PWD/target/webmainbench-results"
+          --revision "$HEAD_SHA"
+      - name: Render job summary
+        if: ${{ always() }}
+        run: |
+          if [[ -f target/webmainbench-results/summary.md ]]; then
+            cat target/webmainbench-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload every page's output and diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: webmainbench-results
+          path: target/webmainbench-results
+          if-no-files-found: warn
+          retention-days: 7
+
   cdp-smoke:
     name: CDP smoke
     needs: [resolve-refs, build-release-head]

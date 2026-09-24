@@ -45,6 +45,58 @@ uv run moli-benchmark synthetic \
   --runs 5
 ```
 
+### WebMainBench fetch stability CI
+
+The `WebMainBench · 545 pages` job runs on pull requests, pushes to `main`, and
+manual CI runs. It reuses the verified HEAD release artifact and replays all
+545 frozen HTML pages with `moli fetch --dump markdown --wait done`, a 45-second
+page deadline, and a 55-second process watchdog. Cases run serially without
+retries. Each page must return nonempty Markdown; panics, crashes, timeouts,
+missing results, and unexpected errors fail the job.
+
+The [public dataset](https://huggingface.co/datasets/opendatalab/WebMainBench)
+is pinned to revision `5da0972e9b58d0c7891ae75053ced97c268f52e3` and SHA-256
+`0efaa4b49a45e320a27fe6e5a0b6aad5b57259fc3321ac3448519cacc74c537e`.
+Its original UTF-8 HTML, including inline scripts, is served over local HTTPS.
+The runner requires a fresh Linux network namespace with only loopback; missing
+fixture paths return 404 and external resources are unreachable. Original URLs
+are metadata, not live fetch targets.
+
+One known exception is recorded explicitly: case
+`ccb6033c-0a12-4f9c-8c68-794f26129841` redirects to `langrensha.163.com` and may
+return that host's DNS resolution error. Only this case and error combination
+is accepted; a different failure on that page still fails CI. A successful
+result on that page also passes. The gate checks every case, not a minimum
+aggregate success count.
+
+To run locally from the repository root, use Python 3.11+, `openssl`, `ip`, and
+`unshare` (Debian/Ubuntu packages `iproute2` and `util-linux`):
+
+```bash
+export PYTHONPATH="$PWD/moli-benchmark"
+python3 -m moli_benchmark.webmainbench download \
+  --output target/webmainbench-data/WebMainBench_545.jsonl
+unshare --user --map-root-user --net -- \
+  python3 -m moli_benchmark.webmainbench run \
+  --moli-bin target/release/moli \
+  --dataset target/webmainbench-data/WebMainBench_545.jsonl \
+  --output target/webmainbench-results \
+  --revision "$(git rev-parse HEAD)"
+```
+
+Use a new output directory for each run. On systems that disallow unprivileged
+user namespaces, use `sudo unshare --net -- env PYTHONPATH="$PYTHONPATH" python3 ...`
+as the CI job does. The runner refuses to run against an ordinary network.
+
+The job summary reports the verdict and failure IDs.
+
+The `webmainbench-results` artifact retains every page's Markdown, stderr, exit
+status, elapsed time, and HTML/output hashes for seven days, including when the
+check fails. Partial runs retain an incrementally flushed `results.jsonl` for
+diagnosis. This job checks fetch stability on Linux. Official content quality
+scoring is a separate local evaluation: dynamic page content and the upstream
+TEDS adapter issue make the raw composite score unsuitable as a CI threshold.
+
 ### Script-authored semantic WPT
 
 The default semantic profile includes both Window and DedicatedWorker variants
