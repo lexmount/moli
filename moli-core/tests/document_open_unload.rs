@@ -136,13 +136,25 @@ async fn ancestor_unload_counter_covers_descendant_callbacks() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn ordinary_ancestor_unload_counter_covers_descendant_callbacks() -> Result<()> {
-    for event in ["beforeunload", "pagehide", "visibilitychange", "unload"] {
+    for event in ["pagehide", "visibilitychange", "unload"] {
         let result = stream_operation_during_unload(event, "open", "ordinary-ancestor").await?;
         assert_eq!(result["sameRoot"], true, "{event}: {result}");
         assert_eq!(result["sameLength"], true);
         assert_eq!(result["listenerCount"], 1);
         assert_eq!(result["returnedDocument"], true);
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn beforeunload_counter_does_not_suppress_writes_to_an_ancestor() -> Result<()> {
+    let result =
+        stream_operation_during_unload("beforeunload", "open", "ordinary-ancestor").await?;
+    assert_eq!(result["sameRoot"], false, "{result}");
+    assert_eq!(result["sameLength"], false);
+    assert_eq!(result["sameURL"], false);
+    assert_eq!(result["listenerCount"], 0);
+    assert_eq!(result["returnedDocument"], true);
     Ok(())
 }
 

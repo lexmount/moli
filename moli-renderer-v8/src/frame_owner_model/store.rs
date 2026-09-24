@@ -2312,6 +2312,32 @@ impl FrameOwnerStore {
         Some(binding)
     }
 
+    /// Claim the beforeunload check before entering script. A replacement
+    /// navigation must get its own check; a stale or repeated check must not
+    /// dispatch events for the current document.
+    pub(crate) fn claim_current_child_navigation_beforeunload(
+        &mut self,
+        child_handle: DomHandle,
+        expected: FrameDocumentNavigationLoadBinding,
+    ) -> bool {
+        if !self.child_document_task_owner_is_current(child_handle, expected.owner()) {
+            return false;
+        }
+        let Some(state) = self
+            .frame_ids_by_child_handle
+            .get(&child_handle)
+            .and_then(|id| self.frames.get_mut(id))
+            .and_then(|frame| frame.navigation_load.as_mut())
+        else {
+            return false;
+        };
+        if state.binding != expected || state.beforeunload_checked {
+            return false;
+        }
+        state.beforeunload_checked = true;
+        true
+    }
+
     /// Reserve exactly one stable Page task for the current child navigation
     /// generation. Duplicate producer observations do not create duplicate
     /// scheduler work; replacing `navigation_load` invalidates this

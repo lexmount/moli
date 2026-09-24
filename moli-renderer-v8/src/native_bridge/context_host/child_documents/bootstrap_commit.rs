@@ -69,6 +69,11 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return Some(ChildDocumentCommitResult::ready(None));
         }
+        if initiator != ChildDocumentNavigationInitiator::HistoryTraversal
+            && !self.check_child_navigation_beforeunload(scope, handle, navigation_load)
+        {
+            return Some(ChildDocumentCommitResult::ready(None));
+        }
         self.cancel_child_meta_refresh_navigation(handle);
         let cached_snapshot =
             self.materialize_local_child_snapshot_for_bootstrap(handle, &bootstrap);
@@ -110,9 +115,7 @@ impl JsContextHost {
             );
             let window_commit_preflight =
                 self.capture_child_document_window_commit_preflight(handle);
-            self.dispatch_child_browsing_context_unload_lifecycle_if_needed(
-                scope, handle, initiator,
-            );
+            self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
             if !self
                 .child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
             {
@@ -157,7 +160,7 @@ impl JsContextHost {
 
         let sandbox = self.child_browsing_context_sandbox_policy_from_owner(handle);
         let window_commit_preflight = self.capture_child_document_window_commit_preflight(handle);
-        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle, initiator);
+        self.dispatch_child_browsing_context_unload_lifecycle_if_needed(scope, handle);
         if !self.child_document_window_commit_preflight_is_current(handle, &window_commit_preflight)
         {
             let _ =

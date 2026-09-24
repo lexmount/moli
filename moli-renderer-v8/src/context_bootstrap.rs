@@ -85,7 +85,10 @@ mod navigation_traversal_coordinator;
 mod navigation_traversal_execution;
 mod navigation_traversal_plan;
 mod navigation_window;
-pub(crate) use navigation_window::window_location_for_holder;
+pub(crate) use navigation_window::{
+    navigation_unload_event_active, replace_navigation_unload_event_active,
+    window_location_for_holder,
+};
 mod navigator_runtime;
 mod platform_object_worlds;
 mod session_history;

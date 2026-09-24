@@ -135,14 +135,16 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         next_url,
         mutation,
     );
-    dispatch_beforeunload_for_runtime_owner(scope, owner);
     let host = unsafe { &mut *host_ptr };
-    host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+    if host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
         child_handle,
         next_url.as_str(),
         entry_seed,
         None,
-    );
+    ) && let Some(navigation_load) = host.current_child_navigation_load(child_handle)
+    {
+        host.check_child_navigation_beforeunload(scope, child_handle, navigation_load);
+    }
     navigation_signal
         .map(|(navigation, signal)| {
             navigation_cross_document_pending_result(scope, navigation, signal, next_url.as_str())
