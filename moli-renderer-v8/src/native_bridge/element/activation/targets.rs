@@ -2,7 +2,6 @@ use crate::{
     RendererPendingPopupActivation, RendererPendingWindowOpenEvent, RendererPopupDisposition,
     context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window,
     document_runtime::{DocumentPolicyContainer, DomHandle},
-    native_bridge::context_host::ChildBrowsingContextNavigationRequest,
     util::v8str,
 };
 
@@ -273,6 +272,94 @@ fn navigate_element_popup_target(
         window_open_event,
     );
     true
+}
+
+/// Choose the navigable synchronously. The form's DOM task starts navigation later.
+pub(in crate::native_bridge) fn choose_form_navigation_target(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    form: DomHandle,
+    target_name: Option<&str>,
+    destination: &url::Url,
+) -> Option<crate::native_bridge::OwnerDispatchScope> {
+    use crate::native_bridge::OwnerDispatchScope;
+    let runtime = unsafe { &*runtime_ptr };
+    let source = runtime.owner_dispatch_scope_for_node(form)?;
+    let special = target_name.and_then(SpecialBrowsingContextTarget::parse);
+    match special {
+        Some(SpecialBrowsingContextTarget::Current) => return Some(source),
+        Some(SpecialBrowsingContextTarget::Parent | SpecialBrowsingContextTarget::Top) => {
+            let mut target = source;
+            while let OwnerDispatchScope::Child(handle) = target {
+                target = runtime.owner_dispatch_scope_for_node(handle)?;
+                if special == Some(SpecialBrowsingContextTarget::Parent) {
+                    break;
+                }
+            }
+            return Some(target);
+        }
+        _ => {}
+    }
+    let Some(target_name) = target_name else {
+        return Some(source);
+    };
+    if special.is_none() {
+        let document = runtime.dom_host().owner_document_handle(form);
+        if let Some(handle) =
+            named_iframe_target_handle_for_navigation(scope, runtime_ptr, target_name, document)
+        {
+            return Some(OwnerDispatchScope::Child(handle));
+        }
+    }
+    let relations = element_popup_relations(unsafe { &*runtime_ptr }, form, target_name);
+    let mut creator = element_popup_creator(scope, runtime_ptr, form)?;
+    creator.policy_container.document_referrer = if relations.suppress_referrer {
+        String::new()
+    } else {
+        moli_fetch::referrer_value(
+            &creator.document_url,
+            destination,
+            None,
+            creator.policy_container.referrer_policy.as_deref(),
+        )
+        .unwrap_or_default()
+    };
+    let runtime = unsafe { &mut *runtime_ptr };
+    let (_, root_document, source) =
+        runtime.renderer_window_document_source_for_dispatch_scope(source)?;
+    let opened = runtime.open_lightweight_popup_window(
+        scope,
+        runtime_ptr,
+        (!relations.suppress_opener).then_some(creator.opener),
+        None,
+        target_name,
+        None,
+        creator.base_url,
+        creator.policy_container,
+    )?;
+    let id = opened.popup_id;
+    let activation = RendererPendingPopupActivation::window(
+        root_document,
+        source,
+        !relations.suppress_opener,
+        Some(id),
+        destination.to_string(),
+        target_name.to_owned(),
+        RendererPopupDisposition::Foreground,
+    )
+    .with_initial_auxiliary_state(
+        runtime.lightweight_popup_session_storage_store(id),
+        runtime.lightweight_popup_initial_empty_document_storage_key(id),
+    );
+    let event = opened.created_new_browsing_context.then(|| {
+        RendererPendingWindowOpenEvent::browser_window(
+            destination.as_str(),
+            target_name,
+            runtime.protocol_user_gesture_activation(),
+        )
+    });
+    runtime.record_pending_popup_activation(activation, event);
+    Some(OwnerDispatchScope::LightweightPopup(id))
 }
 
 fn element_javascript_url_allowed_by_csp(
@@ -564,93 +651,10 @@ pub(in crate::native_bridge) fn navigate_named_iframe_target_from_document<'s>(
     runtime.navigate_child_browsing_context_to_url(scope, target_iframe, resolved_url)
 }
 
-pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_navigation_from_document<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    runtime_ptr: *mut JsContextHost,
-    target_name: &str,
-    resolved_url: &str,
-    source_document: Option<DomHandle>,
-    source_element: Option<v8::Local<'s, v8::Object>>,
-) -> Option<DomHandle> {
-    let target_iframe = named_iframe_target_handle_for_navigation(
-        scope,
-        runtime_ptr,
-        target_name,
-        source_document,
-    )?;
-    let runtime = unsafe { &mut *runtime_ptr };
-    let destination = url::Url::parse(resolved_url).ok()?;
-    let history = crate::context_bootstrap::FormNavigationHistory::capture(
-        scope,
-        runtime,
-        source_document,
-        Some(target_iframe),
-        &destination,
-        None,
-    );
-    let target_url = url::Url::parse(resolved_url).ok();
-    let target_is_same_origin_with_top = target_url
-        .as_ref()
-        .is_some_and(|url| moli_url::same_origin(runtime.document_url(), url));
-    let target_is_same_document_with_child = target_url.as_ref().is_some_and(|url| {
-        runtime
-            .child_browsing_context_current_url(target_iframe)
-            .is_some_and(|current| urls_refer_to_same_document(&current, url))
-    });
-    if ((target_is_same_origin_with_top
-        && runtime.child_browsing_context_is_same_origin_with_top(target_iframe))
-        || target_is_same_document_with_child)
-        && let Some(window) =
-            runtime.existing_child_browsing_context_window_wrapper(scope, target_iframe)
-        && !crate::context_bootstrap::dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data(
-            scope,
-            window,
-            resolved_url,
-            history.mutation.navigation_type(),
-            source_element,
-            false,
-            None,
-            None,
-        )
-    {
-        return Some(target_iframe);
-    }
-    runtime
-        .queue_deferred_child_form_navigation_request(
-            target_iframe,
-            ChildBrowsingContextNavigationRequest {
-                url: destination,
-                method: "GET".to_owned(),
-                body: None,
-                request_headers: Vec::new(),
-            },
-            history.entry_seed,
-            history.mutation,
-        )
-        .then_some(target_iframe)
-}
-
 fn urls_refer_to_same_document(current: &url::Url, target: &url::Url) -> bool {
     let mut current = current.clone();
     current.set_fragment(None);
     let mut target = target.clone();
     target.set_fragment(None);
     current == target
-}
-
-pub(in crate::native_bridge) fn queue_deferred_named_iframe_target_request(
-    runtime_ptr: *mut JsContextHost,
-    target_iframe: DomHandle,
-    request: ChildBrowsingContextNavigationRequest,
-    history: crate::context_bootstrap::FormNavigationHistory,
-) -> Option<DomHandle> {
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime
-        .queue_deferred_child_form_navigation_request(
-            target_iframe,
-            request,
-            history.entry_seed,
-            history.mutation,
-        )
-        .then_some(target_iframe)
 }

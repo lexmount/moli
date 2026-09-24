@@ -12,6 +12,7 @@ mod dynamic_import_owner_action;
 mod element_toggle_event;
 mod file_entry_file_callback;
 mod file_reading;
+mod form_navigation;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
@@ -221,8 +222,9 @@ pub(crate) use self::dedicated_worker_client_event::{
 };
 pub(crate) use self::dom_manipulation::{
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome,
-    RendererPageDomManipulationOwner, RendererPageDomManipulationRoute,
-    RendererPageDomManipulationSender, RendererPageDomManipulationTask,
+    RendererPageDomManipulationCancellation, RendererPageDomManipulationOwner,
+    RendererPageDomManipulationRoute, RendererPageDomManipulationSender,
+    RendererPageDomManipulationTask,
 };
 pub(crate) use self::dynamic_import_owner_action::{
     PageDynamicImportOwnerActionDocumentEffect, PageDynamicImportOwnerActionTurnAction,
@@ -247,6 +249,12 @@ pub(crate) use self::file_reading::{
     PageFileReadingTargetEffect, PageFileReadingTurnAction, PageFileReadingTurnOutcome,
     RendererPageFileReadingOwner, RendererPageFileReadingSender, RendererPageFileReadingTask,
     RendererPageFileReadingTaskId, RendererPageFileReadingTaskKind,
+};
+pub(crate) use self::form_navigation::{
+    PageFormNavigationTargetEffect, PageFormNavigationTurnAction, PageFormNavigationTurnOutcome,
+    RendererPageFormNavigationOwner, RendererPageFormNavigationSender,
+    RendererPageFormNavigationTask, RendererPageFormNavigationTaskId,
+    RendererPageFormNavigationTaskKind,
 };
 pub(crate) use self::hash_change_delivery::{
     PageHashChangeDeliveryTargetEffect, PageHashChangeDeliveryTurnAction,

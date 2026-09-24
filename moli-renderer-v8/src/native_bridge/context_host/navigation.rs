@@ -172,12 +172,32 @@ impl JsContextHost {
         target_child: Option<DomHandle>,
         destination: &Url,
     ) -> NavigationHistoryMutation {
-        let target_scope = target_child.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child);
-        let target_document = match target_child {
-            Some(handle) => self
-                .frame_owner_current_child_snapshot(handle)
-                .map(|s| s.document_handle),
-            None => Some(self.document_handle()),
+        self.form_navigation_history_mutation_for_scope(
+            source_document,
+            target_child.map_or(OwnerDispatchScope::Top, OwnerDispatchScope::Child),
+            destination,
+            false,
+        )
+    }
+
+    pub(crate) fn form_navigation_history_mutation_for_scope(
+        &self,
+        source_document: Option<DomHandle>,
+        target_scope: OwnerDispatchScope,
+        destination: &Url,
+        user_initiated: bool,
+    ) -> NavigationHistoryMutation {
+        let (target_document, replaces_initial) = match target_scope {
+            OwnerDispatchScope::Top => (Some(self.document_handle()), false),
+            OwnerDispatchScope::Child(handle) => (
+                self.frame_owner_current_child_snapshot(handle)
+                    .map(|s| s.document_handle),
+                self.child_current_document_is_initial_empty(handle),
+            ),
+            OwnerDispatchScope::LightweightPopup(id) => (
+                self.lightweight_popup_document_handle(id),
+                self.lightweight_popup_current_document_is_initial_empty(id),
+            ),
         };
         // Form submission fixes history handling before planning the navigation.
         // Unlike Location assignment, transient activation does not change this rule.
@@ -185,14 +205,13 @@ impl JsContextHost {
             && source_document == target_document
             && source_document.and_then(|document| self.document_is_completely_loaded(document))
                 == Some(false);
-        let replaces_initial =
-            target_child.is_some_and(|handle| self.child_current_document_is_initial_empty(handle));
         let same_origin = source_document
             .and_then(|document| self.owner_dispatch_scope_for_node(document))
             .and_then(|source| self.window_access_origin_for_dispatch_scope(source))
             .zip(self.window_access_origin_for_dispatch_scope(target_scope))
             .is_some_and(|(source, target)| source.has_same_origin(&target));
-        let replaces_same_url = same_origin
+        let replaces_same_url = !user_initiated
+            && same_origin
             && target_document
                 .is_some_and(|document| self.document_url_for_handle(document) == *destination);
         if replaces_loading_self
@@ -279,6 +298,7 @@ impl JsContextHost {
         entry_seed: Option<NavigationHistoryEntrySeed>,
         browser_navigation_kind: BrowserNavigationRequestKind,
     ) {
+        self.cancel_planned_form_navigation_to(OwnerDispatchScope::Top);
         self.clear_pending_top_level_navigation();
         let handoff = self.top_level_navigation_handoff_tx.next_handoff();
         let reserved_service_worker_client =
@@ -339,6 +359,16 @@ impl JsContextHost {
             self.pending_top_level_navigation.as_ref(),
             Some(PendingTopLevelNavigation::Location(_))
         )
+    }
+
+    pub(crate) fn pending_location_navigation_source_document(
+        &self,
+    ) -> Option<crate::runtime::RendererDocumentLifecycleIdentity> {
+        match self.pending_top_level_navigation.as_ref()? {
+            PendingTopLevelNavigation::Location(pending) => pending.source_document,
+            #[cfg(test)]
+            PendingTopLevelNavigation::HistoryTraversal(_) => None,
+        }
     }
 
     pub(crate) fn pending_location_navigation_kind(&self) -> Option<PendingLocationNavigationKind> {

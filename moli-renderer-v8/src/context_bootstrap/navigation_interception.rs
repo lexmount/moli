@@ -72,6 +72,8 @@ pub(super) fn dispatch_cross_document_navigation_event<'s>(
     let target_url = url::Url::parse(href).ok();
     let same_document = navigation_type != "reload"
         && download_request.is_none()
+        // A POST resource loads a new Document even when its URL is unchanged.
+        && form_data.is_none()
         && target_url.as_ref().is_some_and(|target| {
             is_same_document_fragment_navigation(current_url.as_ref(), target)
         });

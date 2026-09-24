@@ -17,7 +17,6 @@ use super::navigation_entry_state::clone_navigation_entry_state;
 use super::navigation_events::{
     NavigationDispatchOutcome, cancel_active_navigation_event,
     dispatch_cross_document_navigation_navigate_event_for_window_with_type_and_form_data,
-    dispatch_navigation_navigate_event_with_form_data_and_outcome,
     dispatch_navigation_navigate_event_with_outcome, dispatch_popstate_event,
     finish_navigation_precommit, queue_hash_change_for_runtime_owner,
 };
@@ -929,83 +928,6 @@ pub(crate) fn dispatch_top_level_navigation_event_with_source_element<'s>(
         download_request,
         None,
         None,
-        source_element,
-    );
-    if outcome.abort_error.is_some() {
-        return false;
-    }
-    if !outcome.proceed {
-        finish_location_navigation_canceled(scope, navigation, &outcome, &current_href);
-        return false;
-    }
-    cancel_pending_same_document_navigation_finishes(scope, navigation);
-    if let Some(event) = outcome.precommit_event {
-        let kind = match outcome
-            .redirected_history
-            .as_deref()
-            .unwrap_or(navigation_type)
-        {
-            "replace" => LocationNavigationKind::Replace,
-            "reload" => LocationNavigationKind::Reload,
-            _ => LocationNavigationKind::Assign,
-        };
-        if queue_pending_precommit_same_document_navigation(
-            scope,
-            global,
-            event,
-            &outcome,
-            &current_href,
-            outcome.redirected_url.as_deref().unwrap_or(href),
-            kind,
-            None,
-            None,
-            None,
-            None,
-            None,
-        ) {
-            return false;
-        }
-        finish_navigation_precommit(scope, event);
-    }
-    !outcome.intercepted
-}
-
-pub(crate) fn dispatch_top_level_form_navigation_event<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    href: &str,
-    navigation_type: &str,
-    source_element: Option<v8::Local<'s, v8::Object>>,
-    user_initiated: bool,
-    form_data: v8::Local<'s, v8::Value>,
-) -> bool {
-    let global = scope.get_current_context().global(scope);
-    let Some(navigation) = super::navigation_window::window_navigation_for_holder(scope, global)
-    else {
-        return true;
-    };
-    let current_href = global
-        .get(scope, v8str(scope, "location").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .and_then(|location| location_href_slot(scope, location))
-        .unwrap_or_default();
-    let _ = cancel_active_navigation_event(scope, navigation);
-    cancel_pending_precommit_same_document_navigation(scope, navigation);
-    cancel_pending_precommit_history_traversal(scope, navigation);
-    cancel_active_intercepted_same_document_navigation(scope, navigation);
-    cancel_pending_same_document_navigation_finishes_including_reentrant(scope, navigation);
-    let outcome = dispatch_navigation_navigate_event_with_form_data_and_outcome(
-        scope,
-        navigation,
-        href,
-        navigation_type,
-        false,
-        false,
-        true,
-        user_initiated,
-        None,
-        None,
-        None,
-        Some(form_data),
         source_element,
     );
     if outcome.abort_error.is_some() {
