@@ -46,8 +46,7 @@ use super::super::{
     set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
-    SpecialBrowsingContextTarget, browsing_context_window_for_dispatch_scope,
-    form_navigation_target_document, named_iframe_target_handle_for_navigation,
+    SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
     navigate_element_target_browsing_context, navigate_hyperlink_source_browsing_context,
     queue_top_level_location_navigation,
 };
@@ -2044,83 +2043,6 @@ fn element_matches_fragment_target(element: &Element, fragment: &str) -> bool {
             && element
                 .attribute("name")
                 .is_some_and(|name| name == fragment))
-}
-
-pub(in crate::native_bridge) fn navigate_form_target_browsing_context(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut PageScriptHost,
-    form_handle: DomHandle,
-    target_name: Option<&str>,
-    resolved_url: &str,
-    history: NavigationHistoryMutation,
-    user_initiated: bool,
-) -> bool {
-    let source_document = unsafe { &*runtime_ptr }
-        .dom_host()
-        .owner_document_handle(form_handle);
-    let target_document = source_document.and_then(|source| {
-        form_navigation_target_document(unsafe { &*runtime_ptr }, source, target_name)
-    });
-    if let Some(document_handle) = target_document {
-        let runtime = unsafe { &*runtime_ptr };
-        if document_handle != runtime.document_handle() {
-            let Some(child_handle) =
-                runtime.child_browsing_context_handle_by_document_handle(scope, document_handle)
-            else {
-                return false;
-            };
-            let runtime = unsafe { &mut *runtime_ptr };
-            let navigated =
-                runtime.navigate_child_browsing_context_to_url(scope, child_handle, resolved_url);
-            if navigated {
-                crate::context_bootstrap::web_mcp::bind_child_navigation(
-                    runtime,
-                    form_handle,
-                    child_handle,
-                );
-            }
-            return navigated;
-        }
-        let Some(window) = browsing_context_window_for_dispatch_scope(
-            scope,
-            runtime_ptr,
-            crate::native_bridge::OwnerDispatchScope::Top,
-        ) else {
-            return false;
-        };
-        let source_element = node_wrapper_from_handle(scope, form_handle);
-        if !crate::context_bootstrap::dispatch_top_level_navigation_event_with_source_element(
-            scope,
-            window,
-            resolved_url,
-            history.navigation_type(),
-            source_element,
-            true,
-            user_initiated,
-            None,
-        ) {
-            return true;
-        }
-        if !queue_top_level_location_navigation(runtime_ptr, resolved_url, history) {
-            return false;
-        }
-        crate::context_bootstrap::web_mcp::bind_root_navigation(
-            unsafe { &mut *runtime_ptr },
-            form_handle,
-        );
-        return true;
-    }
-    let source_element = node_wrapper_from_handle(scope, form_handle);
-    navigate_element_target_browsing_context(
-        scope,
-        runtime_ptr,
-        form_handle,
-        target_name,
-        resolved_url,
-        source_element,
-        false,
-        RendererPopupDisposition::Foreground,
-    )
 }
 
 #[cfg(test)]

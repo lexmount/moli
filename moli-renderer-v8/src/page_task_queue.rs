@@ -13,6 +13,7 @@ mod element_toggle_event;
 mod file_entry_file_callback;
 mod file_reading;
 mod font_loading;
+mod form_navigation;
 mod hash_change_delivery;
 mod history_traversal;
 mod image_load_event;
@@ -226,8 +227,9 @@ pub(crate) use self::dedicated_worker_client_event::{
 };
 pub(crate) use self::dom_manipulation::{
     PageDomManipulationTurnAction, PageDomManipulationTurnOutcome,
-    RendererPageDomManipulationOwner, RendererPageDomManipulationRoute,
-    RendererPageDomManipulationSender, RendererPageDomManipulationTask,
+    RendererPageDomManipulationCancellation, RendererPageDomManipulationOwner,
+    RendererPageDomManipulationRoute, RendererPageDomManipulationSender,
+    RendererPageDomManipulationTask,
 };
 pub(crate) use self::dynamic_import_owner_action::{
     PageDynamicImportOwnerActionDocumentEffect, PageDynamicImportOwnerActionTurnAction,
@@ -257,6 +259,12 @@ pub(crate) use self::font_loading::{
     PageFontLoadingTargetEffect, PageFontLoadingTurnAction, PageFontLoadingTurnOutcome,
     RendererPageFontLoadingOwner, RendererPageFontLoadingSender, RendererPageFontLoadingTask,
     RendererPageFontLoadingTaskId, RendererPageFontLoadingTaskKind,
+};
+pub(crate) use self::form_navigation::{
+    PageFormNavigationTargetEffect, PageFormNavigationTurnAction, PageFormNavigationTurnOutcome,
+    RendererPageFormNavigationOwner, RendererPageFormNavigationSender,
+    RendererPageFormNavigationTask, RendererPageFormNavigationTaskId,
+    RendererPageFormNavigationTaskKind,
 };
 pub(crate) use self::hash_change_delivery::{
     PageHashChangeDeliveryTargetEffect, PageHashChangeDeliveryTurnAction,

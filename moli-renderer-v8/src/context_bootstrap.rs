@@ -39,6 +39,8 @@ mod events;
 pub(crate) mod exposed_interfaces;
 mod file_api;
 mod form_data_runtime;
+mod form_navigation;
+pub(crate) use self::form_navigation::FormNavigationHistory;
 mod history_mutation;
 mod history_runtime;
 use moli_webapi::picture_in_picture;
@@ -211,9 +213,9 @@ pub(crate) use css_fontface_runtime::{
 };
 pub(crate) use history_mutation::update_history_for_document_open;
 pub(crate) use location_navigation::{
-    LocationNavigationKind, dispatch_top_level_form_navigation_event,
-    dispatch_top_level_navigation_event_with_source_element,
-    history_entry_seed_for_cross_document_location, history_entry_seed_for_location_kind, is_native_location, navigate_borrowed_location,
+    LocationNavigationKind, dispatch_top_level_navigation_event_with_source_element,
+    history_entry_seed_for_cross_document_location, history_entry_seed_for_location_kind,
+    is_native_location, navigate_borrowed_location,
     navigate_child_meta_refresh, navigate_location_object_with_child_navigate_event,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,

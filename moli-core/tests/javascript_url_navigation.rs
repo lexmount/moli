@@ -139,11 +139,56 @@ async fn child_javascript_url_string_survives_without_a_new_cross_document_navig
     for action in [
         "document.body.dataset.changed = 'yes';",
         "location.hash = 'fragment';",
-        "navigation.onnavigate = event => event.preventDefault(); document.forms[0].submit();",
     ] {
         let result = child_javascript_url_navigation(action, false).await?;
         assert_eq!(result[0]["bodyId"], "completion", "{action}: {result}");
         assert_eq!(result[0]["body"], "replacement");
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn canceled_planned_form_navigation_suppresses_javascript_string_replacement() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(BrowserConfig::default())?;
+    let source = markup_url(
+        &server,
+        r#"<!doctype html><body id=original>
+      <form action='/net/echo'><input name=q value=submitted></form>
+      <a id=go href="javascript:(document.forms[0].submit(), '<body id=completion>replacement')">go</a>"#,
+    );
+    let parent = format!(
+        r#"<!doctype html><body><script>
+      window.finished = new Promise(resolve => {{
+        const frame = document.createElement('iframe');
+        frame.onload = () => {{
+          const original = frame.contentDocument;
+          const nav = frame.contentWindow.navigation;
+          nav.onnavigate = event => event.preventDefault();
+          nav.onnavigateerror = event => resolve({{
+            sameDocument: frame.contentDocument === original,
+            bodyId: frame.contentDocument.body.id,
+            error: event.error.name
+          }});
+          setTimeout(() => original.getElementById('go').click(), 0);
+        }};
+        frame.src = {};
+        document.body.appendChild(frame);
+      }});
+    </script>"#,
+        serde_json::to_string(&source)?.replace("</script>", "<\\/script>")
+    );
+    let result = tokio::time::timeout(Duration::from_secs(10), async {
+        let mut page = browser.fetch(&markup_url(&server, &parent)).await?;
+        page.evaluate_runtime_expression_with_await_async("finished.then(JSON.stringify)", true)
+            .await
+    })
+    .await??;
+    let observed: Value = serde_json::from_str(result["value"].as_str().unwrap())?;
+    assert_eq!(
+        observed,
+        serde_json::json!({"sameDocument":true,"bodyId":"original","error":"AbortError"})
+    );
+    server.shutdown().await;
     Ok(())
 }

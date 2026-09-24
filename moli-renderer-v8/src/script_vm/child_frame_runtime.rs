@@ -307,6 +307,15 @@ impl ScriptVm {
             .has_pending_location_navigation()
     }
 
+    pub(super) fn has_planned_form_navigation_to(
+        &self,
+        target: crate::native_bridge::OwnerDispatchScope,
+    ) -> bool {
+        self._context_host
+            .borrow()
+            .has_planned_form_navigation_to(target)
+    }
+
     pub(crate) fn pending_location_navigation_source_document(
         &self,
     ) -> Option<crate::runtime::RendererDocumentLifecycleIdentity> {

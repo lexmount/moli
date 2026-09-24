@@ -144,6 +144,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageElementToggleEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileEntryFileCallback;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFileReadingTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageFontLoadingTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPageFormNavigation;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHashChangeDelivery;
 pub(crate) use self::page_vm::AuthorizedCurrentPageHistoryTraversal;
 pub(crate) use self::page_vm::AuthorizedCurrentPageImageLoadEvent;

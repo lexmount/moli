@@ -212,7 +212,6 @@ pub(crate) use activation::TextInputSource;
 pub(crate) use activation::activate_handle_via_click;
 #[cfg(feature = "ace-protocol")]
 pub(crate) use activation::activate_handle_via_click_with_detail_and_modifiers;
-use activation::navigate_form_target_browsing_context;
 #[cfg(feature = "devtools")]
 pub(crate) use activation::perform_clipboard_key_default_action;
 #[cfg(feature = "devtools")]
@@ -240,10 +239,6 @@ pub(crate) use activation::{
 };
 pub(crate) use activation::{document_copy_command_supported, run_document_copy_command};
 pub(super) use activation::{input_show_picker_callback, node_click_callback};
-use activation::{
-    queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request,
-};
 pub(super) use anchors::{
     anchor_text_getter_function, anchor_text_setter_function, anchor_to_string_callback,
     area_to_string_callback,
@@ -2239,3 +2234,8 @@ fn aria_element_reference_attribute_setter_callback<'s>(
 
 #[cfg(feature = "devtools")]
 pub(crate) use geometry::read_client_rects;
+
+pub(in crate::native_bridge) use forms::{PlannedFormNavigation, apply_planned_form_navigation};
+
+#[cfg(test)]
+pub(crate) use events::{construct_mouse_event_with_detail_and_modifiers, construct_wheel_event};
