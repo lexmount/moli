@@ -142,6 +142,7 @@ pub(crate) use mouse_click::MouseReleaseFollowUp;
 #[cfg(feature = "devtools")]
 pub(crate) use mouse_click::common_flat_tree_ancestor;
 mod navigation;
+mod navigation_permissions;
 mod navigator_overrides;
 mod opfs_tasks;
 mod permissions;
