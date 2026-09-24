@@ -25,10 +25,7 @@ pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
     }
 
     let Some(realm) = MessagePortRealmBinding::current(scope) else {
-        let global = scope.get_current_context().global(scope);
-        if !crate::context_bootstrap::event_target_dispatch::target_execution_context_is_live(
-            scope, global,
-        ) {
+        if message_channel_context_is_destroyed(scope) {
             // A retained constructor still creates branded objects after its
             // document is destroyed, but those ports have no live endpoint.
             let Some(port1) = new_detached_message_port_object(scope) else {
@@ -76,6 +73,22 @@ pub(in crate::context_bootstrap) fn message_channel_constructor_callback<'s>(
         .initialize(scope, args.this())
         .expect("MessageChannel declaration should initialize ports");
     rv.set(args.this().into());
+}
+
+fn message_channel_context_is_destroyed(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    let context = scope.get_current_context();
+    if context
+        .get_slot::<crate::native_bridge::RuntimeObservableContextToken>()
+        .is_none()
+    {
+        return false;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    host.window_execution_context_identity_for_v8_context(scope, context)
+        .is_none_or(|identity| !host.window_execution_context_identity_is_current(identity))
 }
 
 pub(in crate::context_bootstrap) fn message_port_constructor_callback<'s>(
