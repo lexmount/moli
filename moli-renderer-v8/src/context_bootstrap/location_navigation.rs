@@ -966,6 +966,11 @@ fn navigate_location_object_with_options<'s>(
             if queued && let Some(document) = download_source_document {
                 host.set_pending_child_navigation_download_source(handle, document);
             }
+            if queued && !is_javascript_url
+                && let Some(navigation_load) = host.current_child_navigation_load(handle)
+            {
+                host.check_child_navigation_beforeunload(scope, handle, navigation_load);
+            }
         }
         return;
     }
