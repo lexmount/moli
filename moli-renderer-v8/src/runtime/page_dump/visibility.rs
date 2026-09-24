@@ -27,6 +27,14 @@ impl<'a> MarkdownDom<'a> {
         base_url: Option<&Url>,
     ) -> Self {
         let styles: Vec<_> = styles.into_iter().collect();
+        let document_element = dom.document_element_node_id();
+        let body = dom.body_node_id();
+        let document_visibility_is_hidden = styles.iter().any(|(node, values)| {
+            (Some(*node) == document_element || Some(*node) == body)
+                && values
+                    .get(1)
+                    .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
+        });
         let fragment_links = styles.iter().any(|(node, _)| {
             Dom::attribute(dom, *node, "href").is_some_and(|href| href.starts_with('#'))
         });
@@ -184,11 +192,17 @@ impl<'a> MarkdownDom<'a> {
                             && (foreground.0, foreground.1, foreground.2)
                                 == (background.0, background.1, background.2)
                     });
+            let document_root = Some(node) == document_element || Some(node) == body;
+            let animated = values
+                .get(12)
+                .is_some_and(|name| !name.is_empty() && name != "none");
             if ((values.first().is_some_and(|value| value == "none")
                 || values
                     .get(2)
                     .is_some_and(|value| value.parse::<f32>() == Ok(0.0))
-                    && !lazy_media)
+                    && !lazy_media
+                    && !animated
+                    && !document_root)
                 && !disclosure)
                 || aria_hidden
                 || uninitialized_template
@@ -268,6 +282,7 @@ impl<'a> MarkdownDom<'a> {
                 .get(1)
                 .is_some_and(|value| matches!(value.as_str(), "hidden" | "collapse"))
                 && !disclosure
+                && !document_visibility_is_hidden
             {
                 invisible.insert(node);
             }

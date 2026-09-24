@@ -36,6 +36,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
                 <p>Visible value <font color="white">hidden suffix</font> 8</p>
                 <p style="background:black;color:white">White on black stays visible</p>
                 <p style="opacity:0.5">Faded text</p>
+                <p style="opacity:0;animation-name:fadeIn">Animated article text</p>
                 <div><span style="display:inline-block">Active</span><span style="display:inline-block">Reviewed</span></div>
                 <p>Mass 2.4 × 10<span style="position:relative;top:-0.5em;line-height:0">−17</span> J; m<span style="position:relative;bottom:-0.25em;line-height:0">n</span></p>
                 <img style="width:1px;height:1px" src="/tracking.gif">
@@ -52,7 +53,7 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         "#).unwrap();
         for strip_css in [false, true] {
             let output = page.render_page_dump(options(strip_css));
-            for kept in ["Visible body", "Restored child", "Panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Visible value 8", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
+            for kept in ["Visible body", "Restored child", "Panel content", "Disclosure content", "Closed details content", "Followers 2", "Score 31", "Accessible helper", "Faded text", "Animated article text", "Visible value 8", "White on black stays visible", "![Article photo](https://example.test/article.jpg)"] {
                 assert!(output.contains(kept), "missing {kept}: {output}");
             }
             assert!(output.contains("10<sup>−17</sup>"), "{output}");
@@ -67,6 +68,18 @@ async fn markdown_uses_live_visibility_and_preserves_disclosure_content() {
         page.vm_mut().eval("document.getElementById('waiting').className = ''").unwrap();
         assert!(page.render_page_dump(options(false)).contains("Translation pending"));
         assert_eq!(page.vm_mut().eval("document.querySelector('style').textContent.includes('.off')").unwrap(), "true");
+        page.vm_mut().eval(r#"
+            document.documentElement.style.opacity = '0';
+            document.body.innerHTML = '<article>Whole-page loading veil</article>';
+        "#).unwrap();
+        assert!(page.render_page_dump(options(false)).contains("Whole-page loading veil"));
+        page.vm_mut().eval(r#"
+            document.documentElement.style.opacity = '';
+            document.body.style.visibility = 'hidden';
+            document.body.innerHTML = '<article>Font loading veil</article>';
+        "#).unwrap();
+        assert!(page.render_page_dump(options(false)).contains("Font loading veil"));
+        page.vm_mut().eval("document.body.style.visibility = ''").unwrap();
         page.vm_mut().eval(r#"
             document.head.innerHTML = '<style>.action{display:block}</style>';
             document.body.innerHTML = '<a class="action" href="/accept">Accept</a><a class="action" href="/reject">Reject</a>';
