@@ -53,6 +53,7 @@ mod images;
 mod input_event_init;
 mod joint_history_child_pushes;
 mod legacy_event_init;
+mod location_entry_settings;
 mod media;
 mod media_devices;
 mod media_player_init;

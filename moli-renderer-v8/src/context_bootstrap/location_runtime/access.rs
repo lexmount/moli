@@ -80,7 +80,6 @@ fn location_proxy_set<'s>(
     let caller = scope
         .get_incumbent_context()
         .unwrap_or_else(|| scope.get_current_context());
-    let scope = &mut v8::ContextScope::new(scope, caller);
     if target
         .get_creation_context(scope)
         .is_some_and(|owner| window_contexts_allow_access(caller, owner))
@@ -100,8 +99,15 @@ fn location_proxy_set<'s>(
     let Ok(key) = v8::Local::<v8::Name>::try_from(args.get(1)) else {
         return;
     };
-    if let Some(value) =
-        set_cross_origin_location_property(scope, target, key, args.get(2), args.get(3))
+    let setter = {
+        let scope = &mut v8::ContextScope::new(scope, caller);
+        cross_origin_location_setter(scope, target, key)
+    };
+    // Only construct the cross-origin surface in the caller's realm. Entering
+    // that context during the call would replace the entry settings object
+    // used by URL parsing, including nested calls during value conversion.
+    if let Some(setter) = setter
+        && let Some(value) = call_location_setter(scope, setter, args.get(3), args.get(2))
     {
         rv.set_bool(value);
     }
@@ -127,16 +133,26 @@ pub(super) fn set_location_href<'s>(
     {
         return target.set_with_receiver(scope, key.into(), value, location);
     }
-    set_cross_origin_location_property(scope, target, key.into(), value, location.into())
+    let setter = cross_origin_location_setter(scope, target, key.into())?;
+    call_location_setter(scope, setter, location.into(), value)
 }
 
-fn set_cross_origin_location_property<'s>(
+fn call_location_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    setter: v8::Local<'s, v8::Function>,
+    receiver: v8::Local<'s, v8::Value>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<bool> {
+    // Preserve Reflect.set's receiver. Interceptor callbacks only expose the
+    // holder, and must not substitute it for a forged or author Proxy receiver.
+    setter.call(scope, receiver, &[value]).map(|_| true)
+}
+
+fn cross_origin_location_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     target: v8::Local<'s, v8::Object>,
     key: v8::Local<'s, v8::Name>,
-    value: v8::Local<'s, v8::Value>,
-    receiver: v8::Local<'s, v8::Value>,
-) -> Option<bool> {
+) -> Option<v8::Local<'s, v8::Function>> {
     if key != v8str(scope, "href") {
         crate::native_bridge::throw_cross_origin_location_security_error(scope);
         return None;
@@ -145,12 +161,9 @@ fn set_cross_origin_location_property<'s>(
     let descriptor = surface
         .get_own_property_descriptor(scope, key)
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
-    let setter = descriptor
+    descriptor
         .get(scope, v8str(scope, "set").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    // Preserve Reflect.set's receiver. Interceptor callbacks only expose the
-    // holder, and must not substitute it for a forged or author Proxy receiver.
-    setter.call(scope, receiver, &[value]).map(|_| true)
+        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
 }
 
 fn location_proxy_set_prototype<'s>(
