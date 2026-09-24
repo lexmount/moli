@@ -70,6 +70,7 @@ const NAVIGATE_EVENT_PRECOMMIT_TRANSITION_TYPE_SLOT: &str =
 pub(super) const NAVIGATE_EVENT_SCROLL_CALLED_SLOT: &str = "__lmNavigateEventScrollCalled";
 const NAVIGATION_ACTIVE_NAVIGATE_EVENT_SLOT: &str = "__lmNavigationActiveNavigateEvent";
 pub(super) const NAVIGATION_FOCUS_RESET_EPOCH_SLOT: &str = "__lmNavigationFocusResetEpoch";
+const NAVIGATION_FOCUS_RESET_USER_INITIATED_SLOT: &str = "__lmNavigationFocusResetUserInitiated";
 pub(in crate::context_bootstrap) const NAVIGATION_ACTIVE_SCROLL_EVENT_SLOT: &str =
     "__lmNavigationActiveScrollEvent";
 pub(super) const NAVIGATION_SCROLL_TARGET_HREF_SLOT: &str = "__lmNavigationScrollTargetHref";
@@ -244,13 +245,23 @@ pub(super) fn mark_navigation_outcome_default_prevented<'s>(
     );
 }
 
-fn set_navigation_focus_reset_epoch<'s>(
+fn set_navigation_focus_reset_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
-    epoch: Option<u64>,
+    state: Option<(u64, bool)>,
 ) {
-    match epoch {
-        Some(epoch) => {
+    set_private_value(
+        scope,
+        navigation,
+        NAVIGATION_FOCUS_RESET_USER_INITIATED_SLOT,
+        v8::Boolean::new(
+            scope,
+            state.is_some_and(|(_, user_initiated)| user_initiated),
+        )
+        .into(),
+    );
+    match state {
+        Some((epoch, _)) => {
             let value = v8::BigInt::new_from_u64(scope, epoch);
             set_private_value(
                 scope,
@@ -287,14 +298,30 @@ pub(super) fn navigation_scroll_target_href<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
 }
 
-pub(super) fn navigation_focus_reset_epoch<'s>(
+pub(super) fn navigation_focus_change_epoch<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) -> Option<u64> {
+    let owner = runtime_window_owner(scope, navigation);
+    let host = unsafe { &*context_host_ptr_from_global_bridge(scope)? };
+    let document = super::window_accessors::window_document_handle(scope, owner, host)?;
+    Some(host.focus_change_epoch(document))
+}
+
+pub(super) fn navigation_focus_reset_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    navigation: v8::Local<'s, v8::Object>,
+) -> Option<(u64, bool)> {
     let value = get_private_value(scope, navigation, NAVIGATION_FOCUS_RESET_EPOCH_SLOT)?;
     let value = v8::Local::<v8::BigInt>::try_from(value).ok()?;
     let (epoch, lossless) = value.u64_value();
-    lossless.then_some(epoch)
+    let user_initiated = get_private_value(
+        scope,
+        navigation,
+        NAVIGATION_FOCUS_RESET_USER_INITIATED_SLOT,
+    )
+    .is_some_and(|value| value.is_true());
+    lossless.then_some((epoch, user_initiated))
 }
 
 pub(super) fn navigation_error_event_active<'s>(
@@ -318,16 +345,11 @@ fn set_navigation_error_event_active<'s>(
     );
 }
 
-pub(super) fn clear_navigation_focus_reset_epoch<'s>(
+pub(super) fn clear_navigation_focus_reset_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     navigation: v8::Local<'s, v8::Object>,
 ) {
-    set_private_value(
-        scope,
-        navigation,
-        NAVIGATION_FOCUS_RESET_EPOCH_SLOT,
-        v8::undefined(scope).into(),
-    );
+    set_navigation_focus_reset_state(scope, navigation, None);
 }
 
 pub(super) fn clear_navigation_scroll_state<'s>(
@@ -958,8 +980,7 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
-    let focus_reset_epoch = context_host_ptr_from_global_bridge(scope)
-        .map(|host_ptr| unsafe { &*host_ptr }.focus_change_epoch());
+    let focus_reset_epoch = navigation_focus_change_epoch(scope, navigation);
     let Ok(event_ctor) =
         super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
     else {
@@ -1028,12 +1049,13 @@ pub(super) fn dispatch_navigation_navigate_event_with_form_data_and_outcome<'s>(
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_INTERCEPTED_SLOT, false);
     let focus_reset =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
-    set_navigation_focus_reset_epoch(
+    set_navigation_focus_reset_state(
         scope,
         navigation,
         (intercepted && focus_reset)
             .then_some(focus_reset_epoch)
-            .flatten(),
+            .flatten()
+            .map(|epoch| (epoch, user_initiated)),
     );
     set_navigation_scroll_state(scope, navigation, event, href, intercepted);
     let (redirected_url, redirected_history, redirected_state) =
@@ -1248,8 +1270,7 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
         .get_creation_context(scope)
         .unwrap_or_else(|| scope.get_current_context());
     let scope = &mut v8::ContextScope::new(scope, context);
-    let focus_reset_epoch = context_host_ptr_from_global_bridge(scope)
-        .map(|host_ptr| unsafe { &*host_ptr }.focus_change_epoch());
+    let focus_reset_epoch = navigation_focus_change_epoch(scope, navigation);
     let Ok(event_ctor) =
         super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "NavigateEvent")
     else {
@@ -1339,12 +1360,13 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_INTERCEPTED_SLOT, false);
     let focus_reset =
         navigate_event_private_bool(scope, event, NAVIGATE_EVENT_FOCUS_RESET_SLOT, true);
-    set_navigation_focus_reset_epoch(
+    set_navigation_focus_reset_state(
         scope,
         navigation,
         (intercepted && focus_reset)
             .then_some(focus_reset_epoch)
-            .flatten(),
+            .flatten()
+            .map(|epoch| (epoch, false)),
     );
     set_navigation_scroll_state(scope, navigation, event, &href, intercepted);
     let intercept_error =

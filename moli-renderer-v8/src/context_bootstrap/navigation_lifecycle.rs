@@ -4,13 +4,13 @@ use super::navigation_activation::{
 };
 use super::navigation_events::{
     NAVIGATE_EVENT_SCROLL_AFTER_TRANSITION_SLOT, NAVIGATE_EVENT_SCROLL_CALLED_SLOT,
-    clear_navigation_focus_reset_epoch, clear_navigation_scroll_state, dispatch_navigation_error,
-    dispatch_navigation_success, navigation_active_scroll_event, navigation_focus_reset_epoch,
+    clear_navigation_focus_reset_state, clear_navigation_scroll_state, dispatch_navigation_error,
+    dispatch_navigation_success, navigation_active_scroll_event, navigation_focus_reset_state,
     navigation_scroll_target_href,
 };
 use super::*;
 use crate::native_bridge::element::{
-    process_post_parse_autofocus, scroll_to_url_fragment_or_top, update_focus,
+    reset_document_navigation_focus, scroll_to_url_fragment_or_top,
 };
 use crate::{native_bridge::NavigationAttemptId, util::get_private_value};
 use moli_webapi_declare::WebApiObject;
@@ -270,15 +270,21 @@ pub(super) fn reset_navigation_focus_if_unchanged<'s>(
     let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
         return;
     };
-    let Some(expected_epoch) = navigation_focus_reset_epoch(scope, navigation) else {
+    let Some((expected_epoch, user_initiated)) = navigation_focus_reset_state(scope, navigation)
+    else {
         return;
     };
-    clear_navigation_focus_reset_epoch(scope, navigation);
-    if unsafe { &*host_ptr }.focus_change_epoch() != expected_epoch {
+    clear_navigation_focus_reset_state(scope, navigation);
+    let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+    let Some(document) =
+        super::window_accessors::window_document_handle(scope, owner, unsafe { &*host_ptr })
+    else {
+        return;
+    };
+    if unsafe { &*host_ptr }.focus_change_epoch(document) != expected_epoch {
         return;
     }
-    update_focus(scope, host_ptr, None);
-    let _ = process_post_parse_autofocus(scope, host_ptr);
+    reset_document_navigation_focus(scope, host_ptr, document, user_initiated);
 }
 
 const NAVIGATION_FINISH_RESOLVE_SLOT: &str = "__lmNavigationFinishResolve";
