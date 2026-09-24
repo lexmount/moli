@@ -117,7 +117,7 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     set_runtime_window_owner(scope, history, window);
     install_history_scroll_restoration_runtime_state(scope, history, "auto");
     install_history_state_runtime_state(scope, history, v8::null(scope).into());
-    let entries = build_history_entries_from_seed(&initial_seed);
+    let entries = build_history_entries_from_seed(scope, window, &initial_seed);
     let current_entry = entries
         .get(initial_seed.current_index as usize)
         .map(|entry| entry_wrappers::for_window(scope, window, entry.clone()))
