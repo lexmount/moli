@@ -9,15 +9,9 @@
     <script>
       const iframe = document.createElement('iframe');
       iframe.id = 'child';
-      iframe.src = 'about:blank';
+      iframe.src = '/compat/window-child-browsing-context-target-name-a';
       let child = null;
-      let loadCount = 0;
       iframe.addEventListener('load', () => {
-        loadCount += 1;
-        if (loadCount === 1) {
-          iframe.src = '/compat/window-child-browsing-context-target-name-a';
-          return;
-        }
         document.body.dataset.windowSame = String(child === iframe.contentWindow);
         document.body.dataset.locationUpdated = String(
           iframe.contentWindow?.location?.href ?? 'null'

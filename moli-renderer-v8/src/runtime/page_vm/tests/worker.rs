@@ -5519,6 +5519,7 @@ async fn child_frame_shared_worker_client_survives_initial_reuse_then_disconnect
                         globalThis.__childSharedWorkerDone = false;
                         globalThis.__childSharedWorkerMessages = [];
                         const frame = document.createElement("iframe");
+                        frame.srcdoc = "<p>first</p>";
                         document.body.appendChild(frame);
                         globalThis.__childSharedWorkerFrame = frame;
                         const source = {worker_source_literal};
@@ -5535,23 +5536,20 @@ async fn child_frame_shared_worker_client_survives_initial_reuse_then_disconnect
                     }})()
                     "#
                 ))?;
-                drive_shared_worker_until_done(
-                    &mut page_vm,
-                    "String(globalThis.__childSharedWorkerDone === true)",
-                    "child frame SharedWorker should connect before navigation",
-                )
-                .await?;
                 assert_eq!(page_vm.vm().shared_worker_client_count_for_test(), 1);
 
-                page_vm.vm_mut().eval(
-                    "globalThis.__childSharedWorkerFrame.srcdoc = '<p>first</p>'; 'navigating-first'",
-                )?;
                 run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
                     &mut page_vm,
                     ChildFrameSemanticTurnKind::NavigationCommit,
                     "first child navigation should securely reuse the initial-empty LocalWindow",
                 )
                 .await;
+                drive_shared_worker_until_done(
+                    &mut page_vm,
+                    "String(globalThis.__childSharedWorkerDone === true)",
+                    "child frame SharedWorker should connect across initial Window reuse",
+                )
+                .await?;
                 assert_eq!(page_vm.vm().shared_worker_client_count_for_test(), 1);
                 page_vm.vm_mut().eval(
                     r#"

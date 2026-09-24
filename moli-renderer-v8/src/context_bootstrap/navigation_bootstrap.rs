@@ -19,7 +19,7 @@ use super::navigation_surface::{
     install_history_scroll_restoration_runtime_state, install_history_state_runtime_state,
 };
 use super::navigation_window::{
-    bind_navigation_document, navigation_has_current_document, set_runtime_window_owner,
+    bind_navigation_owner, navigation_belongs_to_current_local_window, set_runtime_window_owner,
 };
 use super::*;
 use crate::util::{get_private_value, set_private_value};
@@ -66,7 +66,7 @@ pub(crate) fn install_window_location_history_navigation_runtime_state<'s>(
 
     let navigation = build_navigation_runtime_state(scope, window, &initial_seed)?;
     set_runtime_window_owner(scope, navigation, owner);
-    bind_navigation_document(scope, navigation, owner);
+    bind_navigation_owner(scope, navigation, owner);
     set_private_value(scope, window, WINDOW_NAVIGATION_SLOT, navigation.into());
     if crate::native_bridge::lightweight_popup_id_from_window(scope, window).is_some() {
         super::session_history::initialize(scope, window, &initial_seed);
@@ -133,11 +133,15 @@ pub(crate) fn reset_window_location_history_navigation_runtime_state<'s>(
     set_private_value(scope, window, WINDOW_HISTORY_SLOT, history.into());
 
     let navigation = match window_runtime_object(scope, window, WINDOW_NAVIGATION_SLOT) {
-        Some(navigation) if navigation_has_current_document(scope, navigation) => navigation,
+        // The initial about:blank Document can be replaced without replacing
+        // its Window. Keep that Window's Navigation object and event listeners.
+        Some(navigation) if navigation_belongs_to_current_local_window(scope, navigation) => {
+            navigation
+        }
         Some(_) | None => build_navigation_runtime_state(scope, window, &initial_seed)?,
     };
     set_runtime_window_owner(scope, navigation, window);
-    bind_navigation_document(scope, navigation, window);
+    bind_navigation_owner(scope, navigation, window);
     set_navigation_current_entry(scope, navigation, current_entry);
     clear_active_cross_document_navigation_if_matches(scope, navigation, href);
     install_navigation_activation_runtime_state(
