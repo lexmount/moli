@@ -13,8 +13,9 @@ use super::navigation_activation::{
 };
 use super::navigation_entry::{
     history_entries, navigation_current_entry, navigation_entries_share_document,
-    navigation_entry_id_value, navigation_entry_index_value, navigation_entry_key_value,
-    navigation_entry_url_value, save_current_navigation_entry_scroll_position,
+    navigation_entries_share_origin, navigation_entry_id_value, navigation_entry_index_value,
+    navigation_entry_key_value, navigation_entry_url_value,
+    save_current_navigation_entry_scroll_position,
 };
 use super::navigation_entry_state::clone_navigation_entry_state;
 use super::navigation_handler_callbacks::{
@@ -29,7 +30,8 @@ use super::navigation_window::{
     child_browsing_context_handle_for_runtime_owner, navigation_document_is_active,
     navigation_has_disabled_entries, replace_navigation_unload_event_active,
     runtime_window_dispatch_scope, runtime_window_is_global, runtime_window_owner,
-    should_dispatch_hash_change, window_location_for_holder, window_task_target_for_runtime_owner,
+    should_dispatch_hash_change, window_history_for_holder, window_location_for_holder,
+    window_task_target_for_runtime_owner,
 };
 use super::*;
 use crate::document_runtime::EventTargetHandle;
@@ -1261,6 +1263,15 @@ pub(super) fn dispatch_navigation_traverse_event_with_outcome<'s>(
     };
     let owner = runtime_window_owner(scope, navigation);
     let entry = super::history_runtime::native::entry_wrapper(scope, owner, entry.clone());
+    // Traversal event eligibility uses the destination Document's old origin,
+    // before fetching it (and possibly redirecting). It is independent of the
+    // contiguous same-origin region exposed by navigation.entries().
+    if navigation_has_disabled_entries(scope, navigation)
+        || !navigation_current_entry(scope, owner)
+            .is_some_and(|current| navigation_entries_share_origin(scope, current, entry))
+    {
+        return NavigationDispatchOutcome::proceed();
+    }
     let destination = create_navigation_destination_for_entry(scope, navigation, entry);
     let target_href = navigation_destination_url_value(scope, destination).unwrap_or_default();
     let owner = runtime_window_owner(scope, navigation);
@@ -1409,12 +1420,24 @@ fn create_navigation_destination_for_entry<'s>(
     let owner = runtime_window_owner(scope, navigation);
     let same_document = navigation_current_entry(scope, owner)
         .is_some_and(|current| navigation_entries_share_document(scope, current, entry));
-    let state =
-        clone_navigation_entry_state(scope, entry).unwrap_or_else(|| v8::undefined(scope).into());
+    let visible_entry = window_history_for_holder(scope, owner)
+        .and_then(|history| history_entries(scope, history))
+        .and_then(|entries| {
+            let current = navigation_current_entry(scope, owner);
+            super::navigation_projection::visible_navigation_index_for_entry(
+                scope, entries, current, entry,
+            )
+        })
+        .map(|_| entry);
+    let state = match visible_entry {
+        Some(entry) => clone_navigation_entry_state(scope, entry)
+            .unwrap_or_else(|| v8::undefined(scope).into()),
+        None => v8::null(scope).into(),
+    };
     NavigationDestinationDeclaration::new(
         v8_string(scope, &url).unwrap_or_else(|| v8::String::empty(scope)),
         same_document,
-        Some(entry),
+        visible_entry,
         state,
     )
     .bind(scope)

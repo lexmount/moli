@@ -84,7 +84,7 @@ pub(crate) fn install_navigation_entry_view_for_holder<'s>(
     let Some(navigation) = window_navigation_for_holder(scope, owner) else {
         return;
     };
-    let entries = build_history_entries_from_seed(entry_seed);
+    let entries = build_history_entries_from_seed(scope, owner, entry_seed);
     let current_entry = entries
         .get(entry_seed.current_index as usize)
         .map(|entry| native::entry_wrapper(scope, owner, entry.clone()))

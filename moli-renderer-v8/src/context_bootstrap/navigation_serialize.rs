@@ -184,6 +184,7 @@ fn snapshot_native_entry(
 ) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
         url: entry.url.clone(),
+        document_origin: entry.document_origin.clone(),
         history_state: entry.history_state.clone(),
         navigation_state: entry.navigation_state.clone(),
         scroll_restoration: entry.scroll_restoration,

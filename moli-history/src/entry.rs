@@ -24,6 +24,7 @@ impl ScrollRestoration {
 #[derive(Clone, Debug)]
 pub struct HistoryEntry {
     pub url: String,
+    pub document_origin: String,
     pub id: String,
     pub key: NavigationHistoryEntryKey,
     pub document: NavigationHistoryDocumentId,

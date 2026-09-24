@@ -53,7 +53,7 @@ pub(in crate::context_bootstrap) fn build_history_runtime_state<'s>(
                 anyhow::anyhow!("isolated History is missing its native Window history")
             })?
     } else {
-        let records = build_history_entries_from_seed(initial_seed);
+        let records = build_history_entries_from_seed(scope, window, initial_seed);
         std::rc::Rc::new(std::cell::RefCell::new(moli_history::WindowHistory::new(
             records,
             initial_seed.current_index,

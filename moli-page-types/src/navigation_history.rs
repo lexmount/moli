@@ -47,6 +47,9 @@ fn allocate_navigation_history_entry_id(counter: &AtomicU64) -> NavigationHistor
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavigationHistorySerializedEntry {
     pub url: String,
+    /// The document's serialized origin, including inherited about: origins.
+    /// `null` represents an opaque origin and must not match another Document.
+    pub document_origin: String,
     /// Authoritative structured state, preserved across renderer replacement.
     pub history_state: Option<moli_history::SerializedScriptValue>,
     pub navigation_state: Option<moli_history::SerializedScriptValue>,
@@ -504,6 +507,9 @@ fn navigation_history_entry(
 ) -> NavigationHistorySerializedEntry {
     NavigationHistorySerializedEntry {
         url: url.to_owned(),
+        document_origin: Url::parse(url)
+            .map(|url| url.origin().ascii_serialization())
+            .unwrap_or_else(|_| "null".to_owned()),
         history_state: None,
         navigation_state: None,
         scroll_restoration: Default::default(),
