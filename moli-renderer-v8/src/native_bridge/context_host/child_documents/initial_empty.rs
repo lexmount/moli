@@ -177,6 +177,7 @@ impl JsContextHost {
         );
 
         self.populate_initial_empty_child_html_document(document_handle);
+        self.capture_child_top_navigation_permission(handle);
         self.dom_host_mut()
             .mark_subtree_connected_preserving_owner_document(document_handle);
         self.install_empty_child_classic_script_runner_for_current_document(
