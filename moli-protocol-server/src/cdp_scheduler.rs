@@ -32,6 +32,7 @@ use tokio::time::Instant as TokioInstant;
 use crate::config::DEFAULT_SCREENCAST_INTERVAL_MS;
 
 const PAGE_SCREENCAST_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+const EVENT_BATCH_LIMIT: usize = 32;
 
 mod actor;
 mod adapter_scheduler;
@@ -292,7 +293,6 @@ impl CdpSchedulerEventReceivers {
         detached_navigations: &mut FuturesUnordered<DevToolsNavigationCommandWait>,
     ) -> Option<CdpSchedulerInterleavedInput> {
         tokio::select! {
-            biased;
             event = browser_events::recv_browser_event(browser_event_rx) => {
                 Some(CdpSchedulerInterleavedInput::BrowserEvent(event))
             }
@@ -1020,7 +1020,7 @@ impl CdpScheduler {
         command: DevToolsCommand,
         background_command_id: Option<u64>,
     ) -> DevToolsCommandExecution {
-        let mut protocol_output = self.drain_browser_events().await;
+        let mut protocol_output = self.drain_browser_event_prefix().await;
         let outcome = self
             .conn
             .execute_devtools_command_with_protocol_events_with_background_command_id(

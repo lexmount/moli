@@ -927,7 +927,7 @@ async fn handle_classic_session_runtime_request(
     request: ClassicSessionRuntimeRequest,
     pending_command: &mut Option<ClassicPendingCommand>,
 ) -> ClassicSessionRuntimeRequestOutcome {
-    let mut output = scheduler.drain_browser_events().await;
+    let mut output = scheduler.drain_browser_event_prefix().await;
     output.append(
         scheduler
             .complete_ready_protocol_residences_for_external_load_wait()

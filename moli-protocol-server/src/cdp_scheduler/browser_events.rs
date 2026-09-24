@@ -34,15 +34,38 @@ impl CdpScheduler {
     }
 
     pub(crate) async fn drain_browser_events(&mut self) -> ProtocolOutputSequence {
+        self.drain_browser_event_batch(super::EVENT_BATCH_LIMIT)
+            .await
+    }
+
+    /// A frontend command must see native mutations that precede its arrival.
+    /// Capture a finite prefix; events produced while projecting it belong to
+    /// later turns. Lag recovery's atomic snapshot already covers that prefix.
+    pub(crate) async fn drain_browser_event_prefix(&mut self) -> ProtocolOutputSequence {
+        let ready = self
+            .browser_event_rx
+            .as_ref()
+            .map_or(0, BrowserEventReceiver::len);
+        self.drain_browser_event_batch(ready).await
+    }
+
+    async fn drain_browser_event_batch(&mut self, limit: usize) -> ProtocolOutputSequence {
         let mut output = self.project_initial_browser_snapshot().await;
-        while let Some(receiver) = self.browser_event_rx.as_mut() {
+        for _ in 0..limit {
+            let Some(receiver) = self.browser_event_rx.as_mut() else {
+                break;
+            };
             let event = match receiver.try_recv() {
                 Ok(event) => Ok(event),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Lagged(count)) => Err(RecvError::Lagged(count)),
                 Err(TryRecvError::Closed) => Err(RecvError::Closed),
             };
+            let recover = event.is_err();
             output.append(self.handle_browser_event(event).await);
+            if recover {
+                break;
+            }
         }
         output.append(ProtocolOutputSequence::from_background_events(
             self.conn.project_bound_worker_output().await,
@@ -171,6 +194,48 @@ mod tests {
     use crate::config::DEFAULT_SCREENCAST_INTERVAL_MS;
     use moli_core::browser::BrowserService;
     use moli_protocol::CdpInitialStoragePartition;
+
+    #[tokio::test]
+    async fn browser_event_batch_yields_with_pending_native_events() {
+        use moli_core::browser::{BrowserContextStoragePartitionHandles, StoragePartitionKind};
+
+        let service = BrowserService::start().unwrap();
+        let browser = service.handle();
+        let (mut scheduler, _) = CdpScheduler::new_with_initial_state_runtime_config(
+            browser.clone(),
+            CdpInitialStoragePartition::memory(),
+            Default::default(),
+        );
+        scheduler.drain_browser_events().await;
+        let before = scheduler.conn.browser_contexts().count();
+        let contexts = (0..128)
+            .map(|_| {
+                browser
+                    .create_context(
+                        BrowserContextStoragePartitionHandles::memory(),
+                        StoragePartitionKind::Ephemeral,
+                        None,
+                        None,
+                    )
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
+        scheduler.drain_browser_events().await;
+        assert!(
+            !scheduler.browser_event_rx.as_ref().unwrap().is_empty(),
+            "one actor turn must leave work for a later turn"
+        );
+        assert!(scheduler.conn.browser_contexts().count() > before);
+        while !scheduler.browser_event_rx.as_ref().unwrap().is_empty() {
+            scheduler.drain_browser_events().await;
+        }
+        assert_eq!(
+            scheduler.conn.browser_contexts().count(),
+            before + contexts.len()
+        );
+        service.shutdown();
+    }
 
     #[tokio::test]
     async fn native_network_lag_recovery_cannot_overtake_retained_renderer_fifo() {

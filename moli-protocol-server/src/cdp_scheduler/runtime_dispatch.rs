@@ -393,7 +393,6 @@ impl CdpScheduler {
                 .extend(ready_output.take_protocol_events_with_id(command_id));
             if !ready_output.is_empty() {
                 protocol_output.append(ready_output);
-                continue;
             }
             tokio::select! {
                 biased;

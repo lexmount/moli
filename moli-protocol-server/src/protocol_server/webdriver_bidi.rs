@@ -3119,7 +3119,7 @@ async fn drain_ready_bidi_background_navigation(
     receivers: &mut CdpSchedulerEventReceivers,
 ) -> Result<BidiDevToolsEventSources, BidiRendererOutputTransportFailure> {
     let mut event_sources = BidiDevToolsEventSources::from_protocol_output(
-        scheduler.drain_browser_events().await,
+        scheduler.drain_browser_event_prefix().await,
         Some(&*scheduler),
     );
     event_sources.extend_protocol_output(

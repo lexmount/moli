@@ -2,6 +2,7 @@ use super::*;
 use std::path::Path;
 
 mod csp_reports;
+mod scheduler_fairness;
 
 #[tokio::test]
 async fn websocket_cdp_created_target_queues_runtime_until_its_initial_url_commits() {

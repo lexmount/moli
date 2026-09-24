@@ -253,7 +253,6 @@ impl CdpScheduler {
 
     pub(crate) async fn recv_adapter_owner_input(&mut self) -> AdapterOwnerInput {
         tokio::select! {
-            biased;
             event = super::browser_events::recv_browser_event(&mut self.browser_event_rx) => AdapterOwnerInput::Browser(event),
             completed = self.detached_navigations.next(), if !self.detached_navigations.is_empty() => {
                 AdapterOwnerInput::Navigation(completed.expect("nonempty navigation wait set").map(Box::new))
@@ -327,7 +326,7 @@ impl CdpScheduler {
                     .devtools_context_routes_to_top_level_target(&context),
             context,
             wait,
-            output: self.drain_browser_events().await,
+            output: self.drain_browser_event_prefix().await,
         };
         let step = self
             .conn

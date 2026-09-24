@@ -110,7 +110,10 @@ impl SchedulerInputReceivers {
         //
         // Renderer publications stay on their concrete stream. The correlated
         // response carries the exact cursor consumed by the fence below.
-        while let Ok(event) = self.events.background_event_rx.try_recv() {
+        for _ in 0..self.events.background_event_rx.len() {
+            let Ok(event) = self.events.background_event_rx.try_recv() else {
+                break;
+            };
             self.ready_background_inputs_before_runtime_response
                 .push_back(SchedulerInput::BackgroundEvent(event));
         }
@@ -165,7 +168,6 @@ impl SchedulerInputReceivers {
             }
         } else {
             tokio::select! {
-                biased;
                 maybe_event = self.events.background_event_rx.recv() => {
                     maybe_event.map(SchedulerInput::BackgroundEvent)
                 }
@@ -224,41 +226,20 @@ async fn run_cdp_scheduler_actor(
     let mut pending_frontend_output = None;
 
     'owner: loop {
-        // Projection can satisfy a navigation's visibility fence before its
-        // notifications reach the socket. Deliver the entire ready batch before
-        // polling frontend continuations, including the no-output close path.
-        let mut bidi_outputs = Vec::new();
-        while let Some(output) = pending_frontend_output
-            .take()
-            .or_else(|| frontend_output_rx.try_recv().ok())
+        if !flush_ready_frontend_output(
+            &frontend_router,
+            &mut scheduler,
+            &mut scheduler_input_rx.events,
+            &mut pending_runtime_deferred_replies,
+            &mut bidi_frontends,
+            &mut frontend_output_rx,
+            &mut pending_frontend_output,
+            owner_lifecycle.as_ref(),
+        )
+        .await
         {
-            match output {
-                DevToolsFrontendOutput::Cdp(output) => {
-                    if !flush_protocol_output_with_runtime_deferred_reply_routing(
-                        &frontend_router,
-                        &mut scheduler,
-                        &mut pending_runtime_deferred_replies,
-                        output,
-                    )
-                    .await
-                    {
-                        break 'owner;
-                    }
-                }
-                DevToolsFrontendOutput::Bidi { origin, output } => {
-                    bidi_outputs.push((origin, output))
-                }
-            }
+            break;
         }
-        if bidi_frontends
-            .send_outputs(&mut scheduler, &mut scheduler_input_rx.events, bidi_outputs)
-            .await
-        {
-            send_cookie_checkpoint(&mut scheduler, owner_lifecycle.as_ref());
-        }
-        classic_sessions
-            .poll(&mut scheduler, &mut scheduler_input_rx.events)
-            .await;
         let browser_output = scheduler.drain_browser_events().await;
         if !flush_protocol_output_with_runtime_deferred_reply_routing(
             &frontend_router,
@@ -279,7 +260,7 @@ async fn run_cdp_scheduler_actor(
             .ready_background_inputs_before_runtime_response
             .is_empty()
         {
-            for _ in 0..32 {
+            for _ in 0..super::EVENT_BATCH_LIMIT {
                 let Ok(publication) = scheduler_input_rx.events.renderer_publication_rx.try_recv()
                 else {
                     break;
@@ -304,6 +285,25 @@ async fn run_cdp_scheduler_actor(
         {
             break;
         }
+        // Event projection above may release a frontend notification before
+        // its waiting command. Flush that causal prefix before polling input.
+        if !flush_ready_frontend_output(
+            &frontend_router,
+            &mut scheduler,
+            &mut scheduler_input_rx.events,
+            &mut pending_runtime_deferred_replies,
+            &mut bidi_frontends,
+            &mut frontend_output_rx,
+            &mut pending_frontend_output,
+            owner_lifecycle.as_ref(),
+        )
+        .await
+        {
+            break;
+        }
+        classic_sessions
+            .poll(&mut scheduler, &mut scheduler_input_rx.events)
+            .await;
         // Native Browser commits/cancellations can release a Document fence
         // without any legacy completion or later frontend command. Recheck
         // the existing waiters after publishing all ready projection output.
@@ -327,7 +327,6 @@ async fn run_cdp_scheduler_actor(
         adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
         let page_screencast_deadline = scheduler.next_page_screencast_deadline();
         tokio::select! {
-            biased;
             event = scheduler.recv_adapter_owner_input() => {
                 let output = scheduler.complete_adapter_owner_input(&mut scheduler_input_rx.events, event).await;
                 if !flush_protocol_output_with_runtime_deferred_reply_routing(
@@ -499,6 +498,50 @@ async fn run_cdp_scheduler_actor(
         .shutdown(&mut scheduler, &mut scheduler_input_rx.events)
         .await;
     CdpCookieSnapshot::from_profile_backed_cookies(scheduler.snapshot_profile_backed_cookies())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn flush_ready_frontend_output(
+    frontend_router: &CdpFrontendRouter,
+    scheduler: &mut CdpScheduler,
+    receivers: &mut CdpSchedulerEventReceivers,
+    pending_runtime_deferred_replies: &mut VecDeque<PendingRuntimeDeferredReplyState>,
+    bidi_frontends: &mut BidiServiceFrontends,
+    frontend_output_rx: &mut mpsc::UnboundedReceiver<DevToolsFrontendOutput>,
+    pending_frontend_output: &mut Option<DevToolsFrontendOutput>,
+    owner_lifecycle: Option<&CdpOwnerActorLifecycle>,
+) -> bool {
+    // Projection can satisfy a navigation's visibility fence before its
+    // notifications reach the socket. Deliver the entire ready batch before
+    // polling frontend continuations, including the no-output close path.
+    let mut bidi_outputs = Vec::new();
+    while let Some(output) = pending_frontend_output
+        .take()
+        .or_else(|| frontend_output_rx.try_recv().ok())
+    {
+        match output {
+            DevToolsFrontendOutput::Cdp(output) => {
+                if !flush_protocol_output_with_runtime_deferred_reply_routing(
+                    frontend_router,
+                    scheduler,
+                    pending_runtime_deferred_replies,
+                    output,
+                )
+                .await
+                {
+                    return false;
+                }
+            }
+            DevToolsFrontendOutput::Bidi { origin, output } => bidi_outputs.push((origin, output)),
+        }
+    }
+    if bidi_frontends
+        .send_outputs(scheduler, receivers, bidi_outputs)
+        .await
+    {
+        send_cookie_checkpoint(scheduler, owner_lifecycle);
+    }
+    true
 }
 
 async fn wait_for_page_screencast_deadline(deadline: Option<TokioInstant>) {
@@ -1313,6 +1356,17 @@ async fn handle_frontend_command(
     next_in_flight_command_token: &mut u64,
 ) -> bool {
     let CdpFrontendCommand { frontend_id, raw } = frontend_command;
+    let prefix = scheduler.drain_browser_event_prefix().await;
+    if !flush_protocol_output_with_runtime_deferred_reply_routing(
+        frontend_router,
+        scheduler,
+        pending_runtime_deferred_replies,
+        prefix,
+    )
+    .await
+    {
+        return false;
+    }
     let Some(prepared) = frontend_router.prepare_command_str(frontend_id, raw) else {
         return true;
     };
@@ -1940,6 +1994,42 @@ mod tests {
     fn in_flight_command_tokens_never_wrap() {
         let mut next = u64::MAX;
         let _ = take_next_in_flight_command_token(&mut next);
+    }
+
+    #[tokio::test]
+    async fn runtime_completion_advances_while_background_source_stays_ready() {
+        let (background_event_tx, background_event_rx) = mpsc::unbounded_channel();
+        let (_renderer_publication_tx, renderer_publication_rx) =
+            moli_core::renderer_output_transport_channel();
+        let (runtime_response_tx, runtime_inspector_response_ready_rx) = mpsc::unbounded_channel();
+        let mut receivers = SchedulerInputReceivers::new(CdpSchedulerEventReceivers {
+            background_event_rx,
+            renderer_publication_rx,
+            runtime_inspector_response_ready_rx,
+        });
+        let mut adapter = ProtocolAdapterScheduler::default();
+        runtime_response_tx
+            .send(RuntimeInspectorResponseReady::new(
+                42,
+                None,
+                Err("test completion".to_owned()),
+            ))
+            .unwrap();
+        for _ in 0..512 {
+            background_event_tx
+                .send(BackgroundProtocolEvent::immediate(json!({
+                    "method": "Network.dataReceived", "params": {}
+                })))
+                .unwrap();
+            if let Some(SchedulerInput::DeferredRuntimeInspectorResponse(response)) =
+                receivers.recv(false, &mut adapter, false).await
+            {
+                assert_eq!(response.command_id(), 42);
+                assert!(!receivers.events.background_event_rx.is_empty());
+                return;
+            }
+        }
+        panic!("a continuously ready background source starved a runtime completion");
     }
 
     #[tokio::test]
