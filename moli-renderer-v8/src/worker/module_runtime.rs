@@ -1048,16 +1048,7 @@ fn advance_worker_dynamic_module_import(
     let graph = context
         .get_slot::<RefCell<WorkerModuleGraph>>()
         .ok_or_else(|| "worker module graph is not available".to_owned())?;
-    let module_url = job
-        .base_url
-        .join(&job.specifier)
-        .or_else(|_| Url::parse(&job.specifier))
-        .map_err(|error| {
-            format!(
-                "Failed to resolve dynamic module worker import `{}`: {error}",
-                job.specifier
-            )
-        })?;
+    let module_url = resolve_worker_module_specifier(&job.specifier, &job.base_url)?;
     let module_key = worker_module_key_for_attributes(&module_url, &job.attributes)
         .map_err(|message| format!("{message} for dynamic import `{}`", job.specifier))?;
     job.root_key = Some(module_key.clone());
@@ -1083,7 +1074,7 @@ fn advance_worker_dynamic_module_import(
     let existing_root_entry = graph.borrow().entry_for_key(&module_key);
     let root_entry = match existing_root_entry {
         Some(entry) => entry,
-        None => match load_worker_static_module_dependency(&job.base_url, &job.specifier)? {
+        None => match load_worker_static_module_dependency(module_url)? {
             WorkerModuleDependencyLoad::Source { url, source } => {
                 let key =
                     worker_module_key_for_attributes(&url, &job.attributes).map_err(|message| {
@@ -2197,21 +2188,16 @@ fn resolve_worker_module_dependency(
     request: WorkerModuleRequest,
     pending_keys: &mut HashSet<WorkerModuleKey>,
 ) -> WorkerModuleBootstrapResult<WorkerModuleGraphBuild> {
+    let dependency_url =
+        resolve_worker_module_specifier(&request.specifier, url).map_err(|message| {
+            Box::new(worker_bootstrap_error(
+                scope,
+                url.as_str(),
+                &message,
+                WorkerParentErrorEventKind::Event,
+            ))
+        })?;
     if request.phase == ModuleImportPhase::Source {
-        let dependency_url = url
-            .join(&request.specifier)
-            .or_else(|_| Url::parse(&request.specifier))
-            .map_err(|error| {
-                Box::new(worker_bootstrap_error(
-                    scope,
-                    url.as_str(),
-                    &format!(
-                        "Failed to resolve module worker dependency `{}`: {error}",
-                        request.specifier
-                    ),
-                    WorkerParentErrorEventKind::Event,
-                ))
-            })?;
         let dependency_key = worker_module_key_for_attributes(&dependency_url, &request.attributes)
             .map_err(|message| {
                 Box::new(worker_bootstrap_error(
@@ -2234,7 +2220,7 @@ fn resolve_worker_module_dependency(
         }
     }
     let (dependency_key, dependency_source) =
-        match load_worker_static_module_dependency(url, &request.specifier).map_err(|message| {
+        match load_worker_static_module_dependency(dependency_url).map_err(|message| {
             Box::new(worker_bootstrap_error(
                 scope,
                 url.as_str(),
@@ -2627,16 +2613,15 @@ fn worker_module_import_phase(phase: v8::ModuleImportPhase) -> ModuleImportPhase
     }
 }
 
+fn resolve_worker_module_specifier(specifier: &str, base_url: &Url) -> Result<Url, String> {
+    moli_import_map::resolve_url_like_module_specifier(specifier, base_url).ok_or_else(|| {
+        format!("Failed to resolve module specifier `{specifier}` from `{base_url}`")
+    })
+}
+
 fn load_worker_static_module_dependency(
-    base_url: &Url,
-    specifier: &str,
+    dependency_url: Url,
 ) -> Result<WorkerModuleDependencyLoad, String> {
-    let dependency_url = base_url
-        .join(specifier)
-        .or_else(|_| Url::parse(specifier))
-        .map_err(|error| {
-            format!("Failed to resolve module worker dependency `{specifier}`: {error}")
-        })?;
     match dependency_url.scheme() {
         "data" => {
             let source = super::decode_data_url_script_source(
@@ -2882,7 +2867,6 @@ fn worker_import_meta_resolve_callback(
 ) {
     let specifier = args.get(0);
     let Some(specifier) = specifier.to_string(scope) else {
-        throw_worker_import_meta_resolve_type_error(scope, "Module specifier must be a string.");
         return;
     };
     let specifier = specifier.to_rust_string_lossy(scope);
@@ -2893,10 +2877,7 @@ fn worker_import_meta_resolve_callback(
         throw_worker_import_meta_resolve_type_error(scope, "Module base URL is invalid.");
         return;
     };
-    match base_url
-        .join(&specifier)
-        .or_else(|_| Url::parse(&specifier))
-    {
+    match resolve_worker_module_specifier(&specifier, &base_url) {
         Ok(url) => {
             let Some(value) = v8::String::new(scope, url.as_str()) else {
                 throw_worker_import_meta_resolve_type_error(
@@ -2907,11 +2888,8 @@ fn worker_import_meta_resolve_callback(
             };
             rv.set(value.into());
         }
-        Err(error) => {
-            throw_worker_import_meta_resolve_type_error(
-                scope,
-                &format!("Failed to resolve module specifier `{specifier}`: {error}"),
-            );
+        Err(message) => {
+            throw_worker_import_meta_resolve_type_error(scope, &message);
         }
     }
 }

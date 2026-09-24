@@ -9,6 +9,7 @@ mod import_map;
 mod registry;
 mod types;
 
+pub use helpers::resolve_url_like_module_specifier;
 pub use types::ImportMapRegistryState;
 
 #[cfg(test)]

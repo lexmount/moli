@@ -42,7 +42,9 @@ pub(crate) fn is_special_scheme(url: &Url) -> bool {
     )
 }
 
-pub(crate) fn resolve_url_like_module_specifier(specifier: &str, base_url: &Url) -> Option<Url> {
+/// Resolve a URL-like module specifier without consulting import maps.
+/// Bare specifiers return `None`; only `/`, `./`, and `../` prefixes use the base URL.
+pub fn resolve_url_like_module_specifier(specifier: &str, base_url: &Url) -> Option<Url> {
     if specifier.starts_with('/') || specifier.starts_with("./") || specifier.starts_with("../") {
         return base_url.join(specifier).ok();
     }
